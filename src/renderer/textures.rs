@@ -1,4 +1,10 @@
-use std::{cell::RefCell, collections::hash_map::Entry, path::Path, rc::Rc, sync::mpsc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::hash_map::Entry,
+    path::Path,
+    rc::Rc,
+    sync::mpsc,
+};
 
 use ahash::HashMap;
 use anyhow::bail;
@@ -260,6 +266,7 @@ enum LoadResult {
         options: TextureOptions,
         generate_mipmaps: bool,
     },
+    Failed,
 }
 
 pub struct TextureManager {
@@ -268,6 +275,8 @@ pub struct TextureManager {
     // channel for handling async image loads
     results_tx: mpsc::Sender<LoadResult>,
     results_rx: mpsc::Receiver<LoadResult>,
+    /// Number of async loads whose result hasn't been applied yet
+    pending_loads: Cell<usize>,
 }
 
 impl TextureManager {
@@ -289,6 +298,7 @@ impl TextureManager {
             worker_pool: WorkerPool::new(4),
             results_tx: tx,
             results_rx: rx,
+            pending_loads: Cell::new(0),
         }
     }
 
@@ -331,8 +341,12 @@ impl TextureManager {
                             generate_mipmaps,
                         });
                     }
-                    Err(e) => log::warn!("Unable to load image from {image_path}: {e}"),
+                    Err(e) => {
+                        log::warn!("Unable to load image from {image_path}: {e}");
+                        let _ = tx.send(LoadResult::Failed);
+                    }
                 });
+            self.pending_loads.set(self.pending_loads.get() + 1);
 
             Ok(TextureHandle::new(Rc::clone(&self.manager), id))
         } else {
@@ -374,8 +388,12 @@ impl TextureManager {
                             generate_mipmaps,
                         });
                     }
-                    Err(e) => log::warn!("Unable to load image from {image_path}: {e}"),
+                    Err(e) => {
+                        log::warn!("Unable to load image from {image_path}: {e}");
+                        let _ = tx.send(LoadResult::Failed);
+                    }
                 });
+            self.pending_loads.set(self.pending_loads.get() + 1);
         } else {
             match load_image_file(Path::new(&image_path)) {
                 Ok(image) => {
@@ -394,18 +412,27 @@ impl TextureManager {
         Ok(())
     }
 
+    /// Returns `true` if any async image loads are still in flight.
+    pub fn has_pending_loads(&self) -> bool {
+        self.pending_loads.get() > 0
+    }
+
     /// Drains completed async image loads and assigns them to textures
     fn apply_pending_loads(&self) {
         let mut manager = self.manager.borrow_mut();
-        while let Ok(LoadResult::Loaded {
-            id,
-            image,
-            options,
-            generate_mipmaps,
-        }) = self.results_rx.try_recv()
-        {
-            let mip_strategy = MipStrategy::resolve(&image, generate_mipmaps);
-            manager.set(id, ImageDelta::full(image, options, mip_strategy));
+        while let Ok(result) = self.results_rx.try_recv() {
+            self.pending_loads.set(self.pending_loads.get() - 1);
+
+            if let LoadResult::Loaded {
+                id,
+                image,
+                options,
+                generate_mipmaps,
+            } = result
+            {
+                let mip_strategy = MipStrategy::resolve(&image, generate_mipmaps);
+                manager.set(id, ImageDelta::full(image, options, mip_strategy));
+            }
         }
     }
 }

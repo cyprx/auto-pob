@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use winit::window::Window;
 
@@ -34,8 +34,12 @@ pub enum StageTransition {
 pub struct StageFrameOutput {
     pub draw_commands: Vec<DrawCommand>,
     pub can_elide: bool,
-    pub request_redraw: bool,
+    /// The stage has work in progress (e.g. subscripts, coroutines, async loads) and needs
+    /// frames at full rate to make progress, regardless of user input.
+    pub has_ongoing_work: bool,
     pub scale_factor: ScaleFactor<f32>,
+    /// Time spent running Lua this frame (subscript callbacks and `OnFrame`).
+    pub lua_time: Duration,
 }
 
 pub enum ActiveStage {

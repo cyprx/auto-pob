@@ -77,8 +77,9 @@ impl Installer {
         Ok(StageFrameOutput {
             draw_commands,
             can_elide: false,
-            request_redraw: true,
+            has_ongoing_work: true,
             scale_factor: self.window_state.scale_factor(),
+            lua_time: std::time::Duration::ZERO,
         })
     }
 

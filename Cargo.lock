@@ -534,6 +534,8 @@ dependencies = [
  "image",
  "luautf8-rs",
  "mlua",
+ "reqwest",
+ "tar",
 ]
 
 [[package]]

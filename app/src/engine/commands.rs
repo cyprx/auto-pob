@@ -58,7 +58,6 @@ pub enum Command {
 
     Undo(Tab),
     Redo(Tab),
-    /// Node power and tree commands; filled in when the lab moves over.
     Lab(LabCommand),
     Shutdown,
 }
@@ -77,5 +76,14 @@ pub enum Tab {
     Config,
 }
 
+/// Lab commands. Answers arrive as `Event::Lab`.
 #[derive(Debug, Clone)]
-pub enum LabCommand {}
+pub enum LabCommand {
+    /// Send the passive tree and the build's allocated nodes.
+    Tree,
+    /// Rank unallocated passives by `metric` (a calc output key); streams progress.
+    NodePower {
+        metric: &'static str,
+        max_distance: u32,
+    },
+}

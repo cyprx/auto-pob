@@ -1134,3 +1134,54 @@ fn unknown_config_var_is_an_error() {
         "{err:#}"
     );
 }
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn lab_draws_the_tree_and_ranks_nodes() {
+    use auto_pob::engine::{LabCommand, LabEvent};
+    use std::cell::RefCell;
+
+    let _guard = lock();
+    let mut s = Session::start("lab");
+    let (name, xml) = fixtures().into_iter().next().expect("a fixture");
+    s.open_fixture(&name, &xml);
+
+    let events = RefCell::new(Vec::new());
+    let mut lab = |command| {
+        s.backend
+            .apply(Command::Lab(command), &|e| events.borrow_mut().push(e))
+            .expect("lab command");
+    };
+    lab(LabCommand::Tree);
+    lab(LabCommand::NodePower {
+        metric: "Life",
+        max_distance: 4,
+    });
+    let events = events.into_inner();
+    let tree = events
+        .iter()
+        .find_map(|e| match e {
+            Event::Lab(LabEvent::Tree(t)) => Some(t),
+            _ => None,
+        })
+        .expect("tree");
+    assert!(tree.nodes.len() > 2000, "{}", tree.nodes.len());
+    assert!(tree.edges.len() > 2000);
+    assert!(!tree.allocated.is_empty(), "the build allocates nodes");
+    assert!(tree.sheets.iter().all(Option::is_some));
+    let scores = events
+        .iter()
+        .find_map(|e| match e {
+            Event::Lab(LabEvent::NodePower(s)) => Some(s),
+            _ => None,
+        })
+        .expect("node power");
+    assert!(!scores.is_empty());
+    assert!(scores.iter().all(|s| (1..=4).contains(&s.distance)));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Lab(LabEvent::Progress { .. }))),
+        "progress is streamed"
+    );
+}

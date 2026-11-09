@@ -8,6 +8,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use crate::pob_files::DownloadProgress;
 
 use super::commands::Command;
+use super::lab::LabEvent;
 use super::views::{BuildListView, BuildView, ConfigView, StatsView};
 
 #[derive(Debug, Clone)]
@@ -27,10 +28,6 @@ pub enum Event {
     Error { seq: u64, message: String },
     Lab(LabEvent),
 }
-
-/// Lab events; filled in when the lab moves over.
-#[derive(Debug, Clone)]
-pub enum LabEvent {}
 
 /// What a command changed, so the loop knows which snapshots to send.
 #[derive(Default, Clone, Copy, PartialEq, Debug)]

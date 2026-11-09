@@ -1,6 +1,6 @@
 //! Draws the passive tree with egui's painter: pan by dragging, zoom with the scroll wheel.
 
-use crate::engine::lab_engine::{Sprite, Tree, TreeNode};
+use crate::engine::{Sprite, Tree, TreeNode};
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, TextureHandle, Vec2};
 use std::{
     collections::{HashMap, HashSet},

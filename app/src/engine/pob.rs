@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 pub struct PobBackend {
     pub lua: Lua,
     pub game: Game,
+    pob_dir: PathBuf,
     /// The Builds sub-folder the list view shows; "" is the root.
     folder: String,
 }
@@ -75,6 +76,7 @@ impl PobBackend {
             ("@glue/stats.lua", include_str!("glue/stats.lua")),
             ("@glue/tooltip.lua", include_str!("glue/tooltip.lua")),
             ("@glue/config.lua", include_str!("glue/config.lua")),
+            ("@glue/lab.lua", include_str!("glue/lab.lua")),
         ] {
             lua.load(source)
                 .set_name(name)
@@ -85,6 +87,7 @@ impl PobBackend {
         Ok(PobBackend {
             lua,
             game,
+            pob_dir: pob_dir.to_owned(),
             folder: String::new(),
         })
     }
@@ -134,7 +137,7 @@ fn config_changed() -> Affected {
 }
 
 impl Backend for PobBackend {
-    fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> Result<Affected> {
+    fn apply(&mut self, command: Command, send: &dyn Fn(Event)) -> Result<Affected> {
         match command {
             Command::ListBuilds { folder } => {
                 if folder.contains("..") || folder.starts_with('/') {
@@ -183,7 +186,7 @@ impl Backend for PobBackend {
                 })
             }
             Command::Shutdown => Ok(Affected::default()),
-            Command::Lab(lab) => match lab {},
+            Command::Lab(lab) => super::lab::apply(&self.lua, &self.pob_dir, lab, send),
             Command::SetConfig { var, value } => {
                 let value = match value {
                     ConfigValue::Bool(b) => mlua::Value::Boolean(b),

@@ -24,9 +24,10 @@ The default folder is `~/.local/share/RustyPathOfBuilding1` on Linux, so run
 
 | File | Purpose |
 |---|---|
-| `src/engine/glue/lab.lua` | The only code touching PoB's internals. Runs after PoB's `HeadlessWrapper.lua` and exposes a small `lab` API. |
-| `src/engine/lab_engine.rs` | Owns the Lua state on a worker thread. Commands in, events out. Provides what the headless wrapper lacks: `lua-utf8`, real zlib `Inflate`/`Deflate` (share codes, timeless jewel data), `#@` header stripping, the `arg` global. Decodes sprite sheets. |
-| `src/ui/lab.rs` | The egui UI. |
+| `src/engine/glue/lab.lua` | Tree geometry and node power, on top of `pob.build`. |
+| `src/engine/lab.rs` | Handles `LabCommand`s inside the engine thread; decodes sprite sheets. |
+| `src/ui/app.rs` | The app shell: startup, build list and build screens. |
+| `src/ui/lab.rs` | The Lab tab: tree and node power ranking. |
 | `src/ui/tree_view.rs` | Passive tree rendering: camera, arcs, sprites, heatmap. |
 
 ## Where PoB's data comes from

@@ -1,14 +1,23 @@
+//! The Lab tab: the passive tree with a node power ranking, driven by `Command::Lab`.
+
 use crate::{
-    engine::lab_engine::{
-        BuildSummary, CONFIG, Command, ConfigKind, ConfigValue, Engine, Event, METRICS, NodeScore,
-        STATS, Tree,
-    },
+    engine::{LabCommand, LabEvent, NodeScore, Tree},
     theme,
     ui::tree_view::{Heat, TreeView},
 };
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use std::collections::HashMap;
+
+/// Stats node power can be ranked by, as (calc output key, label).
+pub const METRICS: &[(&str, &str)] = &[
+    ("CombinedDPS", "Combined DPS"),
+    ("Life", "Life"),
+    ("EnergyShield", "Energy Shield"),
+    ("TotalEHP", "Effective HP"),
+    ("Armour", "Armour"),
+    ("Evasion", "Evasion"),
+];
 
 #[derive(Clone, Copy, PartialEq)]
 enum SortBy {
@@ -19,202 +28,149 @@ enum SortBy {
     PerPoint,
 }
 
-pub struct LabApp {
-    engine: Engine,
-    status: String,
-    error: Option<String>,
-    /// A command is running on the engine
-    busy: bool,
-    build: Option<BuildSummary>,
-    import_text: String,
-    level: u32,
+pub struct LabTab {
+    /// The tree needs (re)loading: a different build was opened
+    tree_stale: bool,
+    /// A `LabCommand::Tree` is on its way
+    tree_requested: bool,
+    tree: Option<Tree>,
+    tree_view: TreeView,
     metric: usize,
     max_distance: u32,
     progress: Option<(usize, usize)>,
+    /// A ranking is running on the engine
+    ranking: bool,
     scores: Vec<NodeScore>,
     /// Metric the current scores were computed for
     scores_metric: usize,
     sort_by: SortBy,
     sort_descending: bool,
-    tree: Option<Tree>,
-    tree_view: TreeView,
     /// Node power by node id, for the tree heatmap
     heat: HashMap<u32, Heat>,
 }
 
-impl LabApp {
-    pub fn new(engine: Engine) -> Self {
+impl Default for LabTab {
+    fn default() -> Self {
         Self {
-            engine,
-            status: String::new(),
-            error: None,
-            busy: true, // until the engine has started
-            build: None,
-            import_text: String::new(),
-            level: 1,
+            tree_stale: true,
+            tree_requested: false,
+            tree: None,
+            tree_view: TreeView::default(),
             metric: 0,
             max_distance: 6,
             progress: None,
+            ranking: false,
             scores: Vec::new(),
             scores_metric: 0,
             sort_by: SortBy::PerPoint,
             sort_descending: true,
-            tree: None,
-            tree_view: TreeView::default(),
             heat: HashMap::new(),
         }
     }
+}
 
-    fn send(&mut self, command: Command) {
-        self.busy = true;
-        self.error = None;
-        self.engine.send(command);
+impl LabTab {
+    /// A different build was loaded: its tree and any ranking no longer apply.
+    pub fn build_changed(&mut self) {
+        self.tree_stale = true;
+        self.clear_scores();
     }
 
-    fn process_events(&mut self) {
-        while let Ok(event) = self.engine.events.try_recv() {
-            match event {
-                Event::Status(status) => self.status = status,
-                Event::Tree(tree) => {
-                    self.tree = Some(tree);
+    #[cfg(test)]
+    pub fn has_tree(&self) -> bool {
+        self.tree.is_some()
+    }
+
+    /// The build's numbers changed, so a ranking computed before is out of date.
+    pub fn stats_changed(&mut self) {
+        self.clear_scores();
+    }
+
+    fn clear_scores(&mut self) {
+        self.scores.clear();
+        self.heat.clear();
+    }
+
+    /// A command failed; stop showing a ranking's progress.
+    pub fn failed(&mut self) {
+        self.progress = None;
+        self.ranking = false;
+    }
+
+    pub fn on_event(&mut self, event: LabEvent) {
+        match event {
+            LabEvent::Tree(tree) => {
+                self.tree = Some(tree);
+                self.tree_requested = false;
+                self.tree_view.fit();
+            }
+            LabEvent::Progress { done, total } => self.progress = Some((done, total)),
+            LabEvent::NodePower(scores) => {
+                self.heat = scores
+                    .iter()
+                    .map(|s| {
+                        let heat = Heat {
+                            per_point: s.per_point,
+                            distance: s.distance,
+                        };
+                        (s.id, heat)
+                    })
+                    .collect();
+                self.scores = scores;
+                self.scores_metric = self.metric;
+                self.sort_scores();
+                self.progress = None;
+                self.ranking = false;
+            }
+        }
+    }
+
+    /// Draws the tab; returns the commands to send. `busy` is true while the engine is behind.
+    pub fn show(&mut self, ui: &mut egui::Ui, busy: bool) -> Vec<LabCommand> {
+        let mut commands = Vec::new();
+        if self.tree_stale && !self.tree_requested {
+            self.tree_stale = false;
+            self.tree_requested = true;
+            commands.push(LabCommand::Tree);
+        }
+
+        egui::Panel::right("node_power")
+            .resizable(true)
+            .default_size(380.0)
+            .show(ui, |ui| {
+                ui.add_enabled_ui(!busy && !self.ranking, |ui| {
+                    if let Some(command) = self.node_power_panel(ui) {
+                        self.ranking = true;
+                        commands.push(command);
+                    }
+                });
+            });
+
+        egui::CentralPanel::default().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                theme::heading(ui, "Passive tree");
+                if ui.button("Fit").clicked() {
                     self.tree_view.fit();
                 }
-                Event::Build(build) => {
-                    self.level = build.level;
-                    self.build = Some(build);
-                    // scores belong to the previous state of the build
-                    self.scores.clear();
-                    self.heat.clear();
-                    self.busy = false;
+                if !self.heat.is_empty() {
+                    ui.label(format!(
+                        "Heatmap: {} per point (blue = low, red = high)",
+                        METRICS[self.scores_metric].1
+                    ));
                 }
-                Event::Progress { done, total } => self.progress = Some((done, total)),
-                Event::NodePower(scores) => {
-                    self.heat = scores
-                        .iter()
-                        .map(|s| {
-                            let heat = Heat {
-                                per_point: s.per_point,
-                                distance: s.distance,
-                            };
-                            (s.id, heat)
-                        })
-                        .collect();
-                    self.scores = scores;
-                    self.scores_metric = self.metric;
-                    self.sort_scores();
-                    self.progress = None;
-                    self.busy = false;
+            });
+            match &self.tree {
+                Some(tree) => self.tree_view.show(ui, tree, &tree.allocated, &self.heat),
+                None => {
+                    ui.label("Loading...");
                 }
-                Event::Error(error) => {
-                    self.error = Some(error);
-                    self.progress = None;
-                    self.busy = false;
-                }
-            }
-        }
-    }
-
-    fn sort_scores(&mut self) {
-        let key = |s: &NodeScore| match self.sort_by {
-            SortBy::Name | SortBy::Distance => 0.0,
-            SortBy::Gain => s.gain,
-            SortBy::PathGain => s.path_gain,
-            SortBy::PerPoint => s.per_point,
-        };
-        match self.sort_by {
-            SortBy::Name => self.scores.sort_by(|a, b| a.name.cmp(&b.name)),
-            SortBy::Distance => self.scores.sort_by_key(|s| s.distance),
-            _ => self.scores.sort_by(|a, b| key(a).total_cmp(&key(b))),
-        }
-        if self.sort_descending {
-            self.scores.reverse();
-        }
-    }
-
-    fn side_panel(&mut self, ui: &mut egui::Ui) {
-        theme::heading(ui, "Build");
-        ui.label("Paste a PoB share code or build XML:");
-        ui.add(
-            egui::TextEdit::multiline(&mut self.import_text)
-                .desired_rows(4)
-                .desired_width(f32::INFINITY),
-        );
-        ui.horizontal(|ui| {
-            if ui.button("Load").clicked() && !self.import_text.trim().is_empty() {
-                self.send(Command::Load(self.import_text.clone()));
-            }
-            if ui.button("New build").clicked() {
-                self.send(Command::NewBuild);
             }
         });
-
-        let Some(build) = &self.build else {
-            return;
-        };
-        ui.separator();
-        ui.label(match &build.ascendancy {
-            Some(ascendancy) => format!("{} ({})", ascendancy, build.class),
-            None => build.class.clone(),
-        });
-
-        let slider = ui.add(egui::Slider::new(&mut self.level, 1..=100).text("Level"));
-        // only recalculate once the user lets go of the slider
-        if slider.drag_stopped() || (slider.changed() && !slider.dragged()) {
-            let level = self.level;
-            self.send(Command::SetLevel(level));
-        }
-
-        ui.separator();
-        ui.strong("Configuration");
-        let mut changed = None;
-        let build = self.build.as_ref().expect("checked above");
-        for (option, value) in CONFIG.iter().zip(&build.config) {
-            match option.kind {
-                ConfigKind::Check => {
-                    let mut checked = *value == ConfigValue::Bool(true);
-                    if ui.checkbox(&mut checked, option.label).changed() {
-                        changed = Some((option.var, ConfigValue::Bool(checked)));
-                    }
-                }
-                ConfigKind::List(choices) => {
-                    let current = match value {
-                        ConfigValue::Text(text) => choices
-                            .iter()
-                            .find(|(v, _)| v == text)
-                            .map_or(text.as_str(), |(_, label)| label),
-                        _ => "(default)",
-                    };
-                    egui::ComboBox::from_label(option.label)
-                        .selected_text(current)
-                        .show_ui(ui, |ui| {
-                            for (choice, label) in choices {
-                                let selected = *value == ConfigValue::Text((*choice).into());
-                                if ui.selectable_label(selected, *label).clicked() {
-                                    changed =
-                                        Some((option.var, ConfigValue::Text((*choice).into())));
-                                }
-                            }
-                        });
-                }
-            }
-        }
-
-        ui.separator();
-        ui.strong("Stats");
-        egui::Grid::new("stats").striped(true).show(ui, |ui| {
-            for ((key, label), value) in STATS.iter().zip(&build.stats) {
-                ui.label(egui::RichText::new(*label).color(stat_color(key)));
-                ui.label(value.map_or("-".into(), format_number));
-                ui.end_row();
-            }
-        });
-
-        if let Some((var, value)) = changed {
-            self.send(Command::SetConfig(var, value));
-        }
+        commands
     }
 
-    fn node_power_panel(&mut self, ui: &mut egui::Ui) {
+    fn node_power_panel(&mut self, ui: &mut egui::Ui) -> Option<LabCommand> {
+        let mut command = None;
         theme::heading(ui, "Node power");
         ui.horizontal(|ui| {
             ui.label("Rank by");
@@ -226,7 +182,7 @@ impl LabApp {
                     }
                 });
             if ui.add(theme::primary_button("Rank nodes")).clicked() {
-                self.send(Command::NodePower {
+                command = Some(LabCommand::NodePower {
                     metric: METRICS[self.metric].0,
                     max_distance: self.max_distance,
                 });
@@ -242,8 +198,8 @@ impl LabApp {
         }
 
         if self.scores.is_empty() {
-            ui.label("Load a build, then rank its unallocated passives by the selected stat.");
-            return;
+            ui.label("Rank this build's unallocated passives by the selected stat.");
+            return command;
         }
         ui.label(format!(
             "{} nodes ranked by {}. \"Path\" includes the points needed to reach the node.",
@@ -320,80 +276,26 @@ impl LabApp {
             }
             self.sort_scores();
         }
+        command
     }
 }
 
-impl eframe::App for LabApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.process_events();
-
-        egui::Panel::top("status").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if self.busy {
-                    ui.spinner();
-                }
-                ui.label(&self.status);
-            });
-            if let Some(error) = &self.error {
-                ui.colored_label(ui.visuals().error_fg_color, error);
-            }
-        });
-
-        egui::Panel::left("build")
-            .resizable(true)
-            .default_size(260.0)
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.add_enabled_ui(!self.busy, |ui| self.side_panel(ui));
-                });
-            });
-
-        egui::Panel::right("node_power")
-            .resizable(true)
-            .default_size(380.0)
-            .show(ui, |ui| {
-                ui.add_enabled_ui(!self.busy, |ui| self.node_power_panel(ui));
-            });
-
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                theme::heading(ui, "Passive tree");
-                if ui.button("Fit").clicked() {
-                    self.tree_view.fit();
-                }
-                if !self.heat.is_empty() {
-                    ui.label(format!(
-                        "Heatmap: {} per point (blue = low, red = high)",
-                        METRICS[self.scores_metric].1
-                    ));
-                }
-            });
-            match (&self.tree, &self.build) {
-                (Some(tree), Some(build)) => {
-                    self.tree_view.show(ui, tree, &build.allocated, &self.heat);
-                }
-                _ => {
-                    ui.label("Loading...");
-                }
-            }
-        });
-    }
-}
-
-/// PoB's colour for a stat, by calc output key.
-fn stat_color(key: &str) -> egui::Color32 {
-    match key {
-        "Life" => theme::LIFE,
-        "Mana" => theme::MANA,
-        "EnergyShield" => theme::ENERGY_SHIELD,
-        "Armour" => theme::ARMOUR,
-        "Evasion" => theme::POSITIVE,
-        "FireResist" => theme::FIRE,
-        "ColdResist" => theme::COLD,
-        "LightningResist" => theme::LIGHTNING,
-        "ChaosResist" => theme::CHAOS,
-        "CombinedDPS" => theme::UNIQUE,
-        _ => theme::HEADING,
+impl LabTab {
+    fn sort_scores(&mut self) {
+        let key = |s: &NodeScore| match self.sort_by {
+            SortBy::Name | SortBy::Distance => 0.0,
+            SortBy::Gain => s.gain,
+            SortBy::PathGain => s.path_gain,
+            SortBy::PerPoint => s.per_point,
+        };
+        match self.sort_by {
+            SortBy::Name => self.scores.sort_by(|a, b| a.name.cmp(&b.name)),
+            SortBy::Distance => self.scores.sort_by_key(|s| s.distance),
+            _ => self.scores.sort_by(|a, b| key(a).total_cmp(&key(b))),
+        }
+        if self.sort_descending {
+            self.scores.reverse();
+        }
     }
 }
 

@@ -5,3 +5,4 @@ pub mod game;
 pub mod pob_files;
 pub mod theme;
 pub mod ui;
+pub mod widgets;

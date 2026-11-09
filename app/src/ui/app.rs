@@ -1115,37 +1115,54 @@ mod tests {
             path: Some("/b/x.xml".into()),
             ..(**app.build.as_ref().unwrap()).clone()
         }));
-        let mut text = String::new();
+        let mut text = String::from("hello");
         let id = egui::Id::unique("typing");
-        let mut run = |app: &mut AutoPobApp, events| {
+        let mut time = 0.0;
+        let mut run = |app: &mut AutoPobApp, text: &mut String, events| {
+            time += 2.0; // far apart, so the field's undoer sees separate edits
             ctx.run_ui(
                 egui::RawInput {
                     events,
+                    time: Some(time),
                     ..Default::default()
                 },
                 |ui| {
                     app.show(ui);
                     egui::Window::new("field").show(ui.ctx(), |ui| {
-                        ui.add(egui::TextEdit::singleline(&mut text).id(id));
+                        ui.add(egui::TextEdit::singleline(text).id(id));
                     });
                 },
             )
             .drop_without_applying_deltas();
         };
-        run(&mut app, vec![]);
+        run(&mut app, &mut text, vec![]);
         ctx.memory_mut(|m| m.request_focus(id));
-        run(&mut app, vec![]);
-        run(&mut app, vec![]);
+        run(&mut app, &mut text, vec![]);
+        run(&mut app, &mut text, vec![]);
         assert!(ctx.egui_wants_keyboard_input());
+        run(&mut app, &mut text, vec![egui::Event::Text("!".into())]);
+        run(&mut app, &mut text, vec![]);
+        assert_eq!(text, "hello!");
         let before = app.sent_log.len();
-        run(&mut app, key_with(egui::Key::Z, egui::Modifiers::COMMAND));
-        run(&mut app, key_with(egui::Key::Y, egui::Modifiers::COMMAND));
-        assert_eq!(
-            app.sent_log.len(),
-            before,
-            "undo/redo belong to the text field"
+        // the field's own undo reverts the edit, so the key must reach it
+        run(
+            &mut app,
+            &mut text,
+            key_with(egui::Key::Z, egui::Modifiers::COMMAND),
         );
-        run(&mut app, key_with(egui::Key::S, egui::Modifiers::COMMAND));
+        assert_eq!(text, "hello", "Ctrl+Z was taken from the text field");
+        run(
+            &mut app,
+            &mut text,
+            key_with(egui::Key::Y, egui::Modifiers::COMMAND),
+        );
+        assert_eq!(text, "hello!", "Ctrl+Y was taken from the text field");
+        assert_eq!(app.sent_log.len(), before, "no Undo or Redo command");
+        run(
+            &mut app,
+            &mut text,
+            key_with(egui::Key::S, egui::Modifiers::COMMAND),
+        );
         assert_eq!(app.sent_log.last().map(String::as_str), Some("Save"));
     }
 

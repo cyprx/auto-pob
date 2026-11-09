@@ -107,6 +107,130 @@
     "WithIgniteDPS": 139.02029914529913,
     "WithPoisonDPS": 139.02029914529913
   },
+  "sidebar": [
+    {
+      "label": "Active Minion Limit",
+      "text": "6"
+    },
+    {
+      "label": "Cast Rate",
+      "text": "1.24"
+    },
+    {
+      "label": "Mana Cost",
+      "text": "28"
+    },
+    {
+      "label": "Mana Cost per second",
+      "text": "34.59"
+    },
+    {
+      "label": "Strength",
+      "text": "34"
+    },
+    {
+      "label": "Dexterity",
+      "text": "44"
+    },
+    {
+      "label": "Intelligence",
+      "text": "122"
+    },
+    {
+      "label": "Intelligence Required",
+      "text": "155"
+    },
+    {
+      "label": "Effective Hit Pool",
+      "text": "881"
+    },
+    {
+      "label": "Phys Max Hit",
+      "text": "1,232"
+    },
+    {
+      "label": "Elemental Max Hit",
+      "text": "838"
+    },
+    {
+      "label": "Chaos Max Hit",
+      "text": "745"
+    },
+    {
+      "label": "Total Life",
+      "text": "1,192"
+    },
+    {
+      "label": "%Inc Life from Tree",
+      "text": "5%"
+    },
+    {
+      "label": "Total Mana",
+      "text": "725"
+    },
+    {
+      "label": "%Inc Mana from Tree",
+      "text": "8%"
+    },
+    {
+      "label": "Mana Regen",
+      "text": "12.7"
+    },
+    {
+      "label": "Energy Shield",
+      "text": "40"
+    },
+    {
+      "label": "%Inc ES from Tree",
+      "text": "6%"
+    },
+    {
+      "label": "Evasion rating",
+      "text": "16"
+    },
+    {
+      "label": "Phys. Damage Reduction",
+      "text": "0%"
+    },
+    {
+      "label": "Fire Resistance",
+      "text": "-44%"
+    },
+    {
+      "label": "Cold Resistance",
+      "text": "-44%"
+    },
+    {
+      "label": "Lightning Resistance",
+      "text": "-44%"
+    },
+    {
+      "label": "Chaos Resistance",
+      "text": "-60%"
+    },
+    {
+      "label": "Movement Speed Modifier",
+      "text": "+0%"
+    }
+  ],
+  "minion_sidebar": [
+    {
+      "label": "Average Damage",
+      "text": "162.7"
+    },
+    {
+      "label": "Attack/Cast Rate",
+      "text": "0.85"
+    },
+    {
+      "label": "Hit DPS",
+      "text": "139"
+    },
+    {
+      "label": "Total Life",
+      "text": "7,648"
+    }
+  ],
   "visible_config": [
     "EHPUnluckyWorstOf",
     "MapPrefix1",

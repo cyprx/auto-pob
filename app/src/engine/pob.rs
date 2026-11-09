@@ -131,7 +131,11 @@ impl Backend for PobBackend {
                 if folder.contains("..") || folder.starts_with('/') {
                     anyhow::bail!("that isn't a valid folder");
                 }
-                self.folder = folder;
+                self.folder = if folder.is_empty() || folder.ends_with('/') {
+                    folder
+                } else {
+                    format!("{folder}/")
+                };
                 Ok(Affected {
                     list: true,
                     ..Affected::default()

@@ -265,6 +265,24 @@ fn assert_view_matches(
     }
 }
 
+/// The rows must be exactly the lines PoB's own sidebar showed, in order.
+fn assert_sidebar(
+    name: &str,
+    what: &str,
+    rows: &[auto_pob::engine::StatRow],
+    sidebar: &[auto_pob::engine::upstream::SidebarLine],
+) {
+    let got: Vec<(&str, &str)> = rows
+        .iter()
+        .map(|r| (r.label.as_str(), r.text.as_str()))
+        .collect();
+    let want: Vec<(&str, &str)> = sidebar
+        .iter()
+        .map(|l| (l.label.as_str(), l.text.as_str()))
+        .collect();
+    assert_eq!(got, want, "{name}: {what} sidebar lines");
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn stats_match_pob() {
@@ -275,17 +293,13 @@ fn stats_match_pob() {
         let view = s.stats();
         let want = golden(&name);
         assert_view_matches(&name, "stat", &view.stats, &want.stats);
-        // the sidebar hides zero and flag-gated stats, so it shows only part of the golden set
-        let life = view.stats.iter().find(|r| r.key == "Life");
-        if name != "new" {
-            assert!(
-                life.is_some_and(|r| !r.text.is_empty()),
-                "{name}: no Life row"
-            );
-        }
-        match want.minion_stats {
-            Some(ref minion) => assert_view_matches(&name, "minion stat", &view.minion, minion),
-            None => assert!(view.minion.is_empty(), "{name}: unexpected minion rows"),
+        assert_sidebar(&name, "stat", &view.stats, &want.sidebar);
+        match (&want.minion_stats, &want.minion_sidebar) {
+            (Some(minion), Some(sidebar)) => {
+                assert_view_matches(&name, "minion stat", &view.minion, minion);
+                assert_sidebar(&name, "minion stat", &view.minion, sidebar);
+            }
+            _ => assert!(view.minion.is_empty(), "{name}: unexpected minion rows"),
         }
     }
 }
@@ -356,7 +370,7 @@ fn save_as_refuses_existing_without_overwrite() {
     let err = s.run(save_as("x", false)).unwrap_err();
     assert!(format!("{err:#}").contains("exists"), "{err:#}");
     s.run(save_as("x", true)).expect("overwrite");
-    // saving an unsaved-name build with Save fails, but a saved one works
+    // plain Save writes to the file the build now has
     s.run(Command::Save).expect("save");
     let build = s.backend.build_view().unwrap();
     assert_eq!(build.name, "x");
@@ -507,4 +521,52 @@ fn engine_spawn_reaches_ready_with_snapshots() {
     );
     engine.send(Command::Shutdown);
     let _ = fs::remove_dir_all(&user);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn folder_without_trailing_slash_stays_inside_the_folder() {
+    let _guard = lock();
+    let mut s = Session::start("folder-slash");
+    s.run(Command::NewBuild).unwrap();
+    s.run(Command::SaveAs {
+        folder: "Sub Folder".into(),
+        name: "y".into(),
+        overwrite: false,
+    })
+    .expect("save as");
+    assert!(s.builds_dir().join("Sub Folder/y.xml").exists());
+    s.run(Command::ListBuilds {
+        folder: "Sub Folder".into(),
+    })
+    .unwrap();
+    let list = s.backend.build_list_view().unwrap();
+    assert_eq!(list.entries.len(), 1);
+    assert_eq!(list.entries[0].name, "y");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn failed_save_as_leaves_the_build_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let _guard = lock();
+    let mut s = Session::start("save-fails");
+    s.run(Command::NewBuild).unwrap();
+    s.run(save_as("keep", false)).unwrap();
+    let before = s.backend.build_view().unwrap();
+    let locked = s.builds_dir().join("Locked");
+    fs::create_dir_all(&locked).unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+    let result = s.run(Command::SaveAs {
+        folder: "Locked/".into(),
+        name: "z".into(),
+        overwrite: false,
+    });
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    if fs::write(locked.join("probe"), "").is_ok() && result.is_ok() {
+        panic!("save into a read-only folder unexpectedly worked");
+    }
+    result.unwrap_err();
+    assert_eq!(s.backend.build_view().unwrap().path, before.path);
+    assert_eq!(s.backend.build_view().unwrap().name, "keep");
 }

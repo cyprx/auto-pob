@@ -48,7 +48,14 @@ function glue.build_view()
 	}
 end
 
+-- A folder is "" or ends with "/", so it can be joined to a file name.
+local function normalise_folder(folder)
+	if folder ~= "" and folder:sub(-1) ~= "/" then folder = folder .. "/" end
+	return folder
+end
+
 function glue.list_builds(subPath)
+	subPath = normalise_folder(subPath)
 	local helpers = LoadModule("Modules/BuildListHelpers")
 	local index = helpers.ScanFolder(subPath)
 	local list = helpers.FilterList(index, subPath, "")
@@ -120,6 +127,7 @@ function glue.save_as(subPath, name, overwrite)
 	if subPath:find("%.%.") or subPath:sub(1, 1) == "/" then
 		error("that isn't a valid folder", 0)
 	end
+	subPath = normalise_folder(subPath)
 	local build = pob.build
 	local main = main_module()
 	local fullPath = main.buildPath .. subPath .. name .. ".xml"
@@ -131,8 +139,13 @@ function glue.save_as(subPath, name, overwrite)
 		end
 	end
 	MakeDir(main.buildPath .. subPath)
+	local old = { build.dbFileName, build.buildName, build.dbFileSubPath }
 	build.dbFileName = fullPath
 	build.buildName = name
 	build.dbFileSubPath = subPath
-	glue.save()
+	local ok, err = pcall(glue.save)
+	if not ok then
+		build.dbFileName, build.buildName, build.dbFileSubPath = old[1], old[2], old[3]
+		error(err, 0)
+	end
 end

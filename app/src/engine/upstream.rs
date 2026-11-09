@@ -30,10 +30,22 @@ pub struct Golden {
     /// Like `stats`, for `minionDisplayStats` against the main skill's minion; absent without one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minion_stats: Option<BTreeMap<String, f64>>,
+    /// The sidebar's `(label, value)` lines as PoB's own stat list rendered them, colour codes
+    /// removed; for the player, or for the minion when it has one.
+    #[serde(default)]
+    pub sidebar: Vec<SidebarLine>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minion_sidebar: Option<Vec<SidebarLine>>,
     /// Config variables whose controls are shown, sorted.
     pub visible_config: Vec<String>,
     /// `configTab.input`: booleans, numbers and strings.
     pub config: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SidebarLine {
+    pub label: String,
+    pub text: String,
 }
 
 const EXTRACT: &str = r#"
@@ -55,12 +67,30 @@ if minion then
 		end
 	end
 end
+-- PoB's rendered stat list: two-column rows are stats, "Minion:" and "Player:" rows divide it
+local sidebar, minionSidebar = {}, nil
+local target = sidebar
+for _, row in ipairs(build.controls.statBox.list) do
+	local first, second = row[1], row[2]
+	if type(first) == "string" and type(second) == "string" then
+		local label = StripEscapes(first):gsub(":$", "")
+		target[#target + 1] = { label = label, text = StripEscapes(second) }
+	elseif type(first) == "string" and second == nil then
+		local plain = StripEscapes(first)
+		if plain == "Minion:" then
+			minionSidebar = {}
+			target = minionSidebar
+		elseif plain == "Player:" then
+			target = sidebar
+		end
+	end
+end
 local visible = {}
 for var, control in pairs(build.configTab.varControls) do
 	if control:IsShown() then visible[#visible + 1] = var end
 end
 table.sort(visible)
-return { stats = stats, minion_stats = minionStats, visible_config = visible, config = build.configTab.input }
+return { stats = stats, minion_stats = minionStats, sidebar = sidebar, minion_sidebar = minionSidebar, visible_config = visible, config = build.configTab.input }
 "#;
 
 /// Reads the golden data from the build currently loaded in `lua`.
@@ -70,6 +100,9 @@ pub fn golden_of(lua: &Lua, pob_version: &str) -> Result<Golden> {
         #[serde(default)]
         stats: BTreeMap<String, f64>,
         minion_stats: Option<BTreeMap<String, f64>>,
+        #[serde(default)]
+        sidebar: Vec<SidebarLine>,
+        minion_sidebar: Option<Vec<SidebarLine>>,
         #[serde(default)]
         visible_config: Vec<String>,
         #[serde(default)]
@@ -85,6 +118,8 @@ pub fn golden_of(lua: &Lua, pob_version: &str) -> Result<Golden> {
         pob_version: pob_version.to_string(),
         stats: raw.stats,
         minion_stats: raw.minion_stats,
+        sidebar: raw.sidebar,
+        minion_sidebar: raw.minion_sidebar,
         visible_config: raw.visible_config,
         config: raw.config,
     })

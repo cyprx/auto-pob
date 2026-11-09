@@ -76,6 +76,9 @@ pub struct AutoPobApp {
     /// Actions waiting for the next frame (they need the egui context).
     ready_actions: Vec<Pending>,
     allow_close: bool,
+    /// Names of the commands sent through `send`, for tests.
+    #[cfg(test)]
+    sent_log: Vec<String>,
 }
 
 impl AutoPobApp {
@@ -108,6 +111,8 @@ impl AutoPobApp {
             import: None,
             ready_actions: Vec::new(),
             allow_close: false,
+            #[cfg(test)]
+            sent_log: Vec::new(),
         }
     }
 
@@ -118,6 +123,14 @@ impl AutoPobApp {
 
     /// Sends a command whose snapshots the UI waits for.
     fn send(&mut self, command: Command) -> u64 {
+        #[cfg(test)]
+        self.sent_log.push(
+            format!("{command:?}")
+                .split(['(', ' '])
+                .next()
+                .unwrap_or_default()
+                .to_owned(),
+        );
         let seq = self.engine.send(command);
         self.last_sent = seq;
         seq
@@ -430,26 +443,27 @@ impl AutoPobApp {
             return;
         };
 
-        // shortcuts; undo/redo leave text fields to their own undo
-        let (save, undo, redo) = ui.input_mut(|i| {
-            (
-                i.consume_key(egui::Modifiers::COMMAND, egui::Key::S),
-                i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z),
-                i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y)
-                    || i.consume_key(
-                        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-                        egui::Key::Z,
-                    ),
-            )
-        });
+        // Shortcuts. Nothing fires under a modal. While a text field has focus, Ctrl+Z and
+        // Ctrl+Y are left unconsumed for the field's own undo; Ctrl+S still saves.
+        let modal = self.prompt.is_some() || self.save_as.is_some() || self.import.is_some();
         let typing = ui.ctx().egui_wants_keyboard_input();
         let mut action = None;
-        if save {
-            action = Some(BuildAction::Save);
-        } else if undo && !typing {
-            action = Some(BuildAction::Undo);
-        } else if redo && !typing {
-            action = Some(BuildAction::Redo);
+        if !modal {
+            let command = egui::Modifiers::COMMAND;
+            let shift = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+            ui.input_mut(|i| {
+                if i.consume_key(command, egui::Key::S) {
+                    action = Some(BuildAction::Save);
+                }
+                if !typing {
+                    // the Shift variant first: `consume_key` ignores extra Shift
+                    if i.consume_key(shift, egui::Key::Z) || i.consume_key(command, egui::Key::Y) {
+                        action = action.or(Some(BuildAction::Redo));
+                    } else if i.consume_key(command, egui::Key::Z) {
+                        action = action.or(Some(BuildAction::Undo));
+                    }
+                }
+            });
         }
 
         egui::Panel::top("top_bar").show(ui, |ui| {
@@ -1049,6 +1063,111 @@ mod tests {
             a.ready && a.list.is_some()
         });
         assert_eq!(app.screen, Screen::List);
+    }
+
+    fn key_with(key: egui::Key, modifiers: egui::Modifiers) -> Vec<egui::Event> {
+        vec![egui::Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }]
+    }
+
+    fn open_new_build() -> (AutoPobApp, egui::Context) {
+        let (mut app, ctx) = started();
+        app.request(Pending::New);
+        pump_until(&mut app, &ctx, "build", |a| {
+            a.screen == Screen::Build && a.entering.is_none() && a.stats.is_some()
+        });
+        (app, ctx)
+    }
+
+    #[test]
+    fn ctrl_shift_z_redoes_and_ctrl_z_undoes() {
+        let (mut app, ctx) = open_new_build();
+        let before = app.last_sent;
+        frame(
+            &mut app,
+            &ctx,
+            key_with(
+                egui::Key::Z,
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            ),
+        );
+        assert_eq!(app.last_sent, before + 1);
+        // the sent command was Redo: check via the engine's record
+        assert_eq!(app.sent_log.last().map(String::as_str), Some("Redo"));
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Z, egui::Modifiers::COMMAND),
+        );
+        assert_eq!(app.sent_log.last().map(String::as_str), Some("Undo"));
+    }
+
+    #[test]
+    fn typing_keeps_undo_but_ctrl_s_still_saves() {
+        let (mut app, ctx) = open_new_build();
+        // give the build a file so Save is a plain Save
+        app.build = Some(Arc::new(BuildView {
+            path: Some("/b/x.xml".into()),
+            ..(**app.build.as_ref().unwrap()).clone()
+        }));
+        let mut text = String::new();
+        let id = egui::Id::unique("typing");
+        let mut run = |app: &mut AutoPobApp, events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    app.show(ui);
+                    egui::Window::new("field").show(ui.ctx(), |ui| {
+                        ui.add(egui::TextEdit::singleline(&mut text).id(id));
+                    });
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        run(&mut app, vec![]);
+        ctx.memory_mut(|m| m.request_focus(id));
+        run(&mut app, vec![]);
+        run(&mut app, vec![]);
+        assert!(ctx.egui_wants_keyboard_input());
+        let before = app.sent_log.len();
+        run(&mut app, key_with(egui::Key::Z, egui::Modifiers::COMMAND));
+        run(&mut app, key_with(egui::Key::Y, egui::Modifiers::COMMAND));
+        assert_eq!(
+            app.sent_log.len(),
+            before,
+            "undo/redo belong to the text field"
+        );
+        run(&mut app, key_with(egui::Key::S, egui::Modifiers::COMMAND));
+        assert_eq!(app.sent_log.last().map(String::as_str), Some("Save"));
+    }
+
+    #[test]
+    fn shortcuts_do_nothing_under_a_modal() {
+        let (mut app, ctx) = open_new_build();
+        app.open_save_as(None);
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_log.len();
+        for key in [egui::Key::S, egui::Key::Z, egui::Key::Y] {
+            frame(&mut app, &ctx, key_with(key, egui::Modifiers::COMMAND));
+        }
+        assert_eq!(app.sent_log.len(), before);
+        // and under the unsaved prompt
+        app.save_as = None;
+        app.prompt = Some(Pending::BackToList);
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::S, egui::Modifiers::COMMAND),
+        );
+        assert_eq!(app.sent_log.len(), before);
     }
 
     impl AutoPobApp {

@@ -170,5 +170,21 @@ fn committed_xml_loads_as_described() {
 
         let reloaded = golden_of(&lua, Game::Poe1.pob_version()).expect("reading stats");
         assert_eq!(reloaded, golden(name), "{name}: XML and golden data differ");
+
+        // offence fixtures must have real damage numbers, or parity checks pass on zeros
+        let dps = |stats: Option<&std::collections::BTreeMap<String, f64>>| {
+            stats
+                .and_then(|s| s.get("TotalDPS"))
+                .copied()
+                .unwrap_or(0.0)
+        };
+        match name {
+            "attack" => assert!(dps(Some(&reloaded.stats)) > 0.0, "attack has no TotalDPS"),
+            "minion" => assert!(
+                dps(reloaded.minion_stats.as_ref()) > 0.0,
+                "minion has no TotalDPS"
+            ),
+            _ => {}
+        }
     }
 }

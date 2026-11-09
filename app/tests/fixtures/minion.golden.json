@@ -88,6 +88,25 @@
     "WithIgniteDPS": 0.0,
     "WithPoisonDPS": 0.0
   },
+  "minion_stats": {
+    "AverageDamage": 162.65374999999997,
+    "CombinedDPS": 139.02029914529913,
+    "CullingDPS": 0.0,
+    "EnergyShield": 0.0,
+    "EnergyShieldLeechGainRate": 0.0,
+    "EnergyShieldRegenRecovery": 0.0,
+    "Life": 7648.0,
+    "LifeLeechGainRate": 0.0,
+    "LifeRegenRecovery": 0.0,
+    "ReservationDPS": 0.0,
+    "Speed": 0.8547008547008548,
+    "TotalDPS": 139.02029914529913,
+    "TotalDot": 0.0,
+    "TotalDotDPS": 0.0,
+    "WithBleedDPS": 139.02029914529913,
+    "WithIgniteDPS": 139.02029914529913,
+    "WithPoisonDPS": 139.02029914529913
+  },
   "visible_config": [
     "EHPUnluckyWorstOf",
     "MapPrefix1",

@@ -26,7 +26,7 @@ local function allocClassSide(count)
 	end
 end
 
--- spec: { class = "Witch", level = 90, gems = { "Essence Drain", ... }, nodes = 20 }
+-- spec: { weapon = "<raw item text>" (optional), class = "Witch", level = 90, gems = { "Essence Drain", ... }, nodes = 20 }
 function buildFixture(spec)
 	build.spec:SelectClass(classIdByName(spec.class))
 
@@ -43,6 +43,15 @@ function buildFixture(spec)
 		text = text .. gem .. " 20/0  1\r\n"
 	end
 	build.skillsTab:PasteSocketGroup(text)
+
+	-- the first group is the main skill
+	build.mainSocketGroup = 1
+
+	if spec.weapon then
+		local item = new("Item", spec.weapon)
+		build.itemsTab:AddItem(item, false)
+		build.itemsTab:PopulateSlots()
+	end
 
 	build.modFlag = true
 	build.buildFlag = true

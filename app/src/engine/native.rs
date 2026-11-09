@@ -44,10 +44,16 @@ pub fn register(lua: &Lua, pob_dir: &Path, user_dir: &Path) -> mlua::Result<()> 
     g.set(
         "MakeDir",
         lua.create_function(|_, path: String| {
-            // PoB ignores the result; an existing folder is fine
-            let _ = fs::create_dir_all(path);
-            Ok(())
+            // PoB ignores the result; true means this call created the folder
+            let existed = std::path::Path::new(&path).exists();
+            let _ = fs::create_dir_all(&path);
+            Ok(!existed && std::path::Path::new(&path).is_dir())
         })?,
+    )?;
+    g.set(
+        "RemoveDir",
+        // only an empty folder goes; anything else is left alone
+        lua.create_function(|_, path: String| Ok(fs::remove_dir(path).is_ok()))?,
     )?;
     Ok(())
 }

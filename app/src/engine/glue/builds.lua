@@ -157,7 +157,8 @@ function glue.save_as(subPath, name, overwrite)
 			error("a build named '" .. name .. "' exists", 0)
 		end
 	end
-	MakeDir(main.buildPath .. subPath)
+	local folder = main.buildPath .. subPath
+	local createdFolder = MakeDir(folder)
 	local old = { build.dbFileName, build.buildName, build.dbFileSubPath }
 	build.dbFileName = fullPath
 	build.buildName = name
@@ -165,6 +166,8 @@ function glue.save_as(subPath, name, overwrite)
 	local ok, err = pcall(glue.save)
 	if not ok then
 		build.dbFileName, build.buildName, build.dbFileSubPath = old[1], old[2], old[3]
+		-- don't leave behind a folder this call made; RemoveDir only removes empty ones
+		if createdFolder then RemoveDir(folder) end
 		error(err, 0)
 	end
 end

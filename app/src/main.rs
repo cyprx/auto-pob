@@ -16,8 +16,11 @@ fn main() -> eframe::Result {
         .expect("home directory")
         .data_dir()
         .to_path_buf();
-    let user_dir = std::env::var_os("AUTO_POB_USER_DIR")
-        .map_or_else(|| game.default_user_dir(&data_dir), PathBuf::from);
+    // PoB changes the working directory, so a relative override must be made absolute first
+    let user_dir = std::env::var_os("AUTO_POB_USER_DIR").map_or_else(
+        || game.default_user_dir(&data_dir),
+        |dir| std::path::absolute(&dir).unwrap_or_else(|_| PathBuf::from(dir)),
+    );
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

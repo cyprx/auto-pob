@@ -27,7 +27,9 @@ pub fn ensure_pob(
     data_dir: &Path,
     progress: &mut dyn FnMut(DownloadProgress),
 ) -> anyhow::Result<PathBuf> {
-    let override_dir = std::env::var_os(ENV_POB_DIR).map(PathBuf::from);
+    // PoB changes the working directory, so a relative override must be made absolute first
+    let override_dir = std::env::var_os(ENV_POB_DIR)
+        .map(|dir| std::path::absolute(&dir).unwrap_or_else(|_| PathBuf::from(dir)));
     ensure_pob_with(
         game,
         data_dir,
@@ -193,6 +195,75 @@ mod tests {
         assert!(dest.join("manifest.xml").exists());
         assert!(!dest.join("docs").exists());
         assert!(!dest.join("src").exists());
+    }
+
+    /// A reader that yields `data`, then fails.
+    struct FailingAfter(std::io::Cursor<Vec<u8>>);
+
+    impl Read for FailingAfter {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            match self.0.read(buf)? {
+                0 => Err(io::Error::other("connection lost")),
+                n => Ok(n),
+            }
+        }
+    }
+
+    #[test]
+    fn failed_or_truncated_fetch_leaves_no_marker() {
+        let bytes = tarball();
+        type Attempt = Box<dyn Fn() -> anyhow::Result<Box<dyn Read>>>;
+        let attempts: [Attempt; 3] = [
+            Box::new(|| anyhow::bail!("offline")),
+            // cut off mid-stream by an error
+            Box::new({
+                let cut = bytes[..bytes.len() / 2].to_vec();
+                move || {
+                    Ok(Box::new(FailingAfter(std::io::Cursor::new(cut.clone()))) as Box<dyn Read>)
+                }
+            }),
+            // cut off cleanly (a short body)
+            Box::new({
+                let cut = bytes[..bytes.len() / 2].to_vec();
+                move || Ok(Box::new(std::io::Cursor::new(cut.clone())) as Box<dyn Read>)
+            }),
+        ];
+        for (i, fetch) in attempts.iter().enumerate() {
+            let data = scratch(&format!("truncated{i}"));
+            let result = ensure_pob_with(Game::Poe1, &data, None, &mut || fetch(), &mut noop);
+            assert!(result.is_err(), "attempt {i} succeeded");
+            let dir = Game::Poe1.install_dir(&data);
+            assert!(!dir.join(".complete").exists(), "attempt {i} left a marker");
+        }
+    }
+
+    #[test]
+    fn entries_escaping_the_destination_are_not_written() {
+        let outer = scratch("escape");
+        let dest = outer.join("dest");
+        fs::create_dir_all(&dest).unwrap();
+        let mut b = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::fast()));
+        for (path, data) in [
+            ("Root/src/../../evil.txt", "evil"),
+            ("Root/src/ok.lua", "ok"),
+        ] {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(data.len() as u64);
+            h.set_mode(0o644);
+            // set_path refuses `..`, so write the raw name bytes
+            h.as_old_mut().name[..path.len()].copy_from_slice(path.as_bytes());
+            h.set_cksum();
+            b.append(&h, data.as_bytes()).unwrap();
+        }
+        let bytes = b.into_inner().unwrap().finish().unwrap();
+        extract(&bytes[..], &dest).unwrap();
+        assert!(dest.join("ok.lua").exists());
+        assert!(!outer.join("evil.txt").exists());
+        assert!(!dest.join("evil.txt").exists());
+        // and the mapping itself rejects `..` and absolute paths
+        assert_eq!(map_entry(Path::new("src/../../x"), &dest), None);
+        assert_eq!(map_entry(Path::new("/etc/passwd"), &dest), None);
+        assert_eq!(map_entry(Path::new("src/a/../b"), &dest), None);
     }
 
     #[test]

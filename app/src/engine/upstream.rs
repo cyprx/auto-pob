@@ -10,6 +10,9 @@ use std::{collections::BTreeMap, path::Path};
 ///
 /// The returned state has the wrapper's globals (`build`, `newBuild`, `loadBuildFromXML`)
 /// and the real `Inflate`/`Deflate` (the wrapper stubs them).
+///
+/// Unlike our own startup, upstream's wrapper keeps `devMode` on (its user path is "/"), which
+/// is harmless here because nothing it could autosave is writable.
 pub fn upstream_lua(pob_dir: &Path) -> Result<Lua> {
     let lua = super::pob::new_lua(pob_dir)?;
     lua.load("dofile('HeadlessWrapper.lua')")

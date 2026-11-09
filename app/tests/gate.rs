@@ -495,6 +495,8 @@ fn list_shows_folders_first_with_headers() {
 #[ignore = "needs the pinned PoB install"]
 fn engine_spawn_reaches_ready_with_snapshots() {
     let _guard = lock();
+    // fail early without AUTO_POB_POB_DIR, rather than downloading PoB into the temp folder
+    pob_dir();
     let user = std::env::temp_dir().join(format!("auto-pob-gate-spawn-{}", std::process::id()));
     let _ = fs::remove_dir_all(&user);
     let engine = Engine::spawn(Game::Poe1, std::env::temp_dir(), user.clone(), || {});
@@ -534,6 +536,16 @@ fn engine_spawn_reaches_ready_with_snapshots() {
         "{ready} {build} {list} {stats} {config}"
     );
     engine.send(Command::Shutdown);
+    // the engine thread has stopped once the channel disconnects; only then is the working
+    // directory and the user folder free to go
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while engine
+        .events
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .is_ok()
+        && std::time::Instant::now() < deadline
+    {}
+    assert!(!engine.is_alive(), "the engine didn't stop after Shutdown");
     let _ = fs::remove_dir_all(&user);
 }
 
@@ -714,6 +726,34 @@ fn recalculate_reports_frame_errors_once() {
     // the failure was consumed, so it doesn't surface in the next, unrelated frame
     s.run(save_as("after", false))
         .expect("save after a failed recalc");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn failed_save_as_removes_the_folder_it_created() {
+    let _guard = lock();
+    let mut s = Session::start("save-fails-folder");
+    s.run(Command::NewBuild).unwrap();
+    s.backend
+        .lua
+        .load("pob.build.SaveDBFile = function() return 'disk full' end")
+        .exec()
+        .unwrap();
+    let existing = s.builds_dir().join("Existing");
+    fs::create_dir_all(&existing).unwrap();
+    for folder in ["Fresh/", "Existing/"] {
+        s.run(Command::SaveAs {
+            folder: folder.into(),
+            name: "z".into(),
+            overwrite: false,
+        })
+        .unwrap_err();
+    }
+    assert!(!s.builds_dir().join("Fresh").exists(), "empty folder left");
+    assert!(
+        existing.is_dir(),
+        "a folder that already existed was removed"
+    );
 }
 
 // ---- config through PobBackend ----

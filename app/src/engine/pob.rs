@@ -115,16 +115,6 @@ impl PobBackend {
     }
 }
 
-fn all_views() -> Affected {
-    Affected {
-        build: true,
-        list: true,
-        stats: true,
-        config: true,
-        recalc: false,
-    }
-}
-
 /// A config change touches the build and the config tab, and needs a recalculation (after
 /// which the loop also refreshes the stats).
 fn config_changed() -> Affected {
@@ -155,15 +145,15 @@ impl Backend for PobBackend {
             }
             Command::NewBuild => {
                 self.call::<_, ()>("new_build", ())?;
-                Ok(all_views())
+                Ok(Affected::ALL_VIEWS)
             }
             Command::OpenBuild { path } => {
                 self.call::<_, ()>("open_build", path.to_string_lossy().into_owned())?;
-                Ok(all_views())
+                Ok(Affected::ALL_VIEWS)
             }
             Command::ImportShareCode { code } => {
                 self.call::<_, ()>("import_code", code)?;
-                Ok(all_views())
+                Ok(Affected::ALL_VIEWS)
             }
             Command::Save => {
                 self.call::<_, ()>("save", ())?;
@@ -185,6 +175,7 @@ impl Backend for PobBackend {
                     ..Affected::default()
                 })
             }
+            // run_loop handles Shutdown before applying commands; nothing to do here
             Command::Shutdown => Ok(Affected::default()),
             Command::Lab(lab) => super::lab::apply(&self.lua, &self.pob_dir, lab, send),
             Command::SetConfig { var, value } => {

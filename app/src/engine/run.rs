@@ -40,7 +40,7 @@ pub struct Affected {
 }
 
 impl Affected {
-    const ALL_VIEWS: Affected = Affected {
+    pub(crate) const ALL_VIEWS: Affected = Affected {
         build: true,
         list: true,
         stats: true,

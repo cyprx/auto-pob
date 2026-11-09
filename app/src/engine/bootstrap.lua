@@ -100,7 +100,7 @@ end
 function GetRuntimePath()
 	return ""
 end
-function RemoveDir(path) end
+-- RemoveDir is native (Rust)
 function SetWorkDir(path) end
 function LaunchSubScript(scriptText, funcList, subList, ...) return nil end
 function AbortSubScript(ssID) end

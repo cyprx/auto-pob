@@ -65,6 +65,8 @@ pub struct AutoPobApp {
     screen: Screen,
     /// A build is being opened; the build screen waits for this command's snapshots.
     entering: Option<u64>,
+    /// Seqs of recent Lab commands, so only their errors reset the Lab tab.
+    lab_seqs: Vec<u64>,
     tab: BuildTab,
     lab: LabTab,
     config_ui: ConfigUi,
@@ -106,6 +108,7 @@ impl AutoPobApp {
             last_snapshot: 0,
             screen: Screen::List,
             entering: None,
+            lab_seqs: Vec::new(),
             tab: BuildTab::default(),
             lab: LabTab::default(),
             config_ui: ConfigUi::default(),
@@ -206,7 +209,10 @@ impl AutoPobApp {
     }
 
     fn on_error(&mut self, seq: u64, message: String) {
-        self.lab.failed();
+        if let Some(at) = self.lab_seqs.iter().position(|s| *s == seq) {
+            self.lab_seqs.remove(at);
+            self.lab.failed();
+        }
         if self.entering == Some(seq) {
             // the build never opened; go back to where the user was
             self.entering = None;
@@ -508,7 +514,11 @@ impl AutoPobApp {
         }
         for command in lab_commands {
             // lab commands answer with events, not snapshots, so they don't count as "behind"
-            self.engine.send(Command::Lab(command));
+            let seq = self.engine.send(Command::Lab(command));
+            self.lab_seqs.push(seq);
+            if self.lab_seqs.len() > 32 {
+                self.lab_seqs.remove(0);
+            }
         }
 
         match action {

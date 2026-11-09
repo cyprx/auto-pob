@@ -9,6 +9,7 @@ use crate::pob_files::DownloadProgress;
 use crate::theme;
 use crate::ui::build::{self, BuildAction, BuildTab};
 use crate::ui::build_list::{BuildListUi, ListScreenAction};
+use crate::ui::config::ConfigUi;
 use crate::ui::lab::LabTab;
 use crate::ui::unsaved::{Pending, PromptChoice, Resolution, needs_prompt, resolve};
 use crate::ui::{sidebar, startup};
@@ -66,6 +67,7 @@ pub struct AutoPobApp {
     entering: Option<u64>,
     tab: BuildTab,
     lab: LabTab,
+    config_ui: ConfigUi,
     list_ui: BuildListUi,
 
     notices: Vec<String>,
@@ -79,6 +81,9 @@ pub struct AutoPobApp {
     /// Names of the commands sent through `send`, for tests.
     #[cfg(test)]
     sent_log: Vec<String>,
+    /// The same commands in full (`{:?}`), for tests that check arguments.
+    #[cfg(test)]
+    sent_full: Vec<String>,
 }
 
 impl AutoPobApp {
@@ -103,6 +108,7 @@ impl AutoPobApp {
             entering: None,
             tab: BuildTab::default(),
             lab: LabTab::default(),
+            config_ui: ConfigUi::default(),
             list_ui: BuildListUi::default(),
             notices: Vec::new(),
             pending_save: None,
@@ -113,6 +119,8 @@ impl AutoPobApp {
             allow_close: false,
             #[cfg(test)]
             sent_log: Vec::new(),
+            #[cfg(test)]
+            sent_full: Vec::new(),
         }
     }
 
@@ -123,6 +131,8 @@ impl AutoPobApp {
 
     /// Sends a command whose snapshots the UI waits for.
     fn send(&mut self, command: Command) -> u64 {
+        #[cfg(test)]
+        self.sent_full.push(format!("{command:?}"));
         #[cfg(test)]
         self.sent_log.push(
             format!("{command:?}")
@@ -476,16 +486,26 @@ impl AutoPobApp {
             .show(ui, |ui| sidebar::show(ui, self.stats.as_deref(), behind));
 
         let mut lab_commands = Vec::new();
+        let mut config_commands = Vec::new();
+        let config = self.config.clone();
         egui::CentralPanel::default().show(ui, |ui| {
             build::tab_strip(ui, &mut self.tab);
             ui.separator();
             match self.tab {
-                BuildTab::Config => {
-                    ui.label("Config tab: coming in the next task");
-                }
+                BuildTab::Config => match &config {
+                    Some(config) => {
+                        config_commands = self.config_ui.show(ui, config, behind);
+                    }
+                    None => {
+                        ui.spinner();
+                    }
+                },
                 BuildTab::Lab => lab_commands = self.lab.show(ui, behind),
             }
         });
+        for command in config_commands {
+            self.send(command);
+        }
         for command in lab_commands {
             // lab commands answer with events, not snapshots, so they don't count as "behind"
             self.engine.send(Command::Lab(command));
@@ -658,7 +678,10 @@ impl eframe::App for AutoPobApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::views::{BuildListEntry, StatRow};
+    use crate::engine::views::{
+        BuildListEntry, ConfigKind, ConfigOption, ConfigSection, ConfigSet, CustomModGroup,
+        StatRow, TooltipLine,
+    };
     use crate::engine::{Affected, Backend, ConfigValue, LabCommand, LabEvent, NodeScore, Tree};
     use std::collections::HashSet;
     use std::path::PathBuf;
@@ -1185,6 +1208,310 @@ mod tests {
             key_with(egui::Key::S, egui::Modifiers::COMMAND),
         );
         assert_eq!(app.sent_log.len(), before);
+    }
+
+    // ---- the Config tab -----------------------------------------------------------------
+
+    fn choice(label: &str, value: &str) -> crate::engine::views::Choice {
+        crate::engine::views::Choice {
+            label: label.into(),
+            value: value.into(),
+        }
+    }
+
+    fn option(var: &str, kind: ConfigKind, label: &str) -> ConfigOption {
+        ConfigOption {
+            var: var.into(),
+            kind,
+            allow_zero: false,
+            label: label.into(),
+            shown: true,
+            invalid: false,
+            value: None,
+            placeholder: None,
+            selected: None,
+            choices: vec![],
+            tooltip: vec![],
+        }
+    }
+
+    /// Every kind, a hidden option, an invalid one, two sets and two custom mod groups.
+    fn sample_config() -> ConfigView {
+        let mut boss = option("enemyIsBoss", ConfigKind::List, "Enemy is a ^xFF0000Boss");
+        boss.choices = vec![
+            choice("None", "None"),
+            choice("Boss", "Boss"),
+            choice("Pinnacle", "Pinnacle"),
+        ];
+        boss.selected = Some("Boss".into());
+        boss.value = Some(serde_json::json!("Boss"));
+        let mut power = option("usePowerCharges", ConfigKind::Check, "Use power charges?");
+        power.value = Some(serde_json::json!(true));
+        power.tooltip = vec![TooltipLine::Line {
+            size: 14,
+            text: "Charges".into(),
+        }];
+        let mut count = option("overrideCount", ConfigKind::Count, "Charge count");
+        count.value = Some(serde_json::json!(7));
+        count.placeholder = Some(serde_json::json!(3));
+        let mut hidden = option("hiddenCheck", ConfigKind::Check, "A hidden option");
+        hidden.shown = false;
+        let mut invalid = option("staleCheck", ConfigKind::Check, "A stale option");
+        invalid.invalid = true;
+        invalid.value = Some(serde_json::json!(true));
+        let mut float = option("multiplier", ConfigKind::Float, "Multiplier");
+        float.value = Some(serde_json::json!(1.5));
+        let mut text = option("note", ConfigKind::Text, "Note");
+        text.value = Some(serde_json::json!("hi"));
+        ConfigView {
+            sets: vec![
+                ConfigSet {
+                    id: 1,
+                    title: "Default".into(),
+                },
+                ConfigSet {
+                    id: 2,
+                    title: "Mapping".into(),
+                },
+            ],
+            active_set: 1,
+            custom_mods: vec![
+                CustomModGroup {
+                    title: "First".into(),
+                    enabled: true,
+                    text: "+1 to all".into(),
+                },
+                CustomModGroup {
+                    title: "Second".into(),
+                    enabled: false,
+                    text: String::new(),
+                },
+            ],
+            sections: vec![
+                ConfigSection {
+                    name: "General".into(),
+                    column: 1,
+                    options: vec![power, boss, count, hidden],
+                },
+                ConfigSection {
+                    name: "Other".into(),
+                    column: 2,
+                    options: vec![
+                        invalid,
+                        float,
+                        option("integerThing", ConfigKind::Integer, "Integer"),
+                        text,
+                    ],
+                },
+            ],
+        }
+    }
+
+    fn config_app(view: ConfigView) -> (AutoPobApp, egui::Context) {
+        let (mut app, ctx) = open_new_build();
+        app.config = Some(Arc::new(view));
+        app.tab = BuildTab::Config;
+        // two frames: the first lays the widgets out, the second records where they are
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        (app, ctx)
+    }
+
+    fn rect_of(app: &AutoPobApp, key: &str) -> egui::Rect {
+        *app.config_ui
+            .rects
+            .get(key)
+            .unwrap_or_else(|| panic!("no widget {key}"))
+    }
+
+    fn click(app: &mut AutoPobApp, ctx: &egui::Context, key: &str) {
+        let pos = rect_of(app, key).center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(app, ctx, vec![egui::Event::PointerMoved(pos)]);
+        frame(app, ctx, vec![button(true)]);
+        frame(app, ctx, vec![button(false)]);
+        frame(app, ctx, vec![]);
+    }
+
+    fn type_text(app: &mut AutoPobApp, ctx: &egui::Context, text: &str) {
+        frame(app, ctx, vec![egui::Event::Text(text.into())]);
+    }
+
+    fn sent_since(app: &AutoPobApp, before: usize) -> Vec<&str> {
+        app.sent_full[before..].iter().map(String::as_str).collect()
+    }
+
+    #[test]
+    fn config_tab_draws_every_kind_and_hides_hidden_options() {
+        let (mut app, ctx) = config_app(sample_config());
+        for key in [
+            "check:usePowerCharges",
+            "list:enemyIsBoss",
+            "field:overrideCount",
+            "field:multiplier",
+            "field:integerThing",
+            "field:note",
+            "check:staleCheck",
+            "set_combo",
+            "mod_enabled:0",
+            "mod_text:1",
+            "add_group",
+        ] {
+            assert!(app.config_ui.rects.contains_key(key), "missing {key}");
+        }
+        assert!(!app.config_ui.rects.contains_key("check:hiddenCheck"));
+        // an invalid or hidden option is drawn, not sent
+        app.config_ui.rects.clear();
+        app.config_ui.set_show_all(true);
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.config_ui.rects.contains_key("check:hiddenCheck"));
+        assert_eq!(app.sent_log.iter().filter(|c| *c == "SetConfig").count(), 0);
+    }
+
+    #[test]
+    fn config_tab_narrow_and_wide_both_draw() {
+        let (mut app, ctx) = config_app(sample_config());
+        for width in [300.0, 1600.0] {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.show(ui),
+            )
+            .drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
+    fn clicking_a_checkbox_sends_the_toggled_value() {
+        let (mut app, ctx) = config_app(sample_config());
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "check:usePowerCharges");
+        assert_eq!(
+            sent_since(&app, before),
+            ["SetConfig { var: \"usePowerCharges\", value: Bool(false) }"]
+        );
+    }
+
+    #[test]
+    fn choosing_a_dropdown_entry_sends_its_value() {
+        let (mut app, ctx) = config_app(sample_config());
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "list:enemyIsBoss");
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "list:enemyIsBoss:Pinnacle");
+        assert_eq!(
+            sent_since(&app, before),
+            ["SetConfig { var: \"enemyIsBoss\", value: Choice(\"Pinnacle\") }"]
+        );
+    }
+
+    #[test]
+    fn number_fields_send_valid_input_ignore_invalid_and_clear_when_emptied() {
+        let (mut app, ctx) = config_app(sample_config());
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "field:overrideCount");
+        // "7" is there; a valid digit extends it
+        type_text(&mut app, &ctx, "2");
+        assert_eq!(
+            sent_since(&app, before),
+            ["SetConfig { var: \"overrideCount\", value: Number(72.0) }"]
+        );
+        // an invalid keystroke is kept in the field but never sent
+        let before = app.sent_full.len();
+        type_text(&mut app, &ctx, "x");
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        assert_eq!(app.config_ui.draft("overrideCount"), Some("72x"));
+        // emptying the field clears the option
+        let backspace = |key| egui::Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![backspace(egui::Key::Backspace)]);
+        }
+        assert_eq!(
+            sent_since(&app, before).last().copied(),
+            Some("SetConfig { var: \"overrideCount\", value: Clear }")
+        );
+    }
+
+    #[test]
+    fn custom_mod_groups_add_toggle_edit_and_remove() {
+        let (mut app, ctx) = config_app(sample_config());
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "add_group");
+        click(&mut app, &ctx, "mod_enabled:1");
+        assert_eq!(
+            sent_since(&app, before),
+            [
+                "AddCustomModGroup",
+                "SetCustomModEnabled { group: 1, enabled: true }"
+            ]
+        );
+
+        // text is sent when focus leaves
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "mod_text:1");
+        type_text(&mut app, &ctx, "+5 life");
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        click(&mut app, &ctx, "mod_title:1");
+        assert_eq!(
+            sent_since(&app, before),
+            ["SetCustomModText { group: 1, text: \"+5 life\" }"]
+        );
+
+        // removing asks first
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "mod_remove:0");
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        click(&mut app, &ctx, "mod_remove_yes:0");
+        assert_eq!(
+            sent_since(&app, before),
+            ["RemoveCustomModGroup { group: 0 }"]
+        );
+    }
+
+    #[test]
+    fn deleting_a_config_set_asks_first_and_the_last_set_stays() {
+        let (mut app, ctx) = config_app(sample_config());
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "set_delete");
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        click(&mut app, &ctx, "set_delete_yes");
+        assert_eq!(sent_since(&app, before), ["DeleteConfigSet { id: 1 }"]);
+
+        let mut one = sample_config();
+        one.sets.truncate(1);
+        let (mut app, ctx) = config_app(one);
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "set_delete");
+        assert!(app.config_ui.rects.contains_key("set_delete"));
+        assert!(!app.config_ui.rects.contains_key("set_delete_yes"));
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn picking_another_config_set_selects_it() {
+        let (mut app, ctx) = config_app(sample_config());
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "set_combo");
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "set:2");
+        assert_eq!(sent_since(&app, before), ["SelectConfigSet { id: 2 }"]);
     }
 
     impl AutoPobApp {

@@ -281,6 +281,10 @@ mod tests {
             .collect();
         assert_eq!(stats.len(), 1);
         assert_eq!(config.len(), 1);
+        let pos = |wanted: fn(&Snapshot) -> bool| snaps.iter().position(|(_, s)| wanted(s));
+        assert!(
+            pos(|s| matches!(s, Snapshot::Stats(_))) < pos(|s| matches!(s, Snapshot::Config(_)))
+        );
         assert_eq!(stats[0].0, 5);
         assert_eq!(config[0].0, 5);
     }
@@ -315,11 +319,16 @@ mod tests {
     #[test]
     fn shutdown_stops_the_loop() {
         let (mut fake, log) = Fake::new();
-        run_queued(
+        let events = run_queued(
             &mut fake,
             vec![set_config(), Command::Shutdown, set_config()],
         );
         assert_eq!(log.lock().unwrap().set_configs, 1);
+        // The command before Shutdown still produced its snapshots, tagged with Shutdown's seq.
+        let snaps = snapshots(&events);
+        assert_eq!(snaps.len(), 2);
+        assert!(matches!(snaps[0], (2, Snapshot::Stats(_))));
+        assert!(matches!(snaps[1], (2, Snapshot::Config(_))));
     }
 
     #[test]
@@ -339,9 +348,11 @@ mod tests {
         );
         assert_eq!(engine.send(set_config()), 1);
         assert_eq!(engine.send(set_config()), 2);
+        // Shutdown is queued too, so all three commands form one batch (last seq 3).
+        assert_eq!(engine.send(Command::Shutdown), 3);
         release_tx.send(()).unwrap();
 
-        // Ready, then four seq-0 snapshots, then the batch's snapshots tagged seq 2.
+        // Ready, then four seq-0 snapshots, then the batch's snapshots tagged seq 3.
         assert!(matches!(engine.events.recv().unwrap(), Event::Ready));
         for _ in 0..4 {
             match engine.events.recv().unwrap() {
@@ -351,7 +362,6 @@ mod tests {
         }
         let mut stats_seq = None;
         let mut config_seq = None;
-        engine.send(Command::Shutdown);
         while let Ok(event) = engine.events.recv() {
             if let Event::Snapshot { seq, snapshot } = event {
                 match snapshot {
@@ -361,11 +371,12 @@ mod tests {
                 }
             }
         }
-        // Both commands were queued before the backend existed, so they form one batch.
-        assert_eq!(stats_seq, Some(2));
-        assert_eq!(config_seq, Some(2));
+        assert_eq!(stats_seq, Some(3));
+        assert_eq!(config_seq, Some(3));
         assert_eq!(log.lock().unwrap().set_configs, 2);
-        assert!(wakes.load(Ordering::SeqCst) >= 6);
+        // Ready + 4 initial snapshots + Stats + Config; the channel disconnect means the
+        // thread (and so every wake) is finished.
+        assert_eq!(wakes.load(Ordering::SeqCst), 7);
     }
 
     #[test]

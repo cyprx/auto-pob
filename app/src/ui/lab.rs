@@ -1,10 +1,10 @@
 use crate::{
-    engine::{
+    engine::lab_engine::{
         BuildSummary, CONFIG, Command, ConfigKind, ConfigValue, Engine, Event, METRICS, NodeScore,
         STATS, Tree,
     },
     theme,
-    tree_view::{Heat, TreeView},
+    ui::tree_view::{Heat, TreeView},
 };
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};

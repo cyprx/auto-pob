@@ -56,4 +56,4 @@ vendored-lua = ["mlua/vendored"]
 profile-with-puffin = ["profiling/profile-with-puffin", "dep:puffin_http"]
 
 [workspace]
-members = [".", "lab"]
+members = [".", "app"]

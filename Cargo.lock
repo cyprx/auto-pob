@@ -523,7 +523,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "auto-pob-lab"
+name = "auto-pob"
 version = "0.1.0"
 dependencies = [
  "anyhow",

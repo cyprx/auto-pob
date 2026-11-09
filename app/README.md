@@ -1,11 +1,11 @@
-# auto-pob lab
+# auto-pob
 
 Proof of concept: an [egui](https://github.com/emilk/egui) front-end driving Path of Building's
 calculation engine headlessly (no PoB window).
 
 ```bash
-cargo run -p auto-pob-lab --release            # uses the PoB1 install of the main app
-cargo run -p auto-pob-lab --release -- <dir>   # or another PoB folder
+cargo run -p auto-pob --release            # uses the PoB1 install of the main app
+cargo run -p auto-pob --release -- <dir>   # or another PoB folder
 ```
 
 The default folder is `~/.local/share/RustyPathOfBuilding1` on Linux, so run
@@ -24,10 +24,10 @@ The default folder is `~/.local/share/RustyPathOfBuilding1` on Linux, so run
 
 | File | Purpose |
 |---|---|
-| `src/glue.lua` | The only code touching PoB's internals. Runs after PoB's `HeadlessWrapper.lua` and exposes a small `lab` API. |
-| `src/engine.rs` | Owns the Lua state on a worker thread. Commands in, events out. Provides what the headless wrapper lacks: `lua-utf8`, real zlib `Inflate`/`Deflate` (share codes, timeless jewel data), `#@` header stripping, the `arg` global. Decodes sprite sheets. |
-| `src/app.rs` | The egui UI. |
-| `src/tree_view.rs` | Passive tree rendering: camera, arcs, sprites, heatmap. |
+| `src/engine/glue/lab.lua` | The only code touching PoB's internals. Runs after PoB's `HeadlessWrapper.lua` and exposes a small `lab` API. |
+| `src/engine/lab_engine.rs` | Owns the Lua state on a worker thread. Commands in, events out. Provides what the headless wrapper lacks: `lua-utf8`, real zlib `Inflate`/`Deflate` (share codes, timeless jewel data), `#@` header stripping, the `arg` global. Decodes sprite sheets. |
+| `src/ui/lab.rs` | The egui UI. |
+| `src/ui/tree_view.rs` | Passive tree rendering: camera, arcs, sprites, heatmap. |
 
 ## Where PoB's data comes from
 
@@ -51,7 +51,7 @@ we own is the glue above, which can break if PoB renames or restructures what it
 Run the end-to-end engine test against the installed PoB:
 
 ```bash
-cargo test -p auto-pob-lab --release -- --ignored
+cargo test -p auto-pob --release -- --ignored
 ```
 
 It loads builds from XML and a share code, changes level and config, ranks nodes, and

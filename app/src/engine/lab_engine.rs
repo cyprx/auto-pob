@@ -326,7 +326,7 @@ fn start(pob_dir: &Path) -> Result<Lua> {
             .set("Inflate", lua.create_function(inflate)?)?;
         lua.globals()
             .set("Deflate", lua.create_function(deflate)?)?;
-        lua.load(include_str!("glue.lua"))
+        lua.load(include_str!("glue/lab.lua"))
             .set_name("@glue.lua")
             .exec()
     };

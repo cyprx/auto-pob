@@ -1,6 +1,6 @@
 [package]
-name = "auto-pob-lab"
-description = "Proof of concept: egui front-end driving Path of Building's calc engine headlessly"
+name = "auto-pob"
+description = "egui front-end driving Path of Building's calc engine headlessly"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"

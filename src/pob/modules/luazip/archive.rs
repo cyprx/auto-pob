@@ -714,3 +714,194 @@ fn parse_eocd<R: Read>(reader: &mut R) -> io::Result<EOCD> {
         comment: read_u8_slice(reader, comment_length)?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Cursor, Write};
+
+    use zip::{CompressionMethod as Method, ZipWriter, write::SimpleFileOptions};
+
+    use super::*;
+
+    const TEXT: &[u8] = b"Path of Building\n";
+
+    /// Builds a zip in memory with `zip`, an independent implementation of the format.
+    fn build(files: &[(&str, &[u8], Method, bool)], comment: &[u8]) -> Vec<u8> {
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        for &(name, data, method, large) in files {
+            let options = SimpleFileOptions::default()
+                .compression_method(method)
+                .large_file(large);
+            writer.start_file(name, options).unwrap();
+            writer.write_all(data).unwrap();
+        }
+        writer.set_raw_comment(comment.into()).unwrap();
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn open(bytes: Vec<u8>) -> io::Result<ZipArchive<Cursor<Vec<u8>>>> {
+        ZipArchive::new(Cursor::new(bytes))
+    }
+
+    fn read_entry(archive: &ZipArchive<Cursor<Vec<u8>>>, index: usize) -> io::Result<Vec<u8>> {
+        let mut out = Vec::new();
+        archive.by_index(index)?.read_to_end(&mut out)?;
+        Ok(out)
+    }
+
+    /// Byte offset of the first central directory header.
+    fn cdfh_offset(bytes: &[u8]) -> usize {
+        bytes
+            .windows(4)
+            .position(|w| w == CDFH_MAGIC_BYTES)
+            .unwrap()
+    }
+
+    #[test]
+    fn reads_stored_and_deflated_entries() {
+        let big = TEXT.repeat(1000);
+        let bytes = build(
+            &[
+                ("stored.txt", TEXT, Method::Stored, false),
+                ("dir/deflated.txt", &big, Method::Deflated, false),
+                ("empty.txt", b"", Method::Deflated, false),
+            ],
+            b"",
+        );
+        let archive = open(bytes).unwrap();
+
+        let names: Vec<_> = archive.entries().iter().map(ZipEntry::name).collect();
+        assert_eq!(
+            names,
+            [&b"stored.txt"[..], b"dir/deflated.txt", b"empty.txt"]
+        );
+        assert_eq!(archive.entries()[1].uncompressed_size(), big.len() as u64);
+        assert_eq!(read_entry(&archive, 0).unwrap(), TEXT);
+        assert_eq!(read_entry(&archive, 1).unwrap(), big);
+        assert_eq!(read_entry(&archive, 2).unwrap(), b"");
+    }
+
+    #[test]
+    fn entries_can_be_read_interleaved() {
+        let bytes = build(
+            &[
+                ("a", &[b'a'; 100], Method::Stored, false),
+                ("b", &[b'b'; 100], Method::Deflated, false),
+            ],
+            b"",
+        );
+        let archive = open(bytes).unwrap();
+        let mut a = archive.by_index(0).unwrap();
+        let mut b = archive.by_index(1).unwrap();
+        let mut buf = [0u8; 10];
+        for _ in 0..10 {
+            a.read_exact(&mut buf).unwrap();
+            assert_eq!(buf, [b'a'; 10]);
+            b.read_exact(&mut buf).unwrap();
+            assert_eq!(buf, [b'b'; 10]);
+        }
+    }
+
+    #[test]
+    fn reads_zip64_entries() {
+        let bytes = build(&[("big.txt", TEXT, Method::Deflated, true)], b"");
+        let archive = open(bytes).unwrap();
+        assert_eq!(archive.entries()[0].uncompressed_size(), TEXT.len() as u64);
+        assert_eq!(read_entry(&archive, 0).unwrap(), TEXT);
+    }
+
+    #[test]
+    fn reads_zip64_archive_with_more_than_65535_entries() {
+        let count = usize::from(u16::MAX) + 2;
+        let names: Vec<String> = (0..count).map(|i| i.to_string()).collect();
+        let files: Vec<_> = names
+            .iter()
+            .map(|n| (n.as_str(), &b""[..], Method::Stored, false))
+            .collect();
+        let archive = open(build(&files, b"")).unwrap();
+        assert_eq!(archive.entries().len(), count);
+        assert_eq!(
+            archive.entries()[count - 1].name(),
+            names[count - 1].as_bytes()
+        );
+    }
+
+    #[test]
+    fn finds_end_record_when_comment_contains_its_magic_bytes() {
+        let mut comment = b"before ".to_vec();
+        comment.extend_from_slice(EOCD_MAGIC_BYTES);
+        comment.extend_from_slice(&[0; 30]);
+        let bytes = build(&[("a.txt", TEXT, Method::Stored, false)], &comment);
+        let archive = open(bytes).unwrap();
+        assert_eq!(read_entry(&archive, 0).unwrap(), TEXT);
+    }
+
+    #[test]
+    fn rejects_data_that_is_not_a_zip() {
+        let err = open(b"definitely not a zip file".to_vec()).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        let err = open(Vec::new()).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn rejects_truncated_archive() {
+        let mut bytes = build(&[("a.txt", TEXT, Method::Stored, false)], b"");
+        bytes.truncate(bytes.len() - 5);
+        assert!(open(bytes).is_err());
+    }
+
+    #[test]
+    fn rejects_encrypted_and_unknown_compression() {
+        let bytes = build(&[("a.txt", TEXT, Method::Stored, false)], b"");
+        let cdfh = cdfh_offset(&bytes);
+
+        let mut encrypted = bytes.clone();
+        encrypted[cdfh + 8] |= 1;
+        let archive = open(encrypted).unwrap();
+        assert_eq!(
+            read_entry(&archive, 0).unwrap_err().kind(),
+            io::ErrorKind::Unsupported
+        );
+
+        let mut bzip2 = bytes;
+        bzip2[cdfh + 10] = 12;
+        let archive = open(bzip2).unwrap();
+        assert_eq!(
+            read_entry(&archive, 0).unwrap_err().kind(),
+            io::ErrorKind::Unsupported
+        );
+    }
+
+    #[test]
+    fn rejects_entries_that_lie_about_their_size() {
+        let data = TEXT.repeat(10);
+        let bytes = build(&[("a.txt", &data, Method::Deflated, false)], b"");
+        let cdfh = cdfh_offset(&bytes);
+        let declared = |bytes: &mut Vec<u8>, size: u32| {
+            bytes[cdfh + 24..cdfh + 28].copy_from_slice(&size.to_le_bytes());
+        };
+
+        let mut too_small = bytes.clone();
+        declared(&mut too_small, 10);
+        let archive = open(too_small).unwrap();
+        let err = read_entry(&archive, 0).unwrap_err();
+        assert!(err.to_string().contains("larger than declared"), "{err}");
+
+        let mut too_large = bytes;
+        declared(&mut too_large, data.len() as u32 + 10);
+        let archive = open(too_large).unwrap();
+        let err = read_entry(&archive, 0).unwrap_err();
+        assert!(err.to_string().contains("smaller than declared"), "{err}");
+    }
+
+    #[test]
+    fn missing_index_is_not_found() {
+        let archive = open(build(&[], b"")).unwrap();
+        assert!(archive.entries().is_empty());
+        assert_eq!(
+            archive.by_index(0).err().unwrap().kind(),
+            io::ErrorKind::NotFound
+        );
+    }
+}

@@ -1,13 +1,18 @@
 //! Starts Path of Building's Lua with our own bootstrap.
 
+use super::commands::Command;
+use super::run::{Affected, Backend, Engine, Event};
+use super::views::{BuildListView, BuildView, ConfigView, StatsView};
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
-use mlua::Lua;
-use std::path::Path;
+use mlua::{FromLuaMulti, IntoLuaMulti, Lua, LuaSerdeExt};
+use std::path::{Path, PathBuf};
 
 pub struct PobBackend {
     pub lua: Lua,
     pub game: Game,
+    /// The Builds sub-folder the list view shows; "" is the root.
+    folder: String,
 }
 
 /// Runs before the bootstrap.
@@ -65,7 +70,160 @@ impl PobBackend {
             .exec()
             .map_err(lua_error)
             .context("Starting Path of Building")?;
-        Ok(PobBackend { lua, game })
+        for (name, source) in [
+            ("@glue/builds.lua", include_str!("glue/builds.lua")),
+            ("@glue/stats.lua", include_str!("glue/stats.lua")),
+        ] {
+            lua.load(source)
+                .set_name(name)
+                .exec()
+                .map_err(lua_error)
+                .with_context(|| format!("Loading {name}"))?;
+        }
+        Ok(PobBackend {
+            lua,
+            game,
+            folder: String::new(),
+        })
+    }
+
+    /// Calls `glue.<name>(args)`, keeping only the error message.
+    fn call<A: IntoLuaMulti, R: FromLuaMulti>(&self, name: &str, args: A) -> Result<R> {
+        let glue: mlua::Table = self.lua.globals().get("glue").map_err(|e| anyhow!("{e}"))?;
+        let function: mlua::Function = glue.get(name).map_err(|e| anyhow!("{e}"))?;
+        function.call(args).map_err(|e| match e {
+            // errors raised with `error(message, 0)` arrive as the bare message
+            mlua::Error::RuntimeError(message) => {
+                anyhow!("{}", message.lines().next().unwrap_or_default())
+            }
+            other => anyhow!("{other}"),
+        })
+    }
+
+    fn view<T: serde::de::DeserializeOwned>(
+        &self,
+        name: &str,
+        args: impl IntoLuaMulti,
+    ) -> Result<T> {
+        let value: mlua::Value = self.call(name, args)?;
+        self.lua.from_value(value).map_err(|e| anyhow!("{e}"))
+    }
+}
+
+fn all_views() -> Affected {
+    Affected {
+        build: true,
+        list: true,
+        stats: true,
+        config: true,
+        recalc: false,
+    }
+}
+
+fn not_implemented(what: &str) -> anyhow::Error {
+    anyhow!("{what} not implemented yet")
+}
+
+impl Backend for PobBackend {
+    fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> Result<Affected> {
+        match command {
+            Command::ListBuilds { folder } => {
+                if folder.contains("..") || folder.starts_with('/') {
+                    anyhow::bail!("that isn't a valid folder");
+                }
+                self.folder = folder;
+                Ok(Affected {
+                    list: true,
+                    ..Affected::default()
+                })
+            }
+            Command::NewBuild => {
+                self.call::<_, ()>("new_build", ())?;
+                Ok(all_views())
+            }
+            Command::OpenBuild { path } => {
+                self.call::<_, ()>("open_build", path.to_string_lossy().into_owned())?;
+                Ok(all_views())
+            }
+            Command::ImportShareCode { code } => {
+                self.call::<_, ()>("import_code", code)?;
+                Ok(all_views())
+            }
+            Command::Save => {
+                self.call::<_, ()>("save", ())?;
+                Ok(Affected {
+                    build: true,
+                    list: true,
+                    ..Affected::default()
+                })
+            }
+            Command::SaveAs {
+                folder,
+                name,
+                overwrite,
+            } => {
+                self.call::<_, ()>("save_as", (folder, name, overwrite))?;
+                Ok(Affected {
+                    build: true,
+                    list: true,
+                    ..Affected::default()
+                })
+            }
+            Command::Shutdown => Ok(Affected::default()),
+            Command::Lab(lab) => match lab {},
+            Command::SetConfig { .. }
+            | Command::SelectConfigSet { .. }
+            | Command::NewConfigSet { .. }
+            | Command::RenameConfigSet { .. }
+            | Command::DeleteConfigSet { .. }
+            | Command::SetCustomMods { .. }
+            | Command::Undo(_)
+            | Command::Redo(_) => Err(not_implemented("config commands")),
+        }
+    }
+
+    fn recalculate(&mut self) -> Result<()> {
+        self.lua
+            .load("pob.build.buildFlag = true; runCallback('OnFrame')")
+            .exec()
+            .map_err(|e| anyhow!("{e}"))
+    }
+
+    fn build_view(&mut self) -> Result<BuildView> {
+        self.view("build_view", ())
+    }
+
+    fn build_list_view(&mut self) -> Result<BuildListView> {
+        self.view("list_builds", self.folder.clone())
+    }
+
+    fn stats_view(&mut self) -> Result<StatsView> {
+        self.view("stats_view", ())
+    }
+
+    fn config_view(&mut self) -> Result<ConfigView> {
+        anyhow::bail!("config view not implemented yet")
+    }
+}
+
+impl Engine {
+    /// Starts the engine thread on the real PoB: finds or downloads the pinned install, then
+    /// starts it with its user data in `user_dir`.
+    pub fn spawn(
+        game: Game,
+        data_dir: PathBuf,
+        user_dir: PathBuf,
+        wake_ui: impl Fn() + Send + 'static,
+    ) -> Engine {
+        Engine::spawn_with(
+            move |send| {
+                let pob_dir = crate::pob_files::ensure_pob(game, &data_dir, &mut |progress| {
+                    send(Event::Downloading(progress))
+                })?;
+                Ok(Box::new(PobBackend::start(game, &pob_dir, &user_dir)?) as Box<dyn Backend>)
+            },
+            wake_ui,
+        )
     }
 }
 

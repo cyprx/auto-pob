@@ -42,6 +42,9 @@ pub struct BuildListEntry {
 pub struct StatsView {
     #[serde(default)]
     pub stats: Vec<StatRow>,
+    /// The main skill's minion, when it has one.
+    #[serde(default)]
+    pub minion: Vec<StatRow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

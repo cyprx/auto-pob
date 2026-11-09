@@ -73,7 +73,10 @@ impl Backend for Fake {
     }
 
     fn stats_view(&mut self) -> anyhow::Result<StatsView> {
-        Ok(StatsView { stats: vec![] })
+        Ok(StatsView {
+            stats: vec![],
+            minion: vec![],
+        })
     }
 
     fn config_view(&mut self) -> anyhow::Result<ConfigView> {

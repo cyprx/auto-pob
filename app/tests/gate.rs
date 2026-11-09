@@ -3,7 +3,9 @@
 //! Run with
 //! `AUTO_POB_POB_DIR=<pinned PoB> cargo test -p auto-pob --test gate -- --ignored --test-threads=1`.
 
+use auto_pob::engine::pob::PobBackend;
 use auto_pob::engine::upstream::{Golden, golden_of, load_xml, run_recipe, upstream_lua};
+use auto_pob::engine::{Backend, Command, Engine, Event, Snapshot, StatsView};
 use auto_pob::game::Game;
 use std::{
     fs,
@@ -187,4 +189,322 @@ fn committed_xml_loads_as_described() {
             _ => {}
         }
     }
+}
+
+// ---- builds and stats through PobBackend ----
+
+/// A backend over a fresh temp user folder, which is removed when this drops.
+struct Session {
+    backend: PobBackend,
+    user: PathBuf,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.user);
+    }
+}
+
+impl Session {
+    fn start(test: &str) -> Session {
+        let user =
+            std::env::temp_dir().join(format!("auto-pob-gate-{test}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&user);
+        let backend = PobBackend::start(Game::Poe1, &pob_dir(), &user).expect("starting PoB");
+        Session { backend, user }
+    }
+
+    fn run(&mut self, command: Command) -> anyhow::Result<auto_pob::engine::Affected> {
+        self.backend.apply(command, &|_| {})
+    }
+
+    fn builds_dir(&self) -> PathBuf {
+        let path: String = self
+            .backend
+            .lua
+            .load("return pob.main.main.buildPath")
+            .eval()
+            .unwrap();
+        let dir = PathBuf::from(path);
+        assert!(
+            dir.starts_with(&self.user),
+            "Builds folder {} is outside the user folder {}",
+            dir.display(),
+            self.user.display()
+        );
+        dir
+    }
+
+    fn stats(&mut self) -> StatsView {
+        self.backend.stats_view().expect("stats view")
+    }
+
+    /// Copies the fixture into the temp Builds folder and opens it.
+    fn open_fixture(&mut self, name: &str, xml: &Path) -> PathBuf {
+        let dest = self.builds_dir().join(format!("{name}.xml"));
+        fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        fs::copy(xml, &dest).unwrap();
+        self.run(Command::OpenBuild { path: dest.clone() })
+            .expect("open");
+        dest
+    }
+}
+
+fn assert_view_matches(
+    name: &str,
+    what: &str,
+    rows: &[auto_pob::engine::StatRow],
+    golden: &std::collections::BTreeMap<String, f64>,
+) {
+    assert!(!rows.is_empty(), "{name}: no {what} rows");
+    for row in rows {
+        let want = golden
+            .get(&row.key)
+            .unwrap_or_else(|| panic!("{name}: {what} {} is not in the golden data", row.key));
+        assert_eq!(row.value, *want, "{name}: {what} {}", row.key);
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn stats_match_pob() {
+    let _guard = lock();
+    for (name, xml) in fixtures() {
+        let mut s = Session::start(&format!("stats-{name}"));
+        s.open_fixture(&name, &xml);
+        let view = s.stats();
+        let want = golden(&name);
+        assert_view_matches(&name, "stat", &view.stats, &want.stats);
+        // the sidebar hides zero and flag-gated stats, so it shows only part of the golden set
+        let life = view.stats.iter().find(|r| r.key == "Life");
+        if name != "new" {
+            assert!(
+                life.is_some_and(|r| !r.text.is_empty()),
+                "{name}: no Life row"
+            );
+        }
+        match want.minion_stats {
+            Some(ref minion) => assert_view_matches(&name, "minion stat", &view.minion, minion),
+            None => assert!(view.minion.is_empty(), "{name}: unexpected minion rows"),
+        }
+    }
+}
+
+fn attack_xml() -> String {
+    fs::read_to_string(fixtures_dir().join("attack.xml")).unwrap()
+}
+
+fn share_code(s: &Session, xml: &str) -> String {
+    let f: mlua::Function = s
+        .backend
+        .lua
+        .load("return function(xml) return (common.base64.encode(Deflate(xml)):gsub('+','-'):gsub('/','_')) end")
+        .eval()
+        .unwrap();
+    f.call(xml).unwrap()
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn share_code_matches_xml() {
+    let _guard = lock();
+    let mut s = Session::start("share-code");
+    let code = share_code(&s, &attack_xml());
+    s.run(Command::ImportShareCode { code }).expect("import");
+    let view = s.stats();
+    assert_view_matches("attack", "stat", &view.stats, &golden("attack").stats);
+    let build = s.backend.build_view().unwrap();
+    assert_eq!(build.name, "Imported build");
+    assert_eq!(build.path, None);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn import_share_code_trims_and_rejects_urls() {
+    let _guard = lock();
+    let mut s = Session::start("share-trim");
+    let code = share_code(&s, &attack_xml());
+    s.run(Command::ImportShareCode {
+        code: format!("  \n{code}\n "),
+    })
+    .expect("trimmed code");
+    assert_view_matches("attack", "stat", &s.stats().stats, &golden("attack").stats);
+    let err = s
+        .run(Command::ImportShareCode {
+            code: "https://pobb.in/abc".into(),
+        })
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("network features"), "{err:#}");
+}
+
+fn save_as(name: &str, overwrite: bool) -> Command {
+    Command::SaveAs {
+        folder: String::new(),
+        name: name.into(),
+        overwrite,
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn save_as_refuses_existing_without_overwrite() {
+    let _guard = lock();
+    let mut s = Session::start("save-as");
+    s.run(Command::NewBuild).unwrap();
+    s.run(save_as("x", false)).expect("first save");
+    assert!(s.builds_dir().join("x.xml").exists());
+    let err = s.run(save_as("x", false)).unwrap_err();
+    assert!(format!("{err:#}").contains("exists"), "{err:#}");
+    s.run(save_as("x", true)).expect("overwrite");
+    // saving an unsaved-name build with Save fails, but a saved one works
+    s.run(Command::Save).expect("save");
+    let build = s.backend.build_view().unwrap();
+    assert_eq!(build.name, "x");
+    assert!(!build.unsaved);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn save_needs_a_file() {
+    let _guard = lock();
+    let mut s = Session::start("save-nofile");
+    s.run(Command::NewBuild).unwrap();
+    let err = s.run(Command::Save).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("build has no file yet"),
+        "{err:#}"
+    );
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn builds_with_unusual_names_round_trip() {
+    let _guard = lock();
+    let mut s = Session::start("unusual-names");
+    let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "attack").unwrap();
+    s.open_fixture("attack", &xml);
+    let before = s.stats();
+    s.run(Command::SaveAs {
+        folder: "Sub Folder/".into(),
+        name: "Ætheric – Build".into(),
+        overwrite: false,
+    })
+    .expect("save as");
+    s.run(Command::NewBuild).unwrap();
+    s.run(Command::ListBuilds {
+        folder: "Sub Folder/".into(),
+    })
+    .unwrap();
+    let list = s.backend.build_list_view().unwrap();
+    assert_eq!(list.folder, "Sub Folder/");
+    let entry = list
+        .entries
+        .iter()
+        .find(|e| e.name == "Ætheric – Build")
+        .unwrap_or_else(|| panic!("not listed: {:?}", list.entries));
+    assert!(!entry.is_folder);
+    assert_eq!(entry.class.as_deref(), Some("Marauder"));
+    assert_eq!(entry.level, Some(90));
+    s.run(Command::OpenBuild {
+        path: entry.path.clone(),
+    })
+    .expect("reopen");
+    assert_eq!(s.stats(), before);
+    assert_eq!(s.backend.build_view().unwrap().name, "Ætheric – Build");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn list_shows_folders_first_with_headers() {
+    let _guard = lock();
+    let mut s = Session::start("list");
+    let builds = s.builds_dir();
+    fs::create_dir_all(builds.join("Zeta folder")).unwrap();
+    fs::create_dir_all(builds.join("Alpha folder")).unwrap();
+    for name in ["attack", "dot"] {
+        fs::copy(
+            fixtures_dir().join(format!("{name}.xml")),
+            builds.join(format!("{name}.xml")),
+        )
+        .unwrap();
+    }
+    fs::copy(
+        fixtures_dir().join("minion.xml"),
+        builds.join("Alpha folder/minion.xml"),
+    )
+    .unwrap();
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .unwrap();
+    let list = s.backend.build_list_view().unwrap();
+    let names: Vec<_> = list
+        .entries
+        .iter()
+        .map(|e| (e.name.as_str(), e.is_folder))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("Alpha folder", true),
+            ("Zeta folder", true),
+            ("attack", false),
+            ("dot", false)
+        ]
+    );
+    let attack = &list.entries[2];
+    assert_eq!(attack.class.as_deref(), Some("Marauder"));
+    assert_eq!(attack.level, Some(90));
+    assert_eq!(attack.path, builds.join("attack.xml"));
+    s.run(Command::ListBuilds {
+        folder: "Alpha folder/".into(),
+    })
+    .unwrap();
+    let sub = s.backend.build_list_view().unwrap();
+    assert_eq!(sub.entries.len(), 1);
+    assert_eq!(sub.entries[0].name, "minion");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn engine_spawn_reaches_ready_with_snapshots() {
+    let _guard = lock();
+    let user = std::env::temp_dir().join(format!("auto-pob-gate-spawn-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&user);
+    let engine = Engine::spawn(Game::Poe1, std::env::temp_dir(), user.clone(), || {});
+    let (mut ready, mut build, mut list, mut stats) = (false, false, false, false);
+    let mut config_error = false;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    while !(ready && build && list && stats && config_error) && std::time::Instant::now() < deadline
+    {
+        match engine
+            .events
+            .recv_timeout(std::time::Duration::from_secs(30))
+        {
+            Ok(Event::Ready) => ready = true,
+            Ok(Event::Snapshot {
+                snapshot: Snapshot::Build(_),
+                ..
+            }) => build = true,
+            Ok(Event::Snapshot {
+                snapshot: Snapshot::BuildList(_),
+                ..
+            }) => list = true,
+            Ok(Event::Snapshot {
+                snapshot: Snapshot::Stats(_),
+                ..
+            }) => stats = true,
+            // Task 7 implements the config view, then this branch goes away
+            Ok(Event::Error { seq: 0, .. }) => config_error = true,
+            Ok(Event::StartupFailed { message }) => panic!("startup failed: {message}"),
+            Ok(_) => {}
+            Err(e) => panic!("no event: {e}"),
+        }
+    }
+    assert!(
+        ready && build && list && stats,
+        "{ready} {build} {list} {stats}"
+    );
+    engine.send(Command::Shutdown);
+    let _ = fs::remove_dir_all(&user);
 }

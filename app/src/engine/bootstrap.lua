@@ -170,6 +170,27 @@ end
 
 dofile("Launch.lua")
 
+-- The pinned PoB ships a repository-style manifest, so Launch.lua turns on devMode, and
+-- Main:Init then keeps the user's data (builds, settings) inside the PoB folder. We want
+-- GetUserPath() instead: hide devMode while Main initialises, then restore it.
+do
+	local plain_plo = PLoadModule
+	function PLoadModule(fileName, ...)
+		local err, module = plain_plo(fileName, ...)
+		if not err and fileName:match("^Modules/Main") and type(module) == "table" and module.Init then
+			local init = module.Init
+			module.Init = function(self, ...)
+				local dev = mainObject.devMode
+				mainObject.devMode = false
+				local ok, e = pcall(init, self, ...)
+				mainObject.devMode = dev
+				if not ok then error(e, 0) end
+			end
+		end
+		return err, module
+	end
+end
+
 -- never skip ModCache
 mainObject.continuousIntegrationMode = nil
 

@@ -1,6 +1,6 @@
 //! Starts Path of Building's Lua with our own bootstrap.
 
-use super::commands::Command;
+use super::commands::{Command, ConfigValue, Tab};
 use super::run::{Affected, Backend, Engine, Event};
 use super::views::{BuildListView, BuildView, ConfigView, StatsView};
 use crate::game::Game;
@@ -73,6 +73,8 @@ impl PobBackend {
         for (name, source) in [
             ("@glue/builds.lua", include_str!("glue/builds.lua")),
             ("@glue/stats.lua", include_str!("glue/stats.lua")),
+            ("@glue/tooltip.lua", include_str!("glue/tooltip.lua")),
+            ("@glue/config.lua", include_str!("glue/config.lua")),
         ] {
             lua.load(source)
                 .set_name(name)
@@ -120,8 +122,15 @@ fn all_views() -> Affected {
     }
 }
 
-fn not_implemented(what: &str) -> anyhow::Error {
-    anyhow!("{what} not implemented yet")
+/// A config change touches the build and the config tab, and needs a recalculation (after
+/// which the loop also refreshes the stats).
+fn config_changed() -> Affected {
+    Affected {
+        build: true,
+        config: true,
+        recalc: true,
+        ..Affected::default()
+    }
 }
 
 impl Backend for PobBackend {
@@ -175,14 +184,46 @@ impl Backend for PobBackend {
             }
             Command::Shutdown => Ok(Affected::default()),
             Command::Lab(lab) => match lab {},
-            Command::SetConfig { .. }
-            | Command::SelectConfigSet { .. }
-            | Command::NewConfigSet { .. }
-            | Command::RenameConfigSet { .. }
-            | Command::DeleteConfigSet { .. }
-            | Command::SetCustomMods { .. }
-            | Command::Undo(_)
-            | Command::Redo(_) => Err(not_implemented("config commands")),
+            Command::SetConfig { var, value } => {
+                let value = match value {
+                    ConfigValue::Bool(b) => mlua::Value::Boolean(b),
+                    ConfigValue::Number(n) => mlua::Value::Number(n),
+                    ConfigValue::Text(t) | ConfigValue::Choice(t) => {
+                        mlua::Value::String(self.lua.create_string(t).map_err(|e| anyhow!("{e}"))?)
+                    }
+                    ConfigValue::Clear => mlua::Value::Nil,
+                };
+                self.call::<_, ()>("set_config", (var, value))?;
+                Ok(config_changed())
+            }
+            Command::SelectConfigSet { id } => {
+                self.call::<_, ()>("select_config_set", id)?;
+                Ok(config_changed())
+            }
+            Command::NewConfigSet { title } => {
+                self.call::<_, ()>("new_config_set", title)?;
+                Ok(config_changed())
+            }
+            Command::RenameConfigSet { id, title } => {
+                self.call::<_, ()>("rename_config_set", (id, title))?;
+                Ok(config_changed())
+            }
+            Command::DeleteConfigSet { id } => {
+                self.call::<_, ()>("delete_config_set", id)?;
+                Ok(config_changed())
+            }
+            Command::SetCustomMods { text } => {
+                self.call::<_, ()>("set_custom_mods", text)?;
+                Ok(config_changed())
+            }
+            Command::Undo(Tab::Config) => {
+                self.call::<_, ()>("undo", "config")?;
+                Ok(config_changed())
+            }
+            Command::Redo(Tab::Config) => {
+                self.call::<_, ()>("redo", "config")?;
+                Ok(config_changed())
+            }
         }
     }
 
@@ -206,7 +247,7 @@ impl Backend for PobBackend {
     }
 
     fn config_view(&mut self) -> Result<ConfigView> {
-        anyhow::bail!("config view not implemented yet")
+        self.view("config_view", ())
     }
 }
 

@@ -5,7 +5,10 @@
 
 use auto_pob::engine::pob::PobBackend;
 use auto_pob::engine::upstream::{Golden, golden_of, load_xml, run_recipe, upstream_lua};
-use auto_pob::engine::{Backend, Command, Engine, Event, Snapshot, StatsView};
+use auto_pob::engine::{
+    Backend, Command, ConfigOption, ConfigValue, ConfigView, Engine, Event, Snapshot, StatsView,
+    Tab,
+};
 use auto_pob::game::Game;
 use std::{
     fs,
@@ -214,8 +217,17 @@ impl Session {
         Session { backend, user }
     }
 
+    /// Applies a command, then recalculates when it asks for that, as the engine loop does.
     fn run(&mut self, command: Command) -> anyhow::Result<auto_pob::engine::Affected> {
-        self.backend.apply(command, &|_| {})
+        let affected = self.backend.apply(command, &|_| {})?;
+        if affected.recalc {
+            self.backend.recalculate()?;
+        }
+        Ok(affected)
+    }
+
+    fn config(&mut self) -> ConfigView {
+        self.backend.config_view().expect("config view")
     }
 
     fn builds_dir(&self) -> PathBuf {
@@ -487,10 +499,9 @@ fn engine_spawn_reaches_ready_with_snapshots() {
     let _ = fs::remove_dir_all(&user);
     let engine = Engine::spawn(Game::Poe1, std::env::temp_dir(), user.clone(), || {});
     let (mut ready, mut build, mut list, mut stats) = (false, false, false, false);
-    let mut config_error = false;
+    let mut config = false;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
-    while !(ready && build && list && stats && config_error) && std::time::Instant::now() < deadline
-    {
+    while !(ready && build && list && stats && config) && std::time::Instant::now() < deadline {
         match engine
             .events
             .recv_timeout(std::time::Duration::from_secs(30))
@@ -508,16 +519,19 @@ fn engine_spawn_reaches_ready_with_snapshots() {
                 snapshot: Snapshot::Stats(_),
                 ..
             }) => stats = true,
-            // Task 7 implements the config view, then this branch goes away
-            Ok(Event::Error { seq: 0, .. }) => config_error = true,
+            Ok(Event::Snapshot {
+                snapshot: Snapshot::Config(_),
+                ..
+            }) => config = true,
+            Ok(Event::Error { message, .. }) => panic!("startup error: {message}"),
             Ok(Event::StartupFailed { message }) => panic!("startup failed: {message}"),
             Ok(_) => {}
             Err(e) => panic!("no event: {e}"),
         }
     }
     assert!(
-        ready && build && list && stats,
-        "{ready} {build} {list} {stats}"
+        ready && build && list && stats && config,
+        "{ready} {build} {list} {stats} {config}"
     );
     engine.send(Command::Shutdown);
     let _ = fs::remove_dir_all(&user);
@@ -569,4 +583,397 @@ fn failed_save_as_leaves_the_build_alone() {
     result.unwrap_err();
     assert_eq!(s.backend.build_view().unwrap().path, before.path);
     assert_eq!(s.backend.build_view().unwrap().name, "keep");
+}
+
+// ---- config through PobBackend ----
+
+fn option<'a>(view: &'a ConfigView, var: &str) -> &'a ConfigOption {
+    view.sections
+        .iter()
+        .flat_map(|s| &s.options)
+        .find(|o| o.var == var)
+        .unwrap_or_else(|| panic!("config view has no option {var}"))
+}
+
+fn set(var: &str, value: ConfigValue) -> Command {
+    Command::SetConfig {
+        var: var.into(),
+        value,
+    }
+}
+
+/// Upstream PoB after the same three changes, made through the controls' own callbacks.
+const UPSTREAM_CHANGES: &str = r#"
+local ct = build.configTab
+local check = ct.varControls.usePowerCharges
+check.state = true
+check.changeFunc(true)
+local boss = ct.varControls.enemyIsBoss
+for index, item in ipairs(boss.list) do
+	if item.val == "Boss" then boss:SetSel(index) end
+end
+ct.varControls.playerCursedWithDespair:SetText("5", true)
+build.buildFlag = true
+runCallback("OnFrame")
+"#;
+
+fn three_changes() -> [Command; 3] {
+    [
+        set("usePowerCharges", ConfigValue::Bool(true)),
+        set("enemyIsBoss", ConfigValue::Choice("Boss".into())),
+        set("playerCursedWithDespair", ConfigValue::Number(5.0)),
+    ]
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn config_matches_pob() {
+    let _guard = lock();
+    for (name, xml) in fixtures() {
+        let mut s = Session::start(&format!("config-{name}"));
+        s.open_fixture(&name, &xml);
+        let view = s.config();
+        let want = golden(&name);
+
+        let mut shown: Vec<_> = view
+            .sections
+            .iter()
+            .flat_map(|s| &s.options)
+            .filter(|o| o.shown)
+            .map(|o| o.var.clone())
+            .collect();
+        shown.sort();
+        assert_eq!(shown, want.visible_config, "{name}: shown options");
+        for var in &shown {
+            assert_eq!(
+                option(&view, var).value.as_ref(),
+                want.config.get(var),
+                "{name}: value of {var}"
+            );
+        }
+
+        // every option that takes input is listed, shown or not
+        let inputs: Vec<String> = s
+            .backend
+            .lua
+            .load(
+                r#"
+                local vars = {}
+                local types = { check = 1, count = 1, countAllowZero = 1, integer = 1, float = 1, list = 1, text = 1 }
+                for _, varData in ipairs(LoadModule("Modules/ConfigOptions")) do
+                    if varData.var and types[varData.type] then vars[#vars + 1] = varData.var end
+                end
+                return vars
+                "#,
+            )
+            .eval()
+            .unwrap();
+        assert!(
+            inputs.len() > 100,
+            "{name}: only {} input options",
+            inputs.len()
+        );
+        for var in inputs {
+            option(&view, &var);
+        }
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn config_changes_recalculate() {
+    let _guard = lock();
+    let mut s = Session::start("config-changes");
+    let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "attack").unwrap();
+    s.open_fixture("attack", &xml);
+    let before = s.stats();
+    for command in three_changes() {
+        s.run(command).expect("set config");
+    }
+    let ours = s.stats();
+    assert_ne!(ours, before, "the changes should move some stat");
+    let view = s.config();
+    assert_eq!(
+        option(&view, "usePowerCharges").value,
+        Some(serde_json::json!(true))
+    );
+    assert_eq!(
+        option(&view, "enemyIsBoss").value,
+        Some(serde_json::json!("Boss"))
+    );
+    assert_eq!(
+        option(&view, "playerCursedWithDespair").value,
+        Some(serde_json::json!(5))
+    );
+
+    let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
+    load_xml(&lua, &fs::read_to_string(&xml).unwrap(), "attack").unwrap();
+    lua.load(UPSTREAM_CHANGES).exec().expect("upstream changes");
+    let theirs = golden_of(&lua, Game::Poe1.pob_version()).unwrap();
+    assert_view_matches("attack", "stat", &ours.stats, &theirs.stats);
+    assert_sidebar("attack", "stat", &ours.stats, &theirs.sidebar);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn dynamic_tooltips_are_recorded() {
+    let _guard = lock();
+    let mut s = Session::start("config-tooltips");
+    let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "attack").unwrap();
+    s.open_fixture("attack", &xml);
+    let none = option(&s.config(), "pantheonMajorGod").tooltip.clone();
+    assert!(none.is_empty(), "{none:?}");
+    s.run(set(
+        "pantheonMajorGod",
+        ConfigValue::Choice("Lunaris".into()),
+    ))
+    .unwrap();
+    let view = s.config();
+    let lines = &option(&view, "pantheonMajorGod").tooltip;
+    assert!(lines.len() > 1, "{lines:?}");
+    assert!(
+        lines
+            .iter()
+            .any(|l| matches!(l, auto_pob::engine::TooltipLine::Separator { .. })),
+        "{lines:?}"
+    );
+    // a plain tooltip is one line of text
+    let plain = option(&view, "buffAdrenaline");
+    assert!(
+        matches!(
+            plain.tooltip.first(),
+            Some(auto_pob::engine::TooltipLine::Line { size: 14, .. })
+        ),
+        "{:?}",
+        plain.tooltip
+    );
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn config_sets_round_trip() {
+    let _guard = lock();
+    let mut s = Session::start("config-sets");
+    let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "attack").unwrap();
+    let path = s.open_fixture("attack", &xml);
+    let power = |s: &mut Session| option(&s.config(), "usePowerCharges").value.clone();
+
+    let view = s.config();
+    assert_eq!(view.active_set, 1);
+    assert_eq!(view.sets.len(), 1);
+    let first_power = power(&mut s);
+    assert_ne!(first_power, Some(serde_json::json!(true)));
+
+    s.run(Command::NewConfigSet {
+        title: "Mapping".into(),
+    })
+    .unwrap();
+    let view = s.config();
+    assert_eq!(view.active_set, 2);
+    assert_eq!(
+        view.sets
+            .iter()
+            .map(|s| (s.id, s.title.as_str()))
+            .collect::<Vec<_>>(),
+        [(1, "Default"), (2, "Mapping")]
+    );
+    s.run(set("usePowerCharges", ConfigValue::Bool(true)))
+        .unwrap();
+    assert_eq!(power(&mut s), Some(serde_json::json!(true)));
+
+    s.run(Command::SelectConfigSet { id: 1 }).unwrap();
+    assert_eq!(s.config().active_set, 1);
+    assert_eq!(power(&mut s), first_power);
+    s.run(Command::SelectConfigSet { id: 2 }).unwrap();
+    assert_eq!(power(&mut s), Some(serde_json::json!(true)));
+
+    // save with set 2 active, then reopen
+    s.run(Command::Save).unwrap();
+    s.run(Command::NewBuild).unwrap();
+    assert_eq!(s.config().sets.len(), 1);
+    s.run(Command::OpenBuild { path }).unwrap();
+    let view = s.config();
+    assert_eq!(view.active_set, 2);
+    assert_eq!(view.sets.len(), 2);
+    assert_eq!(view.sets[1].title, "Mapping");
+    assert_eq!(power(&mut s), Some(serde_json::json!(true)));
+    s.run(Command::SelectConfigSet { id: 1 }).unwrap();
+    assert_eq!(power(&mut s), first_power);
+
+    // rename, delete and the numbering of new sets
+    s.run(Command::RenameConfigSet {
+        id: 2,
+        title: "Maps".into(),
+    })
+    .unwrap();
+    assert_eq!(s.config().sets[1].title, "Maps");
+    s.run(Command::NewConfigSet { title: "B".into() }).unwrap();
+    assert_eq!(s.config().active_set, 3);
+    s.run(Command::DeleteConfigSet { id: 2 }).unwrap();
+    let view = s.config();
+    assert_eq!(view.sets.iter().map(|s| s.id).collect::<Vec<_>>(), [1, 3]);
+    s.run(Command::NewConfigSet { title: "C".into() }).unwrap();
+    assert_eq!(s.config().active_set, 2, "the lowest free id is reused");
+    // deleting the active set moves to a neighbour; the last set can't go
+    s.run(Command::DeleteConfigSet { id: 2 }).unwrap();
+    assert_eq!(s.config().active_set, 3);
+    s.run(Command::DeleteConfigSet { id: 3 }).unwrap();
+    assert_eq!(s.config().active_set, 1);
+    let err = s.run(Command::DeleteConfigSet { id: 1 }).unwrap_err();
+    assert!(format!("{err:#}").contains("only config set"), "{err:#}");
+    let err = s.run(Command::SelectConfigSet { id: 42 }).unwrap_err();
+    assert!(format!("{err:#}").contains("no config set"), "{err:#}");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn custom_mods_change_stats() {
+    let _guard = lock();
+    let mut s = Session::start("custom-mods");
+    let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "attack").unwrap();
+    s.open_fixture("attack", &xml);
+    let before = s.stats();
+    assert_eq!(s.config().custom_mods, "");
+    s.run(Command::SetCustomMods {
+        text: "+100 to maximum Life\n+10% increased Attack Speed".into(),
+    })
+    .unwrap();
+    assert_eq!(
+        s.config().custom_mods,
+        "+100 to maximum Life\n+10% increased Attack Speed"
+    );
+    let after = s.stats();
+    assert_ne!(after, before);
+
+    // upstream, through the Custom Modifiers edit control
+    let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
+    load_xml(&lua, &attack_xml(), "attack").unwrap();
+    lua.load(
+        r#"
+        build.configTab.customModsBlockControls[1].controls.textEdit:SetText("+100 to maximum Life\n+10% increased Attack Speed", true)
+        build.buildFlag = true
+        runCallback("OnFrame")
+        "#,
+    )
+    .exec()
+    .unwrap();
+    let theirs = golden_of(&lua, Game::Poe1.pob_version()).unwrap();
+    assert_view_matches("attack", "stat", &after.stats, &theirs.stats);
+
+    // custom mods are undoable like any other change
+    s.run(Command::Undo(Tab::Config)).unwrap();
+    assert_eq!(s.config().custom_mods, "");
+    assert_eq!(s.stats(), before);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn undo_redo() {
+    let _guard = lock();
+    let mut s = Session::start("config-undo");
+    let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "attack").unwrap();
+    s.open_fixture("attack", &xml);
+    let flags = |s: &mut Session| {
+        let b = s.backend.build_view().unwrap();
+        (b.can_undo, b.can_redo)
+    };
+    let boss = |s: &mut Session| option(&s.config(), "enemyIsBoss").value.clone();
+    let before = s.stats();
+    let original = boss(&mut s);
+    assert_eq!(original, Some(serde_json::json!("Pinnacle")));
+    assert_eq!(flags(&mut s), (false, false));
+
+    s.run(set("enemyIsBoss", ConfigValue::Choice("Boss".into())))
+        .unwrap();
+    let changed = s.stats();
+    assert_ne!(changed, before);
+    assert_eq!(boss(&mut s), Some(serde_json::json!("Boss")));
+    assert_eq!(flags(&mut s), (true, false));
+
+    s.run(Command::Undo(Tab::Config)).unwrap();
+    assert_eq!(boss(&mut s), original);
+    assert_eq!(s.stats(), before);
+    assert_eq!(flags(&mut s), (false, true));
+
+    s.run(Command::Redo(Tab::Config)).unwrap();
+    assert_eq!(boss(&mut s), Some(serde_json::json!("Boss")));
+    assert_eq!(s.stats(), changed);
+    assert_eq!(flags(&mut s), (true, false));
+
+    // undo with nothing to undo is harmless
+    s.run(Command::Undo(Tab::Config)).unwrap();
+    s.run(Command::Undo(Tab::Config)).unwrap();
+    assert_eq!(flags(&mut s), (false, true));
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn clearing_an_option_goes_back_to_its_placeholder() {
+    let _guard = lock();
+    let mut s = Session::start("config-clear");
+    let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "attack").unwrap();
+    s.open_fixture("attack", &xml);
+    let before = s.stats();
+    s.run(set("playerCursedWithDespair", ConfigValue::Number(5.0)))
+        .unwrap();
+    assert_eq!(
+        option(&s.config(), "playerCursedWithDespair").value,
+        Some(serde_json::json!(5))
+    );
+    s.run(set("playerCursedWithDespair", ConfigValue::Clear))
+        .unwrap();
+    let view = s.config();
+    assert_eq!(option(&view, "playerCursedWithDespair").value, None);
+    assert_eq!(s.stats(), before);
+    // values of the wrong kind are refused
+    let err = s
+        .run(set("usePowerCharges", ConfigValue::Number(1.0)))
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("usePowerCharges"), "{err:#}");
+    let err = s
+        .run(set("enemyIsBoss", ConfigValue::Choice("Nope".into())))
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("enemyIsBoss"), "{err:#}");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn round_trip() {
+    let _guard = lock();
+    let mut s = Session::start("config-round-trip");
+    let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "dot").unwrap();
+    s.open_fixture("dot", &xml);
+    for command in three_changes() {
+        s.run(command).expect("set config");
+    }
+    s.run(save_as("Round Trip", false)).expect("save as");
+    let ours = s.stats();
+    let view = s.config();
+
+    let saved = fs::read_to_string(s.builds_dir().join("Round Trip.xml")).unwrap();
+    let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
+    load_xml(&lua, &saved, "Round Trip").unwrap();
+    let theirs = golden_of(&lua, Game::Poe1.pob_version()).unwrap();
+    for var in ["usePowerCharges", "enemyIsBoss", "playerCursedWithDespair"] {
+        assert_eq!(
+            option(&view, var).value.as_ref(),
+            theirs.config.get(var),
+            "{var}"
+        );
+    }
+    assert_eq!(theirs.config["enemyIsBoss"], "Boss");
+    assert_view_matches("dot", "stat", &ours.stats, &theirs.stats);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn unknown_config_var_is_an_error() {
+    let _guard = lock();
+    let mut s = Session::start("config-unknown");
+    s.run(Command::NewBuild).unwrap();
+    let err = s.run(set("nope", ConfigValue::Bool(true))).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("unknown config option nope"),
+        "{err:#}"
+    );
 }

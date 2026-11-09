@@ -1,0 +1,274 @@
+-- The Config tab for the Rust host: the view, option changes, config sets, custom modifiers
+-- and undo. Changes go through the controls' own callbacks, so undo, `BuildModList` and
+-- `buildFlag` happen exactly as in the classic app.
+-- Runs after bootstrap.lua and tooltip.lua. Errors use level 0.
+
+glue = glue or {}
+
+local function config_tab()
+	return pob.build.configTab
+end
+
+-- PoB's option table, loaded once; `varData` for each option by var.
+local options, option_by_var
+local function option_list()
+	if not options then
+		options = LoadModule("Modules/ConfigOptions")
+		option_by_var = {}
+		for _, varData in ipairs(options) do
+			if varData.var then option_by_var[varData.var] = varData end
+		end
+	end
+	return options, option_by_var
+end
+
+local function strip(text)
+	return (StripEscapes(tostring(text)))
+end
+
+local function set_ids(tab)
+	local sets = {}
+	for _, id in ipairs(tab.configSetOrderList) do
+		sets[#sets + 1] = { id = id, title = tab.configSets[id].title or "Default" }
+	end
+	return sets
+end
+
+-- What the option's tooltip shows now, as a recorder would see it.
+local function tooltip_lines(tab, control, varData)
+	local recorder = glue.tooltip()
+	local ok
+	if varData.tooltipFunc then
+		local index = control.selIndex
+		local value = control.list and index and control.list[index]
+		ok = pcall(varData.tooltipFunc, recorder, "BODY", index, value)
+	else
+		local text
+		ok, text = pcall(control.GetProperty, control, "tooltipText")
+		if ok and text and text ~= "" then recorder:AddLine(14, text) end
+	end
+	local lines = {}
+	if ok then
+		for _, line in ipairs(recorder:lines()) do
+			if line.text then
+				lines[#lines + 1] = { size = line.size, text = strip(line.text) }
+			else
+				lines[#lines + 1] = line
+			end
+		end
+	end
+	return lines
+end
+
+local function option_view(tab, varData, control)
+	local kind = varData.type
+	local view = { var = varData.var, kind = kind }
+	if kind == "countAllowZero" then
+		view.kind = "count"
+		view.allow_zero = true
+	end
+	local label = varData.label or varData.var
+	if kind == "check" and control.label then
+		label = control.label
+		if type(label) == "function" then label = label() end
+	end
+	view.label = strip(label)
+	view.shown = control:IsShown() and true or false
+	-- `false` is a value, so don't use `or`
+	local value = tab.input[varData.var]
+	if type(value) == "boolean" or type(value) == "number" or type(value) == "string" then
+		view.value = value
+	end
+	local placeholder = tab.placeholder[varData.var]
+	if type(placeholder) == "number" or type(placeholder) == "string" then
+		view.placeholder = placeholder
+	end
+	if kind == "list" then
+		local choices = {}
+		for _, item in ipairs(control.list) do
+			choices[#choices + 1] = { label = strip(item.label or item.val), value = tostring(item.val) }
+		end
+		-- an empty Lua table is ambiguous to serde, so leave it out
+		if #choices > 0 then view.choices = choices end
+	end
+	local tooltip = tooltip_lines(tab, control, varData)
+	if #tooltip > 0 then view.tooltip = tooltip end
+	return view
+end
+
+function glue.config_view()
+	local tab = config_tab()
+	local sections = {}
+	local current
+	for _, varData in ipairs((option_list())) do
+		if varData.section then
+			current = { name = varData.section, column = varData.col or 1, options = {} }
+			sections[#sections + 1] = current
+		elseif varData.var and current then
+			local control = tab.varControls[varData.var]
+			if control then
+				current.options[#current.options + 1] = option_view(tab, varData, control)
+			end
+		end
+	end
+	local filled = {}
+	for _, section in ipairs(sections) do
+		if #section.options > 0 then filled[#filled + 1] = section end
+	end
+	local blocks = tab.configSets[tab.activeConfigSetId].customModsList
+	return {
+		sets = set_ids(tab),
+		active_set = tab.activeConfigSetId,
+		custom_mods = blocks and blocks[1] and blocks[1].text or "",
+		sections = filled,
+	}
+end
+
+local function bad_value(var, what)
+	error(var .. " " .. what, 0)
+end
+
+local function finite(value)
+	return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
+end
+
+local function number_text(value)
+	return (string.format("%.14g", value))
+end
+
+function glue.set_config(var, value)
+	local tab = config_tab()
+	local control = tab.varControls[var]
+	if not control then
+		error("unknown config option " .. tostring(var), 0)
+	end
+	local _, by_var = option_list()
+	local kind = by_var[var].type
+	local current = tab.input[var]
+	if kind == "check" then
+		if value == nil then value = false end
+		if type(value) ~= "boolean" then bad_value(var, "takes on or off") end
+		if (current or false) == value then return end
+		control.state = value
+		control.changeFunc(value)
+	elseif kind == "list" then
+		if type(value) ~= "string" then bad_value(var, "takes one of its choices") end
+		local index
+		for i, item in ipairs(control.list) do
+			if tostring(item.val) == value then index = i break end
+		end
+		if not index then bad_value(var, "has no choice '" .. value .. "'") end
+		control:SetSel(index)
+		if control.selIndex ~= index then bad_value(var, "couldn't select '" .. value .. "'") end
+	elseif kind == "text" then
+		if value == nil then value = "" end
+		if type(value) ~= "string" then bad_value(var, "takes text") end
+		if (current or "") == value and current ~= nil then return end
+		control:SetText(value, true)
+	elseif kind == "count" or kind == "countAllowZero" or kind == "integer" or kind == "float" then
+		local buf
+		if value == nil then
+			-- an empty buffer leaves the option unset, so the placeholder applies
+			buf = ""
+			if current == nil then return end
+		else
+			if not finite(value) then bad_value(var, "takes a number") end
+			if kind ~= "float" and value ~= math.floor(value) then bad_value(var, "takes a whole number") end
+			if kind == "count" and value < 0 then bad_value(var, "can't be negative") end
+			if current == value then return end
+			buf = number_text(value)
+		end
+		control:SetText(buf, true)
+	else
+		bad_value(var, "can't be changed")
+	end
+end
+
+local function config_set_index(tab, id)
+	for index, setId in ipairs(tab.configSetOrderList) do
+		if setId == id then return index end
+	end
+	error("no config set " .. tostring(id), 0)
+end
+
+function glue.select_config_set(id)
+	local tab = config_tab()
+	config_set_index(tab, id)
+	if id == tab.activeConfigSetId then return end
+	-- as the set selector does
+	tab:SetActiveConfigSet(id)
+	tab:AddUndoState()
+end
+
+local function valid_title(title)
+	if type(title) ~= "string" or not title:match("%S") then
+		error("a config set needs a name", 0)
+	end
+end
+
+-- As the manager's New button does, then switches to the new set.
+function glue.new_config_set(title)
+	valid_title(title)
+	local tab = config_tab()
+	local configSet = tab:NewConfigSet(nil, title)
+	table.insert(tab.configSetOrderList, configSet.id)
+	tab.modFlag = true
+	tab:SetActiveConfigSet(configSet.id)
+	tab:AddUndoState()
+end
+
+function glue.rename_config_set(id, title)
+	valid_title(title)
+	local tab = config_tab()
+	config_set_index(tab, id)
+	tab.configSets[id].title = title
+	tab.modFlag = true
+	tab:AddUndoState()
+	tab.build:SyncLoadouts()
+end
+
+function glue.delete_config_set(id)
+	local tab = config_tab()
+	local index = config_set_index(tab, id)
+	if #tab.configSetOrderList < 2 then
+		error("can't delete the only config set", 0)
+	end
+	table.remove(tab.configSetOrderList, index)
+	tab.configSets[id] = nil
+	if id == tab.activeConfigSetId then
+		tab:SetActiveConfigSet(tab.configSetOrderList[math.max(1, index - 1)])
+	end
+	tab:AddUndoState()
+	tab.build:SyncLoadouts()
+	tab.build.buildFlag = true
+end
+
+-- Edits the first custom modifier group through its text control, like typing in it.
+function glue.set_custom_mods(text)
+	local tab = config_tab()
+	if type(text) ~= "string" then error("custom modifiers must be text", 0) end
+	local block = tab.customModsBlockControls and tab.customModsBlockControls[1]
+	if not block then error("this build has no custom modifiers", 0) end
+	local blocks = tab.configSets[tab.activeConfigSetId].customModsList
+	if blocks[1] and (blocks[1].text or "") == text then return end
+	block.controls.textEdit:SetText(text, true)
+end
+
+local function undo_tab(tab)
+	if tab ~= "config" then error("nothing to undo in " .. tostring(tab), 0) end
+	return config_tab()
+end
+
+function glue.undo(tab)
+	local configTab = undo_tab(tab)
+	configTab:Undo()
+	configTab:BuildModList()
+	configTab.build.buildFlag = true
+end
+
+function glue.redo(tab)
+	local configTab = undo_tab(tab)
+	configTab:Redo()
+	configTab:BuildModList()
+	configTab.build.buildFlag = true
+end

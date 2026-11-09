@@ -8,21 +8,31 @@ use crate::{
     pob::PathOfBuilding,
     renderer::{RenderJob, textures::TextureManager},
     stage::{ActiveStage, StageEvent, StageTransition},
+    stats::FrameStats,
 };
 use anyhow::Result;
-use std::sync::Arc;
 use std::{cell::RefCell, path::PathBuf, rc::Rc};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use winit::{
     application::ApplicationHandler,
-    event::{ElementState, MouseScrollDelta, WindowEvent},
-    event_loop::ActiveEventLoop,
+    event::{ElementState, MouseScrollDelta, StartCause, WindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow},
     platform::modifier_supplement::KeyEventExtModifierSupplement,
     window::Window,
 };
 
+/// How long after the last input frames keep running at full rate.
+const ACTIVE_DURATION: Duration = Duration::from_millis(500);
+/// Interval between frames while the window is focused or hovered but idle.
+const IDLE_FRAME_INTERVAL: Duration = Duration::from_millis(100);
+
 struct FrameOutput {
     pub render_job: Option<RenderJob>,
-    pub request_redraw: bool,
+    pub has_ongoing_work: bool,
+    pub lua_time: std::time::Duration,
 }
 
 pub struct App {
@@ -33,6 +43,10 @@ pub struct App {
     game: Game,
     script_dir: PathBuf,
     needs_reconfigure: bool,
+    stats: FrameStats,
+    is_focused: bool,
+    is_hovered: bool,
+    last_input: Instant,
 }
 
 impl App {
@@ -60,6 +74,10 @@ impl App {
             game,
             script_dir,
             needs_reconfigure: true,
+            stats: FrameStats::default(),
+            is_focused: false,
+            is_hovered: false,
+            last_input: Instant::now(),
         })
     }
 
@@ -111,7 +129,8 @@ impl App {
 
         Ok(FrameOutput {
             render_job,
-            request_redraw: stage_output.request_redraw,
+            has_ongoing_work: stage_output.has_ongoing_work,
+            lua_time: stage_output.lua_time,
         })
     }
 
@@ -159,9 +178,46 @@ impl App {
             gfx.window.request_redraw();
         }
     }
+
+    /// Marks user input. Frames run at full rate for a while after input.
+    fn on_input(&mut self) {
+        self.last_input = Instant::now();
+        self.request_redraw();
+    }
+
+    /// Decides when the next frame runs.
+    ///
+    /// SimpleGraphic redraws continuously while the window is focused or hovered. PoB's Lua
+    /// `OnFrame` is expensive, so instead frames run at full rate only while there is ongoing
+    /// work or recent input, and at a low rate otherwise. Frames still run while idle because
+    /// PoB's Lua relies on being polled (e.g. timers, cursor blinking).
+    fn schedule_next_frame(&self, event_loop: &ActiveEventLoop, has_ongoing_work: bool) {
+        let is_active = self.last_input.elapsed() < ACTIVE_DURATION;
+
+        if has_ongoing_work || is_active {
+            event_loop.set_control_flow(ControlFlow::Wait);
+            self.request_redraw();
+        } else if self.is_focused || self.is_hovered {
+            event_loop
+                .set_control_flow(ControlFlow::WaitUntil(Instant::now() + IDLE_FRAME_INTERVAL));
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+        }
+    }
 }
 
 impl ApplicationHandler<GraphicsContext> for App {
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
+        // idle frame timer set by `schedule_next_frame`
+        if let StartCause::ResumeTimeReached { .. } = cause {
+            // Clear the expired deadline. Otherwise, if the redraw is withheld (e.g. Wayland
+            // doesn't send frame callbacks for hidden surfaces), the loop would keep waking up
+            // immediately. The next frame re-arms the timer.
+            event_loop.set_control_flow(ControlFlow::Wait);
+            self.request_redraw();
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if let Err(err) = self.create_window(event_loop) {
             log::error!("{err}");
@@ -184,6 +240,7 @@ impl ApplicationHandler<GraphicsContext> for App {
             }
             WindowEvent::RedrawRequested => {
                 profiling::scope!("RedrawRequested");
+                let frame_start = Instant::now();
 
                 if let Err(err) = self.update(event_loop) {
                     log::error!("{err}");
@@ -205,7 +262,8 @@ impl ApplicationHandler<GraphicsContext> for App {
 
                 let FrameOutput {
                     render_job,
-                    request_redraw,
+                    has_ongoing_work,
+                    lua_time,
                 } = match self.frame(inhibit_elision) {
                     Ok(frame_output) => frame_output,
                     Err(err) => {
@@ -215,6 +273,7 @@ impl ApplicationHandler<GraphicsContext> for App {
                     }
                 };
 
+                let elided = render_job.is_none();
                 if let Some(ref mut gfx) = self.gfx_context {
                     match gfx.render(render_job) {
                         Ok(()) => {}
@@ -224,9 +283,15 @@ impl ApplicationHandler<GraphicsContext> for App {
                     }
                 }
 
-                if request_redraw {
-                    self.request_redraw();
-                }
+                self.stats.record(frame_start.elapsed(), lua_time, elided);
+                let (is_focused, is_hovered) = (self.is_focused, self.is_hovered);
+                self.stats.maybe_report(|| {
+                    format!(
+                        "focused={is_focused} hovered={is_hovered} ongoing_work={has_ongoing_work}"
+                    )
+                });
+
+                self.schedule_next_frame(event_loop, has_ongoing_work);
 
                 profiling::finish_frame!();
             }
@@ -236,12 +301,14 @@ impl ApplicationHandler<GraphicsContext> for App {
                     size.width,
                     size.height,
                 )));
-                self.request_redraw();
+                self.on_input();
             }
             WindowEvent::Focused(focused) => {
+                self.is_focused = focused;
+                log::debug!(target: crate::stats::TARGET, "focused={focused}");
                 self.handle_event(StageEvent::FocusChanged(focused));
                 if focused {
-                    self.request_redraw();
+                    self.on_input();
                 } else {
                     // Clear inputs on lost focus to avoid "stuck" keys on Wayland systems.
                     self.stage.clear_pressed();
@@ -249,7 +316,7 @@ impl ApplicationHandler<GraphicsContext> for App {
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.handle_event(StageEvent::ScaleFactorChanged(scale_factor));
-                self.request_redraw();
+                self.on_input();
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let state = event.state;
@@ -274,13 +341,13 @@ impl ApplicationHandler<GraphicsContext> for App {
                         self.handle_event(event);
                     }
                 }
-                self.request_redraw();
+                self.on_input();
             }
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.handle_event(StageEvent::ModifiersChanged {
                     state: modifiers.state(),
                 });
-                self.request_redraw();
+                self.on_input();
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let event = match state {
@@ -288,18 +355,22 @@ impl ApplicationHandler<GraphicsContext> for App {
                     ElementState::Released => StageEvent::MouseUp { button },
                 };
                 self.handle_event(event);
-                self.request_redraw();
+                self.on_input();
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let pos = PhysicalPoint::new(position.x as f32, position.y as f32);
                 self.handle_event(StageEvent::MouseMoved { pos });
-                self.request_redraw();
+                self.on_input();
             }
             WindowEvent::CursorEntered { .. } => {
+                self.is_hovered = true;
+                log::debug!(target: crate::stats::TARGET, "hovered=true");
                 self.handle_event(StageEvent::HoverChanged(true));
-                self.request_redraw();
+                self.on_input();
             }
             WindowEvent::CursorLeft { .. } => {
+                self.is_hovered = false;
+                log::debug!(target: crate::stats::TARGET, "hovered=false");
                 self.handle_event(StageEvent::HoverChanged(false));
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -310,7 +381,7 @@ impl ApplicationHandler<GraphicsContext> for App {
                     }
                 };
                 self.handle_event(StageEvent::MouseWheel { delta });
-                self.request_redraw();
+                self.on_input();
             }
             _ => {}
         }

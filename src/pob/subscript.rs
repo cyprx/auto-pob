@@ -5,15 +5,22 @@ use crate::{
 use anyhow::{Result, anyhow};
 use mlua::{Integer, IntoLuaMulti, Lua, MultiValue, Number, Value};
 use std::{
+    ops::DerefMut,
     path::PathBuf,
     sync::mpsc::{Receiver, Sender, channel},
     thread::JoinHandle,
+    time::{Duration, Instant},
 };
+
+/// How long to wait for a subscript's next call after replying to one of its blocking calls.
+const FOLLOW_UP_WAIT: Duration = Duration::from_millis(1);
 
 /// A unit of work produced by advancing the running subscripts.
 pub enum SubscriptEvent {
     /// A subscript requested that a function in the main Lua instance be called on its behalf.
     Call {
+        /// Id of the subscript that made the call.
+        id: u64,
         function_name: String,
         arguments: NativeMultiValue,
         /// Present for blocking calls. The return values of the callback must be sent back over it.
@@ -77,6 +84,18 @@ impl SubscriptManager {
         events
     }
 
+    /// Waits up to `timeout` for the subscript with the given id to issue its next call.
+    ///
+    /// A received call is held back and returned by the next [`Self::process`]. Returns early
+    /// if the subscript finishes in the meantime.
+    pub fn wait_for_call(&mut self, id: u64, timeout: Duration) {
+        if let Some(subscript) = self.scripts.iter_mut().find(|s| s.id == id)
+            && subscript.pending_call.is_none()
+        {
+            subscript.pending_call = subscript.call_rx.recv_timeout(timeout).ok();
+        }
+    }
+
     /// Returns `true` if at least one subscript is running.
     pub fn has_running_subscripts(&self) -> bool {
         !self.scripts.is_empty()
@@ -111,6 +130,11 @@ pub struct Subscript {
     handle: Option<JoinHandle<anyhow::Result<NativeMultiValue>>>,
     /// Receives `SubscriptCall`s sent by the proxy functions running in the subscript's s thread.
     call_rx: Receiver<SubscriptCall>,
+    /// A call received by [`SubscriptManager::wait_for_call`] that hasn't been processed yet.
+    pending_call: Option<SubscriptCall>,
+    /// Used for stats logging
+    started: Instant,
+    calls_serviced: u32,
 }
 
 // Subscripts are lua scripts that are executed in their own instance on a separate thread.
@@ -197,17 +221,25 @@ impl Subscript {
             id,
             handle: Some(handle),
             call_rx,
+            pending_call: None,
+            started: Instant::now(),
+            calls_serviced: 0,
         }
     }
 
     /// Collects a pending `SubscriptCall` into `events`.
     ///
     /// Does nothing if there is no pending call.
-    fn take_call(&self, events: &mut Vec<SubscriptEvent>) {
-        let Ok(call) = self.call_rx.try_recv() else {
+    fn take_call(&mut self, events: &mut Vec<SubscriptEvent>) {
+        let Some(call) = self
+            .pending_call
+            .take()
+            .or_else(|| self.call_rx.try_recv().ok())
+        else {
             // no pending call, or thread disconnected which is handled on join
             return;
         };
+        self.calls_serviced += 1;
 
         events.push(match call {
             SubscriptCall::Blocking {
@@ -215,6 +247,7 @@ impl Subscript {
                 arguments,
                 reply_tx,
             } => SubscriptEvent::Call {
+                id: self.id,
                 function_name,
                 arguments,
                 reply_tx: Some(reply_tx),
@@ -223,6 +256,7 @@ impl Subscript {
                 function_name,
                 arguments,
             } => SubscriptEvent::Call {
+                id: self.id,
                 function_name,
                 arguments,
                 reply_tx: None,
@@ -236,6 +270,14 @@ impl Subscript {
         if !self.handle.as_ref().is_some_and(JoinHandle::is_finished) {
             return None;
         }
+
+        log::info!(
+            target: crate::stats::TARGET,
+            "subscript {} finished in {:.1}ms after {} main-thread calls",
+            self.id,
+            self.started.elapsed().as_secs_f64() * 1000.0,
+            self.calls_serviced,
+        );
 
         let event = match self.handle.take().unwrap().join() {
             Ok(Ok(return_values)) => SubscriptEvent::Finished {
@@ -253,6 +295,59 @@ impl Subscript {
             },
         };
         Some(event)
+    }
+}
+
+/// Advances subscripts and passes their events to `handle` until no more work is immediately
+/// available or `budget` is spent.
+///
+/// A subscript making a blocking call can't issue its next call until it receives the reply, so
+/// polling once per frame would limit it to one blocking call per frame. Instead, after a
+/// blocking call is handled, this briefly waits for the subscript's follow-up call and services
+/// it in the same frame.
+///
+/// `manager` is called to borrow the manager for each step and the borrow is released before
+/// `handle` runs, so `handle` may access the manager itself (e.g. to launch another subscript).
+pub fn service_subscripts<D, E>(
+    mut manager: impl FnMut() -> D,
+    budget: Duration,
+    mut handle: impl FnMut(SubscriptEvent) -> Result<(), E>,
+) -> Result<(), E>
+where
+    D: DerefMut<Target = SubscriptManager>,
+{
+    let deadline = Instant::now() + budget;
+
+    loop {
+        let events = manager().process();
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        let mut awaiting_follow_up = Vec::new();
+        for event in events {
+            if let SubscriptEvent::Call {
+                id,
+                reply_tx: Some(_),
+                ..
+            } = &event
+            {
+                awaiting_follow_up.push(*id);
+            }
+            handle(event)?;
+        }
+
+        for id in awaiting_follow_up {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            manager().wait_for_call(id, FOLLOW_UP_WAIT.min(remaining));
+        }
+
+        if Instant::now() >= deadline {
+            return Ok(());
+        }
     }
 }
 
@@ -319,5 +414,69 @@ impl IntoLuaMulti for NativeMultiValue {
             })
             .collect::<mlua::Result<Vec<_>>>()
             .map(MultiValue::from_vec)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    const CALLS: u32 = 200;
+    const FRAME_TIME: Duration = Duration::from_millis(2);
+
+    /// Runs a subscript making `CALLS` blocking calls and returns how many frames it took to
+    /// finish when servicing it with the given per-frame budget.
+    fn frames_to_finish(budget: Duration) -> u32 {
+        let manager = RefCell::new(SubscriptManager::default());
+        manager.borrow_mut().push(
+            std::env::temp_dir(),
+            format!("for i = 1, {CALLS} do assert(Echo(i) == i) end"),
+            vec!["Echo".into()],
+            vec![],
+            NativeMultiValue(vec![]),
+        );
+
+        let mut frames = 0;
+        let mut finished = false;
+        while !finished {
+            frames += 1;
+            assert!(frames < 100_000, "subscript did not finish");
+            service_subscripts(
+                || manager.borrow_mut(),
+                budget,
+                |event| -> Result<()> {
+                    match event {
+                        SubscriptEvent::Call {
+                            arguments,
+                            reply_tx,
+                            ..
+                        } => {
+                            reply_tx.unwrap().send(Ok(arguments)).unwrap();
+                        }
+                        SubscriptEvent::Finished { .. } => finished = true,
+                        SubscriptEvent::Error { error, .. } => panic!("{error}"),
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
+            // the rest of the frame
+            std::thread::sleep(FRAME_TIME);
+        }
+        frames
+    }
+
+    #[test]
+    fn blocking_calls_are_serviced_within_a_frame() {
+        // a zero budget services one call per subscript per frame
+        let unbudgeted = frames_to_finish(Duration::ZERO);
+        let budgeted = frames_to_finish(Duration::from_millis(4));
+        eprintln!(
+            "{CALLS} blocking calls: {unbudgeted} frames (no budget) vs {budgeted} frames (4ms budget)"
+        );
+
+        assert!(unbudgeted >= CALLS);
+        assert!(budgeted < CALLS / 4);
     }
 }

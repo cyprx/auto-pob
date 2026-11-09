@@ -18,6 +18,7 @@ mod math;
 mod pob;
 mod renderer;
 mod stage;
+mod stats;
 mod util;
 mod uv;
 mod window;

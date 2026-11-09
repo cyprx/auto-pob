@@ -10,7 +10,7 @@ use crate::{
     draw_commands::DrawCommandRecorder,
     fonts::Fonts,
     input::InputState,
-    pob::subscript::{NativeMultiValue, SubscriptEvent, SubscriptManager},
+    pob::subscript::{NativeMultiValue, SubscriptEvent, SubscriptManager, service_subscripts},
     renderer::textures::TextureManager,
     stage::{StageEvent, StageFrameOutput, StageTransition},
     util::{append_lua_package_dir, change_working_directory, load_lua_file},
@@ -21,11 +21,15 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 mod api;
 mod modules;
 mod subscript;
+
+/// Maximum time per frame spent servicing subscript calls on the main thread.
+const SUBSCRIPT_BUDGET: Duration = Duration::from_millis(4);
 
 /// Holds all state shared between Rust and the API functions exposed to Lua.
 ///
@@ -255,6 +259,8 @@ impl PathOfBuilding {
             ctx.set_recorder_viewport_to_window_size();
         }
 
+        let lua_start = Instant::now();
+
         self.handle_subscripts()?;
 
         {
@@ -262,26 +268,26 @@ impl PathOfBuilding {
             api::on_frame(&self.lua)?;
         }
 
+        let lua_time = lua_start.elapsed();
+
         let ctx = self.lua.app_data_ref::<Context>().unwrap();
 
         let (layers_hash, layers) = ctx.recorder.finish();
         let identical = layers_hash == self.previous_layers_hash;
         self.previous_layers_hash = layers_hash;
 
-        // determine if another redraw needs to be requested after this frame.
-        // this mirrors SimpleGraphic's behavior.
-        let is_focused = ctx.window_state.is_focused;
-        let is_hovered = ctx.window_state.is_hovered;
-        let has_active_subscript = self.has_active_subscript();
-        let has_active_coroutine = self.has_active_coroutine();
-        let request_redraw =
-            is_focused || is_hovered || has_active_subscript || has_active_coroutine;
+        // background work that needs frames to progress. Redraws due to focus/hover/input are
+        // scheduled by the app.
+        let has_ongoing_work = self.has_active_subscript()
+            || self.has_active_coroutine()
+            || ctx.texture_manager.borrow().has_pending_loads();
 
         Ok(StageFrameOutput {
             draw_commands: layers.values().flatten().copied().collect(),
             can_elide: identical,
-            request_redraw,
+            has_ongoing_work,
             scale_factor: ctx.window_state.scale_factor(),
+            lua_time,
         })
     }
 
@@ -290,39 +296,37 @@ impl PathOfBuilding {
     fn handle_subscripts(&self) -> LuaResult<()> {
         profiling::scope!("handle_subscripts");
 
-        // advance the subscripts and collect the work they produced
-        let subscript_events = self
-            .lua
-            .app_data_mut::<SubscriptManager>()
-            .unwrap()
-            .process();
-
-        for event in subscript_events {
-            match event {
-                SubscriptEvent::Call {
-                    function_name,
-                    arguments,
-                    reply_tx,
-                } => {
-                    let result = api::on_sub_call(&self.lua, function_name, arguments)
-                        .map_err(anyhow::Error::from)
-                        .and_then(NativeMultiValue::try_from);
-                    // non-blocking calls have no reply channel and discard their result
-                    if let Some(reply_tx) = reply_tx {
-                        // if the subscript's thread has already gone away, there's nowhere to send
-                        // the result, so ignore the error
-                        let _ = reply_tx.send(result);
+        service_subscripts(
+            || self.lua.app_data_mut::<SubscriptManager>().unwrap(),
+            SUBSCRIPT_BUDGET,
+            |event| {
+                match event {
+                    SubscriptEvent::Call {
+                        id: _,
+                        function_name,
+                        arguments,
+                        reply_tx,
+                    } => {
+                        let result = api::on_sub_call(&self.lua, function_name, arguments)
+                            .map_err(anyhow::Error::from)
+                            .and_then(NativeMultiValue::try_from);
+                        // non-blocking calls have no reply channel and discard their result
+                        if let Some(reply_tx) = reply_tx {
+                            // if the subscript's thread has already gone away, there's nowhere to
+                            // send the result, so ignore the error
+                            let _ = reply_tx.send(result);
+                        }
+                    }
+                    SubscriptEvent::Finished { id, return_values } => {
+                        api::on_sub_finished(&self.lua, id, return_values)?;
+                    }
+                    SubscriptEvent::Error { id, error } => {
+                        api::on_sub_error(&self.lua, id, error)?;
                     }
                 }
-                SubscriptEvent::Finished { id, return_values } => {
-                    api::on_sub_finished(&self.lua, id, return_values)?;
-                }
-                SubscriptEvent::Error { id, error } => {
-                    api::on_sub_error(&self.lua, id, error)?;
-                }
-            }
-        }
-        Ok(())
+                Ok(())
+            },
+        )
     }
 
     fn has_active_subscript(&self) -> bool {

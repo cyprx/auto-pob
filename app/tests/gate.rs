@@ -585,6 +585,107 @@ fn failed_save_as_leaves_the_build_alone() {
     assert_eq!(s.backend.build_view().unwrap().name, "keep");
 }
 
+// ---- PoB must not write build files behind the user's back ----
+
+/// Every file under `dir` with its bytes, for before/after comparisons.
+fn snapshot_dir(dir: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    fn walk(dir: &Path, out: &mut std::collections::BTreeMap<PathBuf, Vec<u8>>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for path in entries.filter_map(|e| e.ok().map(|e| e.path())) {
+            if path.is_dir() {
+                walk(&path, out);
+            } else {
+                out.insert(path.clone(), fs::read(&path).unwrap());
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(dir, &mut out);
+    out
+}
+
+fn fixture_xml(name: &str) -> PathBuf {
+    fixtures()
+        .into_iter()
+        .find(|(n, _)| n == name)
+        .unwrap_or_else(|| panic!("no fixture named {name}"))
+        .1
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn switching_builds_never_rewrites_files() {
+    let _guard = lock();
+    let mut s = Session::start("no-autosave-open");
+    let a = s.open_fixture("attack", &fixture_xml("attack"));
+    s.run(Command::SetConfig {
+        var: "usePowerCharges".into(),
+        value: ConfigValue::Bool(true),
+    })
+    .unwrap();
+    let before = snapshot_dir(&s.builds_dir());
+    let b = s.builds_dir().join("dot.xml");
+    fs::copy(fixture_xml("dot"), &b).unwrap();
+    let before = {
+        let mut m = before;
+        m.insert(b.clone(), fs::read(&b).unwrap());
+        m
+    };
+    s.run(Command::OpenBuild { path: b }).expect("open B");
+    assert_eq!(snapshot_dir(&s.builds_dir()), before, "A was rewritten");
+    assert_eq!(fs::read(&a).unwrap(), before[&a]);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn new_build_never_rewrites_files() {
+    let _guard = lock();
+    let mut s = Session::start("no-autosave-new");
+    s.open_fixture("attack", &fixture_xml("attack"));
+    s.run(Command::SetConfig {
+        var: "usePowerCharges".into(),
+        value: ConfigValue::Bool(true),
+    })
+    .unwrap();
+    let before = snapshot_dir(&s.builds_dir());
+    s.run(Command::NewBuild).unwrap();
+    assert_eq!(snapshot_dir(&s.builds_dir()), before);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn leaving_the_unnamed_build_drops_no_temp_file() {
+    let _guard = lock();
+    let mut s = Session::start("no-autosave-temp");
+    let a = s.builds_dir().join("attack.xml");
+    fs::create_dir_all(a.parent().unwrap()).unwrap();
+    fs::copy(fixture_xml("attack"), &a).unwrap();
+    let before = snapshot_dir(&s.builds_dir());
+    s.run(Command::SetConfig {
+        var: "usePowerCharges".into(),
+        value: ConfigValue::Bool(true),
+    })
+    .unwrap();
+    s.run(Command::OpenBuild { path: a }).unwrap();
+    assert_eq!(snapshot_dir(&s.builds_dir()), before);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_garbage_build_file_is_an_error_and_does_not_wedge_the_engine() {
+    let _guard = lock();
+    let mut s = Session::start("garbage-build");
+    let bad = s.builds_dir().join("bad.xml");
+    fs::create_dir_all(bad.parent().unwrap()).unwrap();
+    fs::write(&bad, "this is not xml at all").unwrap();
+    s.run(Command::OpenBuild { path: bad }).unwrap_err();
+    // the engine still works afterwards
+    s.open_fixture("attack", &fixture_xml("attack"));
+    assert_view_matches("attack", "stat", &s.stats().stats, &golden("attack").stats);
+}
+
 // ---- config through PobBackend ----
 
 fn option<'a>(view: &'a ConfigView, var: &str) -> &'a ConfigOption {

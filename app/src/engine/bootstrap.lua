@@ -1,8 +1,7 @@
 -- Our startup for Path of Building, based on its HeadlessWrapper.lua.
 -- Differences: native Inflate/Deflate/NewFileSearch/paths, ConPrintf logs, startup
 -- errors raise, LaunchSubScript returns nil, and the result is exposed as `pob`.
--- This wrapper allows the program to run headless on any OS (in theory)
--- It can be run using a standard lua interpreter, although LuaJIT is preferable
+-- It runs inside our embedded LuaJIT (mlua) with native Rust helpers for the host functions.
 
 
 
@@ -172,7 +171,10 @@ dofile("Launch.lua")
 
 -- The pinned PoB ships a repository-style manifest, so Launch.lua turns on devMode, and
 -- Main:Init then keeps the user's data (builds, settings) inside the PoB folder. We want
--- GetUserPath() instead: hide devMode while Main initialises, then restore it.
+-- GetUserPath() instead, so devMode is turned off before Main initialises and stays off.
+-- Classic release installs run with devMode false too. Leaving it on would enable PoB's
+-- "dev autosave" in the build Shutdown, which rewrites build files on every mode switch,
+-- and it would disable Launch.lua's crash recovery for a build that fails to load.
 do
 	local plain_plo = PLoadModule
 	function PLoadModule(fileName, ...)
@@ -180,11 +182,8 @@ do
 		if not err and fileName:match("^Modules/Main") and type(module) == "table" and module.Init then
 			local init = module.Init
 			module.Init = function(self, ...)
-				local dev = mainObject.devMode
 				mainObject.devMode = false
-				local ok, e = pcall(init, self, ...)
-				mainObject.devMode = dev
-				if not ok then error(e, 0) end
+				return init(self, ...)
 			end
 		end
 		return err, module

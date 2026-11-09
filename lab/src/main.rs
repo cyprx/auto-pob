@@ -6,6 +6,7 @@
 
 mod app;
 mod engine;
+mod theme;
 mod tree_view;
 
 use directories::BaseDirs;
@@ -34,6 +35,7 @@ fn main() -> eframe::Result {
         "auto-pob lab",
         options,
         Box::new(move |cc| {
+            theme::apply(&cc.egui_ctx);
             let ctx = cc.egui_ctx.clone();
             let engine = engine::Engine::spawn(pob_dir, move || ctx.request_repaint());
             Ok(Box::new(app::LabApp::new(engine)))

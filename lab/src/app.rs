@@ -3,6 +3,7 @@ use crate::{
         BuildSummary, CONFIG, Command, ConfigKind, ConfigValue, Engine, Event, METRICS, NodeScore,
         STATS, Tree,
     },
+    theme,
     tree_view::{Heat, TreeView},
 };
 use eframe::egui;
@@ -131,7 +132,7 @@ impl LabApp {
     }
 
     fn side_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Build");
+        theme::heading(ui, "Build");
         ui.label("Paste a PoB share code or build XML:");
         ui.add(
             egui::TextEdit::multiline(&mut self.import_text)
@@ -201,8 +202,8 @@ impl LabApp {
         ui.separator();
         ui.strong("Stats");
         egui::Grid::new("stats").striped(true).show(ui, |ui| {
-            for ((_, label), value) in STATS.iter().zip(&build.stats) {
-                ui.label(*label);
+            for ((key, label), value) in STATS.iter().zip(&build.stats) {
+                ui.label(egui::RichText::new(*label).color(stat_color(key)));
                 ui.label(value.map_or("-".into(), format_number));
                 ui.end_row();
             }
@@ -214,7 +215,7 @@ impl LabApp {
     }
 
     fn node_power_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Node power");
+        theme::heading(ui, "Node power");
         ui.horizontal(|ui| {
             ui.label("Rank by");
             egui::ComboBox::from_id_salt("rank_by")
@@ -224,7 +225,7 @@ impl LabApp {
                         ui.selectable_value(&mut self.metric, i, *label);
                     }
                 });
-            if ui.button("Rank nodes").clicked() {
+            if ui.add(theme::primary_button("Rank nodes")).clicked() {
                 self.send(Command::NodePower {
                     metric: METRICS[self.metric].0,
                     max_distance: self.max_distance,
@@ -271,7 +272,9 @@ impl LabApp {
                             Some(s) if s == self.sort_by => " ⏶",
                             _ => "",
                         };
-                        let text = egui::RichText::new(format!("{label}{marker}")).strong();
+                        let text = egui::RichText::new(format!("{label}{marker}"))
+                            .strong()
+                            .color(theme::HEADING);
                         match sort {
                             Some(s) => {
                                 if ui.button(text).clicked() {
@@ -292,14 +295,17 @@ impl LabApp {
                         ui.label(&score.name);
                     });
                     row.col(|ui| {
-                        ui.label(&score.kind);
+                        ui.label(egui::RichText::new(&score.kind).color(kind_color(&score.kind)));
                     });
                     row.col(|ui| {
                         ui.label(score.distance.to_string());
                     });
                     for value in [score.gain, score.path_gain, score.per_point] {
                         row.col(|ui| {
-                            ui.label(format_number(value));
+                            ui.label(
+                                egui::RichText::new(format_number(value))
+                                    .color(theme::change_color(value)),
+                            );
                         });
                     }
                 });
@@ -351,7 +357,7 @@ impl eframe::App for LabApp {
 
         egui::CentralPanel::default().show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("Passive tree");
+                theme::heading(ui, "Passive tree");
                 if ui.button("Fit").clicked() {
                     self.tree_view.fit();
                 }
@@ -371,6 +377,32 @@ impl eframe::App for LabApp {
                 }
             }
         });
+    }
+}
+
+/// PoB's colour for a stat, by calc output key.
+fn stat_color(key: &str) -> egui::Color32 {
+    match key {
+        "Life" => theme::LIFE,
+        "Mana" => theme::MANA,
+        "EnergyShield" => theme::ENERGY_SHIELD,
+        "Armour" => theme::ARMOUR,
+        "Evasion" => theme::POSITIVE,
+        "FireResist" => theme::FIRE,
+        "ColdResist" => theme::COLD,
+        "LightningResist" => theme::LIGHTNING,
+        "ChaosResist" => theme::CHAOS,
+        "CombinedDPS" => theme::UNIQUE,
+        _ => theme::HEADING,
+    }
+}
+
+/// Node types: keystones stand out the most, like on the tree.
+fn kind_color(kind: &str) -> egui::Color32 {
+    match kind {
+        "Keystone" => theme::UNIQUE,
+        "Notable" => theme::HEADING,
+        _ => theme::TEXT_DIM,
     }
 }
 

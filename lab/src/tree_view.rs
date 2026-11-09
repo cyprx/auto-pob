@@ -30,7 +30,7 @@ pub struct TreeView {
 type Sheet = (egui::TextureId, Vec2);
 
 const ALLOCATED: Color32 = Color32::from_rgb(230, 185, 80);
-const EDGE: Color32 = Color32::from_gray(70);
+const EDGE: Color32 = Color32::from_rgb(72, 62, 50);
 const HOVER: Color32 = Color32::WHITE;
 /// Heatmap colours for the lowest and highest positive score
 const HEAT_LOW: Color32 = Color32::from_rgb(40, 70, 140);
@@ -54,7 +54,7 @@ impl TreeView {
     ) {
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         let rect = response.rect;
-        painter.rect_filled(rect, 0.0, Color32::from_gray(12));
+        painter.rect_filled(rect, 0.0, crate::theme::BACKGROUND);
 
         if self.needs_fit || self.zoom == 0.0 {
             self.fit_to(rect, tree);

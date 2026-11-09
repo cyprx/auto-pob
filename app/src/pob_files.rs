@@ -103,6 +103,12 @@ fn http_fetch(game: Game) -> impl FnMut() -> anyhow::Result<Box<dyn Read>> {
     }
 }
 
+/// Downloads the pinned PoB tarball for `game` and extracts it into `dest` (no marker, no cache).
+pub fn download_into(game: Game, dest: &Path) -> anyhow::Result<()> {
+    fs::create_dir_all(dest)?;
+    extract(http_fetch(game)()?, dest).context("extract PoB tarball")
+}
+
 /// Where a tarball entry (root folder already stripped) lands, or `None` to skip it.
 fn map_entry(relative: &Path, dest: &Path) -> Option<PathBuf> {
     // Reject anything but plain components (no `..`, no absolute paths).

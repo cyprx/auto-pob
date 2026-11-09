@@ -680,10 +680,40 @@ fn a_garbage_build_file_is_an_error_and_does_not_wedge_the_engine() {
     let bad = s.builds_dir().join("bad.xml");
     fs::create_dir_all(bad.parent().unwrap()).unwrap();
     fs::write(&bad, "this is not xml at all").unwrap();
-    s.run(Command::OpenBuild { path: bad }).unwrap_err();
+    let err = s.run(Command::OpenBuild { path: bad }).unwrap_err();
+    let message = format!("{err:#}");
     // the engine still works afterwards
     s.open_fixture("attack", &fixture_xml("attack"));
     assert_view_matches("attack", "stat", &s.stats().stats, &golden("attack").stats);
+    // and the error says why, not just "Error:"
+    assert!(
+        message.len() > "Error:".len() + 5 && !message.starts_with("Error:"),
+        "{message}"
+    );
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn recalculate_reports_frame_errors_once() {
+    let _guard = lock();
+    let mut s = Session::start("recalc-error");
+    s.run(Command::NewBuild).unwrap();
+    s.backend
+        .lua
+        .load(
+            "local main = pob.main.main; local real = main.OnFrame; \
+             main.OnFrame = function(...) main.OnFrame = real; error('boom from the frame') end",
+        )
+        .exec()
+        .unwrap();
+    let err = s.backend.recalculate().unwrap_err();
+    assert!(
+        format!("{err:#}").contains("boom from the frame"),
+        "{err:#}"
+    );
+    // the failure was consumed, so it doesn't surface in the next, unrelated frame
+    s.run(save_as("after", false))
+        .expect("save after a failed recalc");
 }
 
 // ---- config through PobBackend ----

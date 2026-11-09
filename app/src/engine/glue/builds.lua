@@ -9,13 +9,26 @@ local function main_module()
 	return pob.main.main
 end
 
+-- launch:ShowErrMsg builds "^1Error:\n\n^0<reason>\n^8v<version>\n^0Press Enter..."; keep
+-- just the reason, on one line, without colour codes.
+local function error_reason(message)
+	local lines = {}
+	for line in (tostring(message) .. "\n"):gmatch("(.-)\n") do
+		if line:find("^%^8v") or line:find("^%^0Press ") then break end
+		line = line:gsub("%^x%x%x%x%x%x%x", ""):gsub("%^%d", "")
+		if line ~= "" and line ~= "Error:" then lines[#lines + 1] = line end
+	end
+	if #lines == 0 then return "PoB reported an error" end
+	return table.concat(lines, " ")
+end
+
 local function frame()
 	runCallback("OnFrame")
 	-- Launch.lua catches errors from a frame and shows them as a prompt
 	local message = pob.main.promptMsg
 	if message then
 		pob.main.promptMsg = nil
-		error((tostring(message):gsub("%^%x", ""):match("[^\n]+") or "PoB reported an error"), 0)
+		error(error_reason(message), 0)
 	end
 end
 
@@ -29,6 +42,12 @@ local function enter_build(...)
 		frame()
 		error("couldn't open that build", 0)
 	end
+end
+
+-- Recalculates the open build, raising any error PoB hit while doing it.
+function glue.recalculate()
+	pob.build.buildFlag = true
+	frame()
 end
 
 function glue.build_view()

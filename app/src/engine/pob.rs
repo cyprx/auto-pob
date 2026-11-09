@@ -247,10 +247,7 @@ impl Backend for PobBackend {
     }
 
     fn recalculate(&mut self) -> Result<()> {
-        self.lua
-            .load("pob.build.buildFlag = true; runCallback('OnFrame')")
-            .exec()
-            .map_err(|e| anyhow!("{e}"))
+        self.call::<_, ()>("recalculate", ())
     }
 
     fn build_view(&mut self) -> Result<BuildView> {

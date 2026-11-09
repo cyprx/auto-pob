@@ -72,13 +72,18 @@ impl SubscriptManager {
         let mut events = vec![];
 
         self.scripts.retain_mut(|subscript| {
+            // checked before taking calls: a finished subscript can't send more, so draining its
+            // queue afterwards delivers every call it made before its result
+            let finished = subscript.is_finished();
             subscript.take_call(&mut events);
+            if !finished {
+                return true;
+            }
 
-            subscript.try_join().is_none_or(|event| {
-                events.push(event);
-                // subscript has finished or errored, remove it
-                false
-            })
+            while subscript.take_call(&mut events) {}
+            events.push(subscript.join());
+            // subscript has finished or errored, remove it
+            false
         });
 
         events
@@ -186,7 +191,7 @@ impl Subscript {
                                 arguments: args.try_into()?,
                                 reply_tx,
                             })
-                            .unwrap();
+                            .map_err(|e| anyhow!("{e}"))?;
                         let return_values = reply_rx.recv().map_err(|e| anyhow!("{e}"))??;
                         Ok(return_values)
                     })?,
@@ -229,15 +234,15 @@ impl Subscript {
 
     /// Collects a pending `SubscriptCall` into `events`.
     ///
-    /// Does nothing if there is no pending call.
-    fn take_call(&mut self, events: &mut Vec<SubscriptEvent>) {
+    /// Returns `false` if there was no pending call.
+    fn take_call(&mut self, events: &mut Vec<SubscriptEvent>) -> bool {
         let Some(call) = self
             .pending_call
             .take()
             .or_else(|| self.call_rx.try_recv().ok())
         else {
             // no pending call, or thread disconnected which is handled on join
-            return;
+            return false;
         };
         self.calls_serviced += 1;
 
@@ -262,15 +267,15 @@ impl Subscript {
                 reply_tx: None,
             },
         });
+        true
     }
 
-    /// If the subscript's thread has finished, joins it and returns the resulting
-    /// `SubscriptEvent`.
-    fn try_join(&mut self) -> Option<SubscriptEvent> {
-        if !self.handle.as_ref().is_some_and(JoinHandle::is_finished) {
-            return None;
-        }
+    fn is_finished(&self) -> bool {
+        self.handle.as_ref().is_some_and(JoinHandle::is_finished)
+    }
 
+    /// Joins the subscript's finished thread and returns the resulting `SubscriptEvent`.
+    fn join(&mut self) -> SubscriptEvent {
         log::info!(
             target: crate::stats::TARGET,
             "subscript {} finished in {:.1}ms after {} main-thread calls",
@@ -279,7 +284,7 @@ impl Subscript {
             self.calls_serviced,
         );
 
-        let event = match self.handle.take().unwrap().join() {
+        match self.handle.take().unwrap().join() {
             Ok(Ok(return_values)) => SubscriptEvent::Finished {
                 id: self.id,
                 return_values,
@@ -293,8 +298,7 @@ impl Subscript {
                 id: self.id,
                 error: String::from("Subscript thread panicked!"),
             },
-        };
-        Some(event)
+        }
     }
 }
 
@@ -478,5 +482,282 @@ mod tests {
 
         assert!(unbudgeted >= CALLS);
         assert!(budgeted < CALLS / 4);
+    }
+
+    /// Readable form of values passed between instances, e.g. `nil, true, 42, "text"`.
+    fn describe(values: &NativeMultiValue) -> String {
+        let parts: Vec<String> = values
+            .0
+            .iter()
+            .map(|v| match v {
+                NativeValue::Nil => "nil".into(),
+                NativeValue::Boolean(b) => b.to_string(),
+                NativeValue::Integer(i) => i.to_string(),
+                NativeValue::Number(n) => n.to_string(),
+                NativeValue::String(s) => format!("{:?}", String::from_utf8_lossy(s)),
+            })
+            .collect();
+        parts.join(", ")
+    }
+
+    fn launch(
+        manager: &RefCell<SubscriptManager>,
+        script: &str,
+        blocking: &[&str],
+        nonblocking: &[&str],
+        arguments: Vec<NativeValue>,
+    ) -> u64 {
+        manager.borrow_mut().push(
+            std::env::temp_dir(),
+            script.into(),
+            blocking.iter().map(|s| s.to_string()).collect(),
+            nonblocking.iter().map(|s| s.to_string()).collect(),
+            NativeMultiValue(arguments),
+        )
+    }
+
+    /// Services subscripts like the main loop does until none are running. Blocking calls are
+    /// answered by `reply`. Returns a log line per event, e.g. `call 0 Echo(1)`, `finished 0: 1`.
+    fn run_to_completion(
+        manager: &RefCell<SubscriptManager>,
+        mut reply: impl FnMut(&str, NativeMultiValue) -> Result<NativeMultiValue>,
+    ) -> Vec<String> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut log = Vec::new();
+        while manager.borrow().has_running_subscripts() {
+            assert!(
+                Instant::now() < deadline,
+                "subscripts did not finish: {log:?}"
+            );
+            service_subscripts(
+                || manager.borrow_mut(),
+                Duration::from_millis(4),
+                |event| -> Result<()> {
+                    match event {
+                        SubscriptEvent::Call {
+                            id,
+                            function_name,
+                            arguments,
+                            reply_tx,
+                        } => {
+                            log.push(format!(
+                                "call {id} {function_name}({})",
+                                describe(&arguments)
+                            ));
+                            if let Some(reply_tx) = reply_tx {
+                                reply_tx.send(reply(&function_name, arguments)).unwrap();
+                            }
+                        }
+                        SubscriptEvent::Finished { id, return_values } => {
+                            log.push(format!("finished {id}: {}", describe(&return_values)));
+                        }
+                        SubscriptEvent::Error { id, error } => {
+                            log.push(format!("error {id}: {error}"));
+                        }
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
+            std::thread::sleep(FRAME_TIME);
+        }
+        log
+    }
+
+    fn echo(_: &str, arguments: NativeMultiValue) -> Result<NativeMultiValue> {
+        Ok(arguments)
+    }
+
+    #[test]
+    fn values_round_trip_between_instances() {
+        let manager = RefCell::new(SubscriptManager::default());
+        launch(
+            &manager,
+            r#"
+            local a, b, c, d, e = Echo(nil, true, 42, 1.5, "bin\0\255")
+            return a == nil, b == true, c == 42, d == 1.5, e == "bin\0\255"
+            "#,
+            &["Echo"],
+            &[],
+            vec![],
+        );
+        let log = run_to_completion(&manager, echo);
+        assert_eq!(
+            log.last().unwrap(),
+            "finished 0: true, true, true, true, true"
+        );
+    }
+
+    #[test]
+    fn arguments_and_return_values_reach_the_main_instance() {
+        let manager = RefCell::new(SubscriptManager::default());
+        launch(
+            &manager,
+            "local a, b = ... return a .. b, #b",
+            &[],
+            &[],
+            vec![
+                NativeValue::String(b"x".to_vec()),
+                NativeValue::String(b"yz".to_vec()),
+            ],
+        );
+        assert_eq!(
+            run_to_completion(&manager, echo),
+            ["finished 0: \"xyz\", 2"]
+        );
+    }
+
+    #[test]
+    fn unsupported_argument_types_are_lua_errors() {
+        let manager = RefCell::new(SubscriptManager::default());
+        launch(
+            &manager,
+            "local ok, err = pcall(Echo, {}) return ok, tostring(err)",
+            &["Echo"],
+            &[],
+            vec![],
+        );
+        let log = run_to_completion(&manager, echo);
+        assert_eq!(log.len(), 1, "{log:?}");
+        assert!(log[0].starts_with("finished 0: false"), "{log:?}");
+        assert!(log[0].contains("Unsupported value type: table"), "{log:?}");
+    }
+
+    #[test]
+    fn main_thread_errors_are_raised_in_the_subscript() {
+        let manager = RefCell::new(SubscriptManager::default());
+        launch(
+            &manager,
+            "local ok, err = pcall(Fail) return ok, tostring(err)",
+            &["Fail"],
+            &[],
+            vec![],
+        );
+        let log = run_to_completion(&manager, |_, _| Err(anyhow!("main says no")));
+        assert!(log[1].starts_with("finished 0: false"), "{log:?}");
+        assert!(log[1].contains("main says no"), "{log:?}");
+    }
+
+    #[test]
+    fn uncaught_errors_become_error_events() {
+        let manager = RefCell::new(SubscriptManager::default());
+        launch(&manager, r#"error("kaboom")"#, &[], &[], vec![]);
+        launch(&manager, "Undeclared()", &["Echo"], &[], vec![]);
+        launch(&manager, "this is not lua", &[], &[], vec![]);
+        let mut log = run_to_completion(&manager, echo);
+        log.sort();
+        assert_eq!(log.len(), 3, "{log:?}");
+        assert!(
+            log[0].starts_with("error 0:") && log[0].contains("kaboom"),
+            "{log:?}"
+        );
+        assert!(
+            log[1].starts_with("error 1:") && log[1].contains("Undeclared"),
+            "{log:?}"
+        );
+        assert!(
+            log[2].starts_with("error 2:") && log[2].contains("syntax error"),
+            "{log:?}"
+        );
+    }
+
+    #[test]
+    fn nonblocking_calls_arrive_in_order() {
+        let manager = RefCell::new(SubscriptManager::default());
+        launch(
+            &manager,
+            r#"for i = 1, 50 do Notify(i) end return "done""#,
+            &[],
+            &["Notify"],
+            vec![],
+        );
+        let log = run_to_completion(&manager, |name, _| {
+            panic!("unexpected blocking call {name}")
+        });
+        let mut expected: Vec<String> = (1..=50).map(|i| format!("call 0 Notify({i})")).collect();
+        expected.push("finished 0: \"done\"".into());
+        assert_eq!(log, expected);
+    }
+
+    #[test]
+    fn concurrent_subscripts_finish_independently() {
+        let manager = RefCell::new(SubscriptManager::default());
+        let ids: Vec<u64> = (0..8)
+            .map(|n| {
+                launch(
+                    &manager,
+                    "local n = ... for i = 1, 20 do Echo(i) end return Echo(n) * 2",
+                    &["Echo"],
+                    &[],
+                    vec![NativeValue::Integer(n)],
+                )
+            })
+            .collect();
+        assert_eq!(ids, (0..8).collect::<Vec<_>>());
+        assert!(ids.iter().all(|&id| manager.borrow().is_running(id)));
+
+        let log = run_to_completion(&manager, echo);
+        let mut finished: Vec<_> = log.iter().filter(|l| l.starts_with("finished")).collect();
+        finished.sort();
+        let expected: Vec<String> = (0..8).map(|n| format!("finished {n}: {}", n * 2)).collect();
+        assert_eq!(finished, expected.iter().collect::<Vec<_>>());
+        assert!(!ids.iter().any(|&id| manager.borrow().is_running(id)));
+    }
+
+    #[test]
+    fn script_header_is_accepted() {
+        let manager = RefCell::new(SubscriptManager::default());
+        launch(&manager, "#@ SimpleGraphic\nreturn 1", &[], &[], vec![]);
+        assert_eq!(run_to_completion(&manager, echo), ["finished 0: 1"]);
+    }
+
+    /// Drops the manager while `script` is running and returns how its thread ended.
+    fn result_after_dropping_manager(script: &str, wait_for_call: bool) -> String {
+        let mut manager = SubscriptManager::default();
+        let id = manager.push(
+            std::env::temp_dir(),
+            script.into(),
+            vec!["Echo".into()],
+            vec![],
+            NativeMultiValue(vec![]),
+        );
+        if wait_for_call {
+            manager.wait_for_call(id, Duration::from_secs(5));
+            assert!(manager.scripts[0].pending_call.is_some());
+        }
+        let handle = manager.scripts[0].handle.take().unwrap();
+        drop(manager);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !handle.is_finished() {
+            assert!(
+                Instant::now() < deadline,
+                "subscript thread hung after shutdown"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        match handle.join() {
+            Ok(Ok(values)) => format!("finished: {}", describe(&values)),
+            Ok(Err(err)) => format!("error: {err}"),
+            Err(_) => "panicked".into(),
+        }
+    }
+
+    #[test]
+    fn shutdown_unblocks_a_subscript_waiting_for_a_reply() {
+        let result = result_after_dropping_manager(r#"Echo(1) return "unreachable""#, true);
+        assert!(result.starts_with("error:"), "{result}");
+    }
+
+    #[test]
+    fn shutdown_before_a_blocking_call_ends_the_subscript_cleanly() {
+        let script = r#"
+            local start = os.clock()
+            while os.clock() - start < 0.05 do end
+            Echo(1)
+            return "unreachable"
+        "#;
+        let result = result_after_dropping_manager(script, false);
+        assert!(result.starts_with("error:"), "{result}");
     }
 }

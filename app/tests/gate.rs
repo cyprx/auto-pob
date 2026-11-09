@@ -833,14 +833,18 @@ fn custom_mods_change_stats() {
     let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "attack").unwrap();
     s.open_fixture("attack", &xml);
     let before = s.stats();
-    assert_eq!(s.config().custom_mods, "");
-    s.run(Command::SetCustomMods {
+    let texts = |s: &mut Session| -> Vec<String> {
+        s.config().custom_mods.into_iter().map(|g| g.text).collect()
+    };
+    assert_eq!(texts(&mut s), [""]);
+    s.run(Command::SetCustomModText {
+        group: 0,
         text: "+100 to maximum Life\n+10% increased Attack Speed".into(),
     })
     .unwrap();
     assert_eq!(
-        s.config().custom_mods,
-        "+100 to maximum Life\n+10% increased Attack Speed"
+        texts(&mut s),
+        ["+100 to maximum Life\n+10% increased Attack Speed"]
     );
     let after = s.stats();
     assert_ne!(after, before);
@@ -862,8 +866,161 @@ fn custom_mods_change_stats() {
 
     // custom mods are undoable like any other change
     s.run(Command::Undo(Tab::Config)).unwrap();
-    assert_eq!(s.config().custom_mods, "");
+    assert_eq!(texts(&mut s), [""]);
     assert_eq!(s.stats(), before);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn custom_mod_groups_match_pob() {
+    use auto_pob::engine::CustomModGroup;
+    let _guard = lock();
+    let mut s = Session::start("custom-groups");
+    let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "attack").unwrap();
+    let path = s.open_fixture("attack", &xml);
+    s.run(Command::SetCustomModText {
+        group: 0,
+        text: "+100 to maximum Life".into(),
+    })
+    .unwrap();
+    let one = s.stats();
+    s.run(Command::AddCustomModGroup).unwrap();
+    s.run(Command::SetCustomModTitle {
+        group: 1,
+        title: "Speed".into(),
+    })
+    .unwrap();
+    s.run(Command::SetCustomModText {
+        group: 1,
+        text: "+10% increased Attack Speed".into(),
+    })
+    .unwrap();
+    s.run(Command::SetCustomModEnabled {
+        group: 0,
+        enabled: false,
+    })
+    .unwrap();
+    let ours = s.stats();
+    assert_ne!(ours, one);
+    let groups = vec![
+        CustomModGroup {
+            title: "Default".into(),
+            enabled: false,
+            text: "+100 to maximum Life".into(),
+        },
+        CustomModGroup {
+            title: "Speed".into(),
+            enabled: true,
+            text: "+10% increased Attack Speed".into(),
+        },
+    ];
+    assert_eq!(s.config().custom_mods, groups);
+
+    // upstream, through the same controls
+    let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
+    load_xml(&lua, &attack_xml(), "attack").unwrap();
+    lua.load(
+        r#"
+        local ct = build.configTab
+        ct.customModsBlockControls[1].controls.textEdit:SetText("+100 to maximum Life", true)
+        ct.controls.customModsAddBlock.onClick()
+        ct.customModsBlockControls[2].controls.titleEdit:SetText("Speed", true)
+        ct.customModsBlockControls[2].controls.textEdit:SetText("+10% increased Attack Speed", true)
+        local check = ct.customModsBlockControls[1].controls.enableCheck
+        check.state = false
+        check.changeFunc(false)
+        build.buildFlag = true
+        runCallback("OnFrame")
+        "#,
+    )
+    .exec()
+    .unwrap();
+    let theirs = golden_of(&lua, Game::Poe1.pob_version()).unwrap();
+    assert_view_matches("attack", "stat", &ours.stats, &theirs.stats);
+
+    // they survive saving and reopening
+    s.run(Command::Save).unwrap();
+    s.run(Command::NewBuild).unwrap();
+    s.run(Command::OpenBuild { path }).unwrap();
+    assert_eq!(s.config().custom_mods, groups);
+    assert_eq!(s.stats(), ours);
+
+    // removing a group, and groups out of range
+    s.run(Command::RemoveCustomModGroup { group: 0 }).unwrap();
+    assert_eq!(s.config().custom_mods, groups[1..]);
+    for command in [
+        Command::SetCustomModText {
+            group: 1,
+            text: String::new(),
+        },
+        Command::RemoveCustomModGroup { group: 5 },
+        Command::SetCustomModEnabled {
+            group: 9,
+            enabled: true,
+        },
+    ] {
+        let err = s.run(command).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("no custom modifier group"),
+            "{err:#}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn invalid_options_are_flagged() {
+    use auto_pob::engine::TooltipLine;
+    let _guard = lock();
+    let mut s = Session::start("config-invalid");
+    let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "attack").unwrap();
+    s.open_fixture("attack", &xml);
+    let var = "absolutionSkillDamageCountedOnce";
+    let view = s.config();
+    assert!(!option(&view, var).shown);
+    assert!(
+        view.sections
+            .iter()
+            .flat_map(|s| &s.options)
+            .all(|o| !o.invalid)
+    );
+    s.run(set(var, ConfigValue::Bool(true))).unwrap();
+    let view = s.config();
+    let ours = option(&view, var);
+    assert!(ours.invalid);
+    let Some(TooltipLine::Line { text, .. }) = ours.tooltip.last() else {
+        panic!("{:?}", ours.tooltip)
+    };
+
+    // upstream's wrapper: border colour and the tooltip line it appends
+    let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
+    load_xml(&lua, &attack_xml(), "attack").unwrap();
+    let (red, line): (bool, String) = lua
+        .load(format!(
+            r#"
+            local control = build.configTab.varControls.{var}
+            control.state = true
+            control.changeFunc(true)
+            runCallback("OnFrame")
+            local lines = {{}}
+            local tooltip = {{ Clear = function() lines = {{}} end, lines = lines,
+                AddLine = function(_, size, text) lines[#lines + 1] = text end,
+                AddSeparator = function() end }}
+            control.tooltipFunc(tooltip, "BODY")
+            return control.borderFunc() == 0.753, StripEscapes(lines[#lines])
+            "#
+        ))
+        .eval()
+        .unwrap();
+    assert!(red);
+    assert_eq!(*text, line);
+    // choices of a list option say which is selected
+    let boss = option(&view, "enemyIsBoss");
+    assert_eq!(boss.selected.as_deref(), Some("Pinnacle"));
+    assert_eq!(
+        option(&view, "resistancePenalty").selected.as_deref(),
+        Some("-60")
+    );
 }
 
 #[test]

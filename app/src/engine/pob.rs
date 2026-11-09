@@ -212,8 +212,24 @@ impl Backend for PobBackend {
                 self.call::<_, ()>("delete_config_set", id)?;
                 Ok(config_changed())
             }
-            Command::SetCustomMods { text } => {
-                self.call::<_, ()>("set_custom_mods", text)?;
+            Command::SetCustomModText { group, text } => {
+                self.call::<_, ()>("set_custom_mod_text", (group + 1, text))?;
+                Ok(config_changed())
+            }
+            Command::SetCustomModTitle { group, title } => {
+                self.call::<_, ()>("set_custom_mod_title", (group + 1, title))?;
+                Ok(config_changed())
+            }
+            Command::SetCustomModEnabled { group, enabled } => {
+                self.call::<_, ()>("set_custom_mod_enabled", (group + 1, enabled))?;
+                Ok(config_changed())
+            }
+            Command::AddCustomModGroup => {
+                self.call::<_, ()>("add_custom_mod_group", ())?;
+                Ok(config_changed())
+            }
+            Command::RemoveCustomModGroup { group } => {
+                self.call::<_, ()>("remove_custom_mod_group", group + 1)?;
                 Ok(config_changed())
             }
             Command::Undo(Tab::Config) => {

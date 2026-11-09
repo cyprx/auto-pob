@@ -38,9 +38,24 @@ pub enum Command {
     DeleteConfigSet {
         id: u32,
     },
-    SetCustomMods {
+    /// Custom modifier groups; `group` is 0-based.
+    SetCustomModText {
+        group: usize,
         text: String,
     },
+    SetCustomModTitle {
+        group: usize,
+        title: String,
+    },
+    SetCustomModEnabled {
+        group: usize,
+        enabled: bool,
+    },
+    AddCustomModGroup,
+    RemoveCustomModGroup {
+        group: usize,
+    },
+
     Undo(Tab),
     Redo(Tab),
     /// Node power and tree commands; filled in when the lab moves over.

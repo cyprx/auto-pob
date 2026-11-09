@@ -83,7 +83,7 @@ impl Backend for Fake {
         Ok(ConfigView {
             sets: vec![],
             active_set: 1,
-            custom_mods: String::new(),
+            custom_mods: Vec::new(),
             sections: vec![],
         })
     }

@@ -62,9 +62,18 @@ pub struct ConfigView {
     #[serde(default)]
     pub sets: Vec<ConfigSet>,
     pub active_set: u32,
-    pub custom_mods: String,
+    /// The active set's custom modifier groups, in PoB's order.
+    #[serde(default)]
+    pub custom_mods: Vec<CustomModGroup>,
     #[serde(default)]
     pub sections: Vec<ConfigSection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct CustomModGroup {
+    pub title: String,
+    pub enabled: bool,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -89,10 +98,19 @@ pub struct ConfigOption {
     pub allow_zero: bool,
     pub label: String,
     pub shown: bool,
+    /// PoB's "set but invalid" state: the option has a non-default value but its condition
+    /// isn't met any more. PoB colours its label red; the tooltip then ends with a warning line.
+    #[serde(default)]
+    pub invalid: bool,
+    /// The current value. Its type follows the option: a bool, a number or a string, and for
+    /// lists the raw `val`, which can be a number; use `selected` to match a `Choice`.
     #[serde(default)]
     pub value: Option<serde_json::Value>,
     #[serde(default)]
     pub placeholder: Option<serde_json::Value>,
+    /// For lists, `tostring(val)` of the current value, matching a `Choice::value`.
+    #[serde(default)]
+    pub selected: Option<String>,
     #[serde(default)]
     pub choices: Vec<Choice>,
     #[serde(default)]
@@ -140,7 +158,7 @@ mod tests {
             r#"return {
               sets = { { id = 1, title = "Default" } },
               active_set = 1,
-              custom_mods = "+1 to all",
+              custom_mods = { { title = "Default", enabled = true, text = "+1 to all" } },
               sections = { {
                 name = "General", column = 1,
                 options = {
@@ -161,7 +179,11 @@ mod tests {
                 title: "Default".into(),
             }],
             active_set: 1,
-            custom_mods: "+1 to all".into(),
+            custom_mods: vec![CustomModGroup {
+                title: "Default".into(),
+                enabled: true,
+                text: "+1 to all".into(),
+            }],
             sections: vec![ConfigSection {
                 name: "General".into(),
                 column: 1,
@@ -172,6 +194,8 @@ mod tests {
                         allow_zero: false,
                         label: "Use power charges?".into(),
                         shown: true,
+                        invalid: false,
+                        selected: None,
                         value: Some(serde_json::json!(true)),
                         placeholder: None,
                         choices: vec![],
@@ -183,6 +207,8 @@ mod tests {
                         allow_zero: false,
                         label: "Enemy is a Boss?".into(),
                         shown: true,
+                        invalid: false,
+                        selected: None,
                         value: Some(serde_json::json!("None")),
                         placeholder: Some(serde_json::json!(5)),
                         choices: vec![

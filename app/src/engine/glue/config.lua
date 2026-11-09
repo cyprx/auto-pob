@@ -22,6 +22,10 @@ local function option_list()
 	return options, option_by_var
 end
 
+-- The first value of `borderFunc` for a set option that is no longer shown (ConfigTab.lua).
+local INVALID_BORDER = 0.753
+local INVALID_TEXT = "This config option is conditional with missing source and is invalid."
+
 local function strip(text)
 	return (StripEscapes(tostring(text)))
 end
@@ -91,7 +95,21 @@ local function option_view(tab, varData, control)
 		-- an empty Lua table is ambiguous to serde, so leave it out
 		if #choices > 0 then view.choices = choices end
 	end
+	if kind == "list" then
+		local item = control.list[control.selIndex]
+		if value ~= nil and item and item.val == value then view.selected = tostring(value) end
+	end
+	-- PoB's border colours an option red when it is set but its condition isn't met; its label
+	-- wrapper and tooltip only react like that unless the option is `hideIfInvalid`
+	if not varData.hideIfInvalid and control.borderFunc then
+		local red = control.borderFunc()
+		view.invalid = red == INVALID_BORDER
+	end
 	local tooltip = tooltip_lines(tab, control, varData)
+	if view.invalid then
+		-- the wording of the line ConfigTab.lua appends to the control's tooltip
+		tooltip[#tooltip + 1] = { size = 14, text = INVALID_TEXT }
+	end
 	if #tooltip > 0 then view.tooltip = tooltip end
 	return view
 end
@@ -115,11 +133,18 @@ function glue.config_view()
 	for _, section in ipairs(sections) do
 		if #section.options > 0 then filled[#filled + 1] = section end
 	end
-	local blocks = tab.configSets[tab.activeConfigSetId].customModsList
+	local groups = {}
+	for _, block in ipairs(tab.configSets[tab.activeConfigSetId].customModsList or {}) do
+		groups[#groups + 1] = {
+			title = block.title or "Default",
+			enabled = block.enabled ~= false,
+			text = block.text or "",
+		}
+	end
 	return {
 		sets = set_ids(tab),
 		active_set = tab.activeConfigSetId,
-		custom_mods = blocks and blocks[1] and blocks[1].text or "",
+		custom_mods = groups,
 		sections = filled,
 	}
 end
@@ -243,15 +268,48 @@ function glue.delete_config_set(id)
 	tab.build.buildFlag = true
 end
 
--- Edits the first custom modifier group through its text control, like typing in it.
-function glue.set_custom_mods(text)
+-- Custom modifier groups go through the group's own controls, like clicking in the tab.
+local function group_controls(group)
 	local tab = config_tab()
+	local blocks = tab.customModsBlockControls
+	if not blocks then error("this build has no custom modifiers", 0) end
+	if type(group) ~= "number" or group < 1 or group > #blocks or group ~= math.floor(group) then
+		error("no custom modifier group " .. tostring(group), 0)
+	end
+	return blocks[group].controls, tab.configSets[tab.activeConfigSetId].customModsList[group]
+end
+
+function glue.set_custom_mod_text(group, text)
 	if type(text) ~= "string" then error("custom modifiers must be text", 0) end
-	local block = tab.customModsBlockControls and tab.customModsBlockControls[1]
-	if not block then error("this build has no custom modifiers", 0) end
-	local blocks = tab.configSets[tab.activeConfigSetId].customModsList
-	if blocks[1] and (blocks[1].text or "") == text then return end
-	block.controls.textEdit:SetText(text, true)
+	local controls, block = group_controls(group)
+	if (block.text or "") == text then return end
+	controls.textEdit:SetText(text, true)
+end
+
+function glue.set_custom_mod_title(group, title)
+	if type(title) ~= "string" then error("a group title must be text", 0) end
+	local controls, block = group_controls(group)
+	if (block.title or "Default") == title then return end
+	controls.titleEdit:SetText(title, true)
+end
+
+function glue.set_custom_mod_enabled(group, enabled)
+	if type(enabled) ~= "boolean" then error("enabled must be on or off", 0) end
+	local controls, block = group_controls(group)
+	if (block.enabled ~= false) == enabled then return end
+	controls.enableCheck.state = enabled
+	controls.enableCheck.changeFunc(enabled)
+end
+
+function glue.add_custom_mod_group()
+	local button = config_tab().controls.customModsAddBlock
+	if not button then error("this build has no custom modifiers", 0) end
+	button.onClick()
+end
+
+function glue.remove_custom_mod_group(group)
+	local controls = group_controls(group)
+	controls.deleteBtn.onClick()
 end
 
 local function undo_tab(tab)

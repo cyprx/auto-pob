@@ -13,5 +13,5 @@ pub use commands::{Command, ConfigValue, LabCommand, Tab};
 pub use run::{Affected, Backend, Engine, Event, LabEvent, Snapshot, run_loop};
 pub use views::{
     BuildListEntry, BuildListView, BuildView, Choice, ConfigKind, ConfigOption, ConfigSection,
-    ConfigSet, ConfigView, StatRow, StatsView, TooltipLine,
+    ConfigSet, ConfigView, CustomModGroup, StatRow, StatsView, TooltipLine,
 };

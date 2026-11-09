@@ -1,0 +1,1 @@
+-- An empty new build: the generator already called newBuild().

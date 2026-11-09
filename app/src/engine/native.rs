@@ -12,8 +12,7 @@ use std::{
 /// Registers `Inflate`, `Deflate`, `NewFileSearch`, `ConPrintf` support and the path functions.
 pub fn register(lua: &Lua, pob_dir: &Path, user_dir: &Path) -> mlua::Result<()> {
     let g = lua.globals();
-    g.set("Inflate", lua.create_function(inflate)?)?;
-    g.set("Deflate", lua.create_function(deflate)?)?;
+    register_compression(lua)?;
     g.set("NewFileSearch", lua.create_function(new_file_search)?)?;
     g.set(
         "__log_info",
@@ -50,6 +49,14 @@ pub fn register(lua: &Lua, pob_dir: &Path, user_dir: &Path) -> mlua::Result<()> 
             Ok(())
         })?,
     )?;
+    Ok(())
+}
+
+/// Installs the real `Inflate` and `Deflate` (share codes need them).
+pub fn register_compression(lua: &Lua) -> mlua::Result<()> {
+    let g = lua.globals();
+    g.set("Inflate", lua.create_function(inflate)?)?;
+    g.set("Deflate", lua.create_function(deflate)?)?;
     Ok(())
 }
 

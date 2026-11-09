@@ -32,24 +32,33 @@ dofile = function(name) return assert(load_stripped(name))() end
 io.read = function() return "" end
 "##;
 
+/// A Lua state with the standard library, `lua-utf8` and our prelude, running in `pob_dir`.
+pub(crate) fn new_lua(pob_dir: &Path) -> Result<Lua> {
+    // mlua's error isn't Send + Sync, which anyhow requires; keep its message instead
+    let lua_error = |e: mlua::Error| anyhow!("{e}");
+
+    // PoB loads its files relative to the working directory
+    std::env::set_current_dir(pob_dir)
+        .with_context(|| format!("PoB not found in {}", pob_dir.display()))?;
+
+    // `unsafe_new` gives PoB the full standard library, like the main runtime does
+    let lua = unsafe { Lua::unsafe_new() };
+    let utf8 = luautf8::create_module(&lua).map_err(lua_error)?;
+    lua.register_module("lua-utf8", utf8).map_err(lua_error)?;
+    lua.load(PRELUDE)
+        .set_name("=prelude")
+        .exec()
+        .map_err(lua_error)?;
+    Ok(lua)
+}
+
 impl PobBackend {
     /// Starts PoB from `pob_dir`, keeping its user data in `user_dir`.
     pub fn start(game: Game, pob_dir: &Path, user_dir: &Path) -> Result<PobBackend> {
         // mlua's error isn't Send + Sync, which anyhow requires; keep its message instead
         let lua_error = |e: mlua::Error| anyhow!("{e}");
 
-        // PoB loads its files relative to the working directory
-        std::env::set_current_dir(pob_dir)
-            .with_context(|| format!("PoB not found in {}", pob_dir.display()))?;
-
-        // `unsafe_new` gives PoB the full standard library, like the main runtime does
-        let lua = unsafe { Lua::unsafe_new() };
-        let utf8 = luautf8::create_module(&lua).map_err(lua_error)?;
-        lua.register_module("lua-utf8", utf8).map_err(lua_error)?;
-        lua.load(PRELUDE)
-            .set_name("=prelude")
-            .exec()
-            .map_err(lua_error)?;
+        let lua = new_lua(pob_dir)?;
         super::native::register(&lua, pob_dir, user_dir).map_err(lua_error)?;
         lua.load(include_str!("bootstrap.lua"))
             .set_name("@bootstrap.lua")

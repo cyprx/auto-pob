@@ -3,6 +3,7 @@ pub mod lab_engine;
 pub mod native;
 pub mod pob;
 pub mod run;
+pub mod upstream;
 pub mod views;
 
 #[cfg(test)]

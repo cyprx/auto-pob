@@ -1,3 +1,5 @@
 /target/
 *.so
 *.so.dSYM
+app/tests/fixtures/local/*
+!app/tests/fixtures/local/.gitkeep

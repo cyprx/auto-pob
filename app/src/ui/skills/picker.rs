@@ -320,11 +320,17 @@ impl GemPicker {
             if edit.changed() {
                 self.set_text(&text, now);
             }
-            for (label, filter) in [("S", GemFilter::Support), ("A", GemFilter::Active)] {
+            // PoB has no S/A buttons for the imbued support search
+            let filters: &[(&str, GemFilter)] = if self.target == GemTarget::Imbued {
+                &[]
+            } else {
+                &[("S", GemFilter::Support), ("A", GemFilter::Active)]
+            };
+            for &(label, filter) in filters {
                 let on = self.filter == filter;
                 let button = ui.selectable_label(on, label).on_hover_text(match filter {
-                    GemFilter::Support => "Support gems first",
-                    _ => "Active skill gems first",
+                    GemFilter::Support => "Only show Support gems",
+                    _ => "Only show Active gems",
                 });
                 self.rects.note(&button, || format!("picker_{label}"));
                 if button.clicked() {
@@ -627,6 +633,16 @@ mod tests {
             ["SearchGems(GemSearchQuery { group: 0, target: Slot(0), text: \"\", filter: All })"]
         );
         assert!(!h.p.failed);
+    }
+
+    #[test]
+    fn imbued_picker_has_no_support_active_filters() {
+        let h = Harness::new(GemTarget::Imbued, &["a"]);
+        assert!(!h.p.rects.map.contains_key("picker_S"));
+        assert!(!h.p.rects.map.contains_key("picker_A"));
+        let h = Harness::new(GemTarget::Slot(0), &["a"]);
+        assert!(h.p.rects.map.contains_key("picker_S"));
+        assert!(h.p.rects.map.contains_key("picker_A"));
     }
 
     #[test]

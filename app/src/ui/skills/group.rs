@@ -202,6 +202,10 @@ impl SkillsUi {
             if !name.hovered() && self.gem_hover.is_some_and(|(k, _)| k == (gi, si)) {
                 self.gem_hover = None;
             }
+            if !name.hovered() && self.gem_tooltip_asked == Some((gi, si)) {
+                self.gem_tooltip_asked = None;
+                self.gem_tooltip = None;
+            }
             return;
         }
         let since = match self.gem_hover {

@@ -924,6 +924,29 @@ fn gem_edit_on_empty_row_is_refused() {
 
 #[test]
 #[ignore = "needs the pinned PoB install"]
+fn unknown_gem_without_a_level_still_gives_a_view() {
+    let _guard = lock();
+    let mut s = Session::start("unknown-gem-no-level");
+    let attack = fs::read_to_string(fixtures_dir().join("attack.xml")).unwrap();
+    // PoB keeps the nil level of a gem it doesn't know
+    let first = attack.find("<Gem ").expect("a gem");
+    let xml = format!(
+        "{}<Gem nameSpec=\"Fireblal\" enabled=\"true\" count=\"1\"/>\n{}",
+        &attack[..first],
+        &attack[first..]
+    );
+    let path = s.user.join("no-level.xml");
+    fs::create_dir_all(&s.user).unwrap();
+    fs::write(&path, xml).unwrap();
+    s.open_fixture("no-level", &path);
+    let view = s.backend.skills_view().expect("the view deserialises");
+    let gem = &view.groups[0].gems[0];
+    assert_eq!(gem.name_spec, "Fireblal");
+    assert_eq!((gem.level, gem.quality), (0, 0));
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
 fn enabled_on_unknown_gem_is_refused() {
     let _guard = lock();
     let (mut s, group) = session_with_unknown_gem("unknown-gem");

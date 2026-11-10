@@ -72,6 +72,7 @@ pub struct AutoPobApp {
     tree: TreeTab,
     calcs: CalcsUi,
     skills: SkillsUi,
+    sidebar: sidebar::SidebarState,
     notes: NotesUi,
     config_ui: ConfigUi,
     list_ui: BuildListUi,
@@ -116,6 +117,7 @@ impl AutoPobApp {
             tree: TreeTab::default(),
             calcs: CalcsUi::default(),
             skills: SkillsUi::default(),
+            sidebar: sidebar::SidebarState::default(),
             notes: NotesUi::default(),
             config_ui: ConfigUi::default(),
             list_ui: BuildListUi::default(),
@@ -169,6 +171,7 @@ impl AutoPobApp {
             && self.entering.is_none()
             && (self.notes.has_pending()
                 || self.skills.has_pending()
+                || self.sidebar.has_pending()
                 || self.build.as_ref().is_some_and(|b| b.unsaved))
     }
 
@@ -202,6 +205,7 @@ impl AutoPobApp {
                     self.tree.reset();
                     self.calcs.reset();
                     self.skills.reset();
+                    self.sidebar = sidebar::SidebarState::default();
                     self.notes.reset();
                 }
                 match snapshot {
@@ -307,6 +311,9 @@ impl AutoPobApp {
     /// Sends every editor's pending edit (notes, then a Skills field still being typed in).
     fn flush_edits(&mut self) {
         self.flush_notes();
+        if let Some(command) = self.sidebar.flush() {
+            self.send(command);
+        }
         if let Some(command) = self.skills.flush() {
             self.send(command);
         }
@@ -574,7 +581,8 @@ impl AutoPobApp {
             .resizable(true)
             .default_size(300.0)
             .show(ui, |ui| {
-                sidebar_commands = sidebar::show(ui, self.stats.as_deref(), behind);
+                sidebar_commands =
+                    sidebar::show(ui, self.stats.as_deref(), behind, &mut self.sidebar);
             });
         for command in sidebar_commands {
             self.send(command);
@@ -717,6 +725,7 @@ impl AutoPobApp {
                 // "Don't save" drops the edit still waiting to be sent
                 self.notes.discard();
                 self.skills.discard();
+                self.sidebar.discard();
                 self.ready_actions.push(pending);
             }
             Resolution::Stay => {}
@@ -2428,6 +2437,92 @@ mod tests {
         app.tab = BuildTab::Notes;
         frame(&mut app, &ctx, vec![]);
         (app, ctx)
+    }
+
+    fn stages_app() -> (AutoPobApp, egui::Context, egui::Pos2) {
+        let (mut app, ctx) = notes_app();
+        app.stats = Some(Arc::new(crate::engine::views::StatsView {
+            main_skill: crate::engine::views::MainSkillSelector {
+                stages: Some("1".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        let rect: egui::Rect = ctx
+            .data(|d| d.get_temp(egui::Id::NULL.with(("sidebar_rect", "stages".to_owned()))))
+            .expect("the stages box is drawn");
+        let pos = rect.center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![egui::Event::Text("2".into())],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        (app, ctx, pos)
+    }
+
+    #[test]
+    fn a_stage_count_being_typed_counts_as_unsaved_and_flushes_before_save() {
+        let (mut app, ctx, _) = stages_app();
+        assert!(app.sidebar.has_pending());
+        assert!(app.current_unsaved());
+        let before = app.sent_full.len();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::S, egui::Modifiers::COMMAND),
+        );
+        assert_eq!(
+            sent_since(&app, before),
+            [
+                "SetMainSkillCount { control: Stages, text: \"12\" }",
+                "Save"
+            ]
+        );
+        // leaving the box doesn't send it again
+        let before = app.sent_full.len();
+        let away = egui::Pos2::new(900.0, 600.0);
+        let press = |pressed| egui::Event::PointerButton {
+            pos: away,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(away)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        let sent = sent_since(&app, before);
+        assert!(
+            !sent.iter().any(|c| c.contains("SetMainSkillCount")),
+            "{sent:?}"
+        );
+    }
+
+    #[test]
+    fn a_build_switch_clears_a_pending_stage_count() {
+        let (mut app, _ctx, _) = stages_app();
+        assert!(app.sidebar.has_pending());
+        app.entering = Some(5);
+        app.on_event(Event::Snapshot {
+            seq: 5,
+            snapshot: Snapshot::Skills(Arc::new(crate::ui::skills::tests::sample())),
+        });
+        assert!(!app.sidebar.has_pending());
     }
 
     #[test]

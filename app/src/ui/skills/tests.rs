@@ -541,3 +541,73 @@ fn the_picker_closes_when_the_groups_change_under_it() {
     assert_eq!(debug(&o.commands), ["CloseGemSearch"]);
     assert!(!h.ui.has_dialog());
 }
+
+#[test]
+fn gem_tooltip_is_asked_again_after_the_view_changes() {
+    let mut h = Harness::new(sample());
+    let pos = h.ui.rect("gem_0_name").center();
+    h.frame(vec![Event::PointerMoved(pos)]);
+    let o = h.frame(vec![]);
+    assert_eq!(o.queries.len(), 1, "{:?}", o.queries);
+    let query = match &o.queries[0] {
+        Command::GemTooltip(q) => q.clone(),
+        other => panic!("{other:?}"),
+    };
+    h.ui.on_snapshot(&Snapshot::GemTooltip(Arc::new(
+        crate::engine::views::GemTooltipView {
+            query,
+            lines: vec![TooltipLine::Line {
+                size: 14,
+                text: "old".into(),
+            }],
+        },
+    )));
+    assert!(h.ui.gem_tooltip.is_some());
+    let mut changed = sample();
+    changed.groups[0].gems[0] = gem("Cleave");
+    h.ui.on_snapshot(&Snapshot::Skills(Arc::new(changed)));
+    assert!(h.ui.gem_tooltip.is_none(), "old lines kept");
+    let mut asked = false;
+    for _ in 0..4 {
+        asked |= h
+            .frame(vec![Event::PointerMoved(pos)])
+            .queries
+            .iter()
+            .any(|q| matches!(q, Command::GemTooltip(_)));
+    }
+    assert!(asked, "no new GemTooltip query");
+}
+
+#[test]
+fn gem_tooltip_is_forgotten_when_the_hover_ends() {
+    let mut h = Harness::new(sample());
+    let pos = h.ui.rect("gem_0_name").center();
+    h.frame(vec![Event::PointerMoved(pos)]);
+    h.frame(vec![]);
+    assert!(h.ui.gem_tooltip_asked.is_some());
+    h.frame(vec![Event::PointerMoved(Pos2::new(1100.0, 650.0))]);
+    assert!(h.ui.gem_tooltip_asked.is_none());
+    assert!(h.ui.gem_tooltip.is_none());
+}
+
+#[test]
+fn a_pending_default_quality_is_not_unsaved_but_still_flushes() {
+    let mut h = Harness::new(sample());
+    h.click("default_quality");
+    h.frame_key(Key::A, Modifiers::COMMAND);
+    h.type_text("20");
+    h.frame(vec![]);
+    assert!(
+        !h.ui.has_pending(),
+        "the option never marks the build unsaved"
+    );
+    assert_eq!(
+        debug(&h.ui.flush().into_iter().collect::<Vec<_>>()),
+        ["SetSkillOption(DefaultQuality(\"20\"))"]
+    );
+    // a gem field still counts
+    h.click("g0_s0_level");
+    h.type_text("1");
+    h.frame(vec![]);
+    assert!(h.ui.has_pending());
+}

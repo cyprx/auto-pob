@@ -88,7 +88,10 @@ impl SkillsUi {
     /// An edit typed into a field is waiting to be sent, so the build has unsaved changes the
     /// engine doesn't know about yet.
     pub fn has_pending(&self) -> bool {
-        self.pending.is_some()
+        // the default quality option never marks the build unsaved in PoB
+        self.pending
+            .as_ref()
+            .is_some_and(|p| p.key != "default_quality")
     }
 
     /// Drops the pending edit (the user chose not to save).
@@ -134,6 +137,8 @@ impl SkillsUi {
                     // what the engine says about a group may have changed
                     self.tooltip = None;
                     self.tooltip_asked = None;
+                    self.gem_tooltip = None;
+                    self.gem_tooltip_asked = None;
                 }
                 let old = self.view.as_ref().map_or(0, |v| v.groups.len());
                 let n = view.groups.len();

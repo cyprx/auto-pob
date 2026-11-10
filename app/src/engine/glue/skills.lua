@@ -46,8 +46,8 @@ local function gem_view(tab, group, index, gem)
 	return {
 		name_spec = gem.nameSpec or "",
 		gem_id = gem.gemId,
-		level = gem.level,
-		quality = gem.quality,
+		level = gem.level or 0,
+		quality = gem.quality or 0,
 		enabled = gem.enabled and true or false,
 		count = slot.count:IsShown() and (tonumber(gem.count) or 1) or nil,
 		colour = gem.color or "",

@@ -17,7 +17,6 @@ pub enum BuildTab {
     #[default]
     Tree,
     Config,
-    Lab,
 }
 
 impl BuildTab {
@@ -74,6 +73,5 @@ pub fn tab_strip(ui: &mut egui::Ui, tab: &mut BuildTab) {
     ui.horizontal(|ui| {
         ui.selectable_value(tab, BuildTab::Tree, "Tree");
         ui.selectable_value(tab, BuildTab::Config, "Config");
-        ui.selectable_value(tab, BuildTab::Lab, "Lab");
     });
 }

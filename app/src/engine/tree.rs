@@ -4,19 +4,10 @@ use super::views::{NodeArt, SheetImage, Sprite, TreeLayout, TreeNode};
 use mlua::{Function, Lua, Table};
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
-
-/// The ids of the allocated nodes.
-pub(super) fn allocated(lua: &Lua) -> mlua::Result<HashSet<u32>> {
-    let glue: Table = lua.globals().get("glue")?;
-    glue.get::<Function>("alloc_ids")?
-        .call::<Table>(())?
-        .sequence_values()
-        .collect()
-}
 
 /// The key of the layout `layout` would build, without building it.
 pub(super) fn layout_key(lua: &Lua) -> mlua::Result<String> {

@@ -10,7 +10,6 @@ use crate::theme;
 use crate::ui::build::{self, BuildAction, BuildTab};
 use crate::ui::build_list::{BuildListUi, ListScreenAction};
 use crate::ui::config::ConfigUi;
-use crate::ui::lab::LabTab;
 use crate::ui::tree::{TreeOutput, TreeTab};
 use crate::ui::unsaved::{Pending, PromptChoice, Resolution, needs_prompt, resolve};
 use crate::ui::{sidebar, startup};
@@ -66,10 +65,7 @@ pub struct AutoPobApp {
     screen: Screen,
     /// A build is being opened; the build screen waits for this command's snapshots.
     entering: Option<u64>,
-    /// Seqs of recent Lab commands, so only their errors reset the Lab tab.
-    lab_seqs: Vec<u64>,
     tab: BuildTab,
-    lab: LabTab,
     tree: TreeTab,
     config_ui: ConfigUi,
     list_ui: BuildListUi,
@@ -110,9 +106,7 @@ impl AutoPobApp {
             last_snapshot: 0,
             screen: Screen::List,
             entering: None,
-            lab_seqs: Vec::new(),
             tab: BuildTab::default(),
-            lab: LabTab::default(),
             tree: TreeTab::default(),
             config_ui: ConfigUi::default(),
             list_ui: BuildListUi::default(),
@@ -195,9 +189,6 @@ impl AutoPobApp {
                     }
                     Snapshot::BuildList(view) => self.list = Some(view),
                     Snapshot::Stats(view) => {
-                        if self.stats.as_deref() != Some(&*view) {
-                            self.lab.stats_changed();
-                        }
                         self.stats = Some(view);
                     }
                     Snapshot::Config(view) => self.config = Some(view),
@@ -208,7 +199,6 @@ impl AutoPobApp {
                 }
             }
             Event::Error { seq, message } => self.on_error(seq, message),
-            Event::Lab(event) => self.lab.on_event(event),
             Event::Progress { percent, .. } => self.tree.on_progress(percent),
             Event::BackgroundFailed { message, .. } => {
                 self.tree.power_failed();
@@ -218,10 +208,6 @@ impl AutoPobApp {
     }
 
     fn on_error(&mut self, seq: u64, message: String) {
-        if let Some(at) = self.lab_seqs.iter().position(|s| *s == seq) {
-            self.lab_seqs.remove(at);
-            self.lab.failed();
-        }
         if self.entering == Some(seq) {
             // the build never opened; go back to where the user was
             self.entering = None;
@@ -283,7 +269,6 @@ impl AutoPobApp {
         self.entering = Some(seq);
         self.screen = Screen::Build;
         self.tab = BuildTab::default();
-        self.lab.build_changed();
         self.tree.reset();
     }
 
@@ -339,7 +324,6 @@ impl AutoPobApp {
         let tab = match self.tab {
             BuildTab::Config => Tab::Config,
             BuildTab::Tree => Tab::Tree,
-            BuildTab::Lab => return,
         };
         self.send(if redo {
             Command::Redo(tab)
@@ -509,7 +493,6 @@ impl AutoPobApp {
             .default_size(300.0)
             .show(ui, |ui| sidebar::show(ui, self.stats.as_deref(), behind));
 
-        let mut lab_commands = Vec::new();
         let mut config_commands = Vec::new();
         let mut tree_out = TreeOutput::default();
         let config = self.config.clone();
@@ -526,7 +509,6 @@ impl AutoPobApp {
                         ui.spinner();
                     }
                 },
-                BuildTab::Lab => lab_commands = self.lab.show(ui, behind),
             }
         });
         for command in config_commands {
@@ -541,14 +523,6 @@ impl AutoPobApp {
         // questions are answered with snapshots but never leave the app waiting
         for query in tree_out.queries {
             self.engine.send(query);
-        }
-        for command in lab_commands {
-            // lab commands answer with events, not snapshots, so they don't count as "behind"
-            let seq = self.engine.send(Command::Lab(command));
-            self.lab_seqs.push(seq);
-            if self.lab_seqs.len() > 32 {
-                self.lab_seqs.remove(0);
-            }
         }
 
         match action {
@@ -722,8 +696,7 @@ mod tests {
         BuildListEntry, ConfigKind, ConfigOption, ConfigSection, ConfigSet, CustomModGroup,
         StatRow, TooltipLine,
     };
-    use crate::engine::{Affected, Backend, ConfigValue, LabCommand, LabEvent, NodeScore, Tree};
-    use std::collections::HashSet;
+    use crate::engine::{Affected, Backend, ConfigValue};
     use std::path::PathBuf;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -748,7 +721,7 @@ mod tests {
     }
 
     impl Backend for Fake {
-        fn apply(&mut self, command: Command, send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
+        fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
             let all = Affected {
                 build: true,
                 list: true,
@@ -839,28 +812,6 @@ mod tests {
                         list: true,
                         ..Affected::default()
                     })
-                }
-                Command::Lab(LabCommand::Tree) => {
-                    send(Event::Lab(LabEvent::Tree(Tree {
-                        nodes: vec![],
-                        edges: vec![],
-                        sheets: vec![],
-                        allocated: HashSet::new(),
-                    })));
-                    Ok(Affected::default())
-                }
-                Command::Lab(LabCommand::NodePower { .. }) => {
-                    send(Event::Lab(LabEvent::Progress { done: 1, total: 2 }));
-                    send(Event::Lab(LabEvent::NodePower(vec![NodeScore {
-                        id: 1,
-                        name: "Node".into(),
-                        kind: "Notable".into(),
-                        distance: 2,
-                        gain: 1.0,
-                        path_gain: 2.0,
-                        per_point: 1.0,
-                    }])));
-                    Ok(Affected::default())
                 }
                 _ => Ok(Affected::default()),
             }
@@ -1123,17 +1074,8 @@ mod tests {
             a.screen == Screen::Build && a.entering.is_none() && a.stats.is_some()
         });
         assert!(!app.behind());
-        app.tab = BuildTab::Lab;
-        pump_until(&mut app, &ctx, "lab tree", |a| a.lab_has_tree());
-        // ranking streams progress then results, and never leaves the sidebar spinning
-        app.engine.send(Command::Lab(LabCommand::NodePower {
-            metric: "Life",
-            max_distance: 3,
-        }));
-        for _ in 0..50 {
-            frame(&mut app, &ctx, vec![]);
-            std::thread::sleep(Duration::from_millis(2));
-        }
+        app.tab = BuildTab::Tree;
+        frame(&mut app, &ctx, vec![]);
         assert!(!app.behind());
         app.tab = BuildTab::Config;
         frame(&mut app, &ctx, vec![]);
@@ -2020,11 +1962,5 @@ mod tests {
         frame(&mut app, &ctx, ctrl(egui::Key::Z));
         frame(&mut app, &ctx, ctrl(egui::Key::S));
         assert_eq!(sent_since(&app, before), Vec::<&str>::new());
-    }
-
-    impl AutoPobApp {
-        fn lab_has_tree(&self) -> bool {
-            self.lab.has_tree()
-        }
     }
 }

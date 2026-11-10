@@ -88,7 +88,6 @@ impl PobBackend {
             ("@glue/config.lua", include_str!("glue/config.lua")),
             ("@glue/tree.lua", include_str!("glue/tree.lua")),
             ("@glue/power.lua", include_str!("glue/power.lua")),
-            ("@glue/lab.lua", include_str!("glue/lab.lua")),
         ] {
             lua.load(source)
                 .set_name(name)
@@ -181,7 +180,7 @@ fn tree_edited() -> Affected {
 }
 
 impl Backend for PobBackend {
-    fn apply(&mut self, command: Command, send: &dyn Fn(Event)) -> Result<Affected> {
+    fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> Result<Affected> {
         match command {
             Command::ListBuilds { folder } => {
                 if folder.contains("..") || folder.starts_with('/') {
@@ -262,7 +261,6 @@ impl Backend for PobBackend {
                     ..Affected::default()
                 })
             }
-            Command::Lab(lab) => super::lab::apply(&self.lua, &self.pob_dir, lab, send),
             Command::SetConfig { var, value } => {
                 let value = match value {
                     ConfigValue::Bool(b) => mlua::Value::Boolean(b),

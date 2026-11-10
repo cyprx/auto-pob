@@ -1,5 +1,4 @@
 pub mod commands;
-pub mod lab;
 pub mod native;
 pub mod pob;
 pub mod run;
@@ -10,8 +9,7 @@ pub mod views;
 #[cfg(test)]
 pub(crate) mod fake;
 
-pub use commands::{Command, ConfigValue, LabCommand, Tab};
-pub use lab::{LabEvent, NodeScore, Tree};
+pub use commands::{Command, ConfigValue, Tab};
 pub use run::{Affected, Backend, BackgroundTask, Engine, Event, Snapshot, run_loop};
 pub use views::{
     AscendancyChoice, BuildListEntry, BuildListView, BuildView, Choice, ClassChoice, CompareColour,

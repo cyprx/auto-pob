@@ -8,7 +8,6 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use crate::pob_files::DownloadProgress;
 
 use super::commands::Command;
-use super::lab::LabEvent;
 use super::views::{
     BuildListView, BuildView, ConfigView, NodePower, NodeTooltip, PowerReport, StatsView,
     TreeLayout, TreeState,
@@ -49,7 +48,6 @@ pub enum Event {
         seq: u64,
         message: String,
     },
-    Lab(LabEvent),
     Progress {
         task: BackgroundTask,
         percent: u32,

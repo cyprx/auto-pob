@@ -2,7 +2,7 @@
 
 use super::commands::{Command, ConfigValue, Tab};
 use super::run::{Affected, Backend, Engine, Event};
-use super::views::{BuildListView, BuildView, ConfigView, StatsView};
+use super::views::{BuildListView, BuildView, ConfigView, StatsView, TreeLayout, TreeState};
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
 use mlua::{FromLuaMulti, IntoLuaMulti, Lua, LuaSerdeExt};
@@ -14,6 +14,8 @@ pub struct PobBackend {
     pob_dir: PathBuf,
     /// The Builds sub-folder the list view shows; "" is the root.
     folder: String,
+    /// The key of the last tree layout sent, so an unchanged layout isn't sent again.
+    last_layout_key: Option<String>,
 }
 
 /// Runs before the bootstrap.
@@ -76,6 +78,7 @@ impl PobBackend {
             ("@glue/stats.lua", include_str!("glue/stats.lua")),
             ("@glue/tooltip.lua", include_str!("glue/tooltip.lua")),
             ("@glue/config.lua", include_str!("glue/config.lua")),
+            ("@glue/tree.lua", include_str!("glue/tree.lua")),
             ("@glue/lab.lua", include_str!("glue/lab.lua")),
         ] {
             lua.load(source)
@@ -89,6 +92,7 @@ impl PobBackend {
             game,
             pob_dir: pob_dir.to_owned(),
             folder: String::new(),
+            last_layout_key: None,
         })
     }
 
@@ -102,6 +106,16 @@ impl PobBackend {
                 anyhow!("{}", message.lines().next().unwrap_or_default())
             }
             other => anyhow!("{other}"),
+        })
+    }
+
+    /// Every view, plus the tree layout when it differs from the one last sent. For commands
+    /// that replace the whole build.
+    fn all_views(&self) -> Result<Affected> {
+        let key = super::tree::layout_key(&self.lua).map_err(|e| anyhow!("{e}"))?;
+        Ok(Affected {
+            tree_layout: self.last_layout_key.as_deref() != Some(key.as_str()),
+            ..Affected::ALL_VIEWS
         })
     }
 
@@ -145,15 +159,15 @@ impl Backend for PobBackend {
             }
             Command::NewBuild => {
                 self.call::<_, ()>("new_build", ())?;
-                Ok(Affected::ALL_VIEWS)
+                self.all_views()
             }
             Command::OpenBuild { path } => {
                 self.call::<_, ()>("open_build", path.to_string_lossy().into_owned())?;
-                Ok(Affected::ALL_VIEWS)
+                self.all_views()
             }
             Command::ImportShareCode { code } => {
                 self.call::<_, ()>("import_code", code)?;
-                Ok(Affected::ALL_VIEWS)
+                self.all_views()
             }
             Command::Save => {
                 self.call::<_, ()>("save", ())?;
@@ -255,6 +269,16 @@ impl Backend for PobBackend {
 
     fn config_view(&mut self) -> Result<ConfigView> {
         self.view("config_view", ())
+    }
+
+    fn tree_layout_view(&mut self) -> Result<TreeLayout> {
+        let layout = super::tree::layout(&self.lua, &self.pob_dir).map_err(|e| anyhow!("{e}"))?;
+        self.last_layout_key = Some(layout.key.clone());
+        Ok(layout)
+    }
+
+    fn tree_state_view(&mut self) -> Result<TreeState> {
+        self.view("tree_state", ())
     }
 }
 

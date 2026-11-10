@@ -1357,6 +1357,187 @@ fn lab_draws_the_tree_and_ranks_nodes() {
     );
 }
 
+// ---- tree layout and state ----
+
+/// What upstream PoB reports for the loaded build, as read from its own globals.
+#[derive(Debug, PartialEq)]
+struct UpstreamTree {
+    alloc: Vec<u32>,
+    class_id: u32,
+    ascendancy_id: u32,
+    spec_titles: Vec<String>,
+    used: u32,
+    available: u32,
+    ascendancy_used: u32,
+    ascendancy_available: u32,
+}
+
+fn upstream_tree(xml: &Path, name: &str) -> UpstreamTree {
+    let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
+    load_xml(&lua, &fs::read_to_string(xml).unwrap(), name).unwrap();
+    // The point display is Build.lua's `pointDisplay` text: "used / max   ascendancy / max"
+    let (alloc, class_id, ascendancy_id, titles, used, available, asc_used, asc_available): (
+        Vec<u32>,
+        u32,
+        u32,
+        Vec<String>,
+        u32,
+        u32,
+        u32,
+        u32,
+    ) = lua
+        .load(
+            r#"
+            local alloc = {}
+            for id in pairs(build.spec.allocNodes) do alloc[#alloc + 1] = id end
+            table.sort(alloc)
+            local titles = {}
+            for i, spec in ipairs(build.treeTab.specList) do titles[i] = spec.title or "Default" end
+            local text = build.controls.pointDisplay.str:gsub("%^x%x%x%x%x%x%x", ""):gsub("%^%d", "")
+            local used, available, ascUsed, ascAvailable =
+                text:match("^%s*(%d+)%s*/%s*(%d+)%s+(%d+)%s*/%s*(%d+)")
+            return alloc, build.spec.curClassId, build.spec.curAscendClassId, titles,
+                tonumber(used), tonumber(available), tonumber(ascUsed), tonumber(ascAvailable)
+            "#,
+        )
+        .eval()
+        .expect("reading upstream tree");
+    UpstreamTree {
+        alloc,
+        class_id,
+        ascendancy_id,
+        spec_titles: titles,
+        used,
+        available,
+        ascendancy_used: asc_used,
+        ascendancy_available: asc_available,
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tree_state_matches_pob() {
+    let _guard = lock();
+    let mut s = Session::start("tree-state");
+    for (name, xml) in fixtures() {
+        s.open_fixture(&name, &xml);
+        let ours = s.backend.tree_state_view().expect("tree state");
+        let theirs = upstream_tree(&xml, &name);
+        let mut allocated = ours.allocated.clone();
+        allocated.sort_unstable();
+        assert_eq!(allocated, theirs.alloc, "{name}: allocated");
+        assert_eq!(ours.class_id, theirs.class_id, "{name}: class");
+        assert_eq!(
+            ours.ascendancy_id, theirs.ascendancy_id,
+            "{name}: ascendancy"
+        );
+        let titles: Vec<&str> = ours.specs.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(titles, theirs.spec_titles, "{name}: spec titles");
+        let points = (
+            ours.points.used,
+            ours.points.available,
+            ours.points.ascendancy_used,
+            ours.points.ascendancy_available,
+        );
+        let want = (
+            theirs.used,
+            theirs.available,
+            theirs.ascendancy_used,
+            theirs.ascendancy_available,
+        );
+        assert_eq!(points, want, "{name}: points");
+        assert_eq!(ours.specs[ours.active_spec].points, theirs.used, "{name}");
+        assert!(ours.classes.windows(2).all(|w| w[0].name < w[1].name));
+        assert!(
+            ours.classes
+                .iter()
+                .any(|c| c.id == ours.class_id && !c.needs_confirm),
+            "{name}: the current class never asks"
+        );
+        assert!(!ours.can_redo, "{name}: nothing to redo after loading");
+        assert!(
+            ours.classes.iter().all(|c| c
+                .ascendancies
+                .first()
+                .is_some_and(|a| a.id == 0 && a.name == "None")),
+            "{name}: ascendancy 0 is None"
+        );
+        // With points spent, a class the tree doesn't connect to asks before resetting it.
+        assert_eq!(
+            ours.classes.iter().any(|c| c.needs_confirm),
+            ours.points.used > 0,
+            "{name}: needs_confirm"
+        );
+        assert!(
+            ours.mastery_options
+                .iter()
+                .any(|m| m.options.iter().any(|o| !o.text.is_empty())),
+            "{name}: masteries offer effects"
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn layout_includes_spec_only_nodes() {
+    let _guard = lock();
+    let mut s = Session::start("layout-nodes");
+    let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "attack").unwrap();
+    s.open_fixture("attack", &xml);
+    let layout = s.backend.tree_layout_view().expect("layout");
+    let state = s.backend.tree_state_view().expect("state");
+    let ids: std::collections::HashSet<u32> = layout.nodes.iter().map(|n| n.id).collect();
+    assert!(!state.allocated.is_empty());
+    for id in &state.allocated {
+        assert!(ids.contains(id), "allocated node {id} is not in the layout");
+    }
+    assert!(!state.paths.is_empty(), "the build can grow");
+    for path in &state.paths {
+        assert!(ids.contains(&path.node), "reachable node {}", path.node);
+        assert!(path.path.iter().all(|id| ids.contains(id)));
+    }
+    assert!(
+        layout.nodes.iter().any(|n| n.ascendancy.is_some()),
+        "ascendancy nodes are included"
+    );
+    assert!(layout.key.starts_with(&layout.version));
+    for &(a, b) in &layout.edges {
+        assert!(a < layout.nodes.len() && b < layout.nodes.len());
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn layout_resent_on_version_change() {
+    let _guard = lock();
+    let mut s = Session::start("layout-resent");
+    let fixtures = fixtures();
+    let (name, xml) = &fixtures[0];
+    // nothing has been sent yet, so opening a build brings the layout
+    let dest = s.builds_dir().join(format!("{name}.xml"));
+    fs::create_dir_all(dest.parent().unwrap()).unwrap();
+    fs::copy(xml, &dest).unwrap();
+    let affected = s.run(Command::OpenBuild { path: dest.clone() }).unwrap();
+    assert!(affected.tree_layout && affected.tree);
+    let layout = s.backend.tree_layout_view().unwrap();
+
+    // the same tree again needs no new layout
+    let affected = s.run(Command::OpenBuild { path: dest }).unwrap();
+    assert!(!affected.tree_layout, "an unchanged layout isn't resent");
+    assert!(affected.tree);
+
+    // for any other build, the layout is resent exactly when its key differs
+    let mut last = layout.key;
+    for (name, xml) in fixtures.iter().skip(1) {
+        let dest = s.builds_dir().join(format!("{name}.xml"));
+        fs::copy(xml, &dest).unwrap();
+        let affected = s.run(Command::OpenBuild { path: dest }).unwrap();
+        let key = s.backend.tree_layout_view().unwrap().key;
+        assert_eq!(affected.tree_layout, key != last, "{name}");
+        last = key;
+    }
+}
+
 #[test]
 #[ignore = "spike: prints numbers, needs the pinned PoB install"]
 fn spike_tree_numbers() {

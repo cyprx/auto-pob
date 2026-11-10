@@ -9,7 +9,7 @@ use crate::pob_files::DownloadProgress;
 
 use super::commands::Command;
 use super::lab::LabEvent;
-use super::views::{BuildListView, BuildView, ConfigView, StatsView};
+use super::views::{BuildListView, BuildView, ConfigView, StatsView, TreeLayout, TreeState};
 
 #[derive(Debug, Clone)]
 pub enum Snapshot {
@@ -17,6 +17,8 @@ pub enum Snapshot {
     BuildList(Arc<BuildListView>),
     Stats(Arc<StatsView>),
     Config(Arc<ConfigView>),
+    TreeLayout(Arc<TreeLayout>),
+    Tree(Arc<TreeState>),
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +38,10 @@ pub struct Affected {
     pub list: bool,
     pub stats: bool,
     pub config: bool,
+    /// The tree's geometry changed: a new version, or a different cluster jewel subgraph
+    pub tree_layout: bool,
+    /// The build's state on the tree changed
+    pub tree: bool,
     pub recalc: bool,
 }
 
@@ -45,6 +51,8 @@ impl Affected {
         list: true,
         stats: true,
         config: true,
+        tree_layout: false,
+        tree: true,
         recalc: false,
     };
 
@@ -53,6 +61,8 @@ impl Affected {
         self.list |= other.list;
         self.stats |= other.stats;
         self.config |= other.config;
+        self.tree_layout |= other.tree_layout;
+        self.tree |= other.tree;
         self.recalc |= other.recalc;
     }
 }
@@ -64,6 +74,8 @@ pub trait Backend {
     fn build_list_view(&mut self) -> anyhow::Result<BuildListView>;
     fn stats_view(&mut self) -> anyhow::Result<StatsView>;
     fn config_view(&mut self) -> anyhow::Result<ConfigView>;
+    fn tree_layout_view(&mut self) -> anyhow::Result<TreeLayout>;
+    fn tree_state_view(&mut self) -> anyhow::Result<TreeState>;
 }
 
 fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &dyn Fn(Event)) {
@@ -95,6 +107,13 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
     }
     if flags.config {
         emit(seq, send, backend.config_view(), Snapshot::Config);
+    }
+    // the state refers to the layout, so the layout goes first
+    if flags.tree_layout {
+        emit(seq, send, backend.tree_layout_view(), Snapshot::TreeLayout);
+    }
+    if flags.tree {
+        emit(seq, send, backend.tree_state_view(), Snapshot::Tree);
     }
 }
 
@@ -142,6 +161,8 @@ pub fn run_loop(
             // Config visibility depends on the calculation.
             affected.stats = true;
             affected.config = true;
+            // Allocated points and the paths between them depend on the calculation too.
+            affected.tree = true;
         }
         send_snapshots(backend, last_seq, affected, send);
         if shutdown {
@@ -197,7 +218,11 @@ impl Engine {
                 }
             };
             send(Event::Ready);
-            send_snapshots(backend.as_mut(), 0, Affected::ALL_VIEWS, &send);
+            let initial = Affected {
+                tree_layout: true,
+                ..Affected::ALL_VIEWS
+            };
+            send_snapshots(backend.as_mut(), 0, initial, &send);
             run_loop(backend.as_mut(), &command_rx, &send);
         });
         Engine {
@@ -307,10 +332,30 @@ mod tests {
                     Snapshot::BuildList(_) => "list",
                     Snapshot::Stats(_) => "stats",
                     Snapshot::Config(_) => "config",
+                    Snapshot::TreeLayout(_) => "tree_layout",
+                    Snapshot::Tree(_) => "tree",
                 }
             })
             .collect();
-        assert_eq!(kinds, ["build", "list", "stats", "config"]);
+        // a failed command resends the views but not the layout, which cannot have changed
+        assert_eq!(kinds, ["build", "list", "stats", "config", "tree"]);
+    }
+
+    #[test]
+    fn layout_is_sent_before_state() {
+        let (mut fake, _log) = Fake::new();
+        // NewBuild replaces the tree, so the layout comes along with the state
+        let events = run_queued(&mut fake, vec![Command::NewBuild]);
+        let kinds: Vec<&str> = snapshots(&events)
+            .iter()
+            .map(|(_, s)| match s {
+                Snapshot::TreeLayout(_) => "tree_layout",
+                Snapshot::Tree(_) => "tree",
+                _ => "other",
+            })
+            .filter(|k| *k != "other")
+            .collect();
+        assert_eq!(kinds, ["tree_layout", "tree"]);
     }
 
     #[test]
@@ -323,9 +368,10 @@ mod tests {
         assert_eq!(log.lock().unwrap().set_configs, 1);
         // The command before Shutdown still produced its snapshots, tagged with Shutdown's seq.
         let snaps = snapshots(&events);
-        assert_eq!(snaps.len(), 2);
+        assert_eq!(snaps.len(), 3);
         assert!(matches!(snaps[0], (2, Snapshot::Stats(_))));
         assert!(matches!(snaps[1], (2, Snapshot::Config(_))));
+        assert!(matches!(snaps[2], (2, Snapshot::Tree(_))));
     }
 
     #[test]
@@ -349,9 +395,9 @@ mod tests {
         assert_eq!(engine.send(Command::Shutdown), 3);
         release_tx.send(()).unwrap();
 
-        // Ready, then four seq-0 snapshots, then the batch's snapshots tagged seq 3.
+        // Ready, then six seq-0 snapshots, then the batch's snapshots tagged seq 3.
         assert!(matches!(engine.events.recv().unwrap(), Event::Ready));
-        for _ in 0..4 {
+        for _ in 0..6 {
             match engine.events.recv().unwrap() {
                 Event::Snapshot { seq: 0, .. } => {}
                 other => panic!("expected initial snapshot, got {other:?}"),
@@ -371,9 +417,9 @@ mod tests {
         assert_eq!(stats_seq, Some(3));
         assert_eq!(config_seq, Some(3));
         assert_eq!(log.lock().unwrap().set_configs, 2);
-        // Ready + 4 initial snapshots + Stats + Config; the channel disconnect means the
+        // Ready + 6 initial snapshots + Stats + Config + Tree; the channel disconnect means the
         // thread (and so every wake) is finished.
-        assert_eq!(wakes.load(Ordering::SeqCst), 7);
+        assert_eq!(wakes.load(Ordering::SeqCst), 10);
     }
 
     #[test]

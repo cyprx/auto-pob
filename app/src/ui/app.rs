@@ -198,6 +198,8 @@ impl AutoPobApp {
                         self.stats = Some(view);
                     }
                     Snapshot::Config(view) => self.config = Some(view),
+                    // the tree tab arrives in a later task
+                    Snapshot::TreeLayout(_) | Snapshot::Tree(_) => {}
                 }
                 if self.entering.is_some_and(|e| seq >= e) {
                     self.entering = None;
@@ -715,6 +717,8 @@ mod tests {
                 list: true,
                 stats: true,
                 config: true,
+                tree_layout: false,
+                tree: true,
                 recalc: false,
             };
             match command {
@@ -847,6 +851,14 @@ mod tests {
                 custom_mods: vec![],
                 sections: vec![],
             })
+        }
+
+        fn tree_layout_view(&mut self) -> anyhow::Result<crate::engine::TreeLayout> {
+            Ok(crate::engine::fake::empty_layout())
+        }
+
+        fn tree_state_view(&mut self) -> anyhow::Result<crate::engine::TreeState> {
+            Ok(crate::engine::fake::empty_tree_state())
         }
     }
 

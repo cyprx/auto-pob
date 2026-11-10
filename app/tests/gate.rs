@@ -2319,7 +2319,15 @@ fn search_matches_pob() {
             assert!(!theirs.is_empty(), "search {text:?} matches nothing");
         }
     }
-    assert_eq!(unsaved(&mut s), before, "searching doesn't edit the build");
+    // PoB saves the search with the build: a changed search is an unsaved change, and the
+    // saved text is not (Build.lua:1303, TreeTab.lua:180)
+    assert!(!before);
+    s.run(search("life")).unwrap();
+    s.backend.recalculate().unwrap();
+    assert!(unsaved(&mut s), "a changed search marks the build unsaved");
+    s.run(search("")).unwrap();
+    s.backend.recalculate().unwrap();
+    assert!(!unsaved(&mut s), "the saved search is not a change");
 }
 
 #[test]
@@ -2378,9 +2386,18 @@ fn jewel_radius_matches_pob() {
 #[ignore = "needs the pinned PoB install"]
 fn tooltip_matches_pob() {
     let _guard = lock();
-    let mut s = attack_session("tree-tooltip");
-    let socket = upstream_node("dot", "pick.socket()");
-    let lua = upstream_with_tree_lib("attack");
+    // the allocated socket that holds the jewel recipe's jewel
+    let recipe = upstream_tree_recipe("jewel");
+    let xml = recipe.xml.expect("the jewel recipe saves its build");
+    let mut s = Session::start("tree-tooltip");
+    let path = s.user.join("jewel.xml");
+    fs::create_dir_all(&s.user).unwrap();
+    fs::write(&path, &xml).unwrap();
+    s.open_fixture("jewel", &path);
+    let socket = s.backend.tree_state_view().unwrap().jewels[0].node;
+    let lua = upstream_lua(&pob_dir()).unwrap();
+    load_xml(&lua, &xml, "jewel").unwrap();
+    load_tree_lib(&lua);
     // the recorder of glue/tooltip.lua, which draws nothing and keeps the lines
     lua.load(include_str!("../src/engine/glue/tooltip.lua"))
         .set_name("=recorder")
@@ -2406,7 +2423,7 @@ fn tooltip_matches_pob() {
         local list = {}
         for _, id in ipairs(ids) do
             local node = build.spec.nodes[id]
-            assert(not node.alloc, "node " .. id .. " is allocated")
+            assert(id == socket_id or not node.alloc, "node " .. id .. " is allocated")
             local tooltip = glue.tooltip()
             build.treeTab.viewer:AddNodeTooltip(tooltip, node, build)
             list[#list + 1] = { id = id, lines = tooltip:lines() }
@@ -2415,6 +2432,13 @@ fn tooltip_matches_pob() {
         "#,
     );
     assert_eq!(theirs.len(), 5);
+    // the jewel is part of the socket's tooltip
+    let jewel_lines = &theirs[4].lines;
+    assert!(
+        jewel_lines.iter().any(|l| matches!(l,
+            auto_pob::engine::TooltipLine::Line { text, .. } if text.contains("Eldritch Knowledge"))),
+        "{jewel_lines:?}"
+    );
     for expected in &theirs {
         assert!(expected.lines.len() > 3, "{expected:?}");
         let affected = s.run(Command::PreviewNode { id: expected.id }).unwrap();
@@ -2591,7 +2615,39 @@ fn no_power_work_without_heatmap() {
     assert!(!s.backend.has_background_work());
     let state = s.backend.tree_state_view().unwrap();
     assert_eq!(state.heatmap, None);
-    assert!(s.backend.node_power_view().unwrap().nodes.is_empty());
+    let off = s.backend.node_power_view().unwrap();
+    assert!(off.nodes.is_empty());
+    assert_eq!(off.stat, None);
+    assert!(
+        off.finished,
+        "nothing is calculated while the heat map is off"
+    );
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn unknown_heatmap_stat_changes_nothing() {
+    let _guard = lock();
+    let mut s = attack_session("tree-heatmap-unknown");
+    let on = Command::SetHeatmap {
+        stat: Some("Life".into()),
+        max_depth: Some(5),
+    };
+    s.run(on).unwrap();
+    let error = s
+        .run(Command::SetHeatmap {
+            stat: Some("No Such Stat".into()),
+            max_depth: Some(10),
+        })
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("unknown heat map stat"),
+        "{error}"
+    );
+    let state = s.backend.tree_state_view().unwrap();
+    assert_eq!(state.heatmap.as_deref(), Some("Life"));
+    assert_eq!(state.max_depth, Some(5));
+    assert!(s.backend.has_background_work(), "the heat map is still on");
 }
 
 #[test]
@@ -2612,6 +2668,16 @@ fn failed_power_step_stops_background_work() {
     assert!(s.backend.has_background_work());
     let error = s.backend.background_step(&|_| {}).unwrap_err();
     assert!(error.to_string().contains("boom"), "{error}");
+    // a recalculation sets powerBuildFlag again (CalcsTab.lua:435)
+    s.run(set("buffAdrenaline", ConfigValue::Bool(true)))
+        .unwrap();
+    let pending: bool = s
+        .backend
+        .lua
+        .load("return glue.power_pending()")
+        .eval()
+        .unwrap();
+    assert!(pending, "the recalculation queued the power calculation");
     assert!(
         !s.backend.has_background_work(),
         "a failed step must end the background work until the next SetHeatmap"

@@ -106,7 +106,9 @@ function glue.node_power()
 		max_offence = max.offence or 0,
 		max_defence = max.defence or 0,
 		-- a calculation that hasn't started yet has its flag set
-		finished = calcs.powerBuilder == nil and not calcs.powerBuildFlag,
+		-- with the heat map off nothing is being calculated
+		finished = not build.treeTab.viewer.showHeatMap
+			or (calcs.powerBuilder == nil and not calcs.powerBuildFlag),
 	}
 end
 

@@ -250,10 +250,10 @@ impl Backend for PobBackend {
                 })
             }
             Command::SetHeatmap { stat, max_depth } => {
-                self.heatmap_on = false;
-                self.power_failed = false;
                 let off = stat.is_none();
+                // an unknown stat is an error that changes nothing, so the flags stay too
                 self.call::<_, ()>("set_heatmap", (stat, max_depth))?;
+                self.power_failed = false;
                 self.heatmap_on = !off;
                 Ok(Affected {
                     tree: true,

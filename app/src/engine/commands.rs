@@ -60,8 +60,8 @@ pub enum Command {
     PreviewNode {
         id: u32,
     },
-    /// Highlights the nodes that match the text (PoB's tree search); "" clears it. It isn't an
-    /// edit, so the build stays as saved.
+    /// Highlights the nodes that match the text (PoB's tree search); "" clears it. PoB saves the
+    /// search with the build, so a changed search marks the build unsaved (Build.lua:1303).
     SetTreeSearch {
         text: String,
     },

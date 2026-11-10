@@ -138,6 +138,7 @@ impl Backend for Fake {
         Ok(StatsView {
             stats: vec![],
             minion: vec![],
+            ..StatsView::default()
         })
     }
 

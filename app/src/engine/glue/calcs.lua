@@ -146,23 +146,11 @@ local function shown_control(calcs, section, name, always_shown)
 	return control
 end
 
-local function drop_list(control)
-	local labels = {}
-	for i, item in ipairs(control.list) do
-		labels[i] = type(item) == "table" and item.label or item
-	end
-	return {
-		labels = labels,
-		selected = math.max((control.selIndex or 1) - 1, 0),
-		enabled = control.enabled ~= false,
-	}
-end
-
 function selector_view(calcs)
 	local section = refreshed_select(calcs)
 	local function drop(name, always_shown)
 		local control = shown_control(calcs, section, name, always_shown)
-		return control and drop_list(control) or nil
+		return control and glue.drop_list(control) or nil
 	end
 	local function text(name)
 		local control = shown_control(calcs, section, name)

@@ -106,6 +106,31 @@ function skillsDump()
 	return out
 end
 
+-- The sidebar's main-skill selector as plain tables, read from the build's own controls. The
+-- build runs `RefreshSkillSelectControls` while it draws, so call this after a frame.
+function mainSkillDump()
+	local c = build.controls
+	local function drop(name)
+		local control = c[name]
+		if not control.shown then return nil end
+		return dropdown(control, control.selIndex or 1)
+	end
+	local function text(name)
+		local control = c[name]
+		if not control.shown then return nil end
+		return control.buf or ""
+	end
+	return {
+		group = dropdown(c.mainSocketGroup, c.mainSocketGroup.selIndex or 1),
+		skill = drop("mainSkill"),
+		part = drop("mainSkillPart"),
+		stages = text("mainSkillStageCount"),
+		mines = text("mainSkillMineCount"),
+		minion = drop("mainSkillMinion"),
+		minion_skill = drop("mainSkillMinionSkill"),
+	}
+end
+
 -- ---- Recipe actions ----
 -- Every `act.*` presses PoB's own control the way the tab does, records the command for the
 -- gate to replay (`cmd` is our command's name, indices are 0-based), then runs a frame.
@@ -437,6 +462,45 @@ function act.option(name, value)
 	record({ cmd = "SetSkillOption", option = name, value = value })
 end
 
+-- A right-click on the group's row, "Set as main skill" (SkillListControl.lua:197-205). The
+-- row's hover is faked, as no mouse is there.
+function act.main_group(index)
+	local list = skillsTab().controls.groupList
+	local group = groupAt(index)
+	local class = list.ListControl
+	local saved = { class.GetHoverIndex, class.GetHoverValue }
+	class.GetHoverIndex = function() return index + 1 end
+	class.GetHoverValue = function() return group end
+	local ok, err = pcall(function() list:OnHoverKeyUp("RIGHTBUTTON") end)
+	class.GetHoverIndex, class.GetHoverValue = saved[1], saved[2]
+	if not ok then error(err, 0) end
+	record({ cmd = "SetMainSocketGroup", group = index })
+end
+
+-- A sidebar dropdown (Build.lua:474-561): `name` is the control, `index` is 0-based. The
+-- build refreshes its dropdowns while it draws, so a frame runs first.
+local sidebarNames = {
+	mainSocketGroup = "Group", mainSkill = "Skill", mainSkillPart = "Part",
+	mainSkillMinion = "Minion", mainSkillMinionSkill = "MinionSkill",
+}
+function act.sidebar(name, index)
+	frame()
+	local control = build.controls[name]
+	assert(sidebarNames[name] and control.shown, "the sidebar doesn't show " .. tostring(name))
+	control:SetSel(index + 1)
+	record({ cmd = "SetMainSkillSelect", control = sidebarNames[name], index = index })
+end
+
+-- The sidebar's Stages and Active Mines boxes
+local countNames = { mainSkillStageCount = "Stages", mainSkillMineCount = "Mines" }
+function act.sidebar_count(name, text)
+	frame()
+	local control = build.controls[name]
+	assert(countNames[name] and control.shown, "the sidebar doesn't show " .. tostring(name))
+	control:SetText(text, true)
+	record({ cmd = "SetMainSkillCount", control = countNames[name], text = text })
+end
+
 -- Ctrl+Z and Ctrl+Y on the tab (SkillsTab.lua:622-627)
 function act.undo()
 	skillsTab():Undo()
@@ -467,9 +531,11 @@ end
 -- The Skills tab right now, recorded for the gate to compare with ours at this point. The
 -- host defines `sidebar_lines()`.
 function checkpoint()
+	frame()
 	local dump = skillsDump()
 	table.insert(actions, { check = {
 		sets = dump.sets, active_set = dump.active_set, groups = dump.groups,
 		can_undo = dump.can_undo, can_redo = dump.can_redo, sidebar = sidebar_lines(),
+		main_skill = mainSkillDump(),
 	} })
 end

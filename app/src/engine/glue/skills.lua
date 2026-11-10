@@ -246,6 +246,16 @@ function glue.skills_move_group(from, to)
 	list.selValue = nil
 end
 
+-- A right-click on a group's row, "Set as main skill" (SkillListControl.lua:210-215); undoable,
+-- unlike the sidebar's dropdown
+function glue.skills_set_main(index)
+	group_at(index)
+	local tab = skills_tab()
+	tab.build.mainSocketGroup = index
+	tab:AddUndoState()
+	tab.build.buildFlag = true
+end
+
 -- Ctrl+V on the tab (SkillsTab.lua:667). Paste() is empty headless, so `testInput` is the text
 function glue.skills_paste(text)
 	local tab = skills_tab()

@@ -941,10 +941,12 @@ mod tests {
                 value: 1.0,
                 text: "1,000".into(),
                 color: Some("^xE05030".into()),
+                notes: vec![],
             };
             Ok(StatsView {
                 stats: vec![row("Life")],
                 minion: vec![row("Minion Life")],
+                ..StatsView::default()
             })
         }
 

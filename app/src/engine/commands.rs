@@ -144,6 +144,21 @@ pub enum Command {
         control: CalcsCount,
         text: String,
     },
+    /// PoB's right-click on a group in the Skills tab, "Set as main skill". Undoable.
+    SetMainSocketGroup {
+        group: usize,
+    },
+    /// Presses one of the sidebar's main-skill dropdowns; `index` is 0-based. `Mode` is an error,
+    /// because the sidebar has no mode selector.
+    SetMainSkillSelect {
+        control: CalcsControl,
+        index: usize,
+    },
+    /// Types into the sidebar's stage or mine count.
+    SetMainSkillCount {
+        control: CalcsCount,
+        text: String,
+    },
     SetShowMinion {
         show: bool,
     },

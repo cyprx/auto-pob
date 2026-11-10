@@ -40,13 +40,17 @@ pub struct BuildListEntry {
     pub level: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct StatsView {
+    /// The player's rows. The "Skill DPS" stat is one row per Full DPS skill, in PoB's order.
     #[serde(default)]
     pub stats: Vec<StatRow>,
     /// The main skill's minion, when it has one.
     #[serde(default)]
     pub minion: Vec<StatRow>,
+    /// The sidebar's main-skill dropdowns.
+    #[serde(default)]
+    pub main_skill: MainSkillSelector,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -57,6 +61,30 @@ pub struct StatRow {
     pub text: String,
     #[serde(default)]
     pub color: Option<String>,
+    /// Lines PoB draws under the row, colour codes kept: a Full DPS skill's part and source.
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+/// The sidebar's main-skill selector (`RefreshSkillSelectControls` on the build's controls). A
+/// control is `None` while PoB doesn't show it for the main skill.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MainSkillSelector {
+    pub group: DropList,
+    #[serde(default)]
+    pub skill: Option<DropList>,
+    #[serde(default)]
+    pub part: Option<DropList>,
+    /// The stage count's text
+    #[serde(default)]
+    pub stages: Option<String>,
+    /// The mine count's text
+    #[serde(default)]
+    pub mines: Option<String>,
+    #[serde(default)]
+    pub minion: Option<DropList>,
+    #[serde(default)]
+    pub minion_skill: Option<DropList>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

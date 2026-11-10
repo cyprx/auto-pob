@@ -7,7 +7,8 @@ use super::{
 };
 use auto_pob::engine::upstream::{SidebarLine, golden_of};
 use auto_pob::engine::{
-    Backend, Command, GemToggle, SkillOption, SkillSetEntry, SkillsView, SocketGroupView, Tab,
+    Backend, CalcsControl, CalcsCount, Command, GemToggle, MainSkillSelector, SkillOption,
+    SkillSetEntry, SkillsView, SocketGroupView, Tab,
 };
 use auto_pob::game::Game;
 use mlua::LuaSerdeExt;
@@ -253,12 +254,23 @@ enum SkillsAction {
         option: String,
         value: serde_json::Value,
     },
+    SetMainSocketGroup {
+        group: usize,
+    },
+    SetMainSkillSelect {
+        control: String,
+        index: usize,
+    },
+    SetMainSkillCount {
+        control: String,
+        text: String,
+    },
     Undo,
     Redo,
     /// Built from the recorded checkpoint table, which can hold empty lists
     #[serde(skip_deserializing)]
     Check {
-        check: SkillsCheckpoint,
+        check: Box<SkillsCheckpoint>,
     },
 }
 
@@ -324,10 +336,35 @@ impl SkillsAction {
             SkillsAction::SetSkillOption { option, value } => {
                 Command::SetSkillOption(skill_option(&option, &value))
             }
+            SkillsAction::SetMainSocketGroup { group } => Command::SetMainSocketGroup { group },
+            SkillsAction::SetMainSkillSelect { control, index } => Command::SetMainSkillSelect {
+                control: calcs_control(&control),
+                index,
+            },
+            SkillsAction::SetMainSkillCount { control, text } => Command::SetMainSkillCount {
+                control: match control.as_str() {
+                    "Stages" => CalcsCount::Stages,
+                    "Mines" => CalcsCount::Mines,
+                    other => panic!("unknown count {other}"),
+                },
+                text,
+            },
             SkillsAction::Undo => Command::Undo(Tab::Skills),
             SkillsAction::Redo => Command::Redo(Tab::Skills),
             SkillsAction::Check { .. } => return None,
         })
+    }
+}
+
+/// The sidebar dropdown `act.sidebar` pressed, as our control.
+fn calcs_control(name: &str) -> CalcsControl {
+    match name {
+        "Group" => CalcsControl::Group,
+        "Skill" => CalcsControl::Skill,
+        "Part" => CalcsControl::Part,
+        "Minion" => CalcsControl::Minion,
+        "MinionSkill" => CalcsControl::MinionSkill,
+        other => panic!("unknown control {other}"),
     }
 }
 
@@ -356,6 +393,8 @@ struct SkillsCheckpoint {
     can_undo: bool,
     can_redo: bool,
     sidebar: Vec<SidebarLine>,
+    /// The sidebar's main-skill selector
+    main_skill: MainSkillSelector,
 }
 
 /// A recipe run in upstream PoB: the steps it took and where they ended.
@@ -397,11 +436,12 @@ fn upstream_skills_recipe(name: &str) -> SkillsRecipe {
         .map(|entry| {
             let entry = entry.unwrap();
             if let Ok(check) = entry.get::<mlua::Table>("check") {
-                let mut check: SkillsCheckpoint = lua
+                let check: SkillsCheckpoint = lua
                     .from_value(mlua::Value::Table(check))
                     .unwrap_or_else(|e| panic!("{name}: checkpoint: {e}"));
-                without_skill_dps(&mut check.sidebar);
-                return SkillsAction::Check { check };
+                return SkillsAction::Check {
+                    check: Box::new(check),
+                };
             }
             let json: serde_json::Value = lua.from_value(mlua::Value::Table(entry)).unwrap();
             serde_json::from_value(json.clone()).unwrap_or_else(|e| panic!("{name}: {json}: {e}"))
@@ -415,20 +455,11 @@ fn upstream_skills_recipe(name: &str) -> SkillsRecipe {
     }
 }
 
-/// PoB lists one sidebar line per skill after "Full DPS" (the `SkillDPS` stat) once a group is in
-/// Full DPS. Our stats view doesn't list them yet (a gap from sub-project 1, not the Skills
-/// tab's), so checkpoints compare the sidebar up to the "Full DPS" line.
-fn without_skill_dps(lines: &mut Vec<SidebarLine>) {
-    if let Some(at) = lines.iter().position(|l| l.label == "Full DPS") {
-        lines.truncate(at + 1);
-    }
-}
-
 /// Our Skills tab and sidebar in the shape of a recipe's `checkpoint()`.
 fn our_skills_checkpoint(s: &mut Session) -> SkillsCheckpoint {
     let view = s.backend.skills_view().expect("skills view");
-    let mut sidebar: Vec<SidebarLine> = s
-        .stats()
+    let stats = s.stats();
+    let sidebar: Vec<SidebarLine> = stats
         .stats
         .iter()
         .map(|r| SidebarLine {
@@ -436,7 +467,6 @@ fn our_skills_checkpoint(s: &mut Session) -> SkillsCheckpoint {
             text: r.text.clone(),
         })
         .collect();
-    without_skill_dps(&mut sidebar);
     SkillsCheckpoint {
         sets: view.sets,
         active_set: view.active_set,
@@ -444,6 +474,7 @@ fn our_skills_checkpoint(s: &mut Session) -> SkillsCheckpoint {
         can_undo: view.can_undo,
         can_redo: view.can_redo,
         sidebar,
+        main_skill: stats.main_skill,
     }
 }
 
@@ -485,7 +516,7 @@ fn run_skills_recipe(name: &str) -> (SkillsRecipe, Session) {
                     unreachable!()
                 };
                 let ours = our_skills_checkpoint(&mut s);
-                assert_eq!(&ours, check, "{name}: checkpoint {checked}");
+                assert_eq!(&ours, &**check, "{name}: checkpoint {checked}");
                 checked += 1;
             }
         }
@@ -502,6 +533,14 @@ fn run_skills_recipe(name: &str) -> (SkillsRecipe, Session) {
 fn group_recipes_match_pob() {
     let _guard = lock();
     let recipe = check_skills_recipe("groups");
+    // the sidebar lists the Full DPS skills after "Full DPS", and the whole sidebar is compared
+    assert!(
+        checkpoints(&recipe).iter().any(|c| {
+            let at = c.sidebar.iter().position(|l| l.label == "Full DPS");
+            at.is_some_and(|at| c.sidebar.len() > at + 1)
+        }),
+        "a Full DPS skill line"
+    );
     // coverage the first review asked for: a group that isn't main, and a disabled one
     let mid = recipe
         .actions
@@ -594,10 +633,8 @@ fn delete_before_main_shifts_main() {
         lua.globals().set("pasted", pasted).unwrap();
         lua.load("act.paste(pasted)").exec().unwrap();
     }
-    // Task 6 replaces this with SetMainSocketGroup; the Calcs selector follows the same group
-    let set_main = "local b = pob and pob.build or build; b.mainSocketGroup = 3; b.calcsTab.input.skill_number = 3";
-    s.backend.lua.load(set_main).exec().unwrap();
-    lua.load(set_main).exec().unwrap();
+    s.run(Command::SetMainSocketGroup { group: 2 }).unwrap();
+    lua.load("act.main_group(2)").exec().unwrap();
     s.run(Command::DeleteSocketGroup { group: 0 }).unwrap();
     lua.load("act.delete_group(0)").exec().unwrap();
     s.run(Command::MoveSocketGroup { from: 1, to: 0 }).unwrap();
@@ -750,7 +787,7 @@ fn checkpoints(recipe: &SkillsRecipe) -> Vec<&SkillsCheckpoint> {
         .actions
         .iter()
         .filter_map(|a| match a {
-            SkillsAction::Check { check } => Some(check),
+            SkillsAction::Check { check } => Some(&**check),
             _ => None,
         })
         .collect()
@@ -1702,4 +1739,70 @@ fn no_silent_writes_item_and_imbued() {
         s.run(command).unwrap_or_else(|e| panic!("{shown}: {e}"));
         assert_eq!(snapshot_dir(&dir), before, "{shown} wrote a file");
     }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn main_skill_recipe_matches_pob() {
+    let _guard = lock();
+    let recipe = check_skills_recipe("main_skill");
+    let checks = checkpoints(&recipe);
+    // coverage: the right-click moves the main group, and the part dropdown reaches the
+    // second part of Boneshatter
+    assert!(!checks[0].groups[1].is_main && checks[1].groups[1].is_main);
+    assert!(checks[0].groups[0].is_main && !checks[1].groups[0].is_main);
+    assert_eq!(checks[2].main_skill.group.selected, 0);
+    assert_eq!(checks[2].main_skill.part.as_ref().unwrap().selected, 1);
+    assert_ne!(
+        checks[1].sidebar, checks[2].sidebar,
+        "the part changes the stats"
+    );
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn main_skill_selector_matches_pob() {
+    let _guard = lock();
+    for (name, xml) in fixtures() {
+        let (mut s, lua) = {
+            let mut s = Session::start(&format!("main-selector-{name}"));
+            s.open_fixture(&name, &xml);
+            (s, upstream_with_skills_lib(&xml, &name))
+        };
+        lua.load("runCallback('OnFrame')").exec().unwrap();
+        let theirs: MainSkillSelector = {
+            let value: mlua::Value = lua.load("return mainSkillDump()").eval().unwrap();
+            lua.from_value(value).unwrap()
+        };
+        assert_eq!(s.stats().main_skill, theirs, "{name}");
+        assert!(!theirs.group.labels.is_empty(), "{name}: group list");
+        let _ = &mut s;
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn main_skill_mode_is_an_error() {
+    let _guard = lock();
+    let (mut s, _) = session_on("attack", "main-mode");
+    let before = s.stats().main_skill;
+    let err = s
+        .run(Command::SetMainSkillSelect {
+            control: CalcsControl::Mode,
+            index: 0,
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("Mode"), "{err}");
+    let err = s
+        .run(Command::SetMainSkillSelect {
+            control: CalcsControl::Group,
+            index: 99,
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("no such choice"), "{err}");
+    let err = s
+        .run(Command::SetMainSocketGroup { group: 99 })
+        .unwrap_err();
+    assert!(err.to_string().contains("no such socket group"), "{err}");
+    assert_eq!(s.stats().main_skill, before);
 }

@@ -428,6 +428,18 @@ impl Backend for PobBackend {
                 self.call::<_, ()>("calcs_set_count", (control.pob_name(), text))?;
                 Ok(calcs_changed(true))
             }
+            Command::SetMainSocketGroup { group } => {
+                self.call::<_, ()>("skills_set_main", group + 1)?;
+                Ok(skills_changed())
+            }
+            Command::SetMainSkillSelect { control, index } => {
+                self.call::<_, ()>("main_skill_select", (control.pob_name(), index + 1))?;
+                Ok(skills_changed())
+            }
+            Command::SetMainSkillCount { control, text } => {
+                self.call::<_, ()>("main_skill_set_count", (control.pob_name(), text))?;
+                Ok(skills_changed())
+            }
             Command::SetShowMinion { show } => {
                 self.call::<_, ()>("calcs_show_minion", show)?;
                 Ok(calcs_changed(false))

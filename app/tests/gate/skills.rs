@@ -1335,12 +1335,6 @@ fn no_silent_writes_skills() {
     commands.extend([
         Command::Undo(Tab::Skills),
         Command::Redo(Tab::Skills),
-        Command::SetImbuedSupport {
-            group: 0,
-            gem_id: None,
-        },
-        Command::OptimiseSockets { group: 0 },
-        Command::GroupTooltip { group: 0 },
         Command::DeleteSocketGroup { group: 0 },
         Command::DeleteAllSocketGroups,
     ]);
@@ -1657,4 +1651,55 @@ fn group_tooltip_matches_pob() {
         }
     }
     assert!(checked >= 3, "only {checked} groups had a tooltip");
+}
+
+/// The write paths added with item groups, imbued supports and Optimise Sockets, in states
+/// where they succeed: each must return Ok and write no file.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn no_silent_writes_item_and_imbued() {
+    let _guard = lock();
+    let (mut s, _lua) = session_on("attack", "no-writes-imbued");
+    let dir = s.builds_dir();
+    let before = snapshot_dir(&dir);
+    let fire = "Metadata/Items/Gems/SkillGemSupportAddedFireDamage";
+    for command in [
+        Command::SetGroupSlot {
+            group: 0,
+            slot: Some("Weapon 1".into()),
+        },
+        Command::SetImbuedSupport {
+            group: 0,
+            gem_id: Some(fire.into()),
+        },
+        Command::OptimiseSockets { group: 0 },
+        Command::GroupTooltip { group: 0 },
+        Command::SetImbuedSupport {
+            group: 0,
+            gem_id: None,
+        },
+    ] {
+        let shown = format!("{command:?}");
+        s.run(command).unwrap_or_else(|e| panic!("{shown}: {e}"));
+        assert_eq!(snapshot_dir(&dir), before, "{shown} wrote a file");
+    }
+    let view = s.backend.skills_view().unwrap();
+    assert_eq!(view.groups[0].slot.as_deref(), Some("Weapon 1"));
+    drop(s);
+
+    let (mut s, item) = item_group_session("no-writes");
+    let dir = s.builds_dir();
+    let before = snapshot_dir(&dir);
+    for command in [
+        Command::SetGroupCount {
+            group: item,
+            text: "2".into(),
+        },
+        Command::GroupTooltip { group: item },
+        Command::OptimiseSockets { group: item },
+    ] {
+        let shown = format!("{command:?}");
+        s.run(command).unwrap_or_else(|e| panic!("{shown}: {e}"));
+        assert_eq!(snapshot_dir(&dir), before, "{shown} wrote a file");
+    }
 }

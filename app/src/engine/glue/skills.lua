@@ -594,7 +594,12 @@ function glue.skills_group_tooltip(index)
 	local group = tab.socketGroupList[index]
 	local tooltip = glue.tooltip()
 	if group then
-		pcall(tab.controls.groupList.AddValueTooltip, tab.controls.groupList, tooltip, index, group)
+		local ok, built = pcall(function()
+			local recorder = glue.tooltip()
+			tab.controls.groupList:AddValueTooltip(recorder, index, group)
+			return recorder
+		end)
+		if ok then tooltip = built end
 	end
 	return { group = index - 1, lines = tooltip:lines() }
 end

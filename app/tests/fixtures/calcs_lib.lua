@@ -65,7 +65,8 @@ function calcsDump()
 				end
 			end
 			table.insert(subs, sub)
-			if anyRow and subIndex == 1 and subSec.collapsed then break end
+			-- DrawContent (CalcSectionControl.lua:468-472) returns here for the first sub-section
+			if subIndex == 1 and (not anyRow or subSec.collapsed) then break end
 		end
 		table.insert(out, {
 			id = section.id,

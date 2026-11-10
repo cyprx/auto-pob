@@ -70,6 +70,15 @@ fn calcs_cells_match_pob() {
         s.open_fixture(&name, &xml);
         let lua = upstream_with_calcs_lib(&xml, &name);
         let mut modes_seen = Vec::new();
+        if name == "attack" {
+            let sections = s.backend.calcs_view().unwrap().sections;
+            let disabled: Vec<_> = sections.iter().filter(|s| !s.enabled).collect();
+            assert!(!disabled.is_empty(), "no disabled section on attack");
+            for section in disabled {
+                assert_eq!(section.subs.len(), 1, "{}", section.id);
+                assert!(section.subs[0].rows.is_empty(), "{}", section.id);
+            }
+        }
         for mode in MODES {
             set_our_mode(&mut s, mode);
             lua.load(format!("setMode('{mode}')")).exec().unwrap();
@@ -102,6 +111,7 @@ const COLLAPSE_AND_SEARCH: &str = r#"
     calcs.controls.search.buf = "a"
     local collapsed_first, collapsed_later = false, false
     for _, section in ipairs(calcs.sectionList) do
+        if not calcs:CheckFlag(section) then section.subSection[1].collapsed = true end
         if section.id ~= "SkillSelect" then
             if not collapsed_first and calcs:CheckFlag(section) then
                 section.subSection[1].collapsed = true
@@ -138,6 +148,11 @@ fn calcs_collapse_and_search_match_pob() {
     let ours = s.backend.calcs_view().unwrap();
     let theirs: Vec<CalcsSection> = lua_value(&lua, "return calcsDump()");
     assert_eq!(ours.search, "a");
+    assert!(
+        ours.sections
+            .iter()
+            .any(|s| !s.enabled && s.subs[0].collapsed)
+    );
     assert!(
         ours.sections
             .iter()

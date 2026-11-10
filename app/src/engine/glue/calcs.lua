@@ -71,8 +71,9 @@ local function section_view(calcs, section, actor)
 			end
 		end
 		subs[#subs + 1] = view
-		-- DrawContent stops at a collapsed first sub-section
-		if enabled and i == 1 and collapsed then break end
+		-- DrawContent returns after the first sub-section when the section is disabled or
+		-- that sub-section is collapsed
+		if i == 1 and (not enabled or collapsed) then break end
 	end
 	return {
 		id = section.id,

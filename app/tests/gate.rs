@@ -1512,6 +1512,235 @@ fn layout_resent_on_version_change() {
     assert!(!affected.tree_layout);
 }
 
+/// The stat lines the tree gives a mastery effect.
+fn effect_stats(s: &Session, effect: u32) -> Vec<String> {
+    s.backend
+        .lua
+        .load(format!(
+            "return pob.build.spec.tree.masteryEffects[{effect}].sd"
+        ))
+        .eval()
+        .unwrap()
+}
+
+fn layout_stats(layout: &auto_pob::engine::TreeLayout, node: u32) -> Vec<String> {
+    layout
+        .nodes
+        .iter()
+        .find(|n| n.id == node)
+        .unwrap_or_else(|| panic!("node {node} is not in the layout"))
+        .stats
+        .clone()
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn choosing_a_mastery_effect_resends_the_layout() {
+    let _guard = lock();
+    let mut s = attack_session("layout-mastery");
+    let before = s.backend.tree_layout_view().unwrap();
+    let mastery = upstream_node("attack", "pick.mastery()");
+    let effect: u32 = upstream_with_tree_lib("attack")
+        .load("return pick.mastery_effects(pick.mastery())[2]")
+        .eval()
+        .unwrap();
+    // nothing else has changed: another edit leaves the layout alone
+    let affected = s
+        .run(Command::AllocNode {
+            id: upstream_node("attack", "pick.notable(2)"),
+        })
+        .unwrap();
+    assert!(!affected.tree_layout, "an unrelated allocation");
+    let affected = s
+        .run(Command::SetMastery {
+            node: mastery,
+            effect,
+        })
+        .unwrap();
+    assert!(affected.tree_layout, "the mastery's text changed");
+    let after = s.backend.tree_layout_view().unwrap();
+    assert_ne!(after.key, before.key);
+    assert!(after.key.starts_with(&after.version));
+    let wanted = effect_stats(&s, effect);
+    assert!(!wanted.is_empty());
+    assert_eq!(layout_stats(&after, mastery), wanted);
+    // a repeat of the same choice has nothing new to send
+    let affected = s
+        .run(Command::SetMastery {
+            node: mastery,
+            effect,
+        })
+        .unwrap();
+    assert!(!affected.tree_layout);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn opening_a_build_after_the_blank_start_up_build_brings_its_content() {
+    let _guard = lock();
+    // a build with a mastery effect chosen, saved in a throw-away folder
+    let mut first = attack_session("layout-open-source");
+    let mastery = upstream_node("attack", "pick.mastery()");
+    let effect: u32 = upstream_with_tree_lib("attack")
+        .load("return pick.mastery_effects(pick.mastery())[2]")
+        .eval()
+        .unwrap();
+    first
+        .run(Command::SetMastery {
+            node: mastery,
+            effect,
+        })
+        .unwrap();
+    first.run(Command::Save).unwrap();
+    let saved = fs::read(first.builds_dir().join("attack.xml")).unwrap();
+
+    // the engine's first layout comes from the blank build it starts with
+    let mut s = Session::start("layout-open");
+    let blank = s.backend.tree_layout_view().unwrap();
+    let path = s.builds_dir().join("chosen.xml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, saved).unwrap();
+    let affected = s.run(Command::OpenBuild { path }).unwrap();
+    assert!(affected.tree_layout, "the build's tree reads differently");
+    let layout = s.backend.tree_layout_view().unwrap();
+    assert_ne!(layout.key, blank.key);
+    assert_eq!(layout_stats(&layout, mastery), effect_stats(&s, effect));
+    // every node's name and stats are what the build's own tree holds
+    let lua = &s.backend.lua;
+    for node in &layout.nodes {
+        let (name, stats): (Option<String>, Vec<String>) = lua
+            .load(format!(
+                "local n = pob.build.spec.nodes[{}]; return n.dn, n.sd or {{}}",
+                node.id
+            ))
+            .eval()
+            .unwrap();
+        assert_eq!(node.name, name.unwrap_or_default(), "node {}", node.id);
+        assert_eq!(node.stats, stats, "node {}", node.id);
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn layout_nodes_are_sorted_by_id_and_the_key_is_cheap() {
+    let _guard = lock();
+    let mut s = attack_session("layout-key-cost");
+    let layout = s.backend.tree_layout_view().unwrap();
+    assert!(layout.nodes.windows(2).all(|w| w[0].id < w[1].id));
+    let digest: mlua::Function = s
+        .backend
+        .lua
+        .load("return glue.tree_layout_digest")
+        .eval()
+        .unwrap();
+    let start = std::time::Instant::now();
+    for _ in 0..20 {
+        let _: mlua::LuaString = digest.call(()).unwrap();
+    }
+    let each = start.elapsed() / 20;
+    eprintln!("layout key digest: {each:?} per command on attack");
+    assert!(each < std::time::Duration::from_millis(50), "{each:?}");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tree_editing_never_writes_files() {
+    let _guard = lock();
+    let mut s = Session::start("tree-no-writes");
+    let fixtures = fixture_xml("attack");
+    let text = fs::read_to_string(&fixtures).unwrap();
+    // an older tree for the conversion, on disk before the first snapshot
+    let older = s.builds_dir().join("older.xml");
+    fs::create_dir_all(older.parent().unwrap()).unwrap();
+    fs::write(
+        &older,
+        text.replace("treeVersion=\"3_29\"", "treeVersion=\"3_27\""),
+    )
+    .unwrap();
+    s.open_fixture("attack", &fixtures);
+    let dir = s.builds_dir();
+    let before = snapshot_dir(&dir);
+    let notable = upstream_node("attack", "pick.notable(2)");
+    let mastery = upstream_node("attack", "pick.mastery()");
+    let effect: u32 = upstream_with_tree_lib("attack")
+        .load("return pick.mastery_effects(pick.mastery())[2]")
+        .eval()
+        .unwrap();
+    let witch = s
+        .backend
+        .tree_state_view()
+        .unwrap()
+        .classes
+        .iter()
+        .find(|c| c.name == "Witch")
+        .unwrap()
+        .id;
+    let commands = vec![
+        Command::AllocNode { id: notable },
+        Command::SetMastery {
+            node: mastery,
+            effect,
+        },
+        Command::Undo(Tab::Tree),
+        Command::Redo(Tab::Tree),
+        Command::SelectClass {
+            id: witch,
+            connect: false,
+        },
+        Command::ResetTree,
+        Command::NewSpec {
+            title: "Extra".into(),
+        },
+        Command::RenameSpec {
+            index: 1,
+            title: "Renamed".into(),
+        },
+        Command::SelectSpec { index: 1 },
+        Command::SetCompareSpec { index: Some(0) },
+        Command::SelectSpec { index: 0 },
+        Command::DeleteSpec { index: 1 },
+        search("life"),
+    ];
+    for command in commands {
+        let shown = format!("{command:?}");
+        s.run(command).unwrap_or_else(|e| panic!("{shown}: {e}"));
+    }
+    // a heat map, calculated to the end
+    run_power(&mut s, "Life", Some(1));
+    // converting needs an older tree
+    s.run(Command::OpenBuild { path: older }).unwrap();
+    let latest = {
+        let latest: String = s
+            .backend
+            .lua
+            .load("return latestTreeVersion")
+            .eval()
+            .unwrap();
+        latest
+    };
+    s.run(Command::ConvertSpec {
+        version: latest,
+        keep_copy: true,
+    })
+    .unwrap();
+    assert_eq!(s.backend.tree_state_view().unwrap().specs.len(), 2);
+    let after = snapshot_dir(&dir);
+    assert_eq!(
+        after.keys().collect::<Vec<_>>(),
+        before.keys().collect::<Vec<_>>(),
+        "files appeared or went"
+    );
+    assert!(
+        snapshot_dir(&s.user)
+            .keys()
+            .all(|p| !p.to_string_lossy().contains("~~temp~~")),
+        "a temporary file was left"
+    );
+    for (path, bytes) in &before {
+        assert!(after[path] == *bytes, "{} changed", path.display());
+    }
+}
+
 // ---- tree editing ----
 
 /// One recorded step of a tree recipe, as upstream's `act.*` helpers log it in the global
@@ -1590,6 +1819,8 @@ enum CompareTarget {
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 struct Checkpoint {
     allocated: Vec<u32>,
+    /// The active tree's version, so a conversion to the wrong one is noticed
+    tree_version: String,
     spec_titles: Vec<String>,
     active_spec: usize,
     #[serde(deserialize_with = "colours")]
@@ -1668,6 +1899,8 @@ impl TreeAction {
 struct TreeResult {
     /// Sorted
     allocated: Vec<u32>,
+    /// The active tree's version
+    tree_version: String,
     class_id: u32,
     ascendancy_id: u32,
     /// (node, effect), sorted
@@ -1725,6 +1958,7 @@ fn upstream_result(lua: &mlua::Lua) -> TreeResult {
     #[derive(serde::Deserialize)]
     struct Raw {
         allocated: Vec<u32>,
+        tree_version: String,
         class_id: u32,
         ascendancy_id: u32,
         #[serde(default)]
@@ -1747,7 +1981,8 @@ fn upstream_result(lua: &mlua::Lua) -> TreeResult {
                 table.sort(masteries, function(a, b) return a.node < b.node end)
                 for i, spec in ipairs(build.treeTab.specList) do titles[i] = spec.title or "Default" end
                 return {
-                    allocated = allocated, class_id = build.spec.curClassId,
+                    allocated = allocated, tree_version = build.spec.treeVersion,
+                    class_id = build.spec.curClassId,
                     ascendancy_id = build.spec.curAscendClassId, masteries = masteries,
                     compare = compareColours(),
                     spec_titles = titles, active_spec = build.treeTab.activeSpec - 1,
@@ -1761,6 +1996,7 @@ fn upstream_result(lua: &mlua::Lua) -> TreeResult {
     let sidebar = golden_of(lua, Game::Poe1.pob_version()).unwrap().sidebar;
     TreeResult {
         allocated: raw.allocated,
+        tree_version: raw.tree_version,
         class_id: raw.class_id,
         ascendancy_id: raw.ascendancy_id,
         masteries: raw.masteries.iter().map(|m| (m.node, m.effect)).collect(),
@@ -1847,6 +2083,7 @@ fn our_tree_result(s: &mut Session) -> TreeResult {
         .collect();
     TreeResult {
         allocated,
+        tree_version: state.version.clone(),
         class_id: state.class_id,
         ascendancy_id: state.ascendancy_id,
         masteries,
@@ -1864,6 +2101,7 @@ fn our_checkpoint(s: &mut Session) -> Checkpoint {
     allocated.sort_unstable();
     Checkpoint {
         allocated,
+        tree_version: state.version,
         spec_titles: state.specs.iter().map(|e| e.title.clone()).collect(),
         active_spec: state.active_spec,
         compare: state.compare,
@@ -2242,6 +2480,7 @@ fn search_matches_pob() {
         assert_eq!(
             affected,
             auto_pob::engine::Affected {
+                build: true,
                 tree: true,
                 ..Default::default()
             }
@@ -2278,11 +2517,10 @@ fn search_matches_pob() {
     // PoB saves the search with the build: a changed search is an unsaved change, and the
     // saved text is not (Build.lua:1303, TreeTab.lua:180)
     assert!(!before);
+    // the command alone does it: the loop runs no recalculation for a search
     s.run(search("life")).unwrap();
-    s.backend.recalculate().unwrap();
     assert!(unsaved(&mut s), "a changed search marks the build unsaved");
     s.run(search("")).unwrap();
-    s.backend.recalculate().unwrap();
     assert!(!unsaved(&mut s), "the saved search is not a change");
 }
 

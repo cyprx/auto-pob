@@ -58,7 +58,7 @@ local function nodeArt(node)
 end
 
 -- Nodes of the active spec that have a position: the main tree, ascendancies and any
--- cluster jewel subgraphs.
+-- cluster jewel subgraphs. Sorted by id, so the layout is the same wherever the nodes come from.
 local function placed_nodes()
 	local list = {}
 	for id, node in pairs(pob.build.spec.nodes) do
@@ -66,21 +66,33 @@ local function placed_nodes()
 			list[#list + 1] = node
 		end
 	end
+	table.sort(list, function(a, b) return a.id < b.id end)
 	return list
 end
 
--- Identifies the layout: it changes with the tree version and with cluster jewel subgraphs
--- (which add nodes), and with nothing else.
-local function layout_key(nodes)
-	local sum = 0
+-- Everything the layout draws that can differ between specs on the same tree version: the
+-- version, then per node its id, name, stat lines and art names. Tattoos, timeless jewels,
+-- cluster jewels and mastery effects all rewrite these on the spec's own nodes. The host
+-- hashes the text into the layout's key.
+local function layout_digest(nodes)
+	local parts = { pob.build.spec.treeVersion }
 	for _, node in ipairs(nodes) do
-		sum = sum + node.id
+		parts[#parts + 1] = table.concat({
+			node.id,
+			node.dn or "",
+			table.concat(node.sd or {}, "\1"),
+			node.type or "",
+			node.icon or "",
+			node.inactiveIcon or "",
+			node.activeIcon or "",
+			node.ascendancyName or "",
+		}, "\2")
 	end
-	return string.format("%s:%d:%d", pob.build.spec.treeVersion, #nodes, sum)
+	return table.concat(parts, "\n")
 end
 
-function glue.tree_layout_key()
-	return layout_key(placed_nodes())
+function glue.tree_layout_digest()
+	return layout_digest(placed_nodes())
 end
 
 -- Geometry of the active spec's tree, for drawing it. Positions are PoB's own, in tree units.
@@ -117,7 +129,7 @@ function glue.tree_layout()
 	end
 	return {
 		version = pob.build.spec.treeVersion,
-		key = layout_key(placed),
+		digest = layout_digest(placed),
 		nodes = nodes,
 		edges = edges,
 		sheets = sheets,
@@ -455,6 +467,19 @@ function glue.dealloc_node(id)
 	finish_edit(false)
 end
 
+-- Runs `fn`, then closes every popup it left open, also when it fails.
+local function in_popups(fn)
+	local main = main_module()
+	local depth = #main.popups
+	local ok, err = pcall(fn)
+	while #main.popups > depth do
+		main:ClosePopup()
+	end
+	if not ok then
+		error(err, 0)
+	end
+end
+
 -- Presses the popup's button with this label (or its `confirm` control).
 local function press(popup, label)
 	for key, control in pairs(popup.controls) do
@@ -481,18 +506,17 @@ function glue.select_class(id, connect)
 		error("unknown class " .. tostring(id), 0)
 	end
 	local main = main_module()
-	local popups = #main.popups
-	drop.selFunc(nil, entry)
-	if #main.popups > popups then
-		local popup = main.popups[1]
-		local pressed = press(popup, connect and "Connect Path" or nil)
-		if not pressed then
-			main:ClosePopup()
+	in_popups(function()
+		local popups = #main.popups
+		drop.selFunc(nil, entry)
+		if #main.popups > popups then
+			-- a popup that isn't pressed is closed by in_popups, as Escape would
+			press(main.popups[1], connect and "Connect Path" or nil)
+			if build.spec.curClassId ~= id then
+				error("couldn't connect your tree to that class", 0)
+			end
 		end
-		if build.spec.curClassId ~= id then
-			error("couldn't connect your tree to that class", 0)
-		end
-	end
+	end)
 end
 
 -- The ascendancy dropdown's callback (Build.lua:279).
@@ -559,19 +583,6 @@ function glue.tree_redo()
 end
 
 -- ---- Trees (specs) ----
-
--- Runs `fn`, then closes every popup it left open, also when it fails.
-local function in_popups(fn)
-	local main = main_module()
-	local depth = #main.popups
-	local ok, err = pcall(fn)
-	while #main.popups > depth do
-		main:ClosePopup()
-	end
-	if not ok then
-		error(err, 0)
-	end
-end
 
 local function spec_at(index)
 	local spec = pob.build.treeTab.specList[index]
@@ -744,6 +755,9 @@ function glue.set_tree_search(text)
 	local viewer = pob.build.treeTab.viewer
 	viewer.searchStr = text
 	pob.build.treeTab.searchFlag = text ~= viewer.searchStrSaved
+	-- PoB works out `unsaved` in OnFrame (Build.lua:1303, which reads searchFlag). The frame
+	-- doesn't set buildFlag, so nothing is recalculated and the heat map keeps running.
+	glue.frame()
 end
 
 -- What the tree draws when the mouse is over a node (PassiveTreeView.lua:1458), or nil when the

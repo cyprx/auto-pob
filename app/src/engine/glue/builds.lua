@@ -41,6 +41,10 @@ local function frame()
 	end
 end
 
+-- For the other glue files: a frame that doesn't calculate (unless a flag asks for it) but
+-- lets PoB refresh `unsaved` (Build.lua:1303).
+glue.frame = frame
+
 -- Switches mode and runs a frame so PoB initialises the build and calculates it.
 -- A build file PoB can't load sends it back to the list; fall back to a new build then.
 local function enter_build(...)

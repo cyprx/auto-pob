@@ -12,7 +12,25 @@ use std::{
 /// The key of the layout `layout` would build, without building it.
 pub(super) fn layout_key(lua: &Lua) -> mlua::Result<String> {
     let glue: Table = lua.globals().get("glue")?;
-    glue.get::<Function>("tree_layout_key")?.call(())
+    let digest: mlua::LuaString = glue.get::<Function>("tree_layout_digest")?.call(())?;
+    Ok(key_of(&digest.as_bytes()))
+}
+
+/// The layout's key: its tree version, then a hash of everything it draws. The digest starts
+/// with the version, on its own line. The hasher has fixed keys, so keys are stable.
+fn key_of(digest: &[u8]) -> String {
+    use std::hash::Hasher;
+    let version_end = digest
+        .iter()
+        .position(|&b| b == b'\n')
+        .unwrap_or(digest.len());
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hasher.write(digest);
+    format!(
+        "{}:{:016x}",
+        String::from_utf8_lossy(&digest[..version_end]),
+        hasher.finish()
+    )
 }
 
 /// Reads the active spec's tree geometry from `glue.tree_layout()`.
@@ -74,7 +92,7 @@ pub(super) fn layout(lua: &Lua, pob_dir: &Path) -> mlua::Result<TreeLayout> {
         nodes,
         edges,
         sheets,
-        key: tree.get("key")?,
+        key: key_of(&tree.get::<mlua::LuaString>("digest")?.as_bytes()),
     })
 }
 

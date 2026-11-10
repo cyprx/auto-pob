@@ -119,25 +119,41 @@ impl PobBackend {
         })
     }
 
+    /// Whether the layout the UI holds no longer matches what the tree draws.
+    fn layout_changed(&self) -> Result<bool> {
+        let key = super::tree::layout_key(&self.lua).map_err(|e| anyhow!("{e}"))?;
+        Ok(self.last_layout_key.as_deref() != Some(key.as_str()))
+    }
+
     /// Every view, plus the tree layout when it differs from the one last sent. For commands
     /// that replace the whole build.
     fn all_views(&self) -> Result<Affected> {
-        let key = super::tree::layout_key(&self.lua).map_err(|e| anyhow!("{e}"))?;
         Ok(Affected {
-            tree_layout: self.last_layout_key.as_deref() != Some(key.as_str()),
+            tree_layout: self.layout_changed()?,
             ..Affected::ALL_VIEWS
         })
     }
 
-    /// A change to the trees: the layout goes out only if the active tree's key changed.
+    /// A change to the trees: the layout goes out only if it differs from the last one sent.
     /// `rebuild` is false for changes that leave the build as it is.
     fn spec_edited(&self, rebuild: bool) -> Result<Affected> {
-        let key = super::tree::layout_key(&self.lua).map_err(|e| anyhow!("{e}"))?;
         Ok(Affected {
             build: rebuild,
             recalc: rebuild,
             tree: true,
-            tree_layout: self.last_layout_key.as_deref() != Some(key.as_str()),
+            tree_layout: self.layout_changed()?,
+            ..Affected::default()
+        })
+    }
+
+    /// A tree edit changes the build and the tree state, and needs a recalculation. It can
+    /// change node text too (a mastery's effect), so the layout is checked.
+    fn tree_edited(&self) -> Result<Affected> {
+        Ok(Affected {
+            build: true,
+            tree: true,
+            recalc: true,
+            tree_layout: self.layout_changed()?,
             ..Affected::default()
         })
     }
@@ -164,16 +180,6 @@ fn config_changed() -> Affected {
     Affected {
         build: true,
         config: true,
-        recalc: true,
-        ..Affected::default()
-    }
-}
-
-/// A tree edit changes the build and the tree state, and needs a recalculation.
-fn tree_edited() -> Affected {
-    Affected {
-        build: true,
-        tree: true,
         recalc: true,
         ..Affected::default()
     }
@@ -244,6 +250,7 @@ impl Backend for PobBackend {
             Command::SetTreeSearch { text } => {
                 self.call::<_, ()>("set_tree_search", text)?;
                 Ok(Affected {
+                    build: true,
                     tree: true,
                     ..Affected::default()
                 })
@@ -311,27 +318,27 @@ impl Backend for PobBackend {
             }
             Command::AllocNode { id } => {
                 self.call::<_, ()>("alloc_node", id)?;
-                Ok(tree_edited())
+                self.tree_edited()
             }
             Command::DeallocNode { id } => {
                 self.call::<_, ()>("dealloc_node", id)?;
-                Ok(tree_edited())
+                self.tree_edited()
             }
             Command::SelectClass { id, connect } => {
                 self.call::<_, ()>("select_class", (id, connect))?;
-                Ok(tree_edited())
+                self.tree_edited()
             }
             Command::SelectAscendancy { id } => {
                 self.call::<_, ()>("select_ascendancy", id)?;
-                Ok(tree_edited())
+                self.tree_edited()
             }
             Command::ResetTree => {
                 self.call::<_, ()>("reset_tree", ())?;
-                Ok(tree_edited())
+                self.tree_edited()
             }
             Command::SetMastery { node, effect } => {
                 self.call::<_, ()>("set_mastery", (node, effect))?;
-                Ok(tree_edited())
+                self.tree_edited()
             }
             Command::SelectSpec { index } => {
                 self.call::<_, ()>("select_spec", index + 1)?;
@@ -367,11 +374,11 @@ impl Backend for PobBackend {
             }
             Command::Undo(Tab::Tree) => {
                 self.call::<_, ()>("tree_undo", ())?;
-                Ok(tree_edited())
+                self.tree_edited()
             }
             Command::Redo(Tab::Tree) => {
                 self.call::<_, ()>("tree_redo", ())?;
-                Ok(tree_edited())
+                self.tree_edited()
             }
             Command::Undo(Tab::Config) => {
                 self.call::<_, ()>("undo", "config")?;

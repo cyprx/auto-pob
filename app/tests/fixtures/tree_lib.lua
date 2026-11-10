@@ -250,7 +250,7 @@ function checkpoint()
 	table.sort(allocated)
 	for i, spec in ipairs(build.treeTab.specList) do titles[i] = spec.title or "Default" end
 	table.insert(actions, { check = {
-		allocated = allocated, spec_titles = titles,
+		allocated = allocated, spec_titles = titles, tree_version = build.spec.treeVersion,
 		active_spec = build.treeTab.activeSpec - 1, compare = compareColours(),
 	} })
 end

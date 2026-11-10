@@ -1526,16 +1526,33 @@ fn layout_resent_on_version_change() {
     assert!(!affected.tree_layout, "an unchanged layout isn't resent");
     assert!(affected.tree);
 
-    // for any other build, the layout is resent exactly when its key differs
-    let mut last = layout.key;
-    for (name, xml) in fixtures.iter().skip(1) {
-        let dest = s.builds_dir().join(format!("{name}.xml"));
-        fs::copy(xml, &dest).unwrap();
-        let affected = s.run(Command::OpenBuild { path: dest }).unwrap();
-        let key = s.backend.tree_layout_view().unwrap().key;
-        assert_eq!(affected.tree_layout, key != last, "{name}");
-        last = key;
-    }
+    // the same build on an older tree version has another key, so the layout is resent
+    let older = s.builds_dir().join("older.xml");
+    let text = fs::read_to_string(xml).unwrap();
+    assert!(text.contains("treeVersion=\"3_29\""));
+    fs::write(
+        &older,
+        text.replace("treeVersion=\"3_29\"", "treeVersion=\"3_27\""),
+    )
+    .unwrap();
+    let affected = s
+        .run(Command::OpenBuild {
+            path: older.clone(),
+        })
+        .unwrap();
+    assert!(affected.tree_layout, "a new tree version brings its layout");
+    let older_layout = s.backend.tree_layout_view().unwrap();
+    assert_eq!(older_layout.version, "3_27");
+    assert_ne!(older_layout.key, layout.key);
+    assert_eq!(s.backend.tree_state_view().unwrap().version, "3_27");
+
+    // and going back resends again, while repeating it does not
+    let dest = s.builds_dir().join(format!("{name}.xml"));
+    let affected = s.run(Command::OpenBuild { path: dest.clone() }).unwrap();
+    assert!(affected.tree_layout);
+    assert_eq!(s.backend.tree_layout_view().unwrap().key, layout.key);
+    let affected = s.run(Command::OpenBuild { path: dest }).unwrap();
+    assert!(!affected.tree_layout);
 }
 
 #[test]

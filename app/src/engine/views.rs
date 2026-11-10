@@ -1,5 +1,6 @@
 //! Typed snapshots of PoB state, deserialised from Lua tables.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -135,7 +136,7 @@ pub struct Choice {
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum TooltipLine {
     Line { size: u32, text: String },
@@ -495,6 +496,61 @@ pub struct CellRef {
     pub sub: usize,
     pub row: usize,
     pub cell: usize,
+}
+
+/// What PoB's breakdown control shows for a [`CellRef`]; no sections when the cell has none
+/// (or is gone, or its flags no longer hold).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BreakdownView {
+    pub cell: CellRef,
+    #[serde(default)]
+    pub sections: Vec<BreakdownSection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum BreakdownSection {
+    Text {
+        /// Separators formatted, colour codes kept
+        #[serde(default)]
+        lines: Vec<String>,
+        size: u32,
+    },
+    Table {
+        #[serde(default)]
+        label: Option<String>,
+        #[serde(default)]
+        footer: Option<String>,
+        /// Only the columns some row has a value for
+        #[serde(default)]
+        columns: Vec<BreakdownColumn>,
+        #[serde(default)]
+        rows: Vec<BreakdownRow>,
+    },
+    Radius {
+        radius: f64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BreakdownColumn {
+    pub label: String,
+    pub key: String,
+    #[serde(default)]
+    pub right: bool,
+}
+
+/// A row's cells by column key, as the breakdown draws them.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BreakdownRow {
+    #[serde(default)]
+    pub cells: BTreeMap<String, String>,
+    /// Shown on hovering the cell
+    #[serde(default)]
+    pub tooltips: BTreeMap<String, Vec<TooltipLine>>,
+    /// The passive node the cell points at (shown on the tree)
+    #[serde(default)]
+    pub nodes: BTreeMap<String, u32>,
 }
 
 #[cfg(test)]

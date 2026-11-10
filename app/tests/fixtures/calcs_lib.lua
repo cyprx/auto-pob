@@ -189,3 +189,115 @@ function selectorDump()
 		mode_tooltip = section.controls.mode.tooltipText,
 	}
 end
+
+-- The first cell that shows, has a breakdown and whose format reads `output.<statKey>`, as a
+-- 0-based CellRef; nil when there is none.
+function findCell(statKey)
+	local calcs = build.calcsTab
+	local needle = "output:" .. statKey .. "}"
+	for _, section in ipairs(calcs.sectionList) do
+		local anyRow = false
+		if calcs:CheckFlag(section) then
+			for _, subSec in ipairs(section.subSection) do
+				for _, rowData in ipairs(subSec.data) do
+					anyRow = anyRow or calcs:CheckFlag(rowData) and true
+				end
+			end
+		end
+		if anyRow then
+			for subIndex, subSec in ipairs(section.subSection) do
+				if not subSec.collapsed then
+					for rowIndex, rowData in ipairs(subSec.data) do
+						if calcs:CheckFlag(rowData) and not hasControl(rowData) then
+							for colIndex, colData in ipairs(rowData) do
+								if colData.format and calcs:CheckFlag(colData) and #colData > 0
+									and colData.format:find(needle, 1, true) then
+									return { section = section.id, sub = subIndex - 1,
+										row = rowIndex - 1, cell = colIndex - 1 }
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+end
+
+-- What upstream's breakdown control would show for a cell, as plain tables.
+function breakdownDump(ref)
+	local calcs = build.calcsTab
+	local out = { cell = ref, sections = {} }
+	local colData
+	for _, section in ipairs(calcs.sectionList) do
+		if section.id == ref.section then
+			local subSec = section.subSection[ref.sub + 1]
+			local rowData = subSec and subSec.data[ref.row + 1]
+			colData = rowData and rowData[ref.cell + 1]
+		end
+	end
+	if not colData or not calcs:CheckFlag(colData) then return out end
+	local control = calcs.controls.breakdown
+	-- the same data again would return early
+	control:SetBreakdownData()
+	control:SetBreakdownData(colData, false)
+	if not control.shown then return out end
+	for _, section in ipairs(control.sectionList) do
+		if section.type == "TEXT" then
+			local lines = {}
+			for i, line in ipairs(section.lines) do
+				lines[i] = formatNumSep(line)
+			end
+			table.insert(out.sections, { kind = "text", lines = lines, size = section.textSize })
+		elseif section.type == "RADIUS" then
+			table.insert(out.sections, { kind = "radius", radius = section.radius })
+		elseif section.type == "TABLE" then
+			local columns, rows = {}, {}
+			for _, col in ipairs(section.colList) do
+				-- upstream gives a column a width when some row has a value for it
+				if col.width then
+					table.insert(columns, { label = col.label, key = col.key, right = not not col.right })
+				end
+			end
+			for _, rowItem in ipairs(section.rowList) do
+				local row = { cells = {}, tooltips = {}, nodes = {} }
+				for _, col in ipairs(columns) do
+					local value = rowItem[col.key]
+					if value then
+						local _, alpha = string.gsub(value, "%a", " ")
+						local _, notes = string.gsub(value, " to ", " ")
+						local _, paren = string.gsub(value, "%b()", " ")
+						if alpha == 0 or notes > 0 or paren > 0 then
+							row.cells[col.key] = formatNumSep(tostring(value))
+						else
+							row.cells[col.key] = tostring(value)
+						end
+						local tipFunc = rowItem[col.key .. "Tooltip"]
+						if tipFunc then
+							local tip = new("Tooltip")
+							tip:Clear()
+							tipFunc(tip)
+							local lines = {}
+							for _, line in ipairs(tip.lines) do
+								if line.text then
+									table.insert(lines, { size = line.size, text = line.text })
+								else
+									-- a separator has no text
+									table.insert(lines, { separator = line.size })
+								end
+							end
+							if #lines > 0 then row.tooltips[col.key] = lines end
+						end
+						local node = rowItem[col.key .. "Node"]
+						if node and node.x then row.nodes[col.key] = node.id end
+					end
+				end
+				table.insert(rows, row)
+			end
+			table.insert(out.sections, { kind = "table", label = section.label,
+				footer = section.footer, columns = #columns > 0 and columns or nil,
+				rows = #rows > 0 and rows or nil })
+		end
+	end
+	return out
+end

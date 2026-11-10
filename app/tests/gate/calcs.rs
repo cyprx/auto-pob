@@ -8,7 +8,8 @@ use super::{
 };
 use auto_pob::engine::upstream::golden_of;
 use auto_pob::engine::{
-    Backend, CalcsControl, CalcsCount, CalcsSection, CalcsSelector, Command, Tab,
+    Backend, BreakdownSection, BreakdownView, CalcsControl, CalcsCount, CalcsSection,
+    CalcsSelector, CellRef, Command, Tab,
 };
 use auto_pob::game::Game;
 use std::fs;
@@ -486,4 +487,135 @@ fn calcs_search_flags_labels() {
     };
     assert_eq!(cells(&before), cells(&view));
     assert_eq!(s.backend.build_view().unwrap().unsaved, unsaved);
+}
+
+/// `findCell` for the stat: it has to find one.
+fn find_cell(lua: &mlua::Lua, stat: &str) -> CellRef {
+    let cell: Option<CellRef> = lua_value(lua, &format!("return findCell({stat:?})"));
+    cell.unwrap_or_else(|| panic!("upstream shows no breakdown cell for {stat}"))
+}
+
+/// Our breakdown of the cell against upstream's; the sections found.
+fn assert_breakdown_matches(s: &mut Session, lua: &mlua::Lua, cell: &CellRef, step: &str) -> usize {
+    let ours = s
+        .backend
+        .breakdown_view(cell)
+        .unwrap_or_else(|e| panic!("{step}: {e:#}"));
+    let theirs: BreakdownView = lua_value(
+        lua,
+        &format!(
+            "return breakdownDump({{ section = {:?}, sub = {}, row = {}, cell = {} }})",
+            cell.section, cell.sub, cell.row, cell.cell
+        ),
+    );
+    assert_eq!(
+        serde_json::to_value(&ours).unwrap(),
+        serde_json::to_value(&theirs).unwrap(),
+        "{step}: breakdown"
+    );
+    eprintln!("BREAKDOWN {step}: {} sections", theirs.sections.len());
+    theirs.sections.len()
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn breakdowns_match_pob() {
+    let _guard = lock();
+    let (mut s, lua) = both("attack");
+    // PoB gives some cells no breakdown in a build (Life, with no increases), which both sides
+    // must agree on; most of them have one
+    let mut with_sections = 0;
+    for stat in ["Life", "Armour", "FireResist", "TotalDPS"] {
+        let cell = find_cell(&lua, stat);
+        let n = assert_breakdown_matches(&mut s, &lua, &cell, stat);
+        // asking again must not depend on the control's earlier data
+        assert_eq!(assert_breakdown_matches(&mut s, &lua, &cell, stat), n);
+        with_sections += usize::from(n > 0);
+    }
+    // Skill Average Hit shows for a skill that isn't an attack (`notFlag = "attack"`)
+    let (mut s, lua) = both("dot");
+    let cell = find_cell(&lua, "AverageHit");
+    let n = assert_breakdown_matches(&mut s, &lua, &cell, "dot AverageHit");
+    with_sections += usize::from(n > 0);
+    assert!(with_sections >= 3, "{with_sections} cells have a breakdown");
+    let (mut s, lua) = both("minion");
+    s.run(Command::SetShowMinion { show: true }).unwrap();
+    lua.load("calcsShowMinion(true)").exec().unwrap();
+    let cell = find_cell(&lua, "Life");
+    assert_breakdown_matches(&mut s, &lua, &cell, "minion Life");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn breakdown_of_vanished_cell_is_empty() {
+    let _guard = lock();
+    let (mut s, lua) = both("attack");
+    let real = find_cell(&lua, "TotalDPS");
+    let gone = [
+        CellRef {
+            section: "nope".into(),
+            ..real.clone()
+        },
+        CellRef {
+            sub: 99,
+            ..real.clone()
+        },
+        CellRef {
+            row: 999,
+            ..real.clone()
+        },
+        CellRef {
+            cell: 99,
+            ..real.clone()
+        },
+    ];
+    for cell in gone {
+        let view = s.backend.breakdown_view(&cell).unwrap();
+        assert_eq!(view.cell, cell);
+        assert!(view.sections.is_empty(), "{cell:?}");
+    }
+    // a real one still has sections afterwards
+    let view = s.backend.breakdown_view(&real).unwrap();
+    assert!(matches!(
+        view.sections.first(),
+        Some(BreakdownSection::Text { .. } | BreakdownSection::Table { .. })
+    ));
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn every_shown_breakdown_matches_pob() {
+    let _guard = lock();
+    for name in ["attack", "dot", "minion"] {
+        let (mut s, lua) = both(name);
+        let view = s.backend.calcs_view().unwrap();
+        let (mut cells, mut with_sections, mut tooltips, mut nodes) = (0, 0, 0, 0);
+        for section in &view.sections {
+            for (sub, x) in section.subs.iter().enumerate() {
+                for row in &x.rows {
+                    for cell in row.cells.iter().filter(|c| c.breakdown) {
+                        let cell = CellRef {
+                            section: section.id.clone(),
+                            sub,
+                            row: row.index,
+                            cell: cell.index,
+                        };
+                        let n = assert_breakdown_matches(&mut s, &lua, &cell, &format!("{cell:?}"));
+                        cells += 1;
+                        with_sections += usize::from(n > 0);
+                        for b in &s.backend.breakdown_view(&cell).unwrap().sections {
+                            if let BreakdownSection::Table { rows, .. } = b {
+                                tooltips += rows.iter().map(|r| r.tooltips.len()).sum::<usize>();
+                                nodes += rows.iter().map(|r| r.nodes.len()).sum::<usize>();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "ALLBD {name}: {cells} cells, {with_sections} with sections, {tooltips} tooltips, {nodes} nodes"
+        );
+        assert!(with_sections > 0, "{name}");
+    }
 }

@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use super::views::CellRef;
+
 #[derive(Debug, Clone)]
 pub enum Command {
     /// Sub-path relative to the Builds folder; "" is the root.
@@ -155,6 +157,9 @@ pub enum Command {
         sub: usize,
         collapsed: bool,
     },
+
+    /// A query: the breakdown of a Calcs cell; the latest one in a batch is answered.
+    Breakdown(CellRef),
 
     Undo(Tab),
     Redo(Tab),

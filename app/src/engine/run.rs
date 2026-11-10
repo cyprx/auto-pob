@@ -9,8 +9,8 @@ use crate::pob_files::DownloadProgress;
 
 use super::commands::Command;
 use super::views::{
-    BuildListView, BuildView, CalcsView, ConfigView, NodePower, NodeTooltip, PowerReport,
-    StatsView, TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
+    NodeTooltip, PowerReport, StatsView, TreeLayout, TreeState,
 };
 
 #[derive(Debug, Clone)]
@@ -24,6 +24,7 @@ pub enum Snapshot {
     NodePower(Arc<NodePower>),
     PowerReport(Arc<PowerReport>),
     NodeTooltip(Arc<NodeTooltip>),
+    Breakdown(Arc<BreakdownView>),
     TreeLink(Arc<String>),
     Calcs(Arc<CalcsView>),
 }
@@ -61,7 +62,7 @@ pub enum Event {
 }
 
 /// What a command changed, so the loop knows which snapshots to send.
-#[derive(Default, Clone, Copy, PartialEq, Debug)]
+#[derive(Default, Clone, PartialEq, Debug)]
 pub struct Affected {
     pub build: bool,
     pub list: bool,
@@ -80,6 +81,8 @@ pub struct Affected {
     pub report: bool,
     /// A tooltip was requested for this node; the latest request wins
     pub preview: Option<u32>,
+    /// The breakdown of this Calcs cell was requested; the latest request wins
+    pub breakdown: Option<CellRef>,
     /// The tree link was requested
     pub link: bool,
 }
@@ -97,6 +100,7 @@ impl Affected {
         power: false,
         report: false,
         preview: None,
+        breakdown: None,
         link: false,
     };
 
@@ -112,6 +116,9 @@ impl Affected {
         self.power |= other.power;
         self.report |= other.report;
         self.preview = other.preview.or(self.preview);
+        if other.breakdown.is_some() {
+            self.breakdown = other.breakdown;
+        }
         self.link |= other.link;
     }
 }
@@ -134,6 +141,8 @@ pub trait Backend {
     fn power_report_view(&mut self) -> anyhow::Result<PowerReport>;
     /// `Ok(None)` when the node no longer exists: nothing is sent.
     fn node_tooltip_view(&mut self, id: u32) -> anyhow::Result<Option<NodeTooltip>>;
+    /// Empty sections when the cell is gone or has no breakdown.
+    fn breakdown_view(&mut self, cell: &CellRef) -> anyhow::Result<BreakdownView>;
     fn tree_link_view(&mut self) -> anyhow::Result<String>;
 }
 
@@ -200,6 +209,9 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
                 message: format!("{e:#}"),
             }),
         }
+    }
+    if let Some(cell) = &flags.breakdown {
+        emit(seq, send, backend.breakdown_view(cell), Snapshot::Breakdown);
     }
     if flags.link {
         emit(seq, send, backend.tree_link_view(), Snapshot::TreeLink);
@@ -722,6 +734,33 @@ mod tests {
             .collect();
         assert_eq!(tooltips, [3]);
         assert_eq!(log.lock().unwrap().previews, [3]);
+    }
+
+    #[test]
+    fn only_latest_breakdown_runs() {
+        let (mut fake, log) = Fake::new();
+        let cell = |row| CellRef {
+            section: "Life".into(),
+            sub: 0,
+            row,
+            cell: 0,
+        };
+        let events = run_queued(
+            &mut fake,
+            (1..=3).map(|row| Command::Breakdown(cell(row))).collect(),
+        );
+        let breakdowns: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Snapshot {
+                    snapshot: Snapshot::Breakdown(b),
+                    ..
+                } => Some(b.cell.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(breakdowns, [cell(3)]);
+        assert_eq!(log.lock().unwrap().breakdowns, [cell(3)]);
     }
 
     #[test]

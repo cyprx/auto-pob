@@ -3,8 +3,8 @@
 use super::commands::{Command, ConfigValue, Tab};
 use super::run::{Affected, Backend, BackgroundTask, Engine, Event};
 use super::views::{
-    BuildListView, BuildView, CalcsView, ConfigView, NodePower, NodeTooltip, PowerReport,
-    StatsView, TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
+    NodeTooltip, PowerReport, StatsView, TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -259,6 +259,10 @@ impl Backend for PobBackend {
             Command::Shutdown => Ok(Affected::default()),
             Command::PreviewNode { id } => Ok(Affected {
                 preview: Some(id),
+                ..Affected::default()
+            }),
+            Command::Breakdown(cell) => Ok(Affected {
+                breakdown: Some(cell),
                 ..Affected::default()
             }),
             Command::ExportTreeLink => Ok(Affected {
@@ -520,6 +524,13 @@ impl Backend for PobBackend {
 
     fn node_tooltip_view(&mut self, id: u32) -> Result<Option<NodeTooltip>> {
         self.view("node_tooltip", id)
+    }
+
+    fn breakdown_view(&mut self, cell: &CellRef) -> Result<BreakdownView> {
+        self.view(
+            "calcs_breakdown",
+            (cell.section.clone(), cell.sub, cell.row, cell.cell),
+        )
     }
 
     fn tree_link_view(&mut self) -> Result<String> {

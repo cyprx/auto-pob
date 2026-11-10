@@ -200,7 +200,7 @@ impl AutoPobApp {
                     }
                     Snapshot::Config(view) => self.config = Some(view),
                     // the Calcs tab's UI comes later
-                    Snapshot::Calcs(_) => {}
+                    Snapshot::Calcs(_) | Snapshot::Breakdown(_) => {}
                     // power results of the build being left
                     Snapshot::NodePower(_) | Snapshot::PowerReport(_)
                         if self.entering.is_some() => {}
@@ -978,6 +978,16 @@ mod tests {
             _id: u32,
         ) -> anyhow::Result<Option<crate::engine::NodeTooltip>> {
             Ok(None)
+        }
+
+        fn breakdown_view(
+            &mut self,
+            cell: &crate::engine::CellRef,
+        ) -> anyhow::Result<crate::engine::BreakdownView> {
+            Ok(crate::engine::BreakdownView {
+                cell: cell.clone(),
+                sections: vec![],
+            })
         }
 
         fn tree_link_view(&mut self) -> anyhow::Result<String> {

@@ -253,3 +253,99 @@ function glue.calcs_redo()
 	calcs:Redo()
 	calcs.build.buildFlag = true
 end
+
+-- ---- Breakdowns ----
+
+-- The cell's data (`colData`), when the cell is still there and PoB would show it.
+local function find_col_data(calcs, ref)
+	for _, section in ipairs(calcs.sectionList) do
+		if section.id == ref.section then
+			local sub = section.subSection[ref.sub + 1]
+			local row = sub and sub.data[ref.row + 1]
+			local colData = row and row[ref.cell + 1]
+			if colData and calcs:CheckFlag(colData) then return colData end
+			return nil
+		end
+	end
+end
+
+-- `CalcBreakdownControl:DrawBreakdownTable`: values with no letters, a " to " or a
+-- parenthesis get their thousands separators.
+local function table_text(value)
+	local _, alpha = string.gsub(value, "%a", " ")
+	local _, notes = string.gsub(value, " to ", " ")
+	local _, paren = string.gsub(value, "%b()", " ")
+	if alpha == 0 or notes > 0 or paren > 0 then
+		return formatNumSep(tostring(value))
+	end
+	return tostring(value)
+end
+
+local function table_view(section)
+	local columns, rows = {}, {}
+	for _, col in ipairs(section.colList) do
+		-- PoB gives a column a width when some row has a value for it
+		for _, row in ipairs(section.rowList) do
+			if row[col.key] then
+				columns[#columns + 1] = { label = col.label, key = col.key, right = col.right and true or false }
+				break
+			end
+		end
+	end
+	for _, item in ipairs(section.rowList) do
+		local row = { cells = {}, tooltips = {}, nodes = {} }
+		for _, col in ipairs(columns) do
+			local key = col.key
+			local value = item[key]
+			if value then
+				row.cells[key] = table_text(value)
+				local tip = item[key .. "Tooltip"]
+				if tip then
+					local tooltip = glue.tooltip()
+					tip(tooltip)
+					-- (an empty list would read as a map, see below)
+					if #tooltip:lines() > 0 then row.tooltips[key] = tooltip:lines() end
+				end
+				local node = item[key .. "Node"]
+				if node and node.x then row.nodes[key] = node.id end
+			end
+		end
+		rows[#rows + 1] = row
+	end
+	-- The section is an internally tagged enum on the Rust side, which reads an empty table as a
+	-- map, so empty lists are left out.
+	return {
+		kind = "table",
+		label = section.label,
+		footer = section.footer,
+		columns = #columns > 0 and columns or nil,
+		rows = #rows > 0 and rows or nil,
+	}
+end
+
+-- What the Calcs tab's breakdown control shows for a cell (0-based positions)
+function glue.calcs_breakdown(section_id, sub, row, cell)
+	local calcs = pob.build.calcsTab
+	local view = { cell = { section = section_id, sub = sub, row = row, cell = cell }, sections = {} }
+	local colData = find_col_data(calcs, { section = section_id, sub = sub, row = row, cell = cell })
+	if not colData then return view end
+	local control = calcs.controls.breakdown
+	-- the same data again returns early
+	control:SetBreakdownData()
+	control:SetBreakdownData(colData, false)
+	if not control.shown then return view end
+	for _, section in ipairs(control.sectionList) do
+		if section.type == "TEXT" then
+			local lines = {}
+			for i, line in ipairs(section.lines) do
+				lines[i] = formatNumSep(line)
+			end
+			view.sections[#view.sections + 1] = { kind = "text", lines = lines, size = section.textSize }
+		elseif section.type == "TABLE" then
+			view.sections[#view.sections + 1] = table_view(section)
+		elseif section.type == "RADIUS" then
+			view.sections[#view.sections + 1] = { kind = "radius", radius = section.radius }
+		end
+	end
+	return view
+end

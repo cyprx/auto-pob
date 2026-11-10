@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use super::commands::Command;
 use super::run::{Affected, Backend, Event};
 use super::views::{
-    BuildListView, BuildView, CalcsView, ConfigView, NodePower, NodeTooltip, Points, PowerReport,
-    StatsView, TooltipLine, TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
+    NodeTooltip, Points, PowerReport, StatsView, TooltipLine, TreeLayout, TreeState,
 };
 
 #[derive(Default, Debug)]
@@ -16,6 +16,7 @@ pub struct Log {
     pub recalculations: usize,
     pub steps: usize,
     pub previews: Vec<u32>,
+    pub breakdowns: Vec<CellRef>,
 }
 
 /// One scripted background step: what it affects, or the error it fails with.
@@ -70,6 +71,10 @@ impl Fake {
             }),
             Command::PreviewNode { id } => Ok(Affected {
                 preview: Some(id),
+                ..Affected::default()
+            }),
+            Command::Breakdown(cell) => Ok(Affected {
+                breakdown: Some(cell),
                 ..Affected::default()
             }),
             Command::ExportTreeLink => Ok(Affected {
@@ -198,6 +203,14 @@ impl Backend for Fake {
                 text: format!("node {id}"),
             }],
         }))
+    }
+
+    fn breakdown_view(&mut self, cell: &CellRef) -> anyhow::Result<BreakdownView> {
+        self.log.lock().unwrap().breakdowns.push(cell.clone());
+        Ok(BreakdownView {
+            cell: cell.clone(),
+            sections: vec![],
+        })
     }
 
     fn tree_link_view(&mut self) -> anyhow::Result<String> {

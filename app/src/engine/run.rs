@@ -38,11 +38,27 @@ pub enum BackgroundTask {
 pub enum Event {
     Downloading(DownloadProgress),
     Ready,
-    StartupFailed { message: String },
-    Snapshot { seq: u64, snapshot: Snapshot },
-    Error { seq: u64, message: String },
+    StartupFailed {
+        message: String,
+    },
+    Snapshot {
+        seq: u64,
+        snapshot: Snapshot,
+    },
+    Error {
+        seq: u64,
+        message: String,
+    },
     Lab(LabEvent),
-    Progress { task: BackgroundTask, percent: u32 },
+    Progress {
+        task: BackgroundTask,
+        percent: u32,
+    },
+    /// A background step failed; its work stops until something restarts it.
+    BackgroundFailed {
+        task: BackgroundTask,
+        message: String,
+    },
 }
 
 /// What a command changed, so the loop knows which snapshots to send.
@@ -204,8 +220,8 @@ pub fn run_loop(
                 Err(TryRecvError::Empty) => {
                     match backend.background_step(send) {
                         Ok(affected) => send_snapshots(backend, last_seq, affected, send),
-                        Err(e) => send(Event::Error {
-                            seq: last_seq,
+                        Err(e) => send(Event::BackgroundFailed {
+                            task: BackgroundTask::NodePower,
                             message: format!("{e:#}"),
                         }),
                     }
@@ -715,7 +731,7 @@ mod tests {
                 drop(tx);
             });
             run_loop(&mut fake, &rx, &|e| {
-                if matches!(e, Event::Error { .. }) {
+                if matches!(e, Event::BackgroundFailed { .. }) {
                     done_tx.send(()).unwrap();
                 }
                 events.borrow_mut().push(e);
@@ -726,7 +742,7 @@ mod tests {
         let errors: Vec<_> = events
             .iter()
             .filter_map(|e| match e {
-                Event::Error { message, .. } => Some(message.clone()),
+                Event::BackgroundFailed { message, .. } => Some(message.clone()),
                 _ => None,
             })
             .collect();

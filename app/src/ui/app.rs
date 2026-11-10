@@ -71,9 +71,6 @@ pub struct AutoPobApp {
     tab: BuildTab,
     lab: LabTab,
     tree: TreeTab,
-    /// A heat map calculation is on its way, so an error that follows the last command's
-    /// snapshots belongs to it
-    heatmap_running: bool,
     config_ui: ConfigUi,
     list_ui: BuildListUi,
 
@@ -117,7 +114,6 @@ impl AutoPobApp {
             tab: BuildTab::default(),
             lab: LabTab::default(),
             tree: TreeTab::default(),
-            heatmap_running: false,
             config_ui: ConfigUi::default(),
             list_ui: BuildListUi::default(),
             notices: Vec::new(),
@@ -205,12 +201,7 @@ impl AutoPobApp {
                         self.stats = Some(view);
                     }
                     Snapshot::Config(view) => self.config = Some(view),
-                    snapshot => {
-                        if matches!(&snapshot, Snapshot::NodePower(p) if p.finished) {
-                            self.heatmap_running = false;
-                        }
-                        self.tree.on_snapshot(&snapshot);
-                    }
+                    snapshot => self.tree.on_snapshot(&snapshot),
                 }
                 if self.entering.is_some_and(|e| seq >= e) {
                     self.entering = None;
@@ -219,16 +210,14 @@ impl AutoPobApp {
             Event::Error { seq, message } => self.on_error(seq, message),
             Event::Lab(event) => self.lab.on_event(event),
             Event::Progress { percent, .. } => self.tree.on_progress(percent),
+            Event::BackgroundFailed { message, .. } => {
+                self.tree.power_failed();
+                self.notices.push(message);
+            }
         }
     }
 
     fn on_error(&mut self, seq: u64, message: String) {
-        // A command's error comes before its snapshots, so one that follows the last command's
-        // snapshots is the background calculation's.
-        if self.heatmap_running && seq >= self.last_sent && self.last_snapshot >= self.last_sent {
-            self.heatmap_running = false;
-            self.tree.power_failed();
-        }
         if let Some(at) = self.lab_seqs.iter().position(|s| *s == seq) {
             self.lab_seqs.remove(at);
             self.lab.failed();
@@ -296,7 +285,6 @@ impl AutoPobApp {
         self.tab = BuildTab::default();
         self.lab.build_changed();
         self.tree.reset();
-        self.heatmap_running = false;
     }
 
     fn save(&mut self, then: Option<Pending>) {
@@ -484,7 +472,10 @@ impl AutoPobApp {
 
         // Shortcuts. Nothing fires under a modal. While a text field has focus, Ctrl+Z and
         // Ctrl+Y are left unconsumed for the field's own undo; Ctrl+S still saves.
-        let modal = self.prompt.is_some() || self.save_as.is_some() || self.import.is_some();
+        let modal = self.prompt.is_some()
+            || self.save_as.is_some()
+            || self.import.is_some()
+            || self.tree.has_dialog();
         let typing = ui.ctx().egui_wants_keyboard_input();
         let mut action = None;
         if !modal {
@@ -542,9 +533,6 @@ impl AutoPobApp {
             self.send(command);
         }
         for command in tree_out.commands {
-            if let Command::SetHeatmap { stat, .. } = &command {
-                self.heatmap_running = stat.is_some();
-            }
             self.send(command);
         }
         // questions are answered with snapshots but never leave the app waiting
@@ -752,6 +740,8 @@ mod tests {
         heatmap: Option<String>,
         /// A node power calculation is running
         power_work: bool,
+        /// The tree layout went out once; the engine resends it only when it changes
+        layout_sent: bool,
     }
 
     impl Backend for Fake {
@@ -761,7 +751,7 @@ mod tests {
                 list: true,
                 stats: true,
                 config: true,
-                tree_layout: true,
+                tree_layout: !self.layout_sent,
                 tree: true,
                 ..Affected::default()
             };
@@ -775,15 +765,28 @@ mod tests {
                         ..Affected::default()
                     })
                 }
-                Command::SetTreeSearch { .. } | Command::ResetTree => Ok(Affected {
+                Command::SetTreeSearch { text } if text == "boom" => {
+                    anyhow::bail!("search broke")
+                }
+                Command::SetTreeSearch { .. } => Ok(Affected {
                     tree: true,
                     ..Affected::default()
                 }),
+                // an allocation or reset restarts the calculation of a heat map that is on
+                Command::ResetTree => {
+                    self.power_work = self.heatmap.is_some();
+                    Ok(Affected {
+                        tree: true,
+                        power: true,
+                        ..Affected::default()
+                    })
+                }
                 Command::ExportTreeLink => Ok(Affected {
                     link: true,
                     ..Affected::default()
                 }),
                 Command::NewBuild => {
+                    self.layout_sent = true;
                     self.path = None;
                     self.unsaved = false;
                     Ok(all)
@@ -792,6 +795,7 @@ mod tests {
                     if path.to_string_lossy().contains("bad") {
                         anyhow::bail!("couldn't open that build");
                     }
+                    self.layout_sent = true;
                     self.path = Some(path);
                     self.unsaved = false;
                     Ok(all)
@@ -1868,7 +1872,6 @@ mod tests {
         pump_until(&mut app, &ctx, "retry", |a| {
             a.tree.rects.map.contains_key("heat_retry")
         });
-        assert!(!app.heatmap_running);
         click(&mut app, &ctx, "heat_retry");
         assert_eq!(
             sent_since(&app, before),
@@ -1945,6 +1948,63 @@ mod tests {
             .chain(copied_later)
             .collect();
         assert_eq!(all, ["https://example.test/tree"]);
+    }
+
+    #[test]
+    fn second_build_still_draws_the_tree_when_the_layout_is_not_resent() {
+        let (mut app, ctx) = tree_app();
+        app.tree.rects.map.clear();
+        app.request(Pending::New);
+        pump_until(&mut app, &ctx, "second build", |a| {
+            a.screen == Screen::Build
+                && a.entering.is_none()
+                && a.tree.rects.map.contains_key("reset")
+        });
+    }
+
+    #[test]
+    fn background_failure_after_a_restart_shows_retry() {
+        let (mut app, ctx) = tree_app_with(|| Fake {
+            fail_power: true,
+            ..Fake::default()
+        });
+        click(&mut app, &ctx, "heat_stat");
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "heat:Life");
+        pump_until(&mut app, &ctx, "first failure", |a| {
+            a.tree.rects.map.contains_key("heat_retry")
+        });
+        // the tree changes, the calculation restarts, and fails again
+        app.tree.rects.map.clear();
+        app.send(Command::ResetTree);
+        pump_until(&mut app, &ctx, "second failure", |a| {
+            a.tree.rects.map.contains_key("heat_retry")
+        });
+        assert!(!app.notices.is_empty());
+    }
+
+    #[test]
+    fn a_command_error_while_the_heatmap_runs_is_not_a_power_failure() {
+        let (mut app, ctx) = tree_app();
+        click(&mut app, &ctx, "heat_stat");
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "heat:Life");
+        app.send(Command::SetTreeSearch {
+            text: "boom".into(),
+        });
+        pump_until(&mut app, &ctx, "notice", |a| !a.notices.is_empty());
+        assert_eq!(app.notices, ["search broke"]);
+        assert!(!app.tree.rects.map.contains_key("heat_retry"));
+    }
+
+    #[test]
+    fn shortcuts_wait_while_a_tree_dialog_is_open() {
+        let (mut app, ctx) = tree_app();
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "reset");
+        frame(&mut app, &ctx, ctrl(egui::Key::Z));
+        frame(&mut app, &ctx, ctrl(egui::Key::S));
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
     }
 
     impl AutoPobApp {

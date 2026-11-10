@@ -54,6 +54,10 @@ pub(super) struct Toolbar {
 }
 
 impl Toolbar {
+    pub(super) fn has_dialog(&self) -> bool {
+        self.dialog.is_some()
+    }
+
     /// A link snapshot arrived.
     pub(super) fn link_arrived(&mut self) {
         self.link_fresh = true;

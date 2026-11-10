@@ -136,12 +136,24 @@ pub struct TreeTab {
 
 impl TreeTab {
     /// Forgets the build's state, as for another build. Uploaded textures stay.
+    ///
+    /// The layout stays: the engine resends it only when its key changes, and a new snapshot
+    /// with another key replaces it.
     pub fn reset(&mut self) {
-        let textures = std::mem::take(&mut self.textures);
-        *self = Self {
-            textures,
+        let kept = Self {
+            textures: std::mem::take(&mut self.textures),
+            layout: self.layout.take(),
+            grid: std::mem::take(&mut self.grid),
+            index: std::mem::take(&mut self.index),
+            camera: self.camera,
             ..Self::default()
         };
+        *self = kept;
+    }
+
+    /// A toolbar dialog is open, so shortcuts must wait.
+    pub fn has_dialog(&self) -> bool {
+        self.toolbar.has_dialog()
     }
 
     /// The undo and redo buttons' enablement.

@@ -392,6 +392,21 @@ pub struct SpecEntry {
     pub points: u32,
 }
 
+/// The build's notes, and the colour buttons PoB's notes tab offers.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct NotesView {
+    pub text: String,
+    #[serde(default)]
+    pub colours: Vec<NoteColour>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NoteColour {
+    pub label: String,
+    /// The caret code the button inserts, such as `^xAF6025`
+    pub code: String,
+}
+
 /// The Calcs tab: PoB's sections as `CalcSectionControl:DrawContent` shows them.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CalcsView {

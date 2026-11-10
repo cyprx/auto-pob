@@ -158,6 +158,11 @@ pub enum Command {
         collapsed: bool,
     },
 
+    /// Replaces the build's notes, filtered as typing into the notes box would filter them.
+    SetNotes {
+        text: String,
+    },
+
     /// A query: the breakdown of a Calcs cell; the latest one in a batch is answered.
     Breakdown(CellRef),
 

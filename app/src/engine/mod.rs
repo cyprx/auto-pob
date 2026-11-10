@@ -17,6 +17,6 @@ pub use views::{
     CalcsSub, CalcsView, CellRef, Choice, ClassChoice, CompareColour, ConfigKind, ConfigOption,
     ConfigSection, ConfigSet, ConfigView, CustomModGroup, DropList, JewelSocket, MasteryChoice,
     MasteryOption, MasteryOptions, NodeArt, NodePath, NodePower, NodePowerEntry, NodeTooltip,
-    Points, PowerReport, PowerReportRow, SheetImage, SpecEntry, Sprite, StatRow, StatsView,
-    TooltipLine, TreeLayout, TreeNode, TreeState,
+    NoteColour, NotesView, Points, PowerReport, PowerReportRow, SheetImage, SpecEntry, Sprite,
+    StatRow, StatsView, TooltipLine, TreeLayout, TreeNode, TreeState,
 };

@@ -10,7 +10,7 @@ use crate::pob_files::DownloadProgress;
 use super::commands::Command;
 use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
-    NodeTooltip, PowerReport, StatsView, TreeLayout, TreeState,
+    NodeTooltip, NotesView, PowerReport, StatsView, TreeLayout, TreeState,
 };
 
 #[derive(Debug, Clone)]
@@ -27,6 +27,7 @@ pub enum Snapshot {
     Breakdown(Arc<BreakdownView>),
     TreeLink(Arc<String>),
     Calcs(Arc<CalcsView>),
+    Notes(Arc<NotesView>),
 }
 
 /// Long-running work the engine does between commands.
@@ -75,6 +76,8 @@ pub struct Affected {
     pub recalc: bool,
     /// The Calcs tab's sections changed
     pub calcs: bool,
+    /// The build's notes changed
+    pub notes: bool,
     /// Node power changed (a background step ran)
     pub power: bool,
     /// The power report is ready
@@ -97,6 +100,7 @@ impl Affected {
         tree: true,
         recalc: false,
         calcs: true,
+        notes: true,
         power: false,
         report: false,
         preview: None,
@@ -113,6 +117,7 @@ impl Affected {
         self.tree |= other.tree;
         self.recalc |= other.recalc;
         self.calcs |= other.calcs;
+        self.notes |= other.notes;
         self.power |= other.power;
         self.report |= other.report;
         self.preview = other.preview.or(self.preview);
@@ -133,6 +138,7 @@ pub trait Backend {
     fn tree_layout_view(&mut self) -> anyhow::Result<TreeLayout>;
     fn tree_state_view(&mut self) -> anyhow::Result<TreeState>;
     fn calcs_view(&mut self) -> anyhow::Result<CalcsView>;
+    fn notes_view(&mut self) -> anyhow::Result<NotesView>;
     /// True while a background calculation has steps left. After a failed step it must be false.
     fn has_background_work(&self) -> bool;
     /// Runs one slice; may `send` Progress. Returns what to snapshot (power/report).
@@ -185,6 +191,9 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
     }
     if flags.calcs {
         emit(seq, send, backend.calcs_view(), Snapshot::Calcs);
+    }
+    if flags.notes {
+        emit(seq, send, backend.notes_view(), Snapshot::Notes);
     }
     if flags.power {
         emit(seq, send, backend.node_power_view(), Snapshot::NodePower);
@@ -473,12 +482,16 @@ mod tests {
                     Snapshot::TreeLayout(_) => "tree_layout",
                     Snapshot::Tree(_) => "tree",
                     Snapshot::Calcs(_) => "calcs",
+                    Snapshot::Notes(_) => "notes",
                     other => panic!("unexpected {other:?}"),
                 }
             })
             .collect();
         // a failed command resends the views but not the layout, which cannot have changed
-        assert_eq!(kinds, ["build", "list", "stats", "config", "tree", "calcs"]);
+        assert_eq!(
+            kinds,
+            ["build", "list", "stats", "config", "tree", "calcs", "notes"]
+        );
     }
 
     #[test]
@@ -558,9 +571,9 @@ mod tests {
         assert_eq!(stats_seq, Some(3));
         assert_eq!(config_seq, Some(3));
         assert_eq!(log.lock().unwrap().set_configs, 2);
-        // Ready + 7 initial snapshots + Stats + Config + Tree + Calcs; the channel disconnect means the
+        // Ready + 8 initial snapshots + Stats + Config + Tree + Calcs; the channel disconnect means the
         // thread (and so every wake) is finished.
-        assert_eq!(wakes.load(Ordering::SeqCst), 12);
+        assert_eq!(wakes.load(Ordering::SeqCst), 13);
     }
 
     #[test]

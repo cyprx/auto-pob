@@ -4,7 +4,7 @@
 
 use super::{
     Session, assert_sidebar, fixtures, fixtures_dir, load_xml, lock, lua_value, pob_dir,
-    upstream_lua,
+    snapshot_dir, upstream_lua,
 };
 use auto_pob::engine::upstream::golden_of;
 use auto_pob::engine::{
@@ -622,4 +622,142 @@ fn every_shown_breakdown_matches_pob() {
         );
         assert!(with_sections > 0, "{name}");
     }
+}
+
+// ---- notes ----
+
+fn set_notes(s: &mut Session, text: &str) {
+    s.run(Command::SetNotes { text: text.into() }).unwrap();
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn notes_round_trip() {
+    let _guard = lock();
+    let (mut s, _lua) = both("attack");
+    set_notes(
+        &mut s,
+        "^xAF6025Unique^7 line\r\n\tTabbed ünïcode ^1red\u{1}\u{7f}",
+    );
+    let view = s.backend.notes_view().unwrap();
+    assert!(!view.text.contains('\r'), "{:?}", view.text);
+    assert!(!view.text.contains('\u{1}'), "{:?}", view.text);
+    assert!(
+        view.text.contains("\n\tTabbed ünïcode ^1red"),
+        "{:?}",
+        view.text
+    );
+    assert!(s.backend.build_view().unwrap().unsaved);
+    let labels: Vec<_> = view.colours.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        [
+            "NORMAL",
+            "MAGIC",
+            "RARE",
+            "UNIQUE",
+            "FIRE",
+            "COLD",
+            "LIGHTNING",
+            "CHAOS",
+            "STRENGTH",
+            "DEXTERITY",
+            "INTELLIGENCE",
+            "DEFAULT"
+        ]
+    );
+    assert_eq!(view.colours[3].code, "^xAF6025");
+    assert_eq!(view.colours[11].code, "^7");
+    s.run(Command::SaveAs {
+        folder: String::new(),
+        name: "notes".into(),
+        overwrite: false,
+    })
+    .unwrap();
+    assert!(!s.backend.build_view().unwrap().unsaved);
+    let saved = fs::read_to_string(s.builds_dir().join("notes.xml")).unwrap();
+    let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
+    load_xml(&lua, &saved, "notes").unwrap();
+    let theirs: String = lua
+        .load("return build.notesTab.controls.edit.buf")
+        .eval()
+        .unwrap();
+    assert_eq!(view.text, theirs);
+    assert_eq!(s.backend.notes_view().unwrap().text, theirs);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn notes_unchanged_text_is_not_unsaved() {
+    let _guard = lock();
+    let (mut s, _lua) = both("attack");
+    assert!(!s.backend.build_view().unwrap().unsaved);
+    let text = s.backend.notes_view().unwrap().text;
+    set_notes(&mut s, &text);
+    assert!(!s.backend.build_view().unwrap().unsaved);
+    // a change and then the original text again is no change
+    set_notes(&mut s, "something else");
+    assert!(s.backend.build_view().unwrap().unsaved);
+    set_notes(&mut s, &text);
+    assert!(!s.backend.build_view().unwrap().unsaved);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn calcs_and_notes_never_write_files() {
+    let _guard = lock();
+    let (mut s, lua) = both("attack");
+    let dir = s.builds_dir();
+    let before = snapshot_dir(&dir);
+    let cell = find_cell(&lua, "TotalDPS");
+    let section = s.backend.calcs_view().unwrap().sections[0].id.clone();
+    let commands = vec![
+        Command::SetCalcsSelect {
+            control: CalcsControl::Mode,
+            index: 1,
+        },
+        Command::SetCalcsCount {
+            control: CalcsCount::Stages,
+            text: "3".into(),
+        },
+        Command::SetShowMinion { show: true },
+        Command::SetCalcsSearch {
+            text: "damage".into(),
+        },
+        Command::SetCalcsCollapsed {
+            section,
+            sub: 0,
+            collapsed: true,
+        },
+        Command::Undo(Tab::Calcs),
+        Command::Redo(Tab::Calcs),
+        Command::Breakdown(cell),
+        Command::SetNotes {
+            text: "a note ^1red".into(),
+        },
+    ];
+    for command in commands {
+        let shown = format!("{command:?}");
+        // a command PoB doesn't offer for this build may fail, but it must not write either
+        let _ = s.run(command).map_err(|e| eprintln!("{shown}: {e}"));
+        assert_eq!(snapshot_dir(&dir), before, "{shown} wrote a file");
+    }
+    assert!(s.backend.build_view().unwrap().unsaved);
+    s.run(Command::SaveAs {
+        folder: String::new(),
+        name: "after".into(),
+        overwrite: false,
+    })
+    .unwrap();
+    let after = snapshot_dir(&dir);
+    assert!(after.keys().any(|p| p.ends_with("after.xml")));
+    for (path, bytes) in &before {
+        assert!(after[path] == *bytes, "{} changed", path.display());
+    }
+    assert!(
+        snapshot_dir(&s.user)
+            .keys()
+            .all(|p| !p.to_string_lossy().contains("~~temp~~")),
+        "a temporary file was left"
+    );
 }

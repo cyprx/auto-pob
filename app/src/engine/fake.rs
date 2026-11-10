@@ -7,7 +7,7 @@ use super::commands::Command;
 use super::run::{Affected, Backend, Event};
 use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
-    NodeTooltip, Points, PowerReport, StatsView, TooltipLine, TreeLayout, TreeState,
+    NodeTooltip, NotesView, Points, PowerReport, StatsView, TooltipLine, TreeLayout, TreeState,
 };
 
 #[derive(Default, Debug)]
@@ -146,6 +146,10 @@ impl Backend for Fake {
 
     fn calcs_view(&mut self) -> anyhow::Result<CalcsView> {
         Ok(CalcsView::default())
+    }
+
+    fn notes_view(&mut self) -> anyhow::Result<NotesView> {
+        Ok(NotesView::default())
     }
 
     fn has_background_work(&self) -> bool {

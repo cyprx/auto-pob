@@ -4,7 +4,7 @@ use super::commands::{Command, ConfigValue, Tab};
 use super::run::{Affected, Backend, BackgroundTask, Engine, Event};
 use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
-    NodeTooltip, PowerReport, StatsView, TreeLayout, TreeState,
+    NodeTooltip, NotesView, PowerReport, StatsView, TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -89,6 +89,7 @@ impl PobBackend {
             ("@glue/tree.lua", include_str!("glue/tree.lua")),
             ("@glue/power.lua", include_str!("glue/power.lua")),
             ("@glue/calcs.lua", include_str!("glue/calcs.lua")),
+            ("@glue/notes.lua", include_str!("glue/notes.lua")),
         ] {
             lua.load(source)
                 .set_name(name)
@@ -429,6 +430,15 @@ impl Backend for PobBackend {
                 self.call::<_, ()>("calcs_collapse", (section, sub + 1, collapsed))?;
                 Ok(calcs_changed(false))
             }
+            Command::SetNotes { text } => {
+                self.call::<_, ()>("set_notes", text)?;
+                // no recalculation: the notes feed nothing
+                Ok(Affected {
+                    build: true,
+                    notes: true,
+                    ..Affected::default()
+                })
+            }
             Command::Undo(Tab::Calcs) => {
                 self.call::<_, ()>("calcs_undo", ())?;
                 Ok(calcs_changed(true))
@@ -480,6 +490,10 @@ impl Backend for PobBackend {
 
     fn calcs_view(&mut self) -> Result<CalcsView> {
         self.view("calcs_view", ())
+    }
+
+    fn notes_view(&mut self) -> Result<NotesView> {
+        self.view("notes_view", ())
     }
 
     fn has_background_work(&self) -> bool {

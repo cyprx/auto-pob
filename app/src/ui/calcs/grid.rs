@@ -116,7 +116,8 @@ pub fn arrange_in(
         let low = col_y[0].max(col_y[1]).max(col_y[2]);
         col_y[..3].fill(low);
         for (i, &(group, _, height)) in sections.iter().enumerate() {
-            if group != 3 {
+            // PoB's portrait layout (fewer than 4 columns) also sends group 2 here
+            if !(group == 3 || (group == 2 && max_cols < 4)) {
                 continue;
             }
             let mut col = 2;
@@ -180,6 +181,21 @@ mod tests {
         let out = arrange(&sections, 3);
         assert_eq!(cols(&out), [0, 1, 2, 1]);
         assert_eq!(ys(&out)[2..], [108.0, 108.0]);
+    }
+
+    #[test]
+    fn narrow_layout_keeps_defence_sections() {
+        let out = arrange(&SECTIONS, 3);
+        assert!(out.iter().all(Option::is_some), "{out:?}");
+        assert!(cols(&out).iter().all(|&c| c < 3));
+    }
+
+    #[test]
+    fn group3_stays_under_column_3_when_it_fits() {
+        let sections = [(1, 1, 100.0), (1, 1, 10.0), (3, 1, 20.0), (3, 1, 20.0)];
+        let out = arrange_in(&sections, 3, 1000.0);
+        assert_eq!(cols(&out), [0, 1, 2, 2]);
+        assert_eq!(ys(&out)[2..], [108.0, 136.0]);
     }
 
     #[test]

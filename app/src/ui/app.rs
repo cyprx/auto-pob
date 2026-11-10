@@ -167,7 +167,9 @@ impl AutoPobApp {
     fn current_unsaved(&self) -> bool {
         self.screen == Screen::Build
             && self.entering.is_none()
-            && (self.notes.has_pending() || self.build.as_ref().is_some_and(|b| b.unsaved))
+            && (self.notes.has_pending()
+                || self.skills.has_pending()
+                || self.build.as_ref().is_some_and(|b| b.unsaved))
     }
 
     fn list_folder(&self) -> String {
@@ -300,14 +302,18 @@ impl AutoPobApp {
         if let Some(command) = self.notes.flush() {
             self.send(command);
         }
-        // a Skills field still being typed in goes first too
+    }
+
+    /// Sends every editor's pending edit (notes, then a Skills field still being typed in).
+    fn flush_edits(&mut self) {
+        self.flush_notes();
         if let Some(command) = self.skills.flush() {
             self.send(command);
         }
     }
 
     fn run_action(&mut self, ctx: &egui::Context, action: Pending) {
-        self.flush_notes();
+        self.flush_edits();
         match action {
             Pending::Close => {
                 self.allow_close = true;
@@ -337,7 +343,7 @@ impl AutoPobApp {
     }
 
     fn save(&mut self, then: Option<Pending>) {
-        self.flush_notes();
+        self.flush_edits();
         if self.build.as_ref().is_some_and(|b| b.path.is_some()) {
             let seq = self.send(Command::Save);
             self.pending_save = Some(PendingSave {
@@ -366,7 +372,7 @@ impl AutoPobApp {
     }
 
     fn send_save_as(&mut self, overwrite: bool) {
-        self.flush_notes();
+        self.flush_edits();
         let Some(dialog) = &mut self.save_as else {
             return;
         };
@@ -562,6 +568,7 @@ impl AutoPobApp {
             action = build::top_bar(ui, &view, self.tab, history).or(action);
         });
         let behind = self.behind();
+        self.skills.set_modal(modal);
         egui::Panel::left("stats_sidebar")
             .resizable(true)
             .default_size(300.0)
@@ -645,7 +652,7 @@ impl AutoPobApp {
 
         // Back goes through the unsaved prompt, which knows about the pending edit
         if matches!(action, Some(BuildAction::Save | BuildAction::SaveAs)) {
-            self.flush_notes();
+            self.flush_edits();
         }
         match action {
             Some(BuildAction::Back) => self.request(Pending::BackToList),
@@ -701,6 +708,7 @@ impl AutoPobApp {
             Resolution::Proceed => {
                 // "Don't save" drops the edit still waiting to be sent
                 self.notes.discard();
+                self.skills.discard();
                 self.ready_actions.push(pending);
             }
             Resolution::Stay => {}
@@ -1965,6 +1973,22 @@ mod tests {
     #[test]
     fn ctrl_z_on_skills_sends_skills_undo() {
         let (mut app, ctx) = skills_app();
+        // a focused row must not count as typing
+        let pos = app.skills.rect("row_0").center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        assert!(ctx.egui_wants_keyboard_input() && !ctx.text_edit_focused());
         let before = app.sent_full.len();
         frame(&mut app, &ctx, ctrl(egui::Key::Z));
         frame(
@@ -1999,6 +2023,51 @@ mod tests {
         let before = app.sent_full.len();
         frame(&mut app, &ctx, ctrl(egui::Key::Z));
         assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn back_or_close_with_a_pending_skills_edit_asks_first() {
+        let (mut app, ctx) = skills_app();
+        let pos = app.skills.rect("g0_label").center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![egui::Event::Text("x".into())],
+            vec![],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        assert!(app.skills.has_pending());
+        app.request(Pending::BackToList);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.prompt, Some(Pending::BackToList));
+        app.prompt = None;
+        ctx.run_ui(
+            egui::RawInput {
+                viewports: std::iter::once((
+                    egui::ViewportId::ROOT,
+                    egui::ViewportInfo {
+                        events: vec![egui::ViewportEvent::Close],
+                        ..Default::default()
+                    },
+                ))
+                .collect(),
+                ..Default::default()
+            },
+            |ui| app.show(ui),
+        )
+        .drop_without_applying_deltas();
+        assert_eq!(app.prompt, Some(Pending::Close));
+        // "Don't save" drops the edit
+        app.skills.discard();
+        assert!(!app.skills.has_pending());
     }
 
     #[test]

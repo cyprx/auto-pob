@@ -221,7 +221,10 @@ impl SkillsUi {
                 self.ask_copy(i, out);
                 ui.close();
             }
-            let paste = ui.add_enabled(self.last_copied.is_some(), egui::Button::new("Paste"));
+            let paste = ui.add_enabled(
+                self.last_copied.is_some(),
+                egui::Button::new("Paste last copied group"),
+            );
             self.rects.note(&paste, || "menu_paste".into());
             if paste.clicked()
                 && let Some(text) = self.last_copied.clone()

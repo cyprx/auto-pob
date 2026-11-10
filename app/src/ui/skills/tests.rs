@@ -447,3 +447,32 @@ fn an_edit_in_a_field_that_vanishes_is_flushed() {
         ["SetGroupLabel { group: 0, text: \"Boneshatter!\" }"]
     );
 }
+
+#[test]
+fn escape_reverts_the_field_and_sends_nothing() {
+    let mut h = Harness::new(sample());
+    h.click("g0_label");
+    h.type_text("!");
+    let o = h.press(Key::Escape);
+    assert!(o.commands.is_empty(), "{:?}", o.commands);
+    let o = h.frame(vec![]);
+    assert!(o.commands.is_empty(), "nothing sent after the revert");
+    assert_eq!(h.ui.edits["g0_label"], "Boneshatter");
+    assert!(!h.ui.has_pending());
+}
+
+#[test]
+fn a_field_that_vanishes_without_a_blur_is_flushed() {
+    let mut h = Harness::new(sample());
+    h.click("row_1");
+    h.click("g1_label");
+    h.type_text("!");
+    // a snapshot removes the group, so the field isn't drawn and never sees a blur
+    h.ui.on_snapshot(&Snapshot::Skills(Arc::new(view(vec![group("A", vec![])]))));
+    let o = h.frame(vec![]);
+    assert_eq!(
+        debug(&o.commands),
+        ["SetGroupLabel { group: 1, text: \"Empty!\" }"]
+    );
+    assert!(!h.ui.has_pending());
+}

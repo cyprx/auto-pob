@@ -58,6 +58,8 @@ pub struct SkillsUi {
     sets: sets::State,
     /// Where the gem picker was asked to open; Task 9 replaces this stub
     picker: Option<(usize, GemTarget)>,
+    /// An app-level dialog is open, so Ctrl+V is left alone
+    modal: bool,
     pub(crate) rects: Rects,
 }
 
@@ -72,6 +74,21 @@ impl SkillsUi {
         self.view
             .as_ref()
             .map_or((false, false), |v| (v.can_undo, v.can_redo))
+    }
+
+    /// An edit typed into a field is waiting to be sent, so the build has unsaved changes the
+    /// engine doesn't know about yet.
+    pub fn has_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// Drops the pending edit (the user chose not to save).
+    pub fn discard(&mut self) {
+        self.pending = None;
+    }
+
+    pub fn set_modal(&mut self, modal: bool) {
+        self.modal = modal;
     }
 
     /// A confirm or the set manager is open, so shortcuts are left alone.
@@ -141,7 +158,7 @@ impl SkillsUi {
             ui.ctx().copy_text(text);
         }
         // Ctrl+V outside a text field and any dialog
-        if !self.has_dialog() && !ui.ctx().text_edit_focused() {
+        if !self.has_dialog() && !self.modal && !ui.ctx().text_edit_focused() {
             let pasted = ui.input(|i| {
                 i.events.iter().find_map(|e| match e {
                     egui::Event::Paste(text) => Some(text.clone()),
@@ -220,9 +237,17 @@ impl SkillsUi {
                 .desired_width(width),
         );
         self.rects.note(&response, || key.to_owned());
-        if response.lost_focus() {
+        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            // Esc reverts the field and sends nothing
+            buf.clear();
+            buf.push_str(self.sent.get(key).map_or(current, String::as_str));
             if self.pending.as_ref().is_some_and(|p| p.key == key) {
                 self.pending = None;
+            }
+        } else if response.lost_focus() {
+            // an edit already noted for this field wins over what the buffer shows now
+            if self.pending.as_ref().is_some_and(|p| p.key == key) {
+                buf = self.pending.take().map(|p| p.text).unwrap_or_default();
             }
             if self.sent.get(key).is_none_or(|s| *s != buf) {
                 self.sent.insert(key.to_owned(), buf.clone());

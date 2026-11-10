@@ -212,6 +212,8 @@ impl AutoPobApp {
                     }
                     Snapshot::Config(view) => self.config = Some(view),
                     Snapshot::Calcs(_) => self.calcs.on_snapshot(&snapshot),
+                    // the Skills tab itself is a later task
+                    Snapshot::Skills(_) => {}
                     Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
@@ -976,6 +978,10 @@ mod tests {
 
         fn calcs_view(&mut self) -> anyhow::Result<crate::engine::CalcsView> {
             Ok(crate::engine::CalcsView::default())
+        }
+
+        fn skills_view(&mut self) -> anyhow::Result<crate::engine::SkillsView> {
+            Ok(crate::engine::SkillsView::default())
         }
 
         fn notes_view(&mut self) -> anyhow::Result<crate::engine::NotesView> {

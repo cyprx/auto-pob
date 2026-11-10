@@ -19,6 +19,8 @@ use std::{
 
 #[path = "gate/calcs.rs"]
 mod calcs;
+#[path = "gate/skills.rs"]
+mod skills;
 
 /// PoB loads files relative to the process working directory, so only one test may run it.
 static CWD: Mutex<()> = Mutex::new(());

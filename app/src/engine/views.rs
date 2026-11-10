@@ -407,6 +407,112 @@ pub struct NoteColour {
     pub code: String,
 }
 
+/// The Skills tab: PoB's skill sets, socket groups, gems and gem options.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SkillsView {
+    #[serde(default)]
+    pub sets: Vec<SkillSetEntry>,
+    pub active_set: u32,
+    #[serde(default)]
+    pub groups: Vec<SocketGroupView>,
+    #[serde(default)]
+    pub slot_choices: Vec<SlotChoice>,
+    pub options: SkillOptionsView,
+    #[serde(default)]
+    pub can_undo: bool,
+    #[serde(default)]
+    pub can_redo: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SkillSetEntry {
+    pub id: u32,
+    /// PoB shows "Default" for a set with no title
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SocketGroupView {
+    pub label: String,
+    /// The group list's row text, with PoB's colour codes
+    pub display_label: String,
+    #[serde(default)]
+    pub slot: Option<String>,
+    pub enabled: bool,
+    pub slot_enabled: bool,
+    pub full_dps: bool,
+    /// The group count's text; only item-sourced groups have one
+    #[serde(default)]
+    pub count: Option<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub source_note: Option<String>,
+    pub is_main: bool,
+    #[serde(default)]
+    pub imbued: Option<ImbuedView>,
+    #[serde(default)]
+    pub sockets_line: Option<String>,
+    pub can_optimise: bool,
+    #[serde(default)]
+    pub gems: Vec<GemView>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ImbuedView {
+    #[serde(default)]
+    pub name: Option<String>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GemView {
+    pub name_spec: String,
+    #[serde(default)]
+    pub gem_id: Option<String>,
+    pub level: u32,
+    pub quality: u32,
+    pub enabled: bool,
+    #[serde(default)]
+    pub count: Option<u32>,
+    /// A PoB colour code
+    pub colour: String,
+    pub support: bool,
+    pub matches_socket: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub toggle1: Option<GemToggleView>,
+    #[serde(default)]
+    pub toggle2: Option<GemToggleView>,
+}
+
+/// A Vaal gem's "Enable <skill>" check box.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GemToggleView {
+    pub label: String,
+    pub on: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SlotChoice {
+    pub label: String,
+    #[serde(default)]
+    pub slot: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SkillOptionsView {
+    pub sort_by_dps: bool,
+    pub sort_field: DropList,
+    pub default_level: DropList,
+    #[serde(default)]
+    pub default_level_help: Vec<String>,
+    pub default_quality: String,
+    pub support_types: DropList,
+    pub show_legacy: bool,
+}
+
 /// The Calcs tab: PoB's sections as `CalcSectionControl:DrawContent` shows them.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CalcsView {

@@ -10,7 +10,7 @@ use crate::pob_files::DownloadProgress;
 use super::commands::Command;
 use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
-    NodeTooltip, NotesView, PowerReport, StatsView, TreeLayout, TreeState,
+    NodeTooltip, NotesView, PowerReport, SkillsView, StatsView, TreeLayout, TreeState,
 };
 
 #[derive(Debug, Clone)]
@@ -27,6 +27,7 @@ pub enum Snapshot {
     Breakdown(Arc<BreakdownView>),
     TreeLink(Arc<String>),
     Calcs(Arc<CalcsView>),
+    Skills(Arc<SkillsView>),
     Notes(Arc<NotesView>),
 }
 
@@ -76,6 +77,8 @@ pub struct Affected {
     pub recalc: bool,
     /// The Calcs tab's sections changed
     pub calcs: bool,
+    /// The Skills tab changed
+    pub skills: bool,
     /// The build's notes changed
     pub notes: bool,
     /// Node power changed (a background step ran)
@@ -100,6 +103,7 @@ impl Affected {
         tree: true,
         recalc: false,
         calcs: true,
+        skills: true,
         notes: true,
         power: false,
         report: false,
@@ -117,6 +121,7 @@ impl Affected {
         self.tree |= other.tree;
         self.recalc |= other.recalc;
         self.calcs |= other.calcs;
+        self.skills |= other.skills;
         self.notes |= other.notes;
         self.power |= other.power;
         self.report |= other.report;
@@ -138,6 +143,7 @@ pub trait Backend {
     fn tree_layout_view(&mut self) -> anyhow::Result<TreeLayout>;
     fn tree_state_view(&mut self) -> anyhow::Result<TreeState>;
     fn calcs_view(&mut self) -> anyhow::Result<CalcsView>;
+    fn skills_view(&mut self) -> anyhow::Result<SkillsView>;
     fn notes_view(&mut self) -> anyhow::Result<NotesView>;
     /// True while a background calculation has steps left. After a failed step it must be false.
     fn has_background_work(&self) -> bool;
@@ -191,6 +197,9 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
     }
     if flags.calcs {
         emit(seq, send, backend.calcs_view(), Snapshot::Calcs);
+    }
+    if flags.skills {
+        emit(seq, send, backend.skills_view(), Snapshot::Skills);
     }
     if flags.notes {
         emit(seq, send, backend.notes_view(), Snapshot::Notes);
@@ -311,6 +320,7 @@ pub fn run_loop(
             // Allocated points and the paths between them depend on the calculation too.
             affected.tree = true;
             affected.calcs = true;
+            affected.skills = true;
         }
         send_snapshots(backend, last_seq, affected, send);
         if shutdown {
@@ -447,6 +457,17 @@ mod tests {
     }
 
     #[test]
+    fn recalc_sends_skills_view() {
+        let (mut fake, _log) = Fake::new();
+        let events = run_queued(&mut fake, vec![set_config()]);
+        let skills = snapshots(&events)
+            .into_iter()
+            .filter(|(_, s)| matches!(s, Snapshot::Skills(_)))
+            .count();
+        assert_eq!(skills, 1);
+    }
+
+    #[test]
     fn queued_commands_share_one_recalculation() {
         let (mut fake, log) = Fake::new();
         let events = run_queued(&mut fake, (0..5).map(|_| set_config()).collect());
@@ -494,6 +515,7 @@ mod tests {
                     Snapshot::TreeLayout(_) => "tree_layout",
                     Snapshot::Tree(_) => "tree",
                     Snapshot::Calcs(_) => "calcs",
+                    Snapshot::Skills(_) => "skills",
                     Snapshot::Notes(_) => "notes",
                     other => panic!("unexpected {other:?}"),
                 }
@@ -502,7 +524,9 @@ mod tests {
         // a failed command resends the views but not the layout, which cannot have changed
         assert_eq!(
             kinds,
-            ["build", "list", "stats", "config", "tree", "calcs", "notes"]
+            [
+                "build", "list", "stats", "config", "tree", "calcs", "skills", "notes"
+            ]
         );
     }
 
@@ -533,11 +557,12 @@ mod tests {
         assert_eq!(log.lock().unwrap().set_configs, 1);
         // The command before Shutdown still produced its snapshots, tagged with Shutdown's seq.
         let snaps = snapshots(&events);
-        assert_eq!(snaps.len(), 4);
+        assert_eq!(snaps.len(), 5);
         assert!(matches!(snaps[0], (2, Snapshot::Stats(_))));
         assert!(matches!(snaps[1], (2, Snapshot::Config(_))));
         assert!(matches!(snaps[2], (2, Snapshot::Tree(_))));
         assert!(matches!(snaps[3], (2, Snapshot::Calcs(_))));
+        assert!(matches!(snaps[4], (2, Snapshot::Skills(_))));
     }
 
     #[test]
@@ -583,9 +608,9 @@ mod tests {
         assert_eq!(stats_seq, Some(3));
         assert_eq!(config_seq, Some(3));
         assert_eq!(log.lock().unwrap().set_configs, 2);
-        // Ready + 8 initial snapshots + Stats + Config + Tree + Calcs; the channel disconnect means the
+        // Ready + 9 initial snapshots + Stats + Config + Tree + Calcs + Skills; the channel disconnect means the
         // thread (and so every wake) is finished.
-        assert_eq!(wakes.load(Ordering::SeqCst), 13);
+        assert_eq!(wakes.load(Ordering::SeqCst), 15);
     }
 
     #[test]

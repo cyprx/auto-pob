@@ -569,10 +569,16 @@ impl AutoPobApp {
         });
         let behind = self.behind();
         self.skills.set_modal(modal);
+        let mut sidebar_commands = Vec::new();
         egui::Panel::left("stats_sidebar")
             .resizable(true)
             .default_size(300.0)
-            .show(ui, |ui| sidebar::show(ui, self.stats.as_deref(), behind));
+            .show(ui, |ui| {
+                sidebar_commands = sidebar::show(ui, self.stats.as_deref(), behind);
+            });
+        for command in sidebar_commands {
+            self.send(command);
+        }
 
         let mut config_commands = Vec::new();
         let mut tree_out = TreeOutput::default();

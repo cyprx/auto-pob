@@ -54,9 +54,10 @@ auto-pob shares `Builds/` and `Settings.xml` with the classic app
 - **Boundary rule**: only `src/engine/` touches PoB internals or Lua. `src/ui/` and
   `src/widgets/` use only `engine::views`, `engine::commands` and `Engine`/events.
 - **Glue files** (`src/engine/glue/*.lua`) are the code that calls into PoB, one per area:
-  `builds.lua`, `stats.lua`, `config.lua`, `tooltip.lua`, `tree.lua` and `power.lua`. If PoB renames or
-  restructures something we call, this is where it breaks. `src/engine/bootstrap.lua` sets up
-  the headless environment and `src/engine/pob.rs` is the backend that runs the glue.
+  `builds.lua`, `stats.lua`, `config.lua`, `tooltip.lua`, `tree.lua` and `power.lua`. If PoB
+  renames or restructures something we call, this is where it breaks.
+  `src/engine/bootstrap.lua` sets up the headless environment and `src/engine/pob.rs` is the
+  backend that runs the glue.
 - `src/game.rs` pins the PoB version and game-specific paths; `src/pob_files.rs` downloads
   and installs it.
 

@@ -1436,6 +1436,13 @@ fn layout_includes_spec_only_nodes() {
     s.open_fixture("attack", &xml);
     let layout = s.backend.tree_layout_view().expect("layout");
     let state = s.backend.tree_state_view().expect("state");
+    assert!(layout.nodes.len() > 2000, "{}", layout.nodes.len());
+    assert!(layout.edges.len() > 2000);
+    assert!(!layout.sheets.is_empty());
+    assert!(
+        layout.sheets.iter().all(Option::is_some),
+        "every sprite sheet loads"
+    );
     let ids: std::collections::HashSet<u32> = layout.nodes.iter().map(|n| n.id).collect();
     assert!(!state.allocated.is_empty());
     for id in &state.allocated {

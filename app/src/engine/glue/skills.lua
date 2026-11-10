@@ -139,6 +139,8 @@ function glue.skills_view()
 		end
 	end)
 	tab.displayGroup, c.groupSlot.selIndex = shown, slot_index
+	-- the gem slots follow the group on show; make them match the restored one again
+	tab:UpdateGemSlots()
 	if not ok then error(err, 0) end
 	return view
 end

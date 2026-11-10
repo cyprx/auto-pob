@@ -34,7 +34,7 @@ fn skills_view_matches_pob() {
         s.open_fixture(&name, &xml);
         let lua = upstream_with_skills_lib(&xml, &name);
         let ours = s.backend.skills_view().unwrap();
-        // the dump runs PoB's full SetDisplayGroup, which may rewrite gems; read ours first
+        // the dump runs PoB's full SetDisplayGroup, which may rewrite gems, so ours is read before it
         let value: mlua::Value = lua.load("return skillsDump()").eval().unwrap();
         let theirs: serde_json::Value =
             serde_json::to_value(mlua::LuaSerdeExt::from_value::<SkillsView>(&lua, value).unwrap())
@@ -64,15 +64,60 @@ fn skills_view_is_pure() {
         .expect("attack fixture");
     let mut s = Session::start("skills-pure");
     s.open_fixture("attack", &xml);
+    // a state PoB's SetDisplayGroup would rewrite: a gem level no gem has (ProcessSocketGroup
+    // clamps it), another group on display and a slot choice that isn't the group's own
+    s.backend
+        .lua
+        .load(
+            r#"
+            local t = pob.build.skillsTab
+            t.displayGroup = t.socketGroupList[1]
+            t.controls.groupSlot.selIndex = 3
+            t.socketGroupList[1].gemList[1].level = 99
+            "#,
+        )
+        .exec()
+        .unwrap();
+    let state = |s: &Session| -> serde_json::Value {
+        lua_value(
+            &s.backend.lua,
+            r#"
+            local t = pob.build.skillsTab
+            local gems = {}
+            for i, g in ipairs(t.socketGroupList) do
+                for j, gem in ipairs(g.gemList) do
+                    gems[#gems + 1] = table.concat({ i, j, gem.level, gem.quality,
+                        tostring(gem.enabled), tostring(gem.count) }, "/")
+                end
+            end
+            return {
+                gems = table.concat(gems, ","),
+                same_group = t.displayGroup == t.socketGroupList[1],
+                slot_index = t.controls.groupSlot.selIndex,
+                undo = #t.undo,
+                redo = #t.redo,
+            }
+            "#,
+        )
+    };
     let unsaved = s.backend.build_view().unwrap().unsaved;
-    let depth =
-        |s: &Session| -> usize { lua_value(&s.backend.lua, "return #pob.build.skillsTab.undo") };
-    let before = depth(&s);
+    let before = state(&s);
+    assert!(
+        before["gems"].as_str().unwrap().contains("/99/"),
+        "{before}"
+    );
     let first = s.backend.skills_view().unwrap();
     let second = s.backend.skills_view().unwrap();
     assert_eq!(first, second);
+    assert_eq!(state(&s), before);
     assert_eq!(s.backend.build_view().unwrap().unsaved, unsaved);
-    assert_eq!(depth(&s), before);
+    // the gem slots follow the restored group
+    let colour_matches: bool = lua_value(
+        &s.backend.lua,
+        r#"local t = pob.build.skillsTab
+        return t.gemSlots[1].nameSpec.inactiveCol == t.displayGroup.gemList[1].color"#,
+    );
+    assert!(colour_matches, "gem slots don't match the restored group");
 }
 
 /// Prints the median time of `skills_view()` and the size of its JSON, for the task report.

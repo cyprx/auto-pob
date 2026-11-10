@@ -5,6 +5,7 @@ pub mod config;
 pub mod lab;
 pub mod sidebar;
 pub mod startup;
+pub mod tree;
 pub mod tree_view;
 pub mod unsaved;
 

@@ -3,8 +3,8 @@
 use super::commands::{Command, ConfigValue, Tab};
 use super::run::{Affected, Backend, BackgroundTask, Engine, Event};
 use super::views::{
-    BuildListView, BuildView, ConfigView, NodePower, NodeTooltip, PowerReport, StatsView,
-    TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
+    NodeTooltip, NotesView, PowerReport, StatsView, TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -88,6 +88,8 @@ impl PobBackend {
             ("@glue/config.lua", include_str!("glue/config.lua")),
             ("@glue/tree.lua", include_str!("glue/tree.lua")),
             ("@glue/power.lua", include_str!("glue/power.lua")),
+            ("@glue/calcs.lua", include_str!("glue/calcs.lua")),
+            ("@glue/notes.lua", include_str!("glue/notes.lua")),
         ] {
             lua.load(source)
                 .set_name(name)
@@ -185,6 +187,17 @@ fn config_changed() -> Affected {
     }
 }
 
+/// A change on the Calcs tab marks the build unsaved; `recalc` is for the ones that set PoB's
+/// `buildFlag`.
+fn calcs_changed(recalc: bool) -> Affected {
+    Affected {
+        build: true,
+        calcs: true,
+        recalc,
+        ..Affected::default()
+    }
+}
+
 impl Backend for PobBackend {
     fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> Result<Affected> {
         match command {
@@ -225,9 +238,11 @@ impl Backend for PobBackend {
             }
             Command::Save => {
                 self.call::<_, ()>("save", ())?;
+                // PoB's save rewrites the notes' `^_` escapes
                 Ok(Affected {
                     build: true,
                     list: true,
+                    notes: true,
                     ..Affected::default()
                 })
             }
@@ -237,9 +252,11 @@ impl Backend for PobBackend {
                 overwrite,
             } => {
                 self.call::<_, ()>("save_as", (folder, name, overwrite))?;
+                // PoB's save rewrites the notes' `^_` escapes
                 Ok(Affected {
                     build: true,
                     list: true,
+                    notes: true,
                     ..Affected::default()
                 })
             }
@@ -247,6 +264,10 @@ impl Backend for PobBackend {
             Command::Shutdown => Ok(Affected::default()),
             Command::PreviewNode { id } => Ok(Affected {
                 preview: Some(id),
+                ..Affected::default()
+            }),
+            Command::Breakdown(cell) => Ok(Affected {
+                breakdown: Some(cell),
                 ..Affected::default()
             }),
             Command::ExportTreeLink => Ok(Affected {
@@ -386,6 +407,50 @@ impl Backend for PobBackend {
                 self.call::<_, ()>("tree_redo", ())?;
                 self.tree_edited()
             }
+            Command::SetCalcsSelect { control, index } => {
+                self.call::<_, ()>("calcs_select", (control.pob_name(), index + 1))?;
+                Ok(calcs_changed(true))
+            }
+            Command::SetCalcsCount { control, text } => {
+                self.call::<_, ()>("calcs_set_count", (control.pob_name(), text))?;
+                Ok(calcs_changed(true))
+            }
+            Command::SetShowMinion { show } => {
+                self.call::<_, ()>("calcs_show_minion", show)?;
+                Ok(calcs_changed(false))
+            }
+            Command::SetCalcsSearch { text } => {
+                self.call::<_, ()>("calcs_search", text)?;
+                Ok(Affected {
+                    calcs: true,
+                    ..Affected::default()
+                })
+            }
+            Command::SetCalcsCollapsed {
+                section,
+                sub,
+                collapsed,
+            } => {
+                self.call::<_, ()>("calcs_collapse", (section, sub + 1, collapsed))?;
+                Ok(calcs_changed(false))
+            }
+            Command::SetNotes { text } => {
+                self.call::<_, ()>("set_notes", text)?;
+                // no recalculation: the notes feed nothing
+                Ok(Affected {
+                    build: true,
+                    notes: true,
+                    ..Affected::default()
+                })
+            }
+            Command::Undo(Tab::Calcs) => {
+                self.call::<_, ()>("calcs_undo", ())?;
+                Ok(calcs_changed(true))
+            }
+            Command::Redo(Tab::Calcs) => {
+                self.call::<_, ()>("calcs_redo", ())?;
+                Ok(calcs_changed(true))
+            }
             Command::Undo(Tab::Config) => {
                 self.call::<_, ()>("undo", "config")?;
                 Ok(config_changed())
@@ -425,6 +490,14 @@ impl Backend for PobBackend {
 
     fn tree_state_view(&mut self) -> Result<TreeState> {
         self.view("tree_state", ())
+    }
+
+    fn calcs_view(&mut self) -> Result<CalcsView> {
+        self.view("calcs_view", ())
+    }
+
+    fn notes_view(&mut self) -> Result<NotesView> {
+        self.view("notes_view", ())
     }
 
     fn has_background_work(&self) -> bool {
@@ -469,6 +542,13 @@ impl Backend for PobBackend {
 
     fn node_tooltip_view(&mut self, id: u32) -> Result<Option<NodeTooltip>> {
         self.view("node_tooltip", id)
+    }
+
+    fn breakdown_view(&mut self, cell: &CellRef) -> Result<BreakdownView> {
+        self.view(
+            "calcs_breakdown",
+            (cell.section.clone(), cell.sub, cell.row, cell.cell),
+        )
     }
 
     fn tree_link_view(&mut self) -> Result<String> {

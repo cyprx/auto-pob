@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use super::commands::Command;
 use super::run::{Affected, Backend, Event};
 use super::views::{
-    BuildListView, BuildView, ConfigView, NodePower, NodeTooltip, Points, PowerReport, StatsView,
-    TooltipLine, TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
+    NodeTooltip, NotesView, Points, PowerReport, StatsView, TooltipLine, TreeLayout, TreeState,
 };
 
 #[derive(Default, Debug)]
@@ -16,6 +16,7 @@ pub struct Log {
     pub recalculations: usize,
     pub steps: usize,
     pub previews: Vec<u32>,
+    pub breakdowns: Vec<CellRef>,
 }
 
 /// One scripted background step: what it affects, or the error it fails with.
@@ -32,6 +33,8 @@ pub struct Fake {
     pub on_step: Option<Box<dyn FnMut(usize) + Send>>,
     /// `node_tooltip_view` answers `None`, as for a node that no longer exists.
     pub tooltip_vanished: bool,
+    /// `breakdown_view` fails with this message.
+    pub fail_breakdown: Option<String>,
 }
 
 impl Fake {
@@ -45,6 +48,7 @@ impl Fake {
                 restart_on_build: Vec::new(),
                 on_step: None,
                 tooltip_vanished: false,
+                fail_breakdown: None,
             },
             log,
         )
@@ -70,6 +74,10 @@ impl Fake {
             }),
             Command::PreviewNode { id } => Ok(Affected {
                 preview: Some(id),
+                ..Affected::default()
+            }),
+            Command::Breakdown(cell) => Ok(Affected {
+                breakdown: Some(cell),
                 ..Affected::default()
             }),
             Command::ExportTreeLink => Ok(Affected {
@@ -139,6 +147,14 @@ impl Backend for Fake {
         Ok(empty_tree_state())
     }
 
+    fn calcs_view(&mut self) -> anyhow::Result<CalcsView> {
+        Ok(CalcsView::default())
+    }
+
+    fn notes_view(&mut self) -> anyhow::Result<NotesView> {
+        Ok(NotesView::default())
+    }
+
     fn has_background_work(&self) -> bool {
         !self.background.lock().unwrap().is_empty()
     }
@@ -194,6 +210,18 @@ impl Backend for Fake {
                 text: format!("node {id}"),
             }],
         }))
+    }
+
+    fn breakdown_view(&mut self, cell: &CellRef) -> anyhow::Result<BreakdownView> {
+        self.log.lock().unwrap().breakdowns.push(cell.clone());
+        if let Some(message) = &self.fail_breakdown {
+            anyhow::bail!("{message}");
+        }
+        Ok(BreakdownView {
+            cell: cell.clone(),
+            sections: vec![],
+            error: None,
+        })
     }
 
     fn tree_link_view(&mut self) -> anyhow::Result<String> {

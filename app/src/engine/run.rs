@@ -9,8 +9,8 @@ use crate::pob_files::DownloadProgress;
 
 use super::commands::Command;
 use super::views::{
-    BuildListView, BuildView, ConfigView, NodePower, NodeTooltip, PowerReport, StatsView,
-    TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
+    NodeTooltip, NotesView, PowerReport, StatsView, TreeLayout, TreeState,
 };
 
 #[derive(Debug, Clone)]
@@ -24,7 +24,10 @@ pub enum Snapshot {
     NodePower(Arc<NodePower>),
     PowerReport(Arc<PowerReport>),
     NodeTooltip(Arc<NodeTooltip>),
+    Breakdown(Arc<BreakdownView>),
     TreeLink(Arc<String>),
+    Calcs(Arc<CalcsView>),
+    Notes(Arc<NotesView>),
 }
 
 /// Long-running work the engine does between commands.
@@ -60,7 +63,7 @@ pub enum Event {
 }
 
 /// What a command changed, so the loop knows which snapshots to send.
-#[derive(Default, Clone, Copy, PartialEq, Debug)]
+#[derive(Default, Clone, PartialEq, Debug)]
 pub struct Affected {
     pub build: bool,
     pub list: bool,
@@ -71,12 +74,18 @@ pub struct Affected {
     /// The build's state on the tree changed
     pub tree: bool,
     pub recalc: bool,
+    /// The Calcs tab's sections changed
+    pub calcs: bool,
+    /// The build's notes changed
+    pub notes: bool,
     /// Node power changed (a background step ran)
     pub power: bool,
     /// The power report is ready
     pub report: bool,
     /// A tooltip was requested for this node; the latest request wins
     pub preview: Option<u32>,
+    /// The breakdown of this Calcs cell was requested; the latest request wins
+    pub breakdown: Option<CellRef>,
     /// The tree link was requested
     pub link: bool,
 }
@@ -90,9 +99,12 @@ impl Affected {
         tree_layout: false,
         tree: true,
         recalc: false,
+        calcs: true,
+        notes: true,
         power: false,
         report: false,
         preview: None,
+        breakdown: None,
         link: false,
     };
 
@@ -104,9 +116,14 @@ impl Affected {
         self.tree_layout |= other.tree_layout;
         self.tree |= other.tree;
         self.recalc |= other.recalc;
+        self.calcs |= other.calcs;
+        self.notes |= other.notes;
         self.power |= other.power;
         self.report |= other.report;
         self.preview = other.preview.or(self.preview);
+        if other.breakdown.is_some() {
+            self.breakdown = other.breakdown;
+        }
         self.link |= other.link;
     }
 }
@@ -120,6 +137,8 @@ pub trait Backend {
     fn config_view(&mut self) -> anyhow::Result<ConfigView>;
     fn tree_layout_view(&mut self) -> anyhow::Result<TreeLayout>;
     fn tree_state_view(&mut self) -> anyhow::Result<TreeState>;
+    fn calcs_view(&mut self) -> anyhow::Result<CalcsView>;
+    fn notes_view(&mut self) -> anyhow::Result<NotesView>;
     /// True while a background calculation has steps left. After a failed step it must be false.
     fn has_background_work(&self) -> bool;
     /// Runs one slice; may `send` Progress. Returns what to snapshot (power/report).
@@ -128,6 +147,8 @@ pub trait Backend {
     fn power_report_view(&mut self) -> anyhow::Result<PowerReport>;
     /// `Ok(None)` when the node no longer exists: nothing is sent.
     fn node_tooltip_view(&mut self, id: u32) -> anyhow::Result<Option<NodeTooltip>>;
+    /// Empty sections when the cell is gone or has no breakdown.
+    fn breakdown_view(&mut self, cell: &CellRef) -> anyhow::Result<BreakdownView>;
     fn tree_link_view(&mut self) -> anyhow::Result<String>;
 }
 
@@ -168,6 +189,12 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
     if flags.tree {
         emit(seq, send, backend.tree_state_view(), Snapshot::Tree);
     }
+    if flags.calcs {
+        emit(seq, send, backend.calcs_view(), Snapshot::Calcs);
+    }
+    if flags.notes {
+        emit(seq, send, backend.notes_view(), Snapshot::Notes);
+    }
     if flags.power {
         emit(seq, send, backend.node_power_view(), Snapshot::NodePower);
     }
@@ -191,6 +218,21 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
                 message: format!("{e:#}"),
             }),
         }
+    }
+    if let Some(cell) = &flags.breakdown {
+        // A failure is the answer to this question (the panel says so), not a notice, and it
+        // stays attached to its cell however many other errors the batch has.
+        let view = backend
+            .breakdown_view(cell)
+            .unwrap_or_else(|e| BreakdownView {
+                cell: cell.clone(),
+                sections: vec![],
+                error: Some(format!("{e:#}")),
+            });
+        send(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::Breakdown(Arc::new(view)),
+        });
     }
     if flags.link {
         emit(seq, send, backend.tree_link_view(), Snapshot::TreeLink);
@@ -268,6 +310,7 @@ pub fn run_loop(
             affected.config = true;
             // Allocated points and the paths between them depend on the calculation too.
             affected.tree = true;
+            affected.calcs = true;
         }
         send_snapshots(backend, last_seq, affected, send);
         if shutdown {
@@ -393,6 +436,17 @@ mod tests {
     }
 
     #[test]
+    fn recalc_sends_calcs_view() {
+        let (mut fake, _log) = Fake::new();
+        let events = run_queued(&mut fake, vec![set_config()]);
+        let calcs = snapshots(&events)
+            .into_iter()
+            .filter(|(_, s)| matches!(s, Snapshot::Calcs(_)))
+            .count();
+        assert_eq!(calcs, 1);
+    }
+
+    #[test]
     fn queued_commands_share_one_recalculation() {
         let (mut fake, log) = Fake::new();
         let events = run_queued(&mut fake, (0..5).map(|_| set_config()).collect());
@@ -439,12 +493,17 @@ mod tests {
                     Snapshot::Config(_) => "config",
                     Snapshot::TreeLayout(_) => "tree_layout",
                     Snapshot::Tree(_) => "tree",
+                    Snapshot::Calcs(_) => "calcs",
+                    Snapshot::Notes(_) => "notes",
                     other => panic!("unexpected {other:?}"),
                 }
             })
             .collect();
         // a failed command resends the views but not the layout, which cannot have changed
-        assert_eq!(kinds, ["build", "list", "stats", "config", "tree"]);
+        assert_eq!(
+            kinds,
+            ["build", "list", "stats", "config", "tree", "calcs", "notes"]
+        );
     }
 
     #[test]
@@ -474,10 +533,11 @@ mod tests {
         assert_eq!(log.lock().unwrap().set_configs, 1);
         // The command before Shutdown still produced its snapshots, tagged with Shutdown's seq.
         let snaps = snapshots(&events);
-        assert_eq!(snaps.len(), 3);
+        assert_eq!(snaps.len(), 4);
         assert!(matches!(snaps[0], (2, Snapshot::Stats(_))));
         assert!(matches!(snaps[1], (2, Snapshot::Config(_))));
         assert!(matches!(snaps[2], (2, Snapshot::Tree(_))));
+        assert!(matches!(snaps[3], (2, Snapshot::Calcs(_))));
     }
 
     #[test]
@@ -523,9 +583,9 @@ mod tests {
         assert_eq!(stats_seq, Some(3));
         assert_eq!(config_seq, Some(3));
         assert_eq!(log.lock().unwrap().set_configs, 2);
-        // Ready + 6 initial snapshots + Stats + Config + Tree; the channel disconnect means the
+        // Ready + 8 initial snapshots + Stats + Config + Tree + Calcs; the channel disconnect means the
         // thread (and so every wake) is finished.
-        assert_eq!(wakes.load(Ordering::SeqCst), 10);
+        assert_eq!(wakes.load(Ordering::SeqCst), 13);
     }
 
     #[test]
@@ -699,6 +759,66 @@ mod tests {
             .collect();
         assert_eq!(tooltips, [3]);
         assert_eq!(log.lock().unwrap().previews, [3]);
+    }
+
+    #[test]
+    fn only_latest_breakdown_runs() {
+        let (mut fake, log) = Fake::new();
+        let cell = |row| CellRef {
+            section: "Life".into(),
+            sub: 0,
+            row,
+            cell: 0,
+        };
+        let events = run_queued(
+            &mut fake,
+            (1..=3).map(|row| Command::Breakdown(cell(row))).collect(),
+        );
+        let breakdowns: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Snapshot {
+                    snapshot: Snapshot::Breakdown(b),
+                    ..
+                } => Some(b.cell.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(breakdowns, [cell(3)]);
+        assert_eq!(log.lock().unwrap().breakdowns, [cell(3)]);
+    }
+
+    #[test]
+    fn failed_breakdown_is_answered_not_errored() {
+        let (mut fake, _log) = Fake::new();
+        fake.fail_breakdown = Some("boom".into());
+        let cell = CellRef {
+            section: "Life".into(),
+            sub: 0,
+            row: 1,
+            cell: 0,
+        };
+        let events = run_queued(&mut fake, vec![Command::Breakdown(cell.clone())]);
+        assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
+        let answers: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Snapshot {
+                    snapshot: Snapshot::Breakdown(b),
+                    ..
+                } => Some(b.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(answers.len(), 1);
+        assert_eq!(answers[0].cell, cell);
+        assert!(answers[0].sections.is_empty());
+        assert!(
+            answers[0]
+                .error
+                .as_deref()
+                .is_some_and(|m| m.contains("boom"))
+        );
     }
 
     #[test]

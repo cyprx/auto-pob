@@ -23,8 +23,19 @@ numbers are PoB's numbers.
     best nodes to take.
   - Show jewel radii, convert a tree to another tree version, import a tree link and copy
     the link of the current tree.
+- **Calcs tab**: PoB's own calculation breakdown, in sections.
+  - Pick the skill, part, minion skill and calculation mode at the top, as in PoB, and show
+    the minion's numbers instead of the player's.
+  - Sections are laid out in as many columns as fit. Collapse the ones you don't need; this is
+    saved with the build. Search highlights matching rows.
+  - Hover a number to see how it is made up, or click it to pin the breakdown. Tables sort by
+    column, and a node in a breakdown links to that node on the Tree tab.
+- **Notes tab**: free text saved with the build. Buttons insert PoB's colour codes (normal,
+  magic, rare, unique, the elements, strength, dexterity, intelligence) at the cursor or
+  around the selection. Preview shows the text with the colours applied. Edits are sent to the
+  build half a second after you stop typing.
 - **Shortcuts**: Ctrl+S saves. Ctrl+Z undoes and Ctrl+Y (or Ctrl+Shift+Z) redoes, on the
-  Tree and Config tabs. Each tab has its own history. They wait while a dialog is open.
+  Tree, Config and Calcs tabs. Each tab has its own history. They wait while a dialog is open.
 
 ## Running
 
@@ -54,7 +65,7 @@ auto-pob shares `Builds/` and `Settings.xml` with the classic app
 - **Boundary rule**: only `src/engine/` touches PoB internals or Lua. `src/ui/` and
   `src/widgets/` use only `engine::views`, `engine::commands` and `Engine`/events.
 - **Glue files** (`src/engine/glue/*.lua`) are the code that calls into PoB, one per area:
-  `builds.lua`, `stats.lua`, `config.lua`, `tooltip.lua`, `tree.lua` and `power.lua`. If PoB
+  `builds.lua`, `stats.lua`, `config.lua`, `tooltip.lua`, `tree.lua`, `power.lua`, `calcs.lua` and `notes.lua`. If PoB
   renames or restructures something we call, this is where it breaks.
   `src/engine/bootstrap.lua` sets up the headless environment and `src/engine/pob.rs` is the
   backend that runs the glue.

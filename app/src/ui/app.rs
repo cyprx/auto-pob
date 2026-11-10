@@ -9,7 +9,9 @@ use crate::pob_files::DownloadProgress;
 use crate::theme;
 use crate::ui::build::{self, BuildAction, BuildTab};
 use crate::ui::build_list::{BuildListUi, ListScreenAction};
+use crate::ui::calcs::{CalcsOutput, CalcsUi};
 use crate::ui::config::ConfigUi;
+use crate::ui::notes::NotesUi;
 use crate::ui::tree::{TreeOutput, TreeTab};
 use crate::ui::unsaved::{Pending, PromptChoice, Resolution, needs_prompt, resolve};
 use crate::ui::{sidebar, startup};
@@ -67,6 +69,8 @@ pub struct AutoPobApp {
     entering: Option<u64>,
     tab: BuildTab,
     tree: TreeTab,
+    calcs: CalcsUi,
+    notes: NotesUi,
     config_ui: ConfigUi,
     list_ui: BuildListUi,
 
@@ -108,6 +112,8 @@ impl AutoPobApp {
             entering: None,
             tab: BuildTab::default(),
             tree: TreeTab::default(),
+            calcs: CalcsUi::default(),
+            notes: NotesUi::default(),
             config_ui: ConfigUi::default(),
             list_ui: BuildListUi::default(),
             notices: Vec::new(),
@@ -141,8 +147,12 @@ impl AutoPobApp {
                 .unwrap_or_default()
                 .to_owned(),
         );
+        let is_notes = matches!(command, Command::SetNotes { .. });
         let seq = self.engine.send(command);
         self.last_sent = seq;
+        if is_notes {
+            self.notes.sent(seq);
+        }
         seq
     }
 
@@ -154,7 +164,7 @@ impl AutoPobApp {
     fn current_unsaved(&self) -> bool {
         self.screen == Screen::Build
             && self.entering.is_none()
-            && self.build.as_ref().is_some_and(|b| b.unsaved)
+            && (self.notes.has_pending() || self.build.as_ref().is_some_and(|b| b.unsaved))
     }
 
     fn list_folder(&self) -> String {
@@ -185,11 +195,13 @@ impl AutoPobApp {
                 if self.entering.is_some_and(|e| seq >= e) {
                     self.entering = None;
                     self.tree.reset();
+                    self.calcs.reset();
+                    self.notes.reset();
                 }
                 match snapshot {
                     Snapshot::Build(view) => {
-                        self.last_unsaved = view.unsaved;
                         self.build = Some(view);
+                        self.last_unsaved = self.current_unsaved();
                         if self.pending_save.as_ref().is_some_and(|p| seq >= p.seq) {
                             self.save_succeeded();
                         }
@@ -199,6 +211,9 @@ impl AutoPobApp {
                         self.stats = Some(view);
                     }
                     Snapshot::Config(view) => self.config = Some(view),
+                    Snapshot::Calcs(_) => self.calcs.on_snapshot(&snapshot),
+                    Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
+                    Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
                     Snapshot::NodePower(_) | Snapshot::PowerReport(_)
                         if self.entering.is_some() => {}
@@ -214,6 +229,12 @@ impl AutoPobApp {
                 self.notices.push(message);
             }
         }
+    }
+
+    /// Shows a passive node on the tree tab.
+    fn show_node(&mut self, id: u32, now: f64) {
+        self.tab = BuildTab::Tree;
+        self.tree.focus(id, now);
     }
 
     fn on_error(&mut self, seq: u64, message: String) {
@@ -256,7 +277,15 @@ impl AutoPobApp {
         }
     }
 
+    /// Sends the notes editor's pending edit, so it precedes whatever command comes next.
+    fn flush_notes(&mut self) {
+        if let Some(command) = self.notes.flush() {
+            self.send(command);
+        }
+    }
+
     fn run_action(&mut self, ctx: &egui::Context, action: Pending) {
+        self.flush_notes();
         match action {
             Pending::Close => {
                 self.allow_close = true;
@@ -286,6 +315,7 @@ impl AutoPobApp {
     }
 
     fn save(&mut self, then: Option<Pending>) {
+        self.flush_notes();
         if self.build.as_ref().is_some_and(|b| b.path.is_some()) {
             let seq = self.send(Command::Save);
             self.pending_save = Some(PendingSave {
@@ -314,6 +344,7 @@ impl AutoPobApp {
     }
 
     fn send_save_as(&mut self, overwrite: bool) {
+        self.flush_notes();
         let Some(dialog) = &mut self.save_as else {
             return;
         };
@@ -337,6 +368,9 @@ impl AutoPobApp {
         let tab = match self.tab {
             BuildTab::Config => Tab::Config,
             BuildTab::Tree => Tab::Tree,
+            BuildTab::Calcs => Tab::Calcs,
+            // the notes editor keeps its own history
+            BuildTab::Notes => return,
         };
         self.send(if redo {
             Command::Redo(tab)
@@ -482,7 +516,7 @@ impl AutoPobApp {
                 if i.consume_key(command, egui::Key::S) {
                     action = Some(BuildAction::Save);
                 }
-                if !typing {
+                if !typing && self.tab.has_undo() {
                     // the Shift variant first: `consume_key` ignores extra Shift
                     if i.consume_key(shift, egui::Key::Z) || i.consume_key(command, egui::Key::Y) {
                         action = action.or(Some(BuildAction::Redo));
@@ -496,6 +530,7 @@ impl AutoPobApp {
         egui::Panel::top("top_bar").show(ui, |ui| {
             let history = match self.tab {
                 BuildTab::Tree => self.tree.history(),
+                BuildTab::Calcs => self.calcs.history(),
                 _ => (view.can_undo, view.can_redo),
             };
             action = build::top_bar(ui, &view, self.tab, history).or(action);
@@ -508,12 +543,19 @@ impl AutoPobApp {
 
         let mut config_commands = Vec::new();
         let mut tree_out = TreeOutput::default();
+        let mut calcs_out = CalcsOutput::default();
+        let mut notes_command = None;
         let config = self.config.clone();
         egui::CentralPanel::default().show(ui, |ui| {
             build::tab_strip(ui, &mut self.tab);
             ui.separator();
             match self.tab {
                 BuildTab::Tree => tree_out = self.tree.show(ui, behind),
+                BuildTab::Calcs => calcs_out = self.calcs.show(ui, behind),
+                BuildTab::Notes => {
+                    let now = ui.input(|i| i.time);
+                    notes_command = self.notes.show(ui, now);
+                }
                 BuildTab::Config => match &config {
                     Some(config) => {
                         config_commands = self.config_ui.show(ui, config, behind);
@@ -527,6 +569,12 @@ impl AutoPobApp {
         for command in config_commands {
             self.send(command);
         }
+        if let Some(command) = notes_command {
+            self.send(command);
+        } else if self.tab != BuildTab::Notes {
+            // leaving the tab
+            self.flush_notes();
+        }
         if self.tab != BuildTab::Tree {
             self.tree.close_dialog();
         }
@@ -538,6 +586,22 @@ impl AutoPobApp {
             self.engine.send(query);
         }
 
+        for command in calcs_out.commands {
+            self.send(command);
+        }
+        // only the latest question matters; the others are about cells the pointer has left
+        if let Some(query) = calcs_out.queries.pop() {
+            self.engine.send(query);
+        }
+        if let Some(id) = calcs_out.focus_node {
+            let now = ui.input(|i| i.time);
+            self.show_node(id, now);
+        }
+
+        // Back goes through the unsaved prompt, which knows about the pending edit
+        if matches!(action, Some(BuildAction::Save | BuildAction::SaveAs)) {
+            self.flush_notes();
+        }
         match action {
             Some(BuildAction::Back) => self.request(Pending::BackToList),
             Some(BuildAction::Save) => self.save(None),
@@ -589,7 +653,11 @@ impl AutoPobApp {
         match resolve(choice, has_path) {
             Resolution::SaveThen => self.save(Some(pending)),
             Resolution::SaveAsThen => self.open_save_as(Some(pending)),
-            Resolution::Proceed => self.ready_actions.push(pending),
+            Resolution::Proceed => {
+                // "Don't save" drops the edit still waiting to be sent
+                self.notes.discard();
+                self.ready_actions.push(pending);
+            }
             Resolution::Stay => {}
         }
     }
@@ -906,6 +974,14 @@ mod tests {
             })
         }
 
+        fn calcs_view(&mut self) -> anyhow::Result<crate::engine::CalcsView> {
+            Ok(crate::engine::CalcsView::default())
+        }
+
+        fn notes_view(&mut self) -> anyhow::Result<crate::engine::NotesView> {
+            Ok(crate::engine::NotesView::default())
+        }
+
         fn tree_state_view(&mut self) -> anyhow::Result<crate::engine::TreeState> {
             let specs = if self.single_spec {
                 serde_json::json!([{ "title": "Main", "version": "3_28", "points": 1 }])
@@ -972,6 +1048,17 @@ mod tests {
             _id: u32,
         ) -> anyhow::Result<Option<crate::engine::NodeTooltip>> {
             Ok(None)
+        }
+
+        fn breakdown_view(
+            &mut self,
+            cell: &crate::engine::CellRef,
+        ) -> anyhow::Result<crate::engine::BreakdownView> {
+            Ok(crate::engine::BreakdownView {
+                cell: cell.clone(),
+                sections: vec![],
+                error: None,
+            })
         }
 
         fn tree_link_view(&mut self) -> anyhow::Result<String> {
@@ -1720,6 +1807,60 @@ mod tests {
     }
 
     #[test]
+    fn focus_node_switches_to_tree() {
+        let (mut app, ctx) = tree_app();
+        app.tab = BuildTab::Calcs;
+        frame(&mut app, &ctx, vec![]);
+        app.show_node(42, 1.0);
+        assert_eq!(app.tab, BuildTab::Tree);
+    }
+
+    #[test]
+    fn errors_are_notices_and_a_failed_breakdown_answer_is_not() {
+        let (mut app, _ctx) = tree_app();
+        let notices = app.notices.len();
+        app.on_event(Event::Error {
+            seq: 76,
+            message: "other".into(),
+        });
+        assert!(!app.calcs.breakdown_unavailable());
+        assert_eq!(app.notices.len(), notices + 1);
+        let failed = crate::engine::BreakdownView {
+            cell: crate::engine::CellRef {
+                section: "s".into(),
+                sub: 0,
+                row: 0,
+                cell: 0,
+            },
+            sections: vec![],
+            error: Some("boom".into()),
+        };
+        app.on_event(Event::Snapshot {
+            seq: 77,
+            snapshot: Snapshot::Breakdown(Arc::new(failed)),
+        });
+        assert_eq!(app.notices.len(), notices + 1, "no notice for a hover");
+    }
+
+    #[test]
+    fn ctrl_z_on_calcs_sends_calcs_undo() {
+        let (mut app, ctx) = tree_app();
+        app.tab = BuildTab::Calcs;
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        frame(&mut app, &ctx, ctrl(egui::Key::Z));
+        frame(
+            &mut app,
+            &ctx,
+            key_with(
+                egui::Key::Z,
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            ),
+        );
+        assert_eq!(sent_since(&app, before), ["Undo(Calcs)", "Redo(Calcs)"]);
+    }
+
+    #[test]
     fn class_change_with_nodes_asks_and_connect_sends_connect_true() {
         let (mut app, ctx) = tree_app();
         let before = app.sent_full.len();
@@ -2035,5 +2176,142 @@ mod tests {
         frame(&mut app, &ctx, ctrl(egui::Key::Z));
         frame(&mut app, &ctx, ctrl(egui::Key::S));
         assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+    }
+
+    fn notes_app() -> (AutoPobApp, egui::Context) {
+        let (mut app, ctx) = open_new_build();
+        app.build = Some(Arc::new(BuildView {
+            path: Some("/b/x.xml".into()),
+            ..(**app.build.as_ref().unwrap()).clone()
+        }));
+        app.tab = BuildTab::Notes;
+        frame(&mut app, &ctx, vec![]);
+        (app, ctx)
+    }
+
+    #[test]
+    fn pending_notes_flush_before_save_and_leave() {
+        // Save, within the debounce time
+        let (mut app, ctx) = notes_app();
+        let before = app.sent_log.len();
+        app.notes.type_for_test("my notes", 0.0);
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::S, egui::Modifiers::COMMAND),
+        );
+        assert_eq!(
+            sent_since(&app, before),
+            ["SetNotes { text: \"my notes\" }", "Save"]
+        );
+
+        // Back
+        let (mut app, ctx) = notes_app();
+        let before = app.sent_log.len();
+        app.notes.type_for_test("my notes", 0.0);
+        app.run_action(&ctx, Pending::BackToList);
+        assert_eq!(
+            sent_since(&app, before),
+            [
+                "SetNotes { text: \"my notes\" }",
+                "ListBuilds { folder: \"\" }"
+            ]
+        );
+
+        // opening another build
+        let (mut app, ctx) = notes_app();
+        let before = app.sent_log.len();
+        app.notes.type_for_test("my notes", 0.0);
+        app.run_action(&ctx, Pending::Open("/b/y.xml".into()));
+        assert_eq!(
+            sent_since(&app, before),
+            [
+                "SetNotes { text: \"my notes\" }",
+                "OpenBuild { path: \"/b/y.xml\" }"
+            ]
+        );
+
+        // leaving the tab
+        let (mut app, ctx) = notes_app();
+        let before = app.sent_log.len();
+        app.notes.type_for_test("my notes", 0.0);
+        app.tab = BuildTab::Config;
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(
+            sent_since(&app, before),
+            ["SetNotes { text: \"my notes\" }"]
+        );
+    }
+
+    #[test]
+    fn ctrl_z_on_notes_sends_no_engine_undo() {
+        let (mut app, ctx) = notes_app();
+        let before = app.sent_log.len();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Z, egui::Modifiers::COMMAND),
+        );
+        frame(
+            &mut app,
+            &ctx,
+            key_with(
+                egui::Key::Z,
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            ),
+        );
+        assert!(sent_since(&app, before).is_empty());
+    }
+
+    #[test]
+    fn back_or_close_with_a_pending_note_asks_first() {
+        let (mut app, ctx) = notes_app();
+        app.notes.type_for_test("my notes", 0.0);
+        app.request(Pending::BackToList);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.prompt, Some(Pending::BackToList));
+        assert_eq!(app.screen, Screen::Build);
+
+        app.prompt = None;
+        ctx.run_ui(
+            egui::RawInput {
+                viewports: std::iter::once((
+                    egui::ViewportId::ROOT,
+                    egui::ViewportInfo {
+                        events: vec![egui::ViewportEvent::Close],
+                        ..Default::default()
+                    },
+                ))
+                .collect(),
+                ..Default::default()
+            },
+            |ui| app.show(ui),
+        )
+        .drop_without_applying_deltas();
+        assert_eq!(app.prompt, Some(Pending::Close));
+        assert!(!app.allow_close);
+    }
+
+    #[test]
+    fn dont_save_drops_the_pending_note_and_save_sends_it() {
+        let (mut app, ctx) = notes_app();
+        let before = app.sent_log.len();
+        app.notes.type_for_test("my notes", 0.0);
+        app.prompt = Some(Pending::BackToList);
+        // "Don't save"
+        app.notes.discard();
+        app.ready_actions.push(Pending::BackToList);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(sent_since(&app, before), ["ListBuilds { folder: \"\" }"]);
+
+        // "Save" flushes first, then saves
+        let (mut app, _ctx) = notes_app();
+        let before = app.sent_log.len();
+        app.notes.type_for_test("my notes", 0.0);
+        app.save(Some(Pending::BackToList));
+        assert_eq!(
+            sent_since(&app, before),
+            ["SetNotes { text: \"my notes\" }", "Save"]
+        );
     }
 }

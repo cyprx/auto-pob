@@ -9,12 +9,14 @@ pub mod views;
 #[cfg(test)]
 pub(crate) mod fake;
 
-pub use commands::{Command, ConfigValue, Tab};
+pub use commands::{CalcsControl, CalcsCount, Command, ConfigValue, Tab};
 pub use run::{Affected, Backend, BackgroundTask, Engine, Event, Snapshot, run_loop};
 pub use views::{
-    AscendancyChoice, BuildListEntry, BuildListView, BuildView, Choice, ClassChoice, CompareColour,
-    ConfigKind, ConfigOption, ConfigSection, ConfigSet, ConfigView, CustomModGroup, JewelSocket,
-    MasteryChoice, MasteryOption, MasteryOptions, NodeArt, NodePath, NodePower, NodePowerEntry,
-    NodeTooltip, Points, PowerReport, PowerReportRow, SheetImage, SpecEntry, Sprite, StatRow,
-    StatsView, TooltipLine, TreeLayout, TreeNode, TreeState,
+    AscendancyChoice, BreakdownColumn, BreakdownRow, BreakdownSection, BreakdownView,
+    BuildListEntry, BuildListView, BuildView, CalcsCell, CalcsRow, CalcsSection, CalcsSelector,
+    CalcsSub, CalcsView, CellRef, Choice, ClassChoice, CompareColour, ConfigKind, ConfigOption,
+    ConfigSection, ConfigSet, ConfigView, CustomModGroup, DropList, JewelSocket, MasteryChoice,
+    MasteryOption, MasteryOptions, NodeArt, NodePath, NodePower, NodePowerEntry, NodeTooltip,
+    NoteColour, NotesView, Points, PowerReport, PowerReportRow, SheetImage, SpecEntry, Sprite,
+    StatRow, StatsView, TooltipLine, TreeLayout, TreeNode, TreeState,
 };

@@ -122,6 +122,19 @@ impl PobBackend {
         })
     }
 
+    /// A change to the trees: the layout goes out only if the active tree's key changed.
+    /// `rebuild` is false for changes that leave the build as it is.
+    fn spec_edited(&self, rebuild: bool) -> Result<Affected> {
+        let key = super::tree::layout_key(&self.lua).map_err(|e| anyhow!("{e}"))?;
+        Ok(Affected {
+            build: rebuild,
+            recalc: rebuild,
+            tree: true,
+            tree_layout: self.last_layout_key.as_deref() != Some(key.as_str()),
+            ..Affected::default()
+        })
+    }
+
     fn view<T: serde::de::DeserializeOwned>(
         &self,
         name: &str,
@@ -285,6 +298,38 @@ impl Backend for PobBackend {
                 self.call::<_, ()>("set_mastery", (node, effect))?;
                 Ok(tree_edited())
             }
+            Command::SelectSpec { index } => {
+                self.call::<_, ()>("select_spec", index + 1)?;
+                self.spec_edited(true)
+            }
+            Command::NewSpec { title } => {
+                self.call::<_, ()>("new_spec", title)?;
+                self.spec_edited(true)
+            }
+            Command::RenameSpec { index, title } => {
+                self.call::<_, ()>("rename_spec", (index + 1, title))?;
+                self.spec_edited(true)
+            }
+            Command::DeleteSpec { index } => {
+                self.call::<_, ()>("delete_spec", index + 1)?;
+                self.spec_edited(true)
+            }
+            Command::SetCompareSpec { index } => {
+                self.call::<_, ()>("set_compare_spec", index.map(|i| i + 1))?;
+                self.spec_edited(false)
+            }
+            Command::ConvertSpec { version, keep_copy } => {
+                self.call::<_, ()>("convert_spec", (version, keep_copy))?;
+                self.spec_edited(true)
+            }
+            Command::ConvertAllSpecs { version } => {
+                self.call::<_, ()>("convert_all_specs", version)?;
+                self.spec_edited(true)
+            }
+            Command::ImportTreeLink { title, url } => {
+                self.call::<_, ()>("import_tree_link", (title, url))?;
+                self.spec_edited(true)
+            }
             Command::Undo(Tab::Tree) => {
                 self.call::<_, ()>("tree_undo", ())?;
                 Ok(tree_edited())
@@ -355,7 +400,7 @@ impl Backend for PobBackend {
     }
 
     fn tree_link_view(&mut self) -> Result<String> {
-        anyhow::bail!("not yet")
+        self.call("tree_link", ())
     }
 }
 

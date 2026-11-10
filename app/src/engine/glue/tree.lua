@@ -214,6 +214,26 @@ local function node_paths(spec, field, filter)
 	return records
 end
 
+-- The colours the tree view gives the nodes when comparing with another spec: TreeTab.lua:445
+-- picks the spec, PassiveTreeView.lua:808 and :936 colour each node. A node that keeps its
+-- default colour (nil) isn't listed.
+local function compare_state(build)
+	local tab = build.treeTab
+	local compareSpec = tab.isComparing and tab.specList[tab.activeCompareSpec] or nil
+	tab.viewer.compareSpec = compareSpec
+	local colours = {}
+	if compareSpec then
+		for id, node in pairs(build.spec.nodes) do
+			local r, g, b = tab.viewer:GetCompareNodeColor(node, compareSpec.nodes[id], build.spec, build, nil)
+			if r then
+				colours[#colours + 1] = { node = id, rgb = { r, g, b } }
+			end
+		end
+		table.sort(colours, function(a, b) return a.node < b.node end)
+	end
+	return colours, compareSpec and tab.activeCompareSpec - 1 or nil
+end
+
 local function spec_entries()
 	local entries = {}
 	for i, spec in ipairs(pob.build.treeTab.specList) do
@@ -227,6 +247,7 @@ function glue.tree_state()
 	local build = pob.build
 	local spec = build.spec
 	local masteries, masteryOptions = mastery_state(spec)
+	local compare, compareSpec = compare_state(build)
 
 	-- the id of the newest tree version, keeping the spec's suffix (TreeTab.lua:326)
 	local convertible
@@ -251,7 +272,8 @@ function glue.tree_state()
 		depends = node_paths(spec, "depends", function(node) return node.alloc end),
 		search = "",
 		search_matches = {},
-		compare = {},
+		compare = compare,
+		compare_spec = compareSpec,
 		jewels = {},
 		specs = spec_entries(),
 		active_spec = build.treeTab.activeSpec - 1,
@@ -465,4 +487,169 @@ end
 function glue.tree_redo()
 	pob.build.spec:Redo()
 	pob.build.buildFlag = true
+end
+
+-- ---- Trees (specs) ----
+
+-- Runs `fn`, then closes every popup it left open, also when it fails.
+local function in_popups(fn)
+	local main = main_module()
+	local depth = #main.popups
+	local ok, err = pcall(fn)
+	while #main.popups > depth do
+		main:ClosePopup()
+	end
+	if not ok then
+		error(err, 0)
+	end
+end
+
+local function spec_at(index)
+	local spec = pob.build.treeTab.specList[index]
+	if not spec then
+		error("unknown tree " .. tostring(index - 1), 0)
+	end
+	return spec
+end
+
+-- Opens the Manage Passive Trees popup (TreeTab.lua:630), whose list control holds the
+-- New, Rename and Delete steps, and calls `fn(list)`.
+local function with_spec_list(fn)
+	in_popups(function()
+		pob.build.treeTab:OpenSpecManagePopup()
+		for _, control in pairs(main_module().popups[1].controls) do
+			if control.controls and control.controls.new and control.OnSelDelete then
+				return fn(control)
+			end
+		end
+		error("couldn't open the tree list", 0)
+	end)
+end
+
+-- Types a name into the rename popup that `RenameSpec` opened and saves it
+-- (PassiveSpecListControl.lua:37-47: Save is disabled until the name has a visible character).
+local function save_name(title)
+	if not title:match("%S") then
+		error("the tree needs a name", 0)
+	end
+	local popup = main_module().popups[1]
+	popup.controls.edit.buf = title
+	popup.controls.save.onClick()
+end
+
+-- The New button and the rename popup's Save (PassiveSpecListControl.lua:31-58). The new tree
+-- is added at the end and not selected.
+function glue.new_spec(title)
+	with_spec_list(function(list)
+		list.controls.new.onClick()
+		save_name(title)
+	end)
+end
+
+function glue.rename_spec(index, title)
+	local spec = spec_at(index)
+	with_spec_list(function(list)
+		list:RenameSpec(spec, "Rename Tree")
+		save_name(title)
+	end)
+end
+
+-- PassiveSpecListClass:OnSelDelete and its confirmation (PassiveSpecListControl.lua:87-101).
+function glue.delete_spec(index)
+	if #pob.build.treeTab.specList <= 1 then
+		error("the last tree can't be deleted", 0)
+	end
+	local spec = spec_at(index)
+	with_spec_list(function(list)
+		list:OnSelDelete(index, spec)
+		if not press(main_module().popups[1], nil) then
+			error("couldn't delete the tree", 0)
+		end
+	end)
+end
+
+-- The tree dropdown's callback (TreeTab.lua:39-43).
+function glue.select_spec(index)
+	spec_at(index)
+	pob.build.modFlag = true
+	pob.build.treeTab:SetActiveSpec(index)
+end
+
+-- The Compare checkbox and dropdown (TreeTab.lua:106-122); nil switches comparing off.
+function glue.set_compare_spec(index)
+	local controls = pob.build.treeTab.controls
+	if index == nil then
+		controls.compareCheck.state = false
+		controls.compareCheck.changeFunc(false)
+		return
+	end
+	local spec = spec_at(index)
+	controls.compareCheck.state = true
+	controls.compareCheck.changeFunc(true)
+	controls.compareSelect.selFunc(index, spec)
+end
+
+local function check_version(version)
+	if not treeVersions[version] then
+		error("unknown tree version " .. tostring(version), 0)
+	end
+end
+
+-- The version dropdown opens the convert popup (TreeTab.lua:166); Convert replaces the tree
+-- and Copy + Convert keeps the old one (TreeTab.lua:649-666).
+function glue.convert_spec(version, keepCopy)
+	check_version(version)
+	if version == pob.build.spec.treeVersion then
+		error("the tree already uses that version", 0)
+	end
+	in_popups(function()
+		pob.build.treeTab.controls.versionSelect.selFunc(nil, { value = version })
+		if not press(main_module().popups[1], keepCopy and "Copy + Convert" or "Convert") then
+			error("couldn't convert the tree", 0)
+		end
+	end)
+end
+
+-- The "Convert all trees" button's popup (TreeTab.lua:668-681).
+function glue.convert_all_specs(version)
+	check_version(version)
+	in_popups(function()
+		pob.build.treeTab:OpenVersionConvertAllPopup(version)
+		if not press(main_module().popups[1], "Convert") then
+			error("couldn't convert the trees", 0)
+		end
+	end)
+end
+
+-- The Import Tree popup (TreeTab.lua:682-811) adds a tree and activates it. Its Import button
+-- picks the link format; poeurl.com links are resolved over the network.
+function glue.import_tree_link(title, url)
+	if not title:match("%S") then
+		error("the tree needs a name", 0)
+	end
+	if not url:match("%S") then
+		error("paste a tree link", 0)
+	end
+	if url:match("poeurl%.com/") then
+		error("short links need the network; paste the full link", 0)
+	end
+	local tab = pob.build.treeTab
+	local count = #tab.specList
+	in_popups(function()
+		tab:OpenImportPopup()
+		local controls = main_module().popups[1].controls
+		controls.name.buf = title
+		controls.edit.buf = url
+		local ok = pcall(controls.import.onClick)
+		if #tab.specList == count then
+			local message = ok and (controls.msg.label or ""):gsub("%^x%x%x%x%x%x%x", ""):gsub("%^%d", "") or ""
+			error(message ~= "" and message or "that isn't a valid tree link", 0)
+		end
+	end)
+end
+
+-- The link OpenExportPopup shows (TreeTab.lua:813).
+function glue.tree_link()
+	local spec = pob.build.spec
+	return spec:EncodeURL(treeVersions[spec.treeVersion].url)
 end

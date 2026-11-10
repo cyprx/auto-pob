@@ -6,8 +6,8 @@
 use auto_pob::engine::pob::PobBackend;
 use auto_pob::engine::upstream::{Golden, golden_of, load_xml, run_recipe, upstream_lua};
 use auto_pob::engine::{
-    Backend, Command, ConfigOption, ConfigValue, ConfigView, Engine, Event, Snapshot, StatsView,
-    Tab,
+    Backend, Command, CompareColour, ConfigOption, ConfigValue, ConfigView, Engine, Event,
+    Snapshot, StatsView, Tab,
 };
 use auto_pob::game::Game;
 use mlua::LuaSerdeExt;
@@ -1563,19 +1563,101 @@ fn layout_resent_on_version_change() {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(untagged)]
 enum TreeAction {
-    Alloc { alloc: u32 },
-    Dealloc { dealloc: u32 },
-    Class { class: u32, connect: bool },
-    Ascend { ascend: u32 },
-    Reset { reset: bool },
-    Mastery { mastery: u32, effect: u32 },
-    Undo { undo: bool },
-    Redo { redo: bool },
+    Alloc {
+        alloc: u32,
+    },
+    Dealloc {
+        dealloc: u32,
+    },
+    Class {
+        class: u32,
+        connect: bool,
+    },
+    Ascend {
+        ascend: u32,
+    },
+    Reset {
+        reset: bool,
+    },
+    Mastery {
+        mastery: u32,
+        effect: u32,
+    },
+    Undo {
+        undo: bool,
+    },
+    Redo {
+        redo: bool,
+    },
+    NewSpec {
+        new_spec: String,
+    },
+    SelectSpec {
+        select_spec: usize,
+    },
+    RenameSpec {
+        rename_spec: usize,
+        title: String,
+    },
+    DeleteSpec {
+        delete_spec: usize,
+    },
+    Compare {
+        compare: CompareTarget,
+    },
+    Convert {
+        convert: String,
+        keep_copy: bool,
+    },
+    ConvertAll {
+        convert_all: String,
+    },
+    Import {
+        import: String,
+        title: String,
+    },
+    /// Not a command: upstream's tree state at this point in the recipe.
+    Check {
+        check: Checkpoint,
+    },
+}
+
+/// A spec index, or `false` for "stop comparing" (the recipe's `act.compare`).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(untagged)]
+enum CompareTarget {
+    Spec(usize),
+    Off(bool),
+}
+
+/// The part of the tree state a recipe's `checkpoint()` records.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+struct Checkpoint {
+    allocated: Vec<u32>,
+    spec_titles: Vec<String>,
+    active_spec: usize,
+    #[serde(deserialize_with = "colours")]
+    compare: Vec<CompareColour>,
+}
+
+/// A list from Lua, where an empty one arrives as an empty map.
+fn colours<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<CompareColour>, D::Error> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum List {
+        Items(Vec<CompareColour>),
+        Empty(#[allow(dead_code)] std::collections::BTreeMap<String, ()>),
+    }
+    Ok(match serde::Deserialize::deserialize(d)? {
+        List::Items(items) => items,
+        List::Empty(_) => Vec::new(),
+    })
 }
 
 impl TreeAction {
-    fn command(&self) -> Command {
-        match *self {
+    /// The command that replays this action; none for a checkpoint.
+    fn command(&self) -> Option<Command> {
+        Some(match self.clone() {
             TreeAction::Alloc { alloc } => Command::AllocNode { id: alloc },
             TreeAction::Dealloc { dealloc } => Command::DeallocNode { id: dealloc },
             TreeAction::Class { class, connect } => Command::SelectClass { id: class, connect },
@@ -1596,7 +1678,32 @@ impl TreeAction {
                 assert!(redo);
                 Command::Redo(Tab::Tree)
             }
-        }
+            TreeAction::NewSpec { new_spec } => Command::NewSpec { title: new_spec },
+            TreeAction::SelectSpec { select_spec } => Command::SelectSpec { index: select_spec },
+            TreeAction::RenameSpec { rename_spec, title } => Command::RenameSpec {
+                index: rename_spec,
+                title,
+            },
+            TreeAction::DeleteSpec { delete_spec } => Command::DeleteSpec { index: delete_spec },
+            TreeAction::Compare { compare } => Command::SetCompareSpec {
+                index: match compare {
+                    CompareTarget::Spec(index) => Some(index),
+                    CompareTarget::Off(off) => {
+                        assert!(!off);
+                        None
+                    }
+                },
+            },
+            TreeAction::Convert { convert, keep_copy } => Command::ConvertSpec {
+                version: convert,
+                keep_copy,
+            },
+            TreeAction::ConvertAll { convert_all } => Command::ConvertAllSpecs {
+                version: convert_all,
+            },
+            TreeAction::Import { import, title } => Command::ImportTreeLink { title, url: import },
+            TreeAction::Check { .. } => return None,
+        })
     }
 }
 
@@ -1612,12 +1719,16 @@ struct TreeResult {
     spec_titles: Vec<String>,
     /// 0-based
     active_spec: usize,
+    /// Sorted by node
+    compare: Vec<CompareColour>,
     sidebar: Vec<auto_pob::engine::upstream::SidebarLine>,
 }
 
 /// A recipe run in upstream PoB: the steps it took and where they ended.
 struct TreeRecipe {
     base: String,
+    /// The build to start from when the recipe prepared one (saved after its setup)
+    setup_xml: Option<String>,
     actions: Vec<TreeAction>,
     result: TreeResult,
 }
@@ -1627,24 +1738,27 @@ fn upstream_with_tree_lib(base: &str) -> mlua::Lua {
     let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
     let xml = fixtures_dir().join(format!("{base}.xml"));
     load_xml(&lua, &fs::read_to_string(xml).unwrap(), base).unwrap();
+    load_tree_lib(&lua);
+    lua
+}
+
+fn load_tree_lib(lua: &mlua::Lua) {
     lua.load(fs::read_to_string(fixtures_dir().join("tree_lib.lua")).unwrap())
         .set_name("=tree_lib")
         .exec()
         .expect("tree_lib.lua");
-    lua
 }
 
-/// The id of the node a `tree_lib.lua` expression picks in the base fixture,
-/// e.g. `pick.notable(2)`.
-fn upstream_node(base: &str, expr: &str) -> u32 {
-    let lua = upstream_with_tree_lib(base);
-    lua.load(format!("return ({expr}).id"))
+/// The tree link upstream exports for a fixture (`OpenExportPopup`).
+fn upstream_link(base: &str) -> String {
+    upstream_with_tree_lib(base)
+        .load("return exportLink()")
         .eval()
-        .unwrap_or_else(|e| panic!("{expr}: {e}"))
+        .unwrap()
 }
 
-/// Runs `tree/<name>.lua` in upstream PoB on its base fixture.
-fn upstream_tree_recipe(name: &str) -> TreeRecipe {
+/// What upstream shows for the tree of the build it has loaded (with `tree_lib.lua`).
+fn upstream_result(lua: &mlua::Lua) -> TreeResult {
     #[derive(serde::Deserialize)]
     struct Mastery {
         node: u32,
@@ -1657,17 +1771,77 @@ fn upstream_tree_recipe(name: &str) -> TreeRecipe {
         ascendancy_id: u32,
         #[serde(default)]
         masteries: Vec<Mastery>,
+        #[serde(deserialize_with = "colours")]
+        compare: Vec<CompareColour>,
         spec_titles: Vec<String>,
         active_spec: usize,
     }
+    let raw: Raw = lua
+        .from_value(
+            lua.load(
+                r#"
+                local allocated, masteries, titles = {}, {}, {}
+                for id in pairs(build.spec.allocNodes) do allocated[#allocated + 1] = id end
+                table.sort(allocated)
+                for node, effect in pairs(build.spec.masterySelections) do
+                    if build.spec.allocNodes[node] then masteries[#masteries + 1] = { node = node, effect = effect } end
+                end
+                table.sort(masteries, function(a, b) return a.node < b.node end)
+                for i, spec in ipairs(build.treeTab.specList) do titles[i] = spec.title or "Default" end
+                return {
+                    allocated = allocated, class_id = build.spec.curClassId,
+                    ascendancy_id = build.spec.curAscendClassId, masteries = masteries,
+                    compare = compareColours(),
+                    spec_titles = titles, active_spec = build.treeTab.activeSpec - 1,
+                }
+                "#,
+            )
+            .eval::<mlua::Value>()
+            .unwrap(),
+        )
+        .unwrap();
+    let sidebar = golden_of(lua, Game::Poe1.pob_version()).unwrap().sidebar;
+    TreeResult {
+        allocated: raw.allocated,
+        class_id: raw.class_id,
+        ascendancy_id: raw.ascendancy_id,
+        masteries: raw.masteries.iter().map(|m| (m.node, m.effect)).collect(),
+        compare: raw.compare,
+        spec_titles: raw.spec_titles,
+        active_spec: raw.active_spec,
+        sidebar,
+    }
+}
+
+/// The id of the node a `tree_lib.lua` expression picks in the base fixture,
+/// e.g. `pick.notable(2)`.
+fn upstream_node(base: &str, expr: &str) -> u32 {
+    let lua = upstream_with_tree_lib(base);
+    lua.load(format!("return ({expr}).id"))
+        .eval()
+        .unwrap_or_else(|e| panic!("{expr}: {e}"))
+}
+
+/// The quoted value of a `key = "value"` line in a recipe file.
+fn recipe_setting(source: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key} = \"");
+    source
+        .lines()
+        .find_map(|l| l.strip_prefix(&prefix)?.strip_suffix('"'))
+        .map(str::to_string)
+}
+
+/// Runs `tree/<name>.lua` in upstream PoB on its base fixture.
+fn upstream_tree_recipe(name: &str) -> TreeRecipe {
     let source = fs::read_to_string(fixtures_dir().join(format!("tree/{name}.lua"))).unwrap();
     // the recipe names its base fixture, which has to be loaded before its helpers run
-    let base = source
-        .lines()
-        .find_map(|l| l.strip_prefix("base = \"")?.strip_suffix('"'))
-        .unwrap_or_else(|| panic!("{name}: no base"))
-        .to_string();
+    let base = recipe_setting(&source, "base").unwrap_or_else(|| panic!("{name}: no base"));
+    // a recipe that imports a link names the fixture to export it from (in another upstream)
+    let link = recipe_setting(&source, "link_from").map(|from| upstream_link(&from));
     let lua = upstream_with_tree_lib(&base);
+    if let Some(link) = link {
+        lua.globals().set("link_url", link).unwrap();
+    }
     lua.load(source)
         .set_name(format!("={name}"))
         .exec()
@@ -1675,40 +1849,19 @@ fn upstream_tree_recipe(name: &str) -> TreeRecipe {
     lua.load("recipe()")
         .exec()
         .unwrap_or_else(|e| panic!("{name}: {e}"));
-    let read = |code: &str| -> mlua::Value { lua.load(code).eval().unwrap() };
-    let actions: Vec<TreeAction> = lua.from_value(read("return actions")).unwrap();
-    let raw: Raw = lua
-        .from_value(read(
-            r#"
-            local allocated, masteries, titles = {}, {}, {}
-            for id in pairs(build.spec.allocNodes) do allocated[#allocated + 1] = id end
-            table.sort(allocated)
-            for node, effect in pairs(build.spec.masterySelections) do
-                if build.spec.allocNodes[node] then masteries[#masteries + 1] = { node = node, effect = effect } end
-            end
-            table.sort(masteries, function(a, b) return a.node < b.node end)
-            for i, spec in ipairs(build.treeTab.specList) do titles[i] = spec.title or "Default" end
-            return {
-                allocated = allocated, class_id = build.spec.curClassId,
-                ascendancy_id = build.spec.curAscendClassId, masteries = masteries,
-                spec_titles = titles, active_spec = build.treeTab.activeSpec - 1,
-            }
-            "#,
-        ))
+    let raw_actions: Vec<serde_json::Value> = lua
+        .from_value(lua.load("return actions").eval().unwrap())
         .unwrap();
-    let sidebar = golden_of(&lua, Game::Poe1.pob_version()).unwrap().sidebar;
+    let actions: Vec<TreeAction> = raw_actions
+        .into_iter()
+        .map(|a| serde_json::from_value(a.clone()).unwrap_or_else(|e| panic!("{name}: {a}: {e}")))
+        .collect();
+    let setup_xml: Option<String> = lua.globals().get("setup_xml").unwrap();
     TreeRecipe {
         base,
+        setup_xml,
         actions,
-        result: TreeResult {
-            allocated: raw.allocated,
-            class_id: raw.class_id,
-            ascendancy_id: raw.ascendancy_id,
-            masteries: raw.masteries.iter().map(|m| (m.node, m.effect)).collect(),
-            spec_titles: raw.spec_titles,
-            active_spec: raw.active_spec,
-            sidebar,
-        },
+        result: upstream_result(&lua),
     }
 }
 
@@ -1736,7 +1889,21 @@ fn our_tree_result(s: &mut Session) -> TreeResult {
         masteries,
         spec_titles: state.specs.iter().map(|e| e.title.clone()).collect(),
         active_spec: state.active_spec,
+        compare: state.compare,
         sidebar,
+    }
+}
+
+/// Our tree state in the shape of a recipe's `checkpoint()`.
+fn our_checkpoint(s: &mut Session) -> Checkpoint {
+    let state = s.backend.tree_state_view().expect("tree state");
+    let mut allocated = state.allocated;
+    allocated.sort_unstable();
+    Checkpoint {
+        allocated,
+        spec_titles: state.specs.iter().map(|e| e.title.clone()).collect(),
+        active_spec: state.active_spec,
+        compare: state.compare,
     }
 }
 
@@ -1746,29 +1913,212 @@ fn attack_session(test: &str) -> Session {
     s
 }
 
+/// Replays a recipe as our commands and checks every checkpoint and the end state against
+/// upstream.
+fn check_recipe(name: &str) -> TreeRecipe {
+    let recipe = upstream_tree_recipe(name);
+    assert!(!recipe.actions.is_empty(), "{name}: no actions recorded");
+    let mut s = Session::start(&format!("tree-recipe-{name}"));
+    match &recipe.setup_xml {
+        Some(xml) => {
+            let path = s.user.join("setup.xml");
+            fs::create_dir_all(&s.user).unwrap();
+            fs::write(&path, xml).unwrap();
+            s.open_fixture(&recipe.base, &path);
+        }
+        None => {
+            s.open_fixture(
+                &recipe.base,
+                &fixtures_dir().join(format!("{}.xml", recipe.base)),
+            );
+        }
+    }
+    let before = our_tree_result(&mut s);
+    for action in &recipe.actions {
+        match action.command() {
+            Some(command) => {
+                s.run(command)
+                    .unwrap_or_else(|e| panic!("{name}: {action:?}: {e}"));
+            }
+            None => {
+                let TreeAction::Check { check } = action else {
+                    unreachable!()
+                };
+                assert_eq!(&our_checkpoint(&mut s), check, "{name}: checkpoint");
+            }
+        }
+    }
+    let ours = our_tree_result(&mut s);
+    let checked = recipe
+        .actions
+        .iter()
+        .any(|a| matches!(a, TreeAction::Check { .. }));
+    assert!(
+        checked || ours != before,
+        "{name}: the recipe changes the tree"
+    );
+    assert_eq!(ours, recipe.result, "{name}");
+    recipe
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn tree_recipes_match_pob() {
     let _guard = lock();
-    for name in ["alloc_path", "class_change", "mastery"] {
-        let recipe = upstream_tree_recipe(name);
-        assert!(!recipe.actions.is_empty(), "{name}: no actions recorded");
-        let mut s = Session::start(&format!("tree-recipe-{name}"));
-        s.open_fixture(
-            &recipe.base,
-            &fixtures_dir().join(format!("{}.xml", recipe.base)),
+    for name in ["alloc_path", "class_change", "mastery", "class_paths"] {
+        check_recipe(name);
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn spec_recipes_match_pob() {
+    let _guard = lock();
+    for name in ["specs", "convert", "link_round_trip"] {
+        check_recipe(name);
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn compare_colours_match_pob() {
+    let _guard = lock();
+    // the `specs` recipe checks the colours while comparing with the second tree
+    let recipe = check_recipe("specs");
+    let compared = recipe
+        .actions
+        .iter()
+        .find_map(|a| match a {
+            TreeAction::Check { check } if !check.compare.is_empty() => Some(check),
+            _ => None,
+        })
+        .expect("a checkpoint while comparing");
+    assert!(compared.compare.iter().any(|c| c.rgb == [1.0, 0.0, 0.0]));
+    assert!(compared.compare.iter().any(|c| c.rgb == [0.0, 1.0, 0.0]));
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tree_link_matches_pob() {
+    let _guard = lock();
+    let mut s = attack_session("tree-link");
+    let affected = s.run(Command::ExportTreeLink).unwrap();
+    assert!(affected.link);
+    let link = s.backend.tree_link_view().unwrap();
+    assert!(link.starts_with("https://"), "{link}");
+    assert_eq!(link, upstream_link("attack"));
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tree_round_trip() {
+    let _guard = lock();
+    let mut s = attack_session("tree-round-trip");
+    let notable = upstream_node("attack", "pick.notable(2)");
+    let mastery = upstream_node("attack", "pick.mastery()");
+    let effect: u32 = upstream_with_tree_lib("attack")
+        .load("return pick.mastery_effects(pick.mastery())[2]")
+        .eval()
+        .unwrap();
+    s.run(Command::AllocNode { id: notable }).unwrap();
+    s.run(Command::NewSpec {
+        title: "Extra".into(),
+    })
+    .unwrap();
+    s.run(Command::SetMastery {
+        node: mastery,
+        effect,
+    })
+    .unwrap();
+    s.run(Command::SaveAs {
+        folder: String::new(),
+        name: "round-trip".into(),
+        overwrite: false,
+    })
+    .unwrap();
+    let saved = s.builds_dir().join("round-trip.xml");
+
+    let ours = our_tree_result(&mut s);
+    assert!(ours.allocated.contains(&notable));
+    assert_eq!(ours.masteries.len(), 1, "{:?}", ours.masteries);
+    assert_eq!(ours.spec_titles.len(), 2);
+    let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
+    load_xml(&lua, &fs::read_to_string(saved).unwrap(), "round-trip").unwrap();
+    load_tree_lib(&lua);
+    assert_eq!(ours, upstream_result(&lua));
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn delete_last_spec_is_an_error() {
+    let _guard = lock();
+    let mut s = attack_session("tree-delete-last");
+    let error = s.run(Command::DeleteSpec { index: 0 }).unwrap_err();
+    assert_eq!(error.to_string(), "the last tree can't be deleted");
+    assert_eq!(s.backend.tree_state_view().unwrap().specs.len(), 1);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn spec_command_errors() {
+    let _guard = lock();
+    let mut s = attack_session("tree-spec-errors");
+    let before = our_checkpoint(&mut s);
+    let cases = [
+        (Command::SelectSpec { index: 5 }, "unknown tree 5"),
+        (
+            Command::RenameSpec {
+                index: 0,
+                title: "  ".into(),
+            },
+            "the tree needs a name",
+        ),
+        (Command::SetCompareSpec { index: Some(3) }, "unknown tree 3"),
+        (
+            Command::ConvertSpec {
+                version: "9_99".into(),
+                keep_copy: false,
+            },
+            "unknown tree version 9_99",
+        ),
+        (
+            Command::ConvertSpec {
+                version: "3_29".into(),
+                keep_copy: false,
+            },
+            "the tree already uses that version",
+        ),
+        (
+            Command::ImportTreeLink {
+                title: "Short".into(),
+                url: "http://poeurl.com/dABz".into(),
+            },
+            "short links need the network; paste the full link",
+        ),
+        (
+            Command::ImportTreeLink {
+                title: "Bad".into(),
+                url: "https://www.pathofexile.com/passive-skill-tree/3.29.0/abc".into(),
+            },
+            "Invalid tree link (unrecognised format)",
+        ),
+        (
+            // PoB's popup raises an error for a made-up tree type
+            Command::ImportTreeLink {
+                title: "Odd".into(),
+                url: "https://www.pathofexile.com/passive-skill-tree/abc".into(),
+            },
+            "that isn't a valid tree link",
+        ),
+    ];
+    for (command, message) in cases {
+        let error = s.run(command.clone()).expect_err(&format!("{command:?}"));
+        assert_eq!(error.to_string(), message, "{command:?}");
+        assert_eq!(
+            our_checkpoint(&mut s),
+            before,
+            "{command:?} changed the trees"
         );
-        let before = our_tree_result(&mut s);
-        for action in &recipe.actions {
-            s.run(action.command())
-                .unwrap_or_else(|e| panic!("{name}: {action:?}: {e}"));
-        }
-        let ours = our_tree_result(&mut s);
-        assert_ne!(
-            ours.allocated, before.allocated,
-            "{name}: the recipe changes the tree"
-        );
-        assert_eq!(ours, recipe.result, "{name}");
     }
 }
 

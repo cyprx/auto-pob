@@ -87,6 +87,40 @@ pub enum Command {
         effect: u32,
     },
 
+    /// Trees (specs) are 0-based, in the order of `TreeState.specs`.
+    SelectSpec {
+        index: usize,
+    },
+    /// Adds an empty tree of the newest version, in the current class; it isn't selected.
+    NewSpec {
+        title: String,
+    },
+    RenameSpec {
+        index: usize,
+        title: String,
+    },
+    DeleteSpec {
+        index: usize,
+    },
+    /// Compares the active tree with another; `None` stops comparing.
+    SetCompareSpec {
+        index: Option<usize>,
+    },
+    /// Converts the active tree to `version`, replacing it or, with `keep_copy`, keeping the old
+    /// one next to it.
+    ConvertSpec {
+        version: String,
+        keep_copy: bool,
+    },
+    ConvertAllSpecs {
+        version: String,
+    },
+    /// Adds the tree of a link as a new tree and selects it.
+    ImportTreeLink {
+        title: String,
+        url: String,
+    },
+
     Undo(Tab),
     Redo(Tab),
     Lab(LabCommand),

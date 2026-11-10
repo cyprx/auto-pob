@@ -291,6 +291,45 @@ function act.delete_gem(g, s)
 	record({ cmd = "DeleteGem", group = g, slot = s })
 end
 
+-- The item group's Count box (SkillsTab.lua:345-356)
+function act.group_count(index, text)
+	local _, c = clickRow(index)
+	c.groupCount:SetText(text, true)
+	record({ cmd = "SetGroupCount", group = index, text = text })
+end
+
+-- Typing the gem's name into the Imbued Support box and pressing Enter, as `act.gem` does
+function act.imbued(index, name)
+	local group, c = clickRow(index)
+	local control = c.imbuedSupport
+	control:OnFocusGained()
+	control:SetText("")
+	control:Insert(name)
+	control:OnKeyDown("RETURN")
+	control.dropped = false
+	assert(group.imbuedSupport, "no imbued support was picked for " .. name)
+	local id
+	for key, gem in pairs(data.gems) do
+		if gem.name == group.imbuedSupport then id = key end
+	end
+	assert(id, "no gem is called " .. group.imbuedSupport)
+	record({ cmd = "SetImbuedSupport", group = index, gem_id = id })
+end
+
+-- The x button beside the Imbued Support box
+function act.imbued_clear(index)
+	local _, c = clickRow(index)
+	c.imbuedSupportClear.onClick()
+	record({ cmd = "SetImbuedSupport", group = index, gem_id = nil })
+end
+
+-- The Optimise Sockets button
+function act.optimise(index)
+	local _, c = clickRow(index)
+	c.optimiseSockets.onClick()
+	record({ cmd = "OptimiseSockets", group = index })
+end
+
 -- ---- Skill sets ----
 -- Sets are addressed by PoB's id, as our commands do.
 

@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use super::commands::Command;
 use super::run::{Affected, Backend, Event};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
-    NodeTooltip, NotesView, Points, PowerReport, SkillsView, SocketGroupText, StatsView,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, GroupTooltipView,
+    NodePower, NodeTooltip, NotesView, Points, PowerReport, SkillsView, SocketGroupText, StatsView,
     TooltipLine, TreeLayout, TreeState,
 };
 
@@ -19,6 +19,7 @@ pub struct Log {
     pub previews: Vec<u32>,
     pub breakdowns: Vec<CellRef>,
     pub copies: Vec<usize>,
+    pub tooltips: Vec<usize>,
 }
 
 /// One scripted background step: what it affects, or the error it fails with.
@@ -80,6 +81,10 @@ impl Fake {
             }),
             Command::Breakdown(cell) => Ok(Affected {
                 breakdown: Some(cell),
+                ..Affected::default()
+            }),
+            Command::GroupTooltip { group } => Ok(Affected {
+                group_tooltip: Some(group),
                 ..Affected::default()
             }),
             Command::CopySocketGroup { group } => Ok(Affected {
@@ -166,6 +171,14 @@ impl Backend for Fake {
         Ok(SocketGroupText {
             group,
             text: format!("group {group}"),
+        })
+    }
+
+    fn group_tooltip_view(&mut self, group: usize) -> anyhow::Result<GroupTooltipView> {
+        self.log.lock().unwrap().tooltips.push(group);
+        Ok(GroupTooltipView {
+            group,
+            lines: vec![],
         })
     }
 

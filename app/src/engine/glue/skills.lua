@@ -358,6 +358,10 @@ end
 -- The control must offer the gem, so a hidden one can't make PoB delete the slot's gem.
 local function pick(control, gem_id)
 	control:PopulateGemList()
+	-- the imbued box offers what can support the group's skill (R5)
+	if control.imbuedSelect then
+		control:UpdateSortCache()
+	end
 	local key = "Default:" .. gem_id
 	local data = control.gems[key]
 	if not data or not control:FilterSupport(key, data) then
@@ -461,9 +465,9 @@ local function save_name(title)
 	popup.controls.cancel.onClick()
 	if not ok then
 		error(applied, 0)
-	elseif applied then
-		check_title("")
 	end
+	-- the filter emptied the title, or Save stayed disabled: either way it is blank
+	check_title("")
 end
 
 -- Draw's sync of the set dropdown (SkillsTab.lua:646-654), then the user's pick
@@ -542,4 +546,55 @@ end
 
 function glue.skills_option_quality(text)
 	type_into(skills_tab().controls.defaultQuality, text)
+end
+
+-- ---- Item groups, imbued supports, Optimise Sockets and tooltips ----
+
+-- The Count box, which only an item's group shows (SkillsTab.lua:345-356)
+function glue.skills_set_group_count(index, text)
+	local group, c = show_group(index)
+	if not c.groupCount:IsShown() then
+		error("only a socket group an item grants has a count", 0)
+	end
+	type_into(c.groupCount, text)
+end
+
+-- The Imbued Support box and its x button (SkillsTab.lua:289-343); `gem_id` is nil to clear
+function glue.skills_set_imbued(index, gem_id)
+	local group, c = show_group(index)
+	if not c.imbuedSupportLabel:IsShown() then
+		error("an item's socket group has no imbued support", 0)
+	end
+	if not c.imbuedSupport:GetProperty("enabled") then
+		if not group.slot then
+			error("the socket group needs an item slot to hold an imbued support", 0)
+		end
+		error("the imbued support of this slot can't be changed", 0)
+	end
+	if gem_id == nil then
+		c.imbuedSupportClear.onClick()
+	else
+		pick(c.imbuedSupport, gem_id)
+	end
+end
+
+-- The Optimise Sockets button (SkillsTab.lua:242-288); it records an Items undo state (R20)
+function glue.skills_optimise(index)
+	local _, c = show_group(index)
+	if not c.optimiseSockets:IsShown() then
+		error("this socket group has no item with sockets to optimise", 0)
+	end
+	c.optimiseSockets.onClick()
+end
+
+-- What the group list shows when the mouse is over a group (R15). The reply for a group that
+-- is gone, or a failing tooltip, is no lines.
+function glue.skills_group_tooltip(index)
+	local tab = skills_tab()
+	local group = tab.socketGroupList[index]
+	local tooltip = glue.tooltip()
+	if group then
+		pcall(tab.controls.groupList.AddValueTooltip, tab.controls.groupList, tooltip, index, group)
+	end
+	return { group = index - 1, lines = tooltip:lines() }
 end

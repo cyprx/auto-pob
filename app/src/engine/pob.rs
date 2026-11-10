@@ -3,9 +3,9 @@
 use super::commands::{Command, ConfigValue, GemToggle, SkillOption, Tab};
 use super::run::{Affected, Backend, BackgroundTask, Engine, Event};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
-    NodeTooltip, NotesView, PowerReport, SkillsView, SocketGroupText, StatsView, TreeLayout,
-    TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, GroupTooltipView,
+    NodePower, NodeTooltip, NotesView, PowerReport, SkillsView, SocketGroupText, StatsView,
+    TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -500,6 +500,22 @@ impl Backend for PobBackend {
                 self.call::<_, ()>("skills_set_full_dps", (group + 1, on))?;
                 Ok(skills_changed())
             }
+            Command::SetGroupCount { group, text } => {
+                self.call::<_, ()>("skills_set_group_count", (group + 1, text))?;
+                Ok(skills_changed())
+            }
+            Command::SetImbuedSupport { group, gem_id } => {
+                self.call::<_, ()>("skills_set_imbued", (group + 1, gem_id))?;
+                Ok(skills_changed())
+            }
+            Command::OptimiseSockets { group } => {
+                self.call::<_, ()>("skills_optimise", group + 1)?;
+                Ok(skills_changed())
+            }
+            Command::GroupTooltip { group } => Ok(Affected {
+                group_tooltip: Some(group),
+                ..Affected::default()
+            }),
             Command::CopySocketGroup { group } => Ok(Affected {
                 group_text: Some(group),
                 ..Affected::default()
@@ -655,6 +671,10 @@ impl Backend for PobBackend {
     fn socket_group_text(&mut self, group: usize) -> Result<SocketGroupText> {
         let text: String = self.call("skills_copy", group + 1)?;
         Ok(SocketGroupText { group, text })
+    }
+
+    fn group_tooltip_view(&mut self, group: usize) -> Result<GroupTooltipView> {
+        self.view("skills_group_tooltip", group + 1)
     }
 
     fn notes_view(&mut self) -> Result<NotesView> {

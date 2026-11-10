@@ -213,7 +213,9 @@ impl AutoPobApp {
                     Snapshot::Config(view) => self.config = Some(view),
                     Snapshot::Calcs(_) => self.calcs.on_snapshot(&snapshot),
                     // the Skills tab itself is a later task
-                    Snapshot::Skills(_) | Snapshot::SocketGroupText(_) => {}
+                    Snapshot::Skills(_)
+                    | Snapshot::SocketGroupText(_)
+                    | Snapshot::GroupTooltip(_) => {}
                     Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
@@ -991,6 +993,16 @@ mod tests {
             Ok(crate::engine::SocketGroupText {
                 group,
                 text: String::new(),
+            })
+        }
+
+        fn group_tooltip_view(
+            &mut self,
+            group: usize,
+        ) -> anyhow::Result<crate::engine::GroupTooltipView> {
+            Ok(crate::engine::GroupTooltipView {
+                group,
+                lines: vec![],
             })
         }
 

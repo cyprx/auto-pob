@@ -258,6 +258,27 @@ pub enum Command {
     /// One of the Skills tab's gem options. They are build state that Save writes, but not
     /// undoable and not unsaved.
     SetSkillOption(SkillOption),
+    /// The Count box of a group an equipped item grants; any other group is an error (R2).
+    SetGroupCount {
+        group: usize,
+        text: String,
+    },
+    /// The group's Imbued Support box: `Some` picks the gem like Enter in the box, `None` presses
+    /// its x button. Refused when PoB's box is disabled or hidden (an item's group).
+    SetImbuedSupport {
+        group: usize,
+        gem_id: Option<String>,
+    },
+    /// The Optimise Sockets button. It edits the item and records an Items undo state, not a
+    /// Skills one (R20).
+    OptimiseSockets {
+        group: usize,
+    },
+    /// A query: what hovering the group in the list shows, answered as a `GroupTooltip`; the
+    /// latest one in a batch is answered.
+    GroupTooltip {
+        group: usize,
+    },
     /// A query: the text PoB copies for the group, answered as a `SocketGroupText`; the latest
     /// one in a batch is answered. The engine never touches the system clipboard.
     CopySocketGroup {

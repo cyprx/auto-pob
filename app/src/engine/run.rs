@@ -9,9 +9,9 @@ use crate::pob_files::DownloadProgress;
 
 use super::commands::Command;
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
-    NodeTooltip, NotesView, PowerReport, SkillsView, SocketGroupText, StatsView, TreeLayout,
-    TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, GroupTooltipView,
+    NodePower, NodeTooltip, NotesView, PowerReport, SkillsView, SocketGroupText, StatsView,
+    TreeLayout, TreeState,
 };
 
 #[derive(Debug, Clone)]
@@ -30,6 +30,7 @@ pub enum Snapshot {
     Calcs(Arc<CalcsView>),
     Skills(Arc<SkillsView>),
     SocketGroupText(Arc<SocketGroupText>),
+    GroupTooltip(Arc<GroupTooltipView>),
     Notes(Arc<NotesView>),
 }
 
@@ -93,6 +94,8 @@ pub struct Affected {
     pub breakdown: Option<CellRef>,
     /// The text PoB copies for this socket group was requested; the latest request wins
     pub group_text: Option<usize>,
+    /// The tooltip of this socket group was requested; the latest request wins
+    pub group_tooltip: Option<usize>,
     /// The tree link was requested
     pub link: bool,
 }
@@ -114,6 +117,7 @@ impl Affected {
         preview: None,
         breakdown: None,
         group_text: None,
+        group_tooltip: None,
         link: false,
     };
 
@@ -135,6 +139,7 @@ impl Affected {
             self.breakdown = other.breakdown;
         }
         self.group_text = other.group_text.or(self.group_text);
+        self.group_tooltip = other.group_tooltip.or(self.group_tooltip);
         self.link |= other.link;
     }
 }
@@ -153,6 +158,8 @@ pub trait Backend {
     fn notes_view(&mut self) -> anyhow::Result<NotesView>;
     /// What copying this socket group writes; an error for a group that doesn't exist or can't be copied.
     fn socket_group_text(&mut self, group: usize) -> anyhow::Result<SocketGroupText>;
+    /// What hovering this socket group shows. A failure is answered with empty lines (R15).
+    fn group_tooltip_view(&mut self, group: usize) -> anyhow::Result<GroupTooltipView>;
     /// True while a background calculation has steps left. After a failed step it must be false.
     fn has_background_work(&self) -> bool;
     /// Runs one slice; may `send` Progress. Returns what to snapshot (power/report).
@@ -258,6 +265,18 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
             backend.socket_group_text(group),
             Snapshot::SocketGroupText,
         );
+    }
+    if let Some(group) = flags.group_tooltip {
+        let view = backend
+            .group_tooltip_view(group)
+            .unwrap_or_else(|_| GroupTooltipView {
+                group,
+                lines: vec![],
+            });
+        send(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::GroupTooltip(Arc::new(view)),
+        });
     }
     if flags.link {
         emit(seq, send, backend.tree_link_view(), Snapshot::TreeLink);
@@ -824,6 +843,29 @@ mod tests {
             .collect();
         assert_eq!(copies, [4]);
         assert_eq!(log.lock().unwrap().copies, [4]);
+    }
+
+    #[test]
+    fn only_latest_group_tooltip_runs() {
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(
+            &mut fake,
+            (1..=3)
+                .map(|group| Command::GroupTooltip { group })
+                .collect(),
+        );
+        let tooltips: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Snapshot {
+                    snapshot: Snapshot::GroupTooltip(t),
+                    ..
+                } => Some(t.group),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tooltips, [3]);
+        assert_eq!(log.lock().unwrap().tooltips, [3]);
     }
 
     #[test]

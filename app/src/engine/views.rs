@@ -191,6 +191,13 @@ pub struct NodeTooltip {
     pub lines: Vec<TooltipLine>,
 }
 
+/// What PoB's group list shows when the mouse is over a socket group (`AddValueTooltip`).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct GroupTooltipView {
+    pub group: usize,
+    pub lines: Vec<TooltipLine>,
+}
+
 /// The passive tree's geometry for the active spec, in PoB's tree coordinates. It changes only
 /// with the tree version or cluster jewel subgraphs, so it is sent apart from [`TreeState`].
 #[derive(Debug, Clone)]

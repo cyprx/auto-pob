@@ -184,6 +184,18 @@ enum SkillsAction {
         group: usize,
         on: bool,
     },
+    SetGroupCount {
+        group: usize,
+        text: String,
+    },
+    SetImbuedSupport {
+        group: usize,
+        /// Missing for the x button
+        gem_id: Option<String>,
+    },
+    OptimiseSockets {
+        group: usize,
+    },
     SetGem {
         group: usize,
         slot: usize,
@@ -263,6 +275,11 @@ impl SkillsAction {
             SkillsAction::SetGroupSlot { group, slot } => Command::SetGroupSlot { group, slot },
             SkillsAction::SetGroupEnabled { group, on } => Command::SetGroupEnabled { group, on },
             SkillsAction::SetGroupFullDps { group, on } => Command::SetGroupFullDps { group, on },
+            SkillsAction::SetGroupCount { group, text } => Command::SetGroupCount { group, text },
+            SkillsAction::SetImbuedSupport { group, gem_id } => {
+                Command::SetImbuedSupport { group, gem_id }
+            }
+            SkillsAction::OptimiseSockets { group } => Command::OptimiseSockets { group },
             SkillsAction::SetGem {
                 group,
                 slot,
@@ -987,7 +1004,8 @@ fn blank_set_title_is_refused() {
     })
     .unwrap();
     let before = s.backend.skills_view().unwrap();
-    for title in ["", "   ", "\t\r\n"] {
+    // the last two are emptied by the box's filter (control characters)
+    for title in ["", "   ", "\t\r\n", "\u{1}\u{2}", "\u{7f}"] {
         for command in [
             Command::NewSkillSet {
                 title: title.into(),
@@ -1317,6 +1335,12 @@ fn no_silent_writes_skills() {
     commands.extend([
         Command::Undo(Tab::Skills),
         Command::Redo(Tab::Skills),
+        Command::SetImbuedSupport {
+            group: 0,
+            gem_id: None,
+        },
+        Command::OptimiseSockets { group: 0 },
+        Command::GroupTooltip { group: 0 },
         Command::DeleteSocketGroup { group: 0 },
         Command::DeleteAllSocketGroups,
     ]);
@@ -1350,4 +1374,287 @@ fn no_silent_writes_skills() {
             .all(|p| !p.to_string_lossy().contains("~~temp~~")),
         "a temporary file was left"
     );
+}
+
+/// The `item_group` recipe's build (a helmet that grants Icestorm) opened in our engine, and
+/// the index of the group the item made.
+fn item_group_session(test: &str) -> (Session, usize) {
+    let recipe = upstream_skills_recipe("item_group");
+    let xml = recipe.setup_xml.expect("the recipe prepares a build");
+    let mut s = Session::start(&format!("skills-{test}-item"));
+    let path = s.user.join("setup.xml");
+    fs::create_dir_all(&s.user).unwrap();
+    fs::write(&path, xml).unwrap();
+    s.open_fixture(&recipe.base, &path);
+    let view = s.backend.skills_view().unwrap();
+    let item = view
+        .groups
+        .iter()
+        .position(|g| g.source.is_some())
+        .expect("an item group");
+    (s, item)
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn item_and_imbued_recipes_match_pob() {
+    let _guard = lock();
+    let recipe = check_skills_recipe("item_group");
+    let checks: Vec<_> = checkpoints(&recipe);
+    let first = checks[0];
+    let item = first
+        .groups
+        .iter()
+        .find(|g| g.source.is_some())
+        .expect("an item group");
+    assert_eq!(item.count.as_deref(), Some("3"));
+    assert_eq!(item.label, "Granted");
+    assert_eq!(item.slot.as_deref(), Some("Helmet"));
+    assert!(item.source_note.as_deref().is_some_and(|n| !n.is_empty()));
+    assert!(item.sockets_line.is_some());
+    assert!(item.can_optimise);
+    assert!(item.imbued.is_none());
+    assert!(item.enabled && item.full_dps);
+    let last = checks[1]
+        .groups
+        .iter()
+        .find(|g| g.source.is_some())
+        .unwrap();
+    assert!(!last.enabled);
+    // the count moved Full DPS: the sidebar line is part of the checkpoint
+    assert!(first.sidebar.iter().any(|l| l.label == "Full DPS"));
+
+    let recipe = check_skills_recipe("imbued_optimise");
+    let checks = checkpoints(&recipe);
+    assert_eq!(checks.len(), 3);
+    assert_eq!(
+        checks[0].groups[0].imbued.as_ref().unwrap().name.as_deref(),
+        Some("Added Fire Damage")
+    );
+    assert!(checks[0].groups[0].sockets_line.is_some());
+    assert_ne!(
+        checks[0].groups[0].sockets_line, checks[1].groups[0].sockets_line,
+        "Optimise Sockets changes the item's sockets"
+    );
+    assert!(checks[2].groups[0].imbued.as_ref().unwrap().name.is_none());
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn item_group_refuses_what_pob_hides() {
+    let _guard = lock();
+    let (mut s, item) = item_group_session("refusals");
+    let before = s.backend.skills_view().unwrap();
+    let gem_id = before.groups[0].gems[0].gem_id.clone().expect("a gem id");
+    assert!(!before.groups[item].gems.is_empty());
+    let cases = [
+        (
+            Command::SetGroupSlot {
+                group: item,
+                slot: None,
+            },
+            "slot of an item's socket group",
+        ),
+        (
+            Command::SetGem {
+                group: item,
+                slot: 0,
+                gem_id: gem_id.clone(),
+            },
+            "can't be edited",
+        ),
+        (
+            Command::SetGem {
+                group: item,
+                slot: 1,
+                gem_id: gem_id.clone(),
+            },
+            "can't be edited",
+        ),
+        (
+            Command::DeleteGem {
+                group: item,
+                slot: 0,
+            },
+            "can't be edited",
+        ),
+        (
+            Command::SetGemLevel {
+                group: item,
+                slot: 0,
+                text: "5".into(),
+            },
+            "can't be edited",
+        ),
+        (
+            Command::DeleteSocketGroup { group: item },
+            "can't be deleted",
+        ),
+        (
+            Command::SetImbuedSupport {
+                group: item,
+                gem_id: Some(gem_id.clone()),
+            },
+            "no imbued support",
+        ),
+        (
+            Command::SetImbuedSupport {
+                group: item,
+                gem_id: None,
+            },
+            "no imbued support",
+        ),
+        (
+            Command::SetGroupCount {
+                group: 0,
+                text: "3".into(),
+            },
+            "has a count",
+        ),
+    ];
+    for (command, fragment) in cases {
+        let shown = format!("{command:?}");
+        let err = s.run(command).expect_err(&shown);
+        assert!(err.to_string().contains(fragment), "{shown}: {err}");
+        assert_eq!(s.backend.skills_view().unwrap(), before, "{shown}");
+    }
+    // copying is a query: its answer is the error
+    let err = s.backend.socket_group_text(item).unwrap_err();
+    assert!(err.to_string().contains("can't be copied"), "{err}");
+    assert_eq!(s.backend.skills_view().unwrap(), before);
+    // what PoB does allow: the count, the label and the flags
+    s.run(Command::SetGroupCount {
+        group: item,
+        text: "2".into(),
+    })
+    .unwrap();
+    let after = s.backend.skills_view().unwrap();
+    assert_eq!(after.groups[item].count.as_deref(), Some("2"));
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn bad_imbued_and_optimise_are_refused() {
+    let _guard = lock();
+    let (mut s, _) = session_on("attack", "imbued-refusals");
+    let before = s.backend.skills_view().unwrap();
+    // no slot: the box is disabled and no item is chosen
+    for (command, fragment) in [
+        (
+            Command::SetImbuedSupport {
+                group: 0,
+                gem_id: Some("Metadata/Items/Gems/SkillGemSupportAddedFireDamage".into()),
+            },
+            "needs an item slot",
+        ),
+        (
+            Command::OptimiseSockets { group: 0 },
+            "no item with sockets",
+        ),
+    ] {
+        let shown = format!("{command:?}");
+        let err = s.run(command).expect_err(&shown);
+        assert!(err.to_string().contains(fragment), "{shown}: {err}");
+    }
+    assert_eq!(s.backend.skills_view().unwrap(), before);
+    s.run(Command::SetGroupSlot {
+        group: 0,
+        slot: Some("Weapon 1".into()),
+    })
+    .unwrap();
+    let before = s.backend.skills_view().unwrap();
+    // a gem that can't support the group's skill isn't offered
+    let err = s
+        .run(Command::SetImbuedSupport {
+            group: 0,
+            gem_id: Some("Metadata/Items/Gems/SkillGemCleave".into()),
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("isn't offered"), "{err}");
+    assert_eq!(s.backend.skills_view().unwrap(), before);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn optimise_records_items_undo_not_skills() {
+    let _guard = lock();
+    let (mut s, _) = session_on("attack", "optimise-undo");
+    s.run(Command::SetGroupSlot {
+        group: 0,
+        slot: Some("Weapon 1".into()),
+    })
+    .unwrap();
+    let item = |s: &Session| -> (String, usize) {
+        let raw: String = lua_value(
+            &s.backend.lua,
+            r#"local tab = pob.build.itemsTab
+            return tab.items[tab.slots["Weapon 1"].selItemId].raw"#,
+        );
+        let depth: usize = lua_value(&s.backend.lua, "return #pob.build.itemsTab.undo");
+        (raw, depth)
+    };
+    let (raw_before, depth_before) = item(&s);
+    let skills_depth =
+        |s: &Session| -> usize { lua_value(&s.backend.lua, "return #pob.build.skillsTab.undo") };
+    let skills_before = skills_depth(&s);
+    let affected = s.run(Command::OptimiseSockets { group: 0 }).unwrap();
+    assert!(affected.skills && affected.build && affected.recalc);
+    let (raw_after, depth_after) = item(&s);
+    assert_ne!(raw_before, raw_after, "the sockets changed");
+    assert_eq!(depth_after, depth_before + 1, "an Items undo state");
+    assert_eq!(skills_depth(&s), skills_before, "no Skills undo state");
+    // Skills undo reverts the slot change, not the sockets
+    s.run(Command::Undo(Tab::Skills)).unwrap();
+    assert_eq!(item(&s).0, raw_after);
+    assert_eq!(s.backend.skills_view().unwrap().groups[0].slot, None);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn group_tooltip_matches_pob() {
+    let _guard = lock();
+    let mut checked = 0;
+    for fixture in ["attack", "minion", "item_group"] {
+        let (mut s, xml) = if fixture == "item_group" {
+            let (s, _) = item_group_session("tooltip");
+            let xml = s.user.join("setup.xml");
+            (s, xml)
+        } else {
+            let (s, _) = session_on(fixture, "tooltip");
+            (s, fixtures_dir().join(format!("{fixture}.xml")))
+        };
+        let lua = upstream_with_skills_lib(&xml, fixture);
+        lua.load(include_str!("../../src/engine/glue/tooltip.lua"))
+            .set_name("=recorder")
+            .exec()
+            .unwrap();
+        let theirs: Vec<auto_pob::engine::GroupTooltipView> = lua_value(
+            &lua,
+            r#"
+            local list = {}
+            local lister = build.skillsTab.controls.groupList
+            for i, group in ipairs(build.skillsTab.socketGroupList) do
+                local tooltip = glue.tooltip()
+                lister:AddValueTooltip(tooltip, i, group)
+                list[i] = { group = i - 1, lines = tooltip:lines() }
+            end
+            return list
+            "#,
+        );
+        assert!(!theirs.is_empty(), "{fixture}");
+        for expected in &theirs {
+            let affected = s
+                .run(Command::GroupTooltip {
+                    group: expected.group,
+                })
+                .unwrap();
+            assert_eq!(affected.group_tooltip, Some(expected.group));
+            let ours = s.backend.group_tooltip_view(expected.group).unwrap();
+            assert_eq!(&ours, expected, "{fixture}: group {}", expected.group);
+            if !expected.lines.is_empty() {
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked >= 3, "only {checked} groups had a tooltip");
 }

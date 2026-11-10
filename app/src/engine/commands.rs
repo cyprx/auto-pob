@@ -234,6 +234,30 @@ pub enum Command {
         group: usize,
         slot: usize,
     },
+    /// Skill sets are addressed by PoB's id (`SkillsView.sets`). Select makes one active.
+    SelectSkillSet {
+        id: u32,
+    },
+    /// Adds a set, as the manager's New button and name popup do; a blank title is an error.
+    NewSkillSet {
+        title: String,
+    },
+    RenameSkillSet {
+        id: u32,
+        title: String,
+    },
+    /// Copies the set under a new title (PoB's Copy button asks for one).
+    CopySkillSet {
+        id: u32,
+        title: String,
+    },
+    /// The last set can't be deleted.
+    DeleteSkillSet {
+        id: u32,
+    },
+    /// One of the Skills tab's gem options. They are build state that Save writes, but not
+    /// undoable and not unsaved.
+    SetSkillOption(SkillOption),
     /// A query: the text PoB copies for the group, answered as a `SocketGroupText`; the latest
     /// one in a batch is answered. The engine never touches the system clipboard.
     CopySocketGroup {
@@ -255,6 +279,18 @@ pub enum ConfigValue {
     Text(String),
     Choice(String),
     Clear,
+}
+
+/// The gem options of the Skills tab. Indices are 0-based positions in the dropdown's list.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SkillOption {
+    SortByDps(bool),
+    SortField(usize),
+    DefaultLevel(usize),
+    /// The text typed into the default quality box
+    DefaultQuality(String),
+    SupportTypes(usize),
+    ShowLegacy(bool),
 }
 
 /// A Vaal gem's two "Enable <skill>" toggles.

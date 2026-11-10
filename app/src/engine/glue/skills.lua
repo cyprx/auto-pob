@@ -263,12 +263,13 @@ local function type_into(control, text)
 	text = text:gsub(control.filterPattern, "")
 	-- everything was filtered out: EditControl:Insert does nothing
 	if typed ~= "" and text == "" then
-		return
+		return false
 	end
 	if control.limit and #text > control.limit then
 		error("the text is too long", 0)
 	end
 	control:SetText(text, true)
+	return true
 end
 
 function glue.skills_set_label(index, text)
@@ -414,4 +415,131 @@ end
 function glue.skills_delete_gem(group_index, slot_index)
 	local _, slot = gem_slot(group_index, slot_index)
 	slot.delete.onClick()
+end
+
+-- ---- Skill sets (R16) ----
+
+local function set_index(id)
+	for i, set_id in ipairs(skills_tab().skillSetOrderList) do
+		if set_id == id then
+			return i
+		end
+	end
+	error("no such skill set", 0)
+end
+
+-- Opens the Manage Skill Sets popup (SkillsTab.lua:1415), calls `fn(list)` with its
+-- SkillSetListControl and closes what is left open.
+local function with_set_list(fn)
+	in_popups(function()
+		skills_tab():OpenSkillSetManagePopup()
+		for _, control in pairs(pob.main.main.popups[1].controls) do
+			if control.controls and control.controls.new and control.OnSelDelete then
+				return fn(control)
+			end
+		end
+		error("couldn't open the skill set list", 0)
+	end)
+end
+
+local function check_title(title)
+	if not title:gsub("\r", ""):match("%S") then
+		error("the skill set needs a name", 0)
+	end
+end
+
+-- Types the title into the name popup `RenameSet` opened and presses Save (Save stays disabled
+-- until the name has a visible character). When that fails, Cancel is pressed, which drops a
+-- set that New or Copy had already made.
+local function save_name(title)
+	local popup = pob.main.main.popups[1]
+	local ok, applied = pcall(type_into, popup.controls.edit, title)
+	if ok and applied and popup.controls.save.enabled then
+		popup.controls.save.onClick()
+		return
+	end
+	popup.controls.cancel.onClick()
+	if not ok then
+		error(applied, 0)
+	elseif applied then
+		check_title("")
+	end
+end
+
+-- Draw's sync of the set dropdown (SkillsTab.lua:646-654), then the user's pick
+function glue.skills_select_set(id)
+	local tab = skills_tab()
+	local index = set_index(id)
+	local select = tab.controls.setSelect
+	local titles = {}
+	for i, set_id in ipairs(tab.skillSetOrderList) do
+		titles[i] = tab.skillSets[set_id].title or "Default"
+		if set_id == tab.activeSkillSetId then
+			select.selIndex = i
+		end
+	end
+	select:SetList(titles)
+	select:SetSel(index)
+end
+
+-- The New button and the name popup (SkillSetListControl.lua:41-43, 36-58)
+function glue.skills_new_set(title)
+	check_title(title)
+	with_set_list(function(list)
+		list.controls.new.onClick()
+		save_name(title)
+	end)
+end
+
+-- The Rename button and the name popup
+function glue.skills_rename_set(id, title)
+	set_index(id)
+	check_title(title)
+	with_set_list(function(list)
+		list:RenameSet(skills_tab().skillSets[id])
+		save_name(title)
+	end)
+	glue.frame()
+end
+
+-- The Copy button and the name popup (SkillSetListControl.lua:11-29)
+function glue.skills_copy_set(id, title)
+	local index = set_index(id)
+	check_title(title)
+	with_set_list(function(list)
+		list.selIndex, list.selValue = index, id
+		list.controls.copy.onClick()
+		save_name(title)
+	end)
+end
+
+-- OnSelDelete and its confirmation (SkillSetListControl.lua:84-99)
+function glue.skills_delete_set(id)
+	local index = set_index(id)
+	if #skills_tab().skillSetOrderList <= 1 then
+		error("the last skill set can't be deleted", 0)
+	end
+	with_set_list(function(list)
+		list.selIndex, list.selValue = index, id
+		list:OnSelDelete(index, id)
+		confirm_popup("delete the skill set")
+	end)
+end
+
+-- ---- Gem options (R18) ----
+
+function glue.skills_option_check(name, on)
+	press_check(skills_tab().controls[name], on)
+end
+
+function glue.skills_option_drop(name, index)
+	local control = skills_tab().controls[name]
+	if index < 1 or index > #control.list then
+		error("no such option", 0)
+	end
+	control:SetSel(index)
+end
+
+function glue.skills_option_quality(text)
+	type_into(skills_tab().controls.defaultQuality, text)
 end

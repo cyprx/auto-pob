@@ -291,6 +291,113 @@ function act.delete_gem(g, s)
 	record({ cmd = "DeleteGem", group = g, slot = s })
 end
 
+-- ---- Skill sets ----
+-- Sets are addressed by PoB's id, as our commands do.
+
+-- Opens the Manage Skill Sets popup (SkillsTab.lua:1415), calls `fn(list)` with its
+-- SkillSetListControl and closes what is left open.
+local function withSetList(fn)
+	local depth = #main.popups
+	skillsTab():OpenSkillSetManagePopup()
+	local list
+	for _, control in pairs(main.popups[1].controls) do
+		if control.controls and control.controls.new and control.OnSelDelete then list = control end
+	end
+	assert(list, "no skill set list")
+	fn(list)
+	while #main.popups > depth do main:ClosePopup() end
+end
+
+local function setIndex(id)
+	for i, setId in ipairs(skillsTab().skillSetOrderList) do
+		if setId == id then return i end
+	end
+	error("no skill set " .. tostring(id))
+end
+
+-- Types the title into the name popup on top and presses Save (SkillSetListControl.lua:36-58)
+local function saveName(title)
+	local popup = main.popups[1]
+	popup.controls.edit:SetText(title, true)
+	assert(popup.controls.save.enabled, "Save is disabled")
+	popup.controls.save.onClick()
+end
+
+-- The New button and the name popup (SkillSetListControl.lua:41-43)
+function act.new_set(title)
+	withSetList(function(list)
+		list.controls.new.onClick()
+		saveName(title)
+	end)
+	record({ cmd = "NewSkillSet", title = title })
+end
+
+-- The Copy button and the name popup (SkillSetListControl.lua:11-29)
+function act.copy_set(id, title)
+	withSetList(function(list)
+		list.selIndex, list.selValue = setIndex(id), id
+		list.controls.copy.onClick()
+		saveName(title)
+	end)
+	record({ cmd = "CopySkillSet", id = id, title = title })
+end
+
+-- The Rename button and the name popup (SkillSetListControl.lua:30-35)
+function act.rename_set(id, title)
+	setIndex(id)
+	withSetList(function(list)
+		list:RenameSet(skillsTab().skillSets[id])
+		saveName(title)
+	end)
+	record({ cmd = "RenameSkillSet", id = id, title = title })
+end
+
+-- OnSelDelete and its confirmation (SkillSetListControl.lua:84-99)
+function act.delete_set(id)
+	withSetList(function(list)
+		local index = setIndex(id)
+		list.selIndex, list.selValue = index, id
+		list:OnSelDelete(index, id)
+		confirm()
+	end)
+	record({ cmd = "DeleteSkillSet", id = id })
+end
+
+-- The set dropdown (SkillsTab.lua:94-97), after Draw has put the titles in it
+function act.select_set(id)
+	local tab = skillsTab()
+	local select = tab.controls.setSelect
+	local titles = {}
+	for i, setId in ipairs(tab.skillSetOrderList) do
+		titles[i] = tab.skillSets[setId].title or "Default"
+	end
+	select:SetList(titles)
+	select.selIndex = setIndex(tab.activeSkillSetId)
+	select:SetSel(setIndex(id))
+	record({ cmd = "SelectSkillSet", id = id })
+end
+
+-- ---- Gem options ----
+-- `name` is one of sort_by_dps, sort_field, default_level, default_quality, support_types and
+-- show_legacy; dropdown values are 0-based indices, the quality is the text typed.
+function act.option(name, value)
+	local c = skillsTab().controls
+	local checks = { sort_by_dps = c.sortGemsByDPS, show_legacy = c.showLegacyGems }
+	local drops = { sort_field = c.sortGemsByDPSFieldControl, default_level = c.defaultLevel,
+		support_types = c.showSupportGemTypes }
+	if checks[name] then
+		checks[name].state = value
+		checks[name].changeFunc(value)
+	elseif drops[name] then
+		drops[name]:SetSel(value + 1)
+	elseif name == "default_quality" then
+		c.defaultQuality:SetText(value, true)
+	else
+		error("unknown option " .. tostring(name))
+	end
+	record({ cmd = "SetSkillOption", option = name, value = value })
+end
+
 -- Ctrl+Z and Ctrl+Y on the tab (SkillsTab.lua:622-627)
 function act.undo()
 	skillsTab():Undo()

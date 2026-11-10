@@ -1,6 +1,6 @@
 //! Starts Path of Building's Lua with our own bootstrap.
 
-use super::commands::{Command, ConfigValue, GemToggle, Tab};
+use super::commands::{Command, ConfigValue, GemToggle, SkillOption, Tab};
 use super::run::{Affected, Backend, BackgroundTask, Engine, Event};
 use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
@@ -541,6 +541,59 @@ impl Backend for PobBackend {
             Command::DeleteGem { group, slot } => {
                 self.call::<_, ()>("skills_delete_gem", (group + 1, slot + 1))?;
                 Ok(skills_changed())
+            }
+            Command::SelectSkillSet { id } => {
+                self.call::<_, ()>("skills_select_set", id)?;
+                Ok(skills_changed())
+            }
+            Command::NewSkillSet { title } => {
+                self.call::<_, ()>("skills_new_set", title)?;
+                Ok(skills_changed())
+            }
+            Command::CopySkillSet { id, title } => {
+                self.call::<_, ()>("skills_copy_set", (id, title))?;
+                Ok(skills_changed())
+            }
+            Command::DeleteSkillSet { id } => {
+                self.call::<_, ()>("skills_delete_set", id)?;
+                Ok(skills_changed())
+            }
+            Command::RenameSkillSet { id, title } => {
+                self.call::<_, ()>("skills_rename_set", (id, title))?;
+                // a title feeds no calculation, but the build is edited
+                Ok(Affected {
+                    build: true,
+                    skills: true,
+                    ..Affected::default()
+                })
+            }
+            Command::SetSkillOption(option) => {
+                match option {
+                    SkillOption::SortByDps(on) => {
+                        self.call::<_, ()>("skills_option_check", ("sortGemsByDPS", on))?
+                    }
+                    SkillOption::ShowLegacy(on) => {
+                        self.call::<_, ()>("skills_option_check", ("showLegacyGems", on))?
+                    }
+                    SkillOption::SortField(i) => self.call::<_, ()>(
+                        "skills_option_drop",
+                        ("sortGemsByDPSFieldControl", i + 1),
+                    )?,
+                    SkillOption::DefaultLevel(i) => {
+                        self.call::<_, ()>("skills_option_drop", ("defaultLevel", i + 1))?
+                    }
+                    SkillOption::SupportTypes(i) => {
+                        self.call::<_, ()>("skills_option_drop", ("showSupportGemTypes", i + 1))?
+                    }
+                    SkillOption::DefaultQuality(text) => {
+                        self.call::<_, ()>("skills_option_quality", text)?
+                    }
+                }
+                // not unsaved, no recalculation (R18)
+                Ok(Affected {
+                    skills: true,
+                    ..Affected::default()
+                })
             }
             Command::Undo(Tab::Skills) => {
                 self.call::<_, ()>("skills_undo", ())?;

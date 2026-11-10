@@ -3,11 +3,11 @@
 
 use super::{
     Session, fixtures, fixtures_dir, load_xml, lock, lua_value, pob_dir, recipe_setting,
-    upstream_lua,
+    snapshot_dir, upstream_lua,
 };
 use auto_pob::engine::upstream::{SidebarLine, golden_of};
 use auto_pob::engine::{
-    Backend, Command, GemToggle, SkillSetEntry, SkillsView, SocketGroupView, Tab,
+    Backend, Command, GemToggle, SkillOption, SkillSetEntry, SkillsView, SocketGroupView, Tab,
 };
 use auto_pob::game::Game;
 use mlua::LuaSerdeExt;
@@ -219,6 +219,28 @@ enum SkillsAction {
         group: usize,
         slot: usize,
     },
+    SelectSkillSet {
+        id: u32,
+    },
+    NewSkillSet {
+        title: String,
+    },
+    RenameSkillSet {
+        id: u32,
+        title: String,
+    },
+    CopySkillSet {
+        id: u32,
+        title: String,
+    },
+    DeleteSkillSet {
+        id: u32,
+    },
+    /// `option` is the name `act.option` takes; `value` is a bool, an index or the quality text
+    SetSkillOption {
+        option: String,
+        value: serde_json::Value,
+    },
     Undo,
     Redo,
     /// Built from the recorded checkpoint table, which can hold empty lists
@@ -277,10 +299,33 @@ impl SkillsAction {
                 on,
             },
             SkillsAction::DeleteGem { group, slot } => Command::DeleteGem { group, slot },
+            SkillsAction::SelectSkillSet { id } => Command::SelectSkillSet { id },
+            SkillsAction::NewSkillSet { title } => Command::NewSkillSet { title },
+            SkillsAction::RenameSkillSet { id, title } => Command::RenameSkillSet { id, title },
+            SkillsAction::CopySkillSet { id, title } => Command::CopySkillSet { id, title },
+            SkillsAction::DeleteSkillSet { id } => Command::DeleteSkillSet { id },
+            SkillsAction::SetSkillOption { option, value } => {
+                Command::SetSkillOption(skill_option(&option, &value))
+            }
             SkillsAction::Undo => Command::Undo(Tab::Skills),
             SkillsAction::Redo => Command::Redo(Tab::Skills),
             SkillsAction::Check { .. } => return None,
         })
+    }
+}
+
+/// The option `act.option(name, value)` pressed, as our command.
+fn skill_option(name: &str, value: &serde_json::Value) -> SkillOption {
+    let on = || value.as_bool().expect("a bool");
+    let index = || value.as_u64().expect("an index") as usize;
+    match name {
+        "sort_by_dps" => SkillOption::SortByDps(on()),
+        "sort_field" => SkillOption::SortField(index()),
+        "default_level" => SkillOption::DefaultLevel(index()),
+        "default_quality" => SkillOption::DefaultQuality(value.as_str().expect("text").into()),
+        "support_types" => SkillOption::SupportTypes(index()),
+        "show_legacy" => SkillOption::ShowLegacy(on()),
+        _ => panic!("unknown option {name}"),
     }
 }
 
@@ -388,6 +433,11 @@ fn our_skills_checkpoint(s: &mut Session) -> SkillsCheckpoint {
 /// Replays a recipe as our commands and checks every checkpoint and the end state against
 /// upstream.
 fn check_skills_recipe(name: &str) -> SkillsRecipe {
+    run_skills_recipe(name).0
+}
+
+/// `check_skills_recipe`, keeping the session our commands ran in.
+fn run_skills_recipe(name: &str) -> (SkillsRecipe, Session) {
     let recipe = upstream_skills_recipe(name);
     assert!(!recipe.actions.is_empty(), "{name}: no actions recorded");
     let mut s = Session::start(&format!("skills-recipe-{name}"));
@@ -427,7 +477,7 @@ fn check_skills_recipe(name: &str) -> SkillsRecipe {
     let ours = s.backend.skills_view().unwrap();
     assert_ne!(ours, before, "{name}: the recipe changes the Skills tab");
     assert_eq!(ours, recipe.result, "{name}");
-    recipe
+    (recipe, s)
 }
 
 #[test]
@@ -870,4 +920,434 @@ fn overlong_level_is_refused() {
     })
     .unwrap();
     assert_eq!(s.backend.skills_view().unwrap(), before);
+}
+
+// ---- Skill sets and gem options ----
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn set_recipes_match_pob() {
+    let _guard = lock();
+    let recipe = check_skills_recipe("sets");
+    let checks = checkpoints(&recipe);
+    // coverage: the untitled set shows "Default", a set other than the first is active, a set was
+    // renamed and a copy holds the group pasted into it
+    assert!(
+        checks
+            .iter()
+            .any(|c| c.sets.iter().any(|s| s.title == "Default")),
+        "the Default title"
+    );
+    assert!(
+        checks.iter().any(|c| c.active_set != 1),
+        "a non-default active set"
+    );
+    let titles = |i: usize| {
+        checks[i]
+            .sets
+            .iter()
+            .map(|s| s.title.as_str())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(titles(0), ["Default", "Mapping", "Bossing"]);
+    assert_eq!(titles(1), ["Default", "Clear", "Bossing"]);
+    // deleting the active set (3) moves to the one before it (2); undo brings it back
+    assert_eq!(checks[2].active_set, 2);
+    assert_eq!(titles(2), ["Default", "Clear"]);
+    assert_eq!(checks[3].active_set, 3);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn last_set_delete_is_refused() {
+    let _guard = lock();
+    let (mut s, _) = session_on("attack", "last-set");
+    let before = s.backend.skills_view().unwrap();
+    assert_eq!(before.sets.len(), 1);
+    let err = s
+        .run(Command::DeleteSkillSet {
+            id: before.sets[0].id,
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("last skill set"), "{err}");
+    assert_eq!(s.backend.skills_view().unwrap(), before);
+    // an id no set has
+    let err = s.run(Command::DeleteSkillSet { id: 99 }).unwrap_err();
+    assert!(err.to_string().contains("no such skill set"), "{err}");
+    assert_eq!(s.backend.skills_view().unwrap(), before);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn blank_set_title_is_refused() {
+    let _guard = lock();
+    let (mut s, _) = session_on("attack", "blank-title");
+    s.run(Command::NewSkillSet {
+        title: "Second".into(),
+    })
+    .unwrap();
+    let before = s.backend.skills_view().unwrap();
+    for title in ["", "   ", "\t\r\n"] {
+        for command in [
+            Command::NewSkillSet {
+                title: title.into(),
+            },
+            Command::CopySkillSet {
+                id: 1,
+                title: title.into(),
+            },
+            Command::RenameSkillSet {
+                id: 1,
+                title: title.into(),
+            },
+        ] {
+            let shown = format!("{command:?}");
+            let err = s.run(command).expect_err(&shown);
+            assert!(err.to_string().contains("needs a name"), "{shown}: {err}");
+        }
+    }
+    // a title the box's limit refuses leaves no half-made set behind
+    for command in [
+        Command::NewSkillSet {
+            title: "x".repeat(101),
+        },
+        Command::CopySkillSet {
+            id: 1,
+            title: "x".repeat(101),
+        },
+        Command::RenameSkillSet {
+            id: 1,
+            title: "x".repeat(101),
+        },
+    ] {
+        let shown = format!("{command:?}");
+        let err = s.run(command).expect_err(&shown);
+        assert!(err.to_string().contains("too long"), "{shown}: {err}");
+    }
+    assert_eq!(s.backend.skills_view().unwrap(), before);
+    let open: usize = lua_value(&s.backend.lua, "return #pob.main.main.popups");
+    assert_eq!(open, 0, "a popup was left open");
+    let sets: usize = lua_value(
+        &s.backend.lua,
+        "local n = 0 for _ in pairs(pob.build.skillsTab.skillSets) do n = n + 1 end return n",
+    );
+    assert_eq!(sets, before.sets.len(), "a set was left in the table");
+}
+
+/// Every option pressed to a non-default value, as `act.option` calls and our commands. Counts
+/// follow PoB's lists: 3 support types, several sort fields and five default levels.
+fn option_presses() -> Vec<(&'static str, serde_json::Value, SkillOption)> {
+    use serde_json::json;
+    vec![
+        ("sort_by_dps", json!(false), SkillOption::SortByDps(false)),
+        ("sort_field", json!(3), SkillOption::SortField(3)),
+        ("default_level", json!(3), SkillOption::DefaultLevel(3)),
+        (
+            "default_quality",
+            json!("20"),
+            SkillOption::DefaultQuality("20".into()),
+        ),
+        ("support_types", json!(2), SkillOption::SupportTypes(2)),
+        ("show_legacy", json!(true), SkillOption::ShowLegacy(true)),
+    ]
+}
+
+/// The attributes of a saved build's `<Skills>` element (PoB writes them in no fixed order).
+fn skills_tag(xml: &str) -> std::collections::BTreeMap<String, String> {
+    let start = xml.find("<Skills").expect("a Skills element") + "<Skills".len();
+    let tag = &xml[start..start + xml[start..].find('>').unwrap()];
+    let mut attributes = std::collections::BTreeMap::new();
+    let mut rest = tag.trim();
+    while let Some((key, after)) = rest.split_once("=\"") {
+        let (value, next) = after.split_once('"').expect("a closing quote");
+        attributes.insert(key.trim().to_string(), value.to_string());
+        rest = next.trim();
+    }
+    attributes
+}
+
+fn upstream_flags(lua: &mlua::Lua) -> String {
+    lua.load(
+        r#"runCallback('OnFrame')
+        local b = build
+        return table.concat({ tostring(b.modFlag), tostring(b.notesTab.modFlag), tostring(b.partyTab.modFlag),
+            tostring(b.configTab.modFlag), tostring(b.treeTab.modFlag), tostring(b.treeTab.searchFlag),
+            tostring(b.spec.modFlag), tostring(b.skillsTab.modFlag), tostring(b.itemsTab.modFlag),
+            tostring(b.calcsTab.modFlag) }, ",")"#,
+    )
+    .eval()
+    .unwrap()
+}
+
+fn upstream_unsaved(lua: &mlua::Lua) -> bool {
+    lua.load("runCallback('OnFrame') return build.unsaved and true or false")
+        .eval()
+        .unwrap()
+}
+
+/// Presses every option on both sides, comparing after each, then saves both and compares the
+/// `<Skills>` attributes.
+fn press_options_on_both(s: &mut Session, lua: &mlua::Lua, name: &str) {
+    assert!(!s.backend.build_view().unwrap().unsaved, "{name}: start");
+    // upstream's loader leaves `build.modFlag` set (our OpenBuild resets it); a save would clear it
+    lua.load("build.modFlag = false").exec().unwrap();
+    assert!(
+        !upstream_unsaved(lua),
+        "{name}: upstream start: {}",
+        upstream_flags(lua)
+    );
+    for (option, value, command) in option_presses() {
+        let before = s.backend.skills_view().unwrap().options;
+        let affected = s.run(Command::SetSkillOption(command.clone())).unwrap();
+        assert!(affected.skills && !affected.build, "{name}: {command:?}");
+        lua.globals()
+            .set("pressed", lua.to_value(&value).unwrap())
+            .unwrap();
+        lua.globals().set("option", option).unwrap();
+        lua.load("act.option(option, pressed)").exec().unwrap();
+        let ours = s.backend.skills_view().unwrap().options;
+        assert_eq!(ours, upstream_dump(lua).options, "{name}: {command:?}");
+        assert_ne!(ours, before, "{name}: {command:?} changes the options");
+        assert!(
+            !s.backend.build_view().unwrap().unsaved,
+            "{name}: {command:?} marks the build unsaved"
+        );
+        assert!(
+            !upstream_unsaved(lua),
+            "{name}: upstream {option}: {}",
+            upstream_flags(lua)
+        );
+    }
+    s.run(Command::SaveAs {
+        folder: String::new(),
+        name: format!("options-{name}"),
+        overwrite: false,
+    })
+    .unwrap();
+    let saved = fs::read_to_string(s.builds_dir().join(format!("options-{name}.xml"))).unwrap();
+    let theirs: String = lua.load("return build:SaveDB('x')").eval().unwrap();
+    assert_eq!(skills_tag(&saved), skills_tag(&theirs), "{name}");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn skill_options_match_pob() {
+    let _guard = lock();
+    let (mut s, lua) = session_on("attack", "options");
+    let start = s.backend.skills_view().unwrap().options;
+    assert!(start.sort_by_dps && !start.show_legacy);
+    press_options_on_both(&mut s, &lua, "attack");
+    let end = s.backend.skills_view().unwrap().options;
+    assert!(!end.sort_by_dps && end.show_legacy);
+    assert_eq!(end.default_quality, "20");
+    assert_eq!(end.sort_field.selected, 3);
+    assert_eq!(end.default_level.selected, 3);
+    assert_eq!(end.support_types.selected, 2);
+
+    // a new build never went through Load: the sort field dropdown still shows "Full DPS" in
+    // PoB's control, but the model, and so the view, says CombinedDPS (R18)
+    let mut s = Session::start("skills-options-new");
+    s.run(Command::NewBuild).unwrap();
+    let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
+    lua.load("newBuild()").exec().unwrap();
+    lua.load(fs::read_to_string(fixtures_dir().join("skills_lib.lua")).unwrap())
+        .set_name("=skills_lib")
+        .exec()
+        .unwrap();
+    let ours = s.backend.skills_view().unwrap().options;
+    assert_eq!(ours, upstream_dump(&lua).options);
+    assert_eq!(ours.sort_field.selected, 1, "CombinedDPS, not entry 1");
+    assert_eq!(ours.sort_field.labels[1], "Combined DPS");
+    press_options_on_both(&mut s, &lua, "new");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn bad_skill_options_are_refused() {
+    let _guard = lock();
+    let (mut s, _) = session_on("attack", "bad-options");
+    let before = s.backend.skills_view().unwrap();
+    for command in [
+        SkillOption::SortField(99),
+        SkillOption::DefaultLevel(99),
+        SkillOption::SupportTypes(99),
+        SkillOption::DefaultQuality("123".into()),
+    ] {
+        let shown = format!("{command:?}");
+        s.run(Command::SetSkillOption(command)).expect_err(&shown);
+    }
+    // text the filter empties does nothing, as typing it would
+    s.run(Command::SetSkillOption(SkillOption::DefaultQuality(
+        "abc".into(),
+    )))
+    .unwrap();
+    assert_eq!(s.backend.skills_view().unwrap(), before);
+    // over 23 is capped by PoB's callback
+    s.run(Command::SetSkillOption(SkillOption::DefaultQuality(
+        "99".into(),
+    )))
+    .unwrap();
+    assert_eq!(
+        s.backend.skills_view().unwrap().options.default_quality,
+        "23"
+    );
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn skills_round_trip() {
+    let _guard = lock();
+    for name in ["groups", "sets"] {
+        let (_, mut s) = run_skills_recipe(name);
+        if name == "sets" {
+            for (_, _, option) in option_presses() {
+                s.run(Command::SetSkillOption(option)).unwrap();
+            }
+        }
+        s.run(Command::SaveAs {
+            folder: String::new(),
+            name: format!("round-{name}"),
+            overwrite: false,
+        })
+        .unwrap();
+        assert!(!s.backend.build_view().unwrap().unsaved);
+        let mut ours = s.backend.skills_view().unwrap();
+        let saved = fs::read_to_string(s.builds_dir().join(format!("round-{name}.xml"))).unwrap();
+        let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
+        load_xml(&lua, &saved, name).unwrap();
+        lua.load(fs::read_to_string(fixtures_dir().join("skills_lib.lua")).unwrap())
+            .set_name("=skills_lib")
+            .exec()
+            .unwrap();
+        let mut theirs = upstream_dump(&lua);
+        // undo history is not saved
+        for view in [&mut ours, &mut theirs] {
+            view.can_undo = false;
+            view.can_redo = false;
+        }
+        assert_eq!(ours, theirs, "{name}");
+        if name == "sets" {
+            assert!(theirs.active_set != 1 && theirs.sets.len() == 3);
+            assert_eq!(theirs.options.default_quality, "20");
+        }
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn no_silent_writes_skills() {
+    let _guard = lock();
+    let (mut s, _lua) = session_on("attack", "no-writes");
+    let dir = s.builds_dir();
+    let before = snapshot_dir(&dir);
+    let view = s.backend.skills_view().unwrap();
+    let gem_id = view.groups[0].gems[0].gem_id.clone().expect("a gem id");
+    let text = |t: &str| t.to_string();
+    let mut commands = vec![
+        Command::AddSocketGroup,
+        Command::PasteSocketGroup {
+            text: "Label: Auras\r\nHatred 20/0  1\r\nWrath 20/0  1\r\n".into(),
+        },
+        Command::SetGroupLabel {
+            group: 0,
+            text: text("Edited"),
+        },
+        Command::SetGroupSlot {
+            group: 0,
+            slot: Some("Helmet".into()),
+        },
+        Command::SetGroupEnabled {
+            group: 0,
+            on: false,
+        },
+        Command::SetGroupFullDps { group: 0, on: true },
+        Command::MoveSocketGroup { from: 0, to: 1 },
+        Command::CopySocketGroup { group: 0 },
+        Command::SetGem {
+            group: 0,
+            slot: 0,
+            gem_id,
+        },
+        Command::SetGemLevel {
+            group: 0,
+            slot: 0,
+            text: text("5"),
+        },
+        Command::SetGemQuality {
+            group: 0,
+            slot: 0,
+            text: text("5"),
+        },
+        Command::SetGemCount {
+            group: 0,
+            slot: 0,
+            text: text("2"),
+        },
+        Command::SetGemEnabled {
+            group: 0,
+            slot: 0,
+            on: false,
+        },
+        Command::SetGemToggle {
+            group: 0,
+            slot: 0,
+            which: GemToggle::First,
+            on: false,
+        },
+        Command::DeleteGem { group: 0, slot: 0 },
+        Command::NewSkillSet {
+            title: text("Mapping"),
+        },
+        Command::CopySkillSet {
+            id: 1,
+            title: text("Bossing"),
+        },
+        Command::SelectSkillSet { id: 3 },
+        Command::RenameSkillSet {
+            id: 2,
+            title: text("Clear"),
+        },
+        Command::DeleteSkillSet { id: 3 },
+    ];
+    commands.extend(
+        option_presses()
+            .into_iter()
+            .map(|(_, _, option)| Command::SetSkillOption(option)),
+    );
+    commands.extend([
+        Command::Undo(Tab::Skills),
+        Command::Redo(Tab::Skills),
+        Command::DeleteSocketGroup { group: 0 },
+        Command::DeleteAllSocketGroups,
+    ]);
+    let mut ran = 0;
+    for command in commands {
+        let shown = format!("{command:?}");
+        // a command PoB doesn't offer for this build may fail, but it must not write either
+        if let Err(e) = s.run(command) {
+            eprintln!("{shown}: {e}");
+        } else {
+            ran += 1;
+        }
+        assert_eq!(snapshot_dir(&dir), before, "{shown} wrote a file");
+    }
+    assert!(ran > 25, "only {ran} commands ran");
+    assert!(s.backend.build_view().unwrap().unsaved);
+    s.run(Command::SaveAs {
+        folder: String::new(),
+        name: "after".into(),
+        overwrite: false,
+    })
+    .unwrap();
+    let after = snapshot_dir(&dir);
+    assert!(after.keys().any(|p| p.ends_with("after.xml")));
+    for (path, bytes) in &before {
+        assert!(after[path] == *bytes, "{} changed", path.display());
+    }
+    assert!(
+        snapshot_dir(&s.user)
+            .keys()
+            .all(|p| !p.to_string_lossy().contains("~~temp~~")),
+        "a temporary file was left"
+    );
 }

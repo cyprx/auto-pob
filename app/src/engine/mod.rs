@@ -9,7 +9,7 @@ pub mod views;
 #[cfg(test)]
 pub(crate) mod fake;
 
-pub use commands::{CalcsControl, CalcsCount, Command, ConfigValue, GemToggle, Tab};
+pub use commands::{CalcsControl, CalcsCount, Command, ConfigValue, GemToggle, SkillOption, Tab};
 pub use run::{Affected, Backend, BackgroundTask, Engine, Event, Snapshot, run_loop};
 pub use views::{
     AscendancyChoice, BreakdownColumn, BreakdownRow, BreakdownSection, BreakdownView,

@@ -91,6 +91,11 @@ impl CalcsUi {
         }
     }
 
+    #[cfg(test)]
+    pub fn breakdown_unavailable(&self) -> bool {
+        self.bd.failed()
+    }
+
     /// The engine failed the breakdown query that was pending.
     pub fn breakdown_failed(&mut self) {
         self.bd.query_failed();
@@ -810,16 +815,26 @@ mod tests {
 
     #[test]
     fn click_pins_and_second_click_unpins() {
-        let mut h = Harness::new(sample(None));
+        let mut view = sample(None);
+        let cells = &mut view.sections[0].subs[0].rows[0].cells;
+        cells.push(CalcsCell {
+            index: 1,
+            text: "7".into(),
+            breakdown: true,
+        });
+        let mut h = Harness::new(view);
         let out = h.click_out(CELL);
         assert_eq!(breakdowns(&out), 1, "pinning asks at once");
         assert_eq!(h.ui.bd.pinned.as_ref().map(|p| p.0.clone()), Some(target()));
         assert_eq!(h.ui.bd.pinned.as_ref().unwrap().1, "Label");
         answer(&mut h, table(&[("a", None, false)]));
-        // hovering another cell while pinned asks nothing
+        // hovering another breakdown cell while pinned asks nothing
+        let other = h.ui.rects.map["cell_sec_0_2_1"].center();
         let t = h.time;
+        h.frame_out(t + 0.01, vec![Event::PointerMoved(other)]);
         let out = h.frame_out(t + 0.5, vec![]);
         assert!(out.queries.is_empty());
+        assert_eq!(h.ui.hovered.as_ref().map(|c| c.cell), Some(1));
         h.click_out(CELL);
         assert_eq!(h.ui.bd.pinned, None);
     }
@@ -861,8 +876,20 @@ mod tests {
         h.click_out(CELL);
         let mut other = table(&[("a", None, false)]);
         other.cell.row = 9;
+        answer(&mut h, other.clone());
+        assert!(h.ui.bd.shown.is_none());
+        // unpinned: only the cell last asked about counts
+        let mut h = Harness::new(sample(None));
+        answer(&mut h, table(&[("a", None, false)]));
+        assert!(h.ui.bd.shown.is_none(), "nothing was asked");
+        let t = h.time;
+        let pos = h.ui.rects.map[CELL].center();
+        h.frame_out(t, vec![Event::PointerMoved(pos)]);
+        h.frame_out(t + 0.2, vec![]);
         answer(&mut h, other);
         assert!(h.ui.bd.shown.is_none());
+        answer(&mut h, table(&[("a", None, false)]));
+        assert!(h.ui.bd.shown.is_some());
     }
 
     #[test]
@@ -890,6 +917,30 @@ mod tests {
         assert_eq!(row_order(rows, desc.as_ref()), [0, 1, 2]);
         assert_eq!(next_sort(desc.as_ref(), "name"), None);
         assert_eq!(row_order(rows, None), [0, 1, 2]);
+    }
+
+    #[test]
+    fn mixed_column_sort_does_not_panic() {
+        use super::breakdown::{Dir, Sort, row_order};
+        let texts = ["10", "9", "1a", "nan", "", "inf", "-3", "b", "1,000"];
+        let view = table(&texts.map(|t| (t, None, false)));
+        let crate::engine::views::BreakdownSection::Table { rows, .. } = &view.sections[0] else {
+            unreachable!()
+        };
+        for dir in [Dir::Asc, Dir::Desc] {
+            let sort = Sort {
+                key: "name".into(),
+                dir,
+            };
+            let order = row_order(rows, Some(&sort));
+            let mut seen = order.clone();
+            seen.sort();
+            assert_eq!(seen, (0..texts.len()).collect::<Vec<_>>());
+            let shown: Vec<&str> = order.iter().map(|&i| texts[i]).collect();
+            if dir == Dir::Asc {
+                assert_eq!(&shown[..4], ["-3", "9", "10", "1,000"], "numbers first");
+            }
+        }
     }
 
     #[test]
@@ -935,6 +986,26 @@ mod tests {
         h.click_out(CELL);
         h.ui.breakdown_failed();
         assert!(h.ui.bd.visible());
+        assert!(h.ui.breakdown_unavailable());
         h.frame(vec![]);
+        // a pinned cell is asked again by the next recalculation, and hovering retries
+        let mut h = Harness::new(sample(None));
+        let t = h.time;
+        let pos = h.ui.rects.map[CELL].center();
+        h.frame_out(t, vec![Event::PointerMoved(pos)]);
+        let asked = h.frame_out(t + 0.2, vec![]);
+        assert_eq!(asked.queries.len(), 1);
+        h.ui.breakdown_failed();
+        let again = h.frame_out(t + 0.4, vec![]);
+        assert!(
+            again.queries.is_empty(),
+            "no retry loop while the pointer stays"
+        );
+        h.frame_out(t + 0.5, vec![Event::PointerGone]);
+        h.frame_out(t + 0.55, vec![]);
+        h.frame_out(t + 0.6, vec![Event::PointerMoved(pos)]);
+        h.frame_out(t + 0.65, vec![]);
+        let retry = h.frame_out(t + 0.8, vec![]);
+        assert_eq!(retry.queries.len(), 1, "hovering again retries");
     }
 }

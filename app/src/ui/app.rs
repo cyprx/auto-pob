@@ -192,6 +192,7 @@ impl AutoPobApp {
                     self.entering = None;
                     self.tree.reset();
                     self.calcs.reset();
+                    self.breakdown_seq = None;
                 }
                 match snapshot {
                     Snapshot::Build(view) => {
@@ -230,6 +231,12 @@ impl AutoPobApp {
                 self.notices.push(message);
             }
         }
+    }
+
+    /// Shows a passive node on the tree tab.
+    fn show_node(&mut self, id: u32, now: f64) {
+        self.tab = BuildTab::Tree;
+        self.tree.focus(id, now);
     }
 
     fn on_error(&mut self, seq: u64, message: String) {
@@ -572,9 +579,8 @@ impl AutoPobApp {
             self.breakdown_seq = Some(self.engine.send(query));
         }
         if let Some(id) = calcs_out.focus_node {
-            self.tab = BuildTab::Tree;
             let now = ui.input(|i| i.time);
-            self.tree.focus(id, now);
+            self.show_node(id, now);
         }
 
         match action {
@@ -1774,6 +1780,38 @@ mod tests {
             ),
         );
         assert_eq!(sent_since(&app, before), ["Undo(Tree)", "Redo(Tree)"]);
+    }
+
+    #[test]
+    fn focus_node_switches_to_tree() {
+        let (mut app, ctx) = tree_app();
+        app.tab = BuildTab::Calcs;
+        frame(&mut app, &ctx, vec![]);
+        app.show_node(42, 1.0);
+        assert_eq!(app.tab, BuildTab::Tree);
+    }
+
+    #[test]
+    fn breakdown_error_marks_panel_not_notice() {
+        let (mut app, _ctx) = tree_app();
+        let notices = app.notices.len();
+        app.breakdown_seq = Some(77);
+        app.on_event(Event::Error {
+            seq: 76,
+            message: "other".into(),
+        });
+        assert!(
+            !app.calcs.breakdown_unavailable(),
+            "another seq is not ours"
+        );
+        assert_eq!(app.notices.len(), notices + 1);
+        app.on_event(Event::Error {
+            seq: 77,
+            message: "boom".into(),
+        });
+        assert!(app.calcs.breakdown_unavailable());
+        assert_eq!(app.notices.len(), notices + 1, "no notice for a hover");
+        assert_eq!(app.breakdown_seq, None);
     }
 
     #[test]

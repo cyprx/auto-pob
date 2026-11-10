@@ -61,7 +61,7 @@ fn number(text: &str) -> Option<f64> {
             plain.push(c);
         }
     }
-    plain.trim().parse().ok()
+    plain.trim().parse().ok().filter(|n: &f64| n.is_finite())
 }
 
 /// The order the rows are shown in. Numbers compare as numbers when both cells are numbers.
@@ -69,15 +69,19 @@ pub fn row_order(rows: &[BreakdownRow], sort: Option<&Sort>) -> Vec<usize> {
     let mut order: Vec<usize> = (0..rows.len()).collect();
     let Some(sort) = sort else { return order };
     let text = |i: usize| rows[i].cells.get(&sort.key).map_or("", String::as_str);
+    // numbers before text; each kind in its own total order, so mixed columns can't confuse
+    // the sort
+    let cmp = |a: usize, b: usize| match (number(text(a)), number(text(b))) {
+        (Some(x), Some(y)) => x.total_cmp(&y),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => text(a).cmp(text(b)),
+    };
     order.sort_by(|&a, &b| {
-        let ord = match (number(text(a)), number(text(b))) {
-            (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
-            _ => text(a).cmp(text(b)),
-        };
         if sort.dir == Dir::Desc {
-            ord.reverse()
+            cmp(b, a)
         } else {
-            ord
+            cmp(a, b)
         }
     });
     order
@@ -100,6 +104,11 @@ pub struct State {
 }
 
 impl State {
+    #[cfg(test)]
+    pub fn failed(&self) -> bool {
+        self.failed
+    }
+
     pub fn visible(&self) -> bool {
         self.shown.is_some() || self.pinned.is_some() || self.failed
     }
@@ -168,6 +177,10 @@ impl State {
         }
         let Some(cell) = hovered else {
             self.hover = None;
+            if self.failed {
+                // the pointer left the failed cell; hovering it again asks again
+                self.requested = None;
+            }
             return;
         };
         if self.hover.as_ref().is_none_or(|(h, _)| h != cell) {

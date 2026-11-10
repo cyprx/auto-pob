@@ -112,6 +112,15 @@ pub fn draw_legend(painter: &Painter, view: Rect, legend: &Legend) {
     }
 }
 
+/// A ring that grows and fades around a node the user was pointed to. `age` is in seconds.
+pub fn draw_pulse(painter: &Painter, pos: Pos2, radius: f32, age: f64) {
+    let t = (age / super::PULSE_SECONDS).clamp(0.0, 1.0) as f32;
+    let grow = radius + 6.0 + 40.0 * t;
+    let colour = SEARCH_RING.gamma_multiply(1.0 - t);
+    painter.circle_stroke(pos, grow, Stroke::new(3.0, colour));
+    painter.circle_stroke(pos, radius + 4.0, Stroke::new(2.0, colour));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -186,6 +186,19 @@ pub fn show(
         }
     }
 
+    if let Some((id, start)) = tab.pulse {
+        let age = ui.input(|i| i.time) - start;
+        match tab.index.get(&id) {
+            Some(&i) if age < super::PULSE_SECONDS => {
+                let node = &layout.nodes[i];
+                let radius = (node_radius(&node.kind) * zoom).max(1.5);
+                overlays::draw_pulse(&painter, to_screen(node.pos), radius, age);
+                ui.ctx().request_repaint();
+            }
+            _ => tab.pulse = None,
+        }
+    }
+
     overlays::draw_legend(
         &painter,
         rect,

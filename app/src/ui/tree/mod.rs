@@ -4,6 +4,8 @@
 pub mod canvas;
 pub mod geometry;
 pub mod overlays;
+pub mod power_report;
+pub mod toolbar;
 
 use crate::engine::{
     Command, NodePower, NodeTooltip, PowerReport, Snapshot, TreeLayout, TreeState,
@@ -11,15 +13,37 @@ use crate::engine::{
 use canvas::CanvasAction;
 use eframe::egui::{self, TextureHandle};
 use geometry::{Camera, HitGrid};
+use power_report::ReportPanel;
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
     sync::Arc,
     time::Duration,
 };
+use toolbar::{PowerStatus, Toolbar};
 
 /// A hover must rest this long on a node before its tooltip is requested.
 const PREVIEW_DELAY: f64 = 0.1;
+
+/// Where widgets were drawn last frame, so tests can click them. Does nothing outside tests.
+#[derive(Default)]
+pub struct Rects {
+    #[cfg(test)]
+    pub(crate) map: HashMap<String, egui::Rect>,
+}
+
+impl Rects {
+    #[cfg(test)]
+    pub(super) fn note(&mut self, response: &egui::Response, key: impl FnOnce() -> String) {
+        self.map.insert(key(), response.rect);
+    }
+
+    #[cfg(not(test))]
+    pub(super) fn note(&mut self, _response: &egui::Response, _key: impl FnOnce() -> String) {}
+}
+
+/// How long a node pulses after a power report row was clicked (seconds).
+pub(super) const PULSE_SECONDS: f64 = 1.5;
 
 /// What the tab asks of the engine in one frame.
 #[derive(Debug, Default)]
@@ -101,11 +125,32 @@ pub struct TreeTab {
     /// The latest power report and tree link, for the panels around the canvas
     pub report: Option<Arc<PowerReport>>,
     pub link: Option<Arc<String>>,
-    #[cfg(test)]
-    rects: HashMap<String, egui::Rect>,
+    /// The node power calculation failed, until the next progress or result
+    failed: bool,
+    toolbar: Toolbar,
+    report_panel: ReportPanel,
+    /// The node being pointed out, and when the pointing started
+    pub(super) pulse: Option<(u32, f64)>,
+    pub(crate) rects: Rects,
 }
 
 impl TreeTab {
+    /// Forgets the build's state, as for another build. Uploaded textures stay.
+    pub fn reset(&mut self) {
+        let textures = std::mem::take(&mut self.textures);
+        *self = Self {
+            textures,
+            ..Self::default()
+        };
+    }
+
+    /// The undo and redo buttons' enablement.
+    pub fn history(&self) -> (bool, bool) {
+        self.state
+            .as_ref()
+            .map_or((false, false), |s| (s.can_undo, s.can_redo))
+    }
+
     pub fn on_snapshot(&mut self, snapshot: &Snapshot) {
         match snapshot {
             Snapshot::TreeLayout(layout) => {
@@ -142,22 +187,37 @@ impl TreeTab {
                 if power.finished {
                     self.progress = None;
                 }
+                self.failed = false;
                 self.power = Some(power.clone());
             }
             Snapshot::PowerReport(report) => self.report = Some(report.clone()),
             Snapshot::NodeTooltip(tooltip) => self.tooltip = Some(tooltip.clone()),
-            Snapshot::TreeLink(link) => self.link = Some(link.clone()),
+            Snapshot::TreeLink(link) => {
+                self.link = Some(link.clone());
+                self.toolbar.link_arrived();
+            }
             _ => {}
         }
     }
 
     pub fn on_progress(&mut self, percent: u32) {
+        self.failed = false;
         self.progress = Some(percent.min(100));
     }
 
     /// The node power calculation stopped with an error.
     pub fn power_failed(&mut self) {
         self.progress = None;
+        self.failed = true;
+    }
+
+    /// Centres the view on a node and makes it pulse.
+    pub(super) fn focus_node(&mut self, id: u32, now: f64) {
+        let (Some(layout), Some(&i)) = (&self.layout, self.index.get(&id)) else {
+            return;
+        };
+        self.camera.center = layout.nodes[i].pos.into();
+        self.pulse = Some((id, now));
     }
 
     /// `busy`: the engine is working, which the legend says.
@@ -168,6 +228,37 @@ impl TreeTab {
             return out;
         };
         self.busy = busy;
+        let status = PowerStatus {
+            progress: self.progress,
+            failed: self.failed,
+        };
+        let link = self.link.clone();
+        egui::Panel::top("tree_toolbar").show(ui, |ui| {
+            self.toolbar.show(
+                ui,
+                &state,
+                &status,
+                link.as_deref().map(String::as_str),
+                &mut self.rects,
+                &mut out,
+            );
+        });
+        if self.toolbar.report_open {
+            let report = self.report.clone();
+            let mut clicked = None;
+            egui::Panel::right("tree_power_report")
+                .resizable(true)
+                .default_size(420.0)
+                .show(ui, |ui| {
+                    clicked = self
+                        .report_panel
+                        .show(ui, report.as_deref(), &mut self.rects);
+                });
+            if let Some(id) = clicked {
+                let now = ui.input(|i| i.time);
+                self.focus_node(id, now);
+            }
+        }
         let power = self.power.clone();
         let actions = canvas::show(ui, self, &layout, &state, power.as_deref());
         let now = ui.input(|i| i.time);
@@ -237,6 +328,7 @@ impl TreeTab {
                     let response = ui.add(button);
                     #[cfg(test)]
                     self.rects
+                        .map
                         .insert(format!("option:{}", option.id), response.rect);
                     if response.clicked() {
                         picked = Some(option.id);
@@ -395,7 +487,7 @@ mod tests {
         assert!(out.commands.is_empty());
         assert_eq!(h.tab.picker, Some(3));
         h.frame(vec![]);
-        let pos = h.tab.rects["option:31"].center();
+        let pos = h.tab.rects.map["option:31"].center();
         let out = h.click_at(pos);
         assert_eq!(debug(&out.commands), ["SetMastery { node: 3, effect: 31 }"]);
         assert_eq!(h.tab.picker, None);

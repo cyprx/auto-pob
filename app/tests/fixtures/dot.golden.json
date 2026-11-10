@@ -1,0 +1,326 @@
+{
+  "pob_version": "2.67.2",
+  "stats": {
+    "AreaOfEffectRadiusMetres": 0.8,
+    "Armour": 0.0,
+    "AttackDodgeChance": 0.0,
+    "AverageBurstDamage": 850.059,
+    "AverageDamage": 850.059,
+    "AverageHit": 850.059,
+    "ChaosMaximumHitTaken": 745.0,
+    "ChaosResist": -60.0,
+    "ChaosResistOverCap": 0.0,
+    "ColdMaximumHitTaken": 838.0,
+    "ColdResist": -44.0,
+    "ColdResistOverCap": 0.0,
+    "CombinedAvg": 850.059,
+    "CombinedDPS": 850.059,
+    "CritChance": 6.0,
+    "CritMultiplier": 1.5,
+    "CullingDPS": 0.0,
+    "Devotion": 0.0,
+    "Dex": 44.0,
+    "ESCost": 0.0,
+    "ESPerSecondCost": 0.0,
+    "ESPercentPerSecondCost": 0.0,
+    "EffectiveBlockChance": 0.0,
+    "EffectiveMovementSpeedMod": 1.0,
+    "EffectiveSpellBlockChance": 0.0,
+    "EffectiveSpellSuppressionChance": 0.0,
+    "EnergyShield": 40.0,
+    "EnergyShieldLeechGainPerHit": 0.0,
+    "EnergyShieldRecoveryCap": 40.0,
+    "EnergyShieldRegenRecovery": 0.0,
+    "Evasion": 16.0,
+    "FireMaximumHitTaken": 838.0,
+    "FireResist": -44.0,
+    "FireResistOverCap": 0.0,
+    "FullDPS": 0.0,
+    "FullDotDPS": 0.0,
+    "HitChance": 100.0,
+    "Int": 122.0,
+    "Life": 1192.0,
+    "LifeCost": 0.0,
+    "LifeLeechGainPerHit": 0.0,
+    "LifePerSecondCost": 0.0,
+    "LifePercentCost": 0.0,
+    "LifePercentPerSecondCost": 0.0,
+    "LifeRecoverable": 1192.0,
+    "LifeRegenRecovery": 0.0,
+    "LifeUnreserved": 1192.0,
+    "LifeUnreservedPercent": 100.0,
+    "LightningMaximumHitTaken": 838.0,
+    "LightningResist": -44.0,
+    "LightningResistOverCap": 0.0,
+    "Mana": 725.0,
+    "ManaCost": 23.0,
+    "ManaLeechGainPerHit": 0.0,
+    "ManaPerSecondCost": 34.5,
+    "ManaPercentCost": 0.0,
+    "ManaPercentPerSecondCost": 0.0,
+    "ManaRegenRecovery": 12.7,
+    "ManaUnreserved": 725.0,
+    "ManaUnreservedPercent": 100.0,
+    "MeleeEvadeChance": 0.0,
+    "PhysicalDamageReduction": 0.0,
+    "PhysicalMaximumHitTaken": 1232.0,
+    "PreEffectiveCritChance": 6.0,
+    "ProjectileEvadeChance": 0.0,
+    "RageCost": 0.0,
+    "RageRegenRecovery": 0.0,
+    "ReqDex": 68.0,
+    "ReqInt": 98.0,
+    "ReservationDPS": 0.0,
+    "SoulCost": 0.0,
+    "Spec:ArmourInc": 0.0,
+    "Spec:EnergyShieldInc": 6.0,
+    "Spec:EvasionInc": 0.0,
+    "Spec:LifeInc": 5.0,
+    "Spec:ManaInc": 8.0,
+    "Speed": 1.5,
+    "SpellDodgeChance": 0.0,
+    "Str": 34.0,
+    "TotalDPS": 1275.0884999999998,
+    "TotalDot": 2292.4439999999995,
+    "TotalDotDPS": 2292.4439999999995,
+    "TotalEHP": 881.167443802741,
+    "Ward": 0.0,
+    "WithBleedDPS": 850.059,
+    "WithDotDPS": 3142.5029999999997,
+    "WithIgniteDPS": 850.059,
+    "WithPoisonDPS": 850.059
+  },
+  "sidebar": [
+    {
+      "label": "Average Hit",
+      "text": "850.1"
+    },
+    {
+      "label": "Cast Rate",
+      "text": "1.5"
+    },
+    {
+      "label": "Crit Chance",
+      "text": "6%"
+    },
+    {
+      "label": "Crit Multiplier",
+      "text": "150%"
+    },
+    {
+      "label": "DoT DPS",
+      "text": "2,292.4"
+    },
+    {
+      "label": "AoE Radius",
+      "text": "0.8m"
+    },
+    {
+      "label": "Mana Cost",
+      "text": "23"
+    },
+    {
+      "label": "Mana Cost per second",
+      "text": "34.5"
+    },
+    {
+      "label": "Strength",
+      "text": "34"
+    },
+    {
+      "label": "Dexterity",
+      "text": "44"
+    },
+    {
+      "label": "Dexterity Required",
+      "text": "68"
+    },
+    {
+      "label": "Intelligence",
+      "text": "122"
+    },
+    {
+      "label": "Effective Hit Pool",
+      "text": "881"
+    },
+    {
+      "label": "Phys Max Hit",
+      "text": "1,232"
+    },
+    {
+      "label": "Elemental Max Hit",
+      "text": "838"
+    },
+    {
+      "label": "Chaos Max Hit",
+      "text": "745"
+    },
+    {
+      "label": "Total Life",
+      "text": "1,192"
+    },
+    {
+      "label": "%Inc Life from Tree",
+      "text": "5%"
+    },
+    {
+      "label": "Total Mana",
+      "text": "725"
+    },
+    {
+      "label": "%Inc Mana from Tree",
+      "text": "8%"
+    },
+    {
+      "label": "Mana Regen",
+      "text": "12.7"
+    },
+    {
+      "label": "Energy Shield",
+      "text": "40"
+    },
+    {
+      "label": "%Inc ES from Tree",
+      "text": "6%"
+    },
+    {
+      "label": "Evasion rating",
+      "text": "16"
+    },
+    {
+      "label": "Phys. Damage Reduction",
+      "text": "0%"
+    },
+    {
+      "label": "Fire Resistance",
+      "text": "-44%"
+    },
+    {
+      "label": "Cold Resistance",
+      "text": "-44%"
+    },
+    {
+      "label": "Lightning Resistance",
+      "text": "-44%"
+    },
+    {
+      "label": "Chaos Resistance",
+      "text": "-60%"
+    },
+    {
+      "label": "Movement Speed Modifier",
+      "text": "+0%"
+    }
+  ],
+  "visible_config": [
+    "EHPUnluckyWorstOf",
+    "MapPrefix1",
+    "MapPrefix2",
+    "MapPrefix3",
+    "MapPrefix4",
+    "MapSuffix1",
+    "MapSuffix2",
+    "MapSuffix3",
+    "MapSuffix4",
+    "PvpScaling",
+    "ailmentMode",
+    "bandit",
+    "buffAdrenaline",
+    "buffArcaneSurge",
+    "buffChaoticMight",
+    "buffFortification",
+    "buffOnslaught",
+    "buffTailwind",
+    "buffUnholyMight",
+    "conditionEnemyBlinded",
+    "conditionEnemyChilled",
+    "conditionEnemyCoveredInAsh",
+    "conditionEnemyCoveredInFrost",
+    "conditionEnemyCrushed",
+    "conditionEnemyIntimidated",
+    "conditionEnemyShocked",
+    "conditionEnemyUnnerved",
+    "conditionOnConsecratedGround",
+    "conditionUsedWarcryRecently",
+    "deliriousPercentage",
+    "enemyArmour",
+    "enemyBlockChance",
+    "enemyChaosDamage",
+    "enemyChaosResist",
+    "enemyColdDamage",
+    "enemyColdPen",
+    "enemyColdResist",
+    "enemyCritChance",
+    "enemyCritDamage",
+    "enemyDamageType",
+    "enemyEvasion",
+    "enemyFireDamage",
+    "enemyFirePen",
+    "enemyFireResist",
+    "enemyIsBoss",
+    "enemyLevel",
+    "enemyLightningDamage",
+    "enemyLightningPen",
+    "enemyLightningResist",
+    "enemyMaxResist",
+    "enemyPhysicalDamage",
+    "enemyPhysicalOverwhelm",
+    "enemyPhysicalReduction",
+    "enemySpeed",
+    "ignoreJewelLimits",
+    "multiplierManaBurnStacks",
+    "multiplierMapModEffect",
+    "multiplierMapModTier",
+    "multiplierWarcryUsedRecently",
+    "pantheonMajorGod",
+    "pantheonMinorGod",
+    "playerCursedWithAssassinsMark",
+    "playerCursedWithConductivity",
+    "playerCursedWithDespair",
+    "playerCursedWithElementalWeakness",
+    "playerCursedWithEnfeeble",
+    "playerCursedWithFlammability",
+    "playerCursedWithFrostbite",
+    "playerCursedWithPoachersMark",
+    "playerCursedWithProjectileWeakness",
+    "playerCursedWithPunishment",
+    "playerCursedWithTemporalChains",
+    "playerCursedWithVulnerability",
+    "playerCursedWithWarlordsMark",
+    "presetBossSkills",
+    "resistancePenalty",
+    "useEnduranceCharges",
+    "useFrenzyCharges",
+    "usePowerCharges"
+  ],
+  "config": {
+    "ChanceToIgnoreEnemyPhysicalDamageReductionMode": "AVERAGE",
+    "ConcPathBypassCD": true,
+    "FlickerStrikeBypassCD": true,
+    "GamblesprintMovementSpeed": 30,
+    "VigilantStrikeBypassCD": true,
+    "bandit": "None",
+    "bloodsoakedBannerStages": 1,
+    "conditionChampionIntimidate": true,
+    "conditionCorruptingCryStages": 1,
+    "conditionSacrificeMinion": true,
+    "doomBlastSource": "vixen",
+    "enemyIsBoss": "Pinnacle",
+    "enemySizePreset": "Medium",
+    "maniaDebuffsCount": 15,
+    "pantheonMajorGod": "None",
+    "pantheonMinorGod": "None",
+    "plagueBearerState": "INC",
+    "presetBossSkills": "None",
+    "raiseSpectreEnableBuffs": true,
+    "raiseSpectreEnableCurses": true,
+    "repeatMode": "AVERAGE",
+    "resistancePenalty": -60,
+    "resourceGainMode": "AVERAGE",
+    "summonElementalRelicEnableAngerAura": true,
+    "summonElementalRelicEnableHatredAura": true,
+    "summonElementalRelicEnableWrathAura": true,
+    "targetBrandedEnemy": true,
+    "touchedDebuffsCount": 10
+  }
+}

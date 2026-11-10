@@ -25,7 +25,37 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test
+        run: cargo test --workspace
+
+  pob-gate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y luajit libluajit-5.1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The key changes when the pinned PoB version in game.rs changes.
+      - name: Cache upstream PoB
+        id: pob-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/pob
+          key: pob-${{ hashFiles('app/src/game.rs') }}
+
+      - name: Fetch upstream PoB
+        if: steps.pob-cache.outputs.cache-hit != 'true'
+        run: cargo run -p auto-pob --example fetch_pob -- ~/pob
+
+      # CI is unset on purpose: GitHub sets CI=true, which makes upstream's HeadlessWrapper
+      # skip ModCache and can change the golden values.
+      - name: Gate tests
+        run: env -u CI AUTO_POB_POB_DIR=$HOME/pob cargo test -p auto-pob --test gate -- --ignored --test-threads=1

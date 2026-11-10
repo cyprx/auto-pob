@@ -33,6 +33,8 @@ pub struct Fake {
     pub on_step: Option<Box<dyn FnMut(usize) + Send>>,
     /// `node_tooltip_view` answers `None`, as for a node that no longer exists.
     pub tooltip_vanished: bool,
+    /// `breakdown_view` fails with this message.
+    pub fail_breakdown: Option<String>,
 }
 
 impl Fake {
@@ -46,6 +48,7 @@ impl Fake {
                 restart_on_build: Vec::new(),
                 on_step: None,
                 tooltip_vanished: false,
+                fail_breakdown: None,
             },
             log,
         )
@@ -211,9 +214,13 @@ impl Backend for Fake {
 
     fn breakdown_view(&mut self, cell: &CellRef) -> anyhow::Result<BreakdownView> {
         self.log.lock().unwrap().breakdowns.push(cell.clone());
+        if let Some(message) = &self.fail_breakdown {
+            anyhow::bail!("{message}");
+        }
         Ok(BreakdownView {
             cell: cell.clone(),
             sections: vec![],
+            error: None,
         })
     }
 

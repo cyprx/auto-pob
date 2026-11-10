@@ -520,6 +520,9 @@ pub struct BreakdownView {
     pub cell: CellRef,
     #[serde(default)]
     pub sections: Vec<BreakdownSection>,
+    /// Why the query failed, when it did; the sections are then empty
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

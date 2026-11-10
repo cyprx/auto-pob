@@ -220,7 +220,19 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
         }
     }
     if let Some(cell) = &flags.breakdown {
-        emit(seq, send, backend.breakdown_view(cell), Snapshot::Breakdown);
+        // A failure is the answer to this question (the panel says so), not a notice, and it
+        // stays attached to its cell however many other errors the batch has.
+        let view = backend
+            .breakdown_view(cell)
+            .unwrap_or_else(|e| BreakdownView {
+                cell: cell.clone(),
+                sections: vec![],
+                error: Some(format!("{e:#}")),
+            });
+        send(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::Breakdown(Arc::new(view)),
+        });
     }
     if flags.link {
         emit(seq, send, backend.tree_link_view(), Snapshot::TreeLink);
@@ -774,6 +786,39 @@ mod tests {
             .collect();
         assert_eq!(breakdowns, [cell(3)]);
         assert_eq!(log.lock().unwrap().breakdowns, [cell(3)]);
+    }
+
+    #[test]
+    fn failed_breakdown_is_answered_not_errored() {
+        let (mut fake, _log) = Fake::new();
+        fake.fail_breakdown = Some("boom".into());
+        let cell = CellRef {
+            section: "Life".into(),
+            sub: 0,
+            row: 1,
+            cell: 0,
+        };
+        let events = run_queued(&mut fake, vec![Command::Breakdown(cell.clone())]);
+        assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
+        let answers: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Snapshot {
+                    snapshot: Snapshot::Breakdown(b),
+                    ..
+                } => Some(b.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(answers.len(), 1);
+        assert_eq!(answers[0].cell, cell);
+        assert!(answers[0].sections.is_empty());
+        assert!(
+            answers[0]
+                .error
+                .as_deref()
+                .is_some_and(|m| m.contains("boom"))
+        );
     }
 
     #[test]

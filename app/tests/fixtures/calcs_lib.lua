@@ -1,6 +1,7 @@
 -- Helpers for the Calcs recipes. Runs in unmodified upstream PoB after a build is loaded.
--- Written independently of glue/calcs.lua: it walks upstream's own `sectionList` and applies
--- the rules of CalcSectionControl:UpdateSize and :DrawContent. Nothing here may call our glue.
+-- Written independently of glue/calcs.lua: it walks upstream's own `sectionList`, runs
+-- upstream's own CalcSectionControl:UpdateSize for the enablement (`section.enabled`,
+-- `rowData.enabled`) and applies the rules of :DrawContent. Nothing here may call our glue.
 
 local function actorOf(calcs)
 	return calcs.input.showMinion and calcs.calcsEnv.minion or calcs.calcsEnv.player
@@ -18,14 +19,8 @@ function calcsDump()
 	local actor = actorOf(calcs)
 	local out = {}
 	for _, section in ipairs(calcs.sectionList) do
-		local anyRow = false
-		if calcs:CheckFlag(section) then
-			for _, subSec in ipairs(section.subSection) do
-				for _, rowData in ipairs(subSec.data) do
-					anyRow = anyRow or calcs:CheckFlag(rowData) and true
-				end
-			end
-		end
+		section:UpdateSize()
+		local anyRow = section.enabled
 		local subs = {}
 		for subIndex, subSec in ipairs(section.subSection) do
 			local sub = {
@@ -41,7 +36,7 @@ function calcsDump()
 				end
 				if not subSec.collapsed then
 					for rowIndex, rowData in ipairs(subSec.data) do
-						if calcs:CheckFlag(rowData) and not hasControl(rowData) then
+						if rowData.enabled and not hasControl(rowData) then
 							local row = {
 								index = rowIndex - 1,
 								label = rowData.label,
@@ -196,19 +191,13 @@ function findCell(statKey)
 	local calcs = build.calcsTab
 	local needle = "output:" .. statKey .. "}"
 	for _, section in ipairs(calcs.sectionList) do
-		local anyRow = false
-		if calcs:CheckFlag(section) then
-			for _, subSec in ipairs(section.subSection) do
-				for _, rowData in ipairs(subSec.data) do
-					anyRow = anyRow or calcs:CheckFlag(rowData) and true
-				end
-			end
-		end
+		section:UpdateSize()
+		local anyRow = section.enabled
 		if anyRow then
 			for subIndex, subSec in ipairs(section.subSection) do
 				if not subSec.collapsed then
 					for rowIndex, rowData in ipairs(subSec.data) do
-						if calcs:CheckFlag(rowData) and not hasControl(rowData) then
+						if rowData.enabled and not hasControl(rowData) then
 							for colIndex, colData in ipairs(rowData) do
 								if colData.format and calcs:CheckFlag(colData) and #colData > 0
 									and colData.format:find(needle, 1, true) then

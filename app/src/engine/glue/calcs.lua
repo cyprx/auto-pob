@@ -1,8 +1,13 @@
 -- The Calcs tab's sections, as `CalcSectionControl:DrawContent` would show them.
--- PoB's Draw functions don't run here, so `section.enabled` and `rowData.enabled` (set by
--- `UpdateSize`) can't be trusted: the flags are worked out with `calcsTab:CheckFlag`.
+-- Nothing runs `UpdateSize` here (it also lays out and runs the sections' updateFuncs), so
+-- `section.enabled` and `rowData.enabled` are not kept up to date: the flags are worked out
+-- with `calcsTab:CheckFlag`. The gate checks them against upstream's own `UpdateSize`.
 
 glue = glue or {}
+
+if type(formatCalcStr) ~= "function" then
+	error("PoB's formatCalcStr (Modules/CalcFormat.lua) is missing; this PoB version isn't supported", 0)
+end
 
 -- PoB's `calcsTab:SearchMatch`, without the truthy-number result
 local function search_match(calcs, text)

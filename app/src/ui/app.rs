@@ -63,8 +63,6 @@ pub struct AutoPobApp {
     /// Highest command number sent that produces snapshots, and highest snapshot received.
     last_sent: u64,
     last_snapshot: u64,
-    /// The seq of the latest breakdown query, until it is answered or fails
-    breakdown_seq: Option<u64>,
 
     screen: Screen,
     /// A build is being opened; the build screen waits for this command's snapshots.
@@ -110,7 +108,6 @@ impl AutoPobApp {
             last_unsaved: false,
             last_sent: 0,
             last_snapshot: 0,
-            breakdown_seq: None,
             screen: Screen::List,
             entering: None,
             tab: BuildTab::default(),
@@ -200,12 +197,11 @@ impl AutoPobApp {
                     self.tree.reset();
                     self.calcs.reset();
                     self.notes.reset();
-                    self.breakdown_seq = None;
                 }
                 match snapshot {
                     Snapshot::Build(view) => {
-                        self.last_unsaved = view.unsaved;
                         self.build = Some(view);
+                        self.last_unsaved = self.current_unsaved();
                         if self.pending_save.as_ref().is_some_and(|p| seq >= p.seq) {
                             self.save_succeeded();
                         }
@@ -216,12 +212,7 @@ impl AutoPobApp {
                     }
                     Snapshot::Config(view) => self.config = Some(view),
                     Snapshot::Calcs(_) => self.calcs.on_snapshot(&snapshot),
-                    Snapshot::Breakdown(_) => {
-                        if self.breakdown_seq.is_some_and(|q| seq >= q) {
-                            self.breakdown_seq = None;
-                        }
-                        self.calcs.on_snapshot(&snapshot);
-                    }
+                    Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
                     Snapshot::NodePower(_) | Snapshot::PowerReport(_)
@@ -247,12 +238,6 @@ impl AutoPobApp {
     }
 
     fn on_error(&mut self, seq: u64, message: String) {
-        // A failed breakdown query is the panel's to report, not a notice: the user only hovered.
-        if self.breakdown_seq == Some(seq) {
-            self.breakdown_seq = None;
-            self.calcs.breakdown_failed();
-            return;
-        }
         if self.entering == Some(seq) {
             // the build never opened; go back to where the user was
             self.entering = None;
@@ -606,7 +591,7 @@ impl AutoPobApp {
         }
         // only the latest question matters; the others are about cells the pointer has left
         if let Some(query) = calcs_out.queries.pop() {
-            self.breakdown_seq = Some(self.engine.send(query));
+            self.engine.send(query);
         }
         if let Some(id) = calcs_out.focus_node {
             let now = ui.input(|i| i.time);
@@ -1072,6 +1057,7 @@ mod tests {
             Ok(crate::engine::BreakdownView {
                 cell: cell.clone(),
                 sections: vec![],
+                error: None,
             })
         }
 
@@ -1830,26 +1816,30 @@ mod tests {
     }
 
     #[test]
-    fn breakdown_error_marks_panel_not_notice() {
+    fn errors_are_notices_and_a_failed_breakdown_answer_is_not() {
         let (mut app, _ctx) = tree_app();
         let notices = app.notices.len();
-        app.breakdown_seq = Some(77);
         app.on_event(Event::Error {
             seq: 76,
             message: "other".into(),
         });
-        assert!(
-            !app.calcs.breakdown_unavailable(),
-            "another seq is not ours"
-        );
+        assert!(!app.calcs.breakdown_unavailable());
         assert_eq!(app.notices.len(), notices + 1);
-        app.on_event(Event::Error {
+        let failed = crate::engine::BreakdownView {
+            cell: crate::engine::CellRef {
+                section: "s".into(),
+                sub: 0,
+                row: 0,
+                cell: 0,
+            },
+            sections: vec![],
+            error: Some("boom".into()),
+        };
+        app.on_event(Event::Snapshot {
             seq: 77,
-            message: "boom".into(),
+            snapshot: Snapshot::Breakdown(Arc::new(failed)),
         });
-        assert!(app.calcs.breakdown_unavailable());
         assert_eq!(app.notices.len(), notices + 1, "no notice for a hover");
-        assert_eq!(app.breakdown_seq, None);
     }
 
     #[test]

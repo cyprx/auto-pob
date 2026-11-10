@@ -67,6 +67,23 @@ impl Default for CalcsUi {
     }
 }
 
+/// Whether two views hold the same sections and selector, ignoring the search's match flags.
+fn same_numbers(a: &CalcsView, b: &CalcsView) -> bool {
+    let plain = |v: &CalcsView| {
+        let mut v = v.clone();
+        for section in &mut v.sections {
+            for sub in &mut section.subs {
+                sub.search_match = false;
+                for row in &mut sub.rows {
+                    row.search_match = false;
+                }
+            }
+        }
+        (v.sections, v.selector)
+    };
+    plain(a) == plain(b)
+}
+
 impl CalcsUi {
     /// Forgets the build's state, as for another build.
     pub fn reset(&mut self) {
@@ -83,8 +100,15 @@ impl CalcsUi {
     pub fn on_snapshot(&mut self, snapshot: &Snapshot) {
         match snapshot {
             Snapshot::Calcs(view) => {
+                // typing in the search box changes only the match flags, which no breakdown shows
+                let changed = self
+                    .view
+                    .as_ref()
+                    .is_none_or(|old| !same_numbers(old, view));
                 self.view = Some(view.clone());
-                self.bd.calcs_changed();
+                if changed {
+                    self.bd.calcs_changed();
+                }
             }
             Snapshot::Breakdown(view) => self.bd.on_view(view),
             _ => {}
@@ -94,11 +118,6 @@ impl CalcsUi {
     #[cfg(test)]
     pub fn breakdown_unavailable(&self) -> bool {
         self.bd.failed()
-    }
-
-    /// The engine failed the breakdown query that was pending.
-    pub fn breakdown_failed(&mut self) {
-        self.bd.query_failed();
     }
 
     /// `busy`: the engine hasn't caught up with what was sent, so typed text stays.
@@ -754,6 +773,7 @@ mod tests {
         use crate::engine::views::{BreakdownColumn, BreakdownRow, BreakdownSection};
         BreakdownView {
             cell: target(),
+            error: None,
             sections: vec![BreakdownSection::Table {
                 label: None,
                 footer: None,
@@ -782,6 +802,14 @@ mod tests {
                     })
                     .collect(),
             }],
+        }
+    }
+
+    fn failure() -> BreakdownView {
+        BreakdownView {
+            cell: target(),
+            sections: vec![],
+            error: Some("boom".into()),
         }
     }
 
@@ -844,7 +872,9 @@ mod tests {
         let mut h = Harness::new(sample(None));
         h.click_out(CELL);
         answer(&mut h, table(&[("a", None, false)]));
-        h.ui.on_snapshot(&Snapshot::Calcs(Arc::new(sample(None))));
+        let mut changed = sample(None);
+        changed.selector.mode.selected += 1;
+        h.ui.on_snapshot(&Snapshot::Calcs(Arc::new(changed)));
         let out = h.frame_out(h.time + 0.01, vec![]);
         assert_eq!(
             debug(&out.queries),
@@ -852,6 +882,51 @@ mod tests {
         );
         let out = h.frame_out(h.time + 0.01, vec![]);
         assert!(out.queries.is_empty());
+    }
+
+    #[test]
+    fn unpinned_breakdown_refreshes_on_new_calcs_view() {
+        let mut h = Harness::new(sample(None));
+        let t = h.time;
+        let pos = h.ui.rects.map[CELL].center();
+        h.frame_out(t, vec![Event::PointerMoved(pos)]);
+        let asked = h.frame_out(t + 0.2, vec![]);
+        assert_eq!(asked.queries.len(), 1);
+        answer(&mut h, table(&[("old", None, false)]));
+        assert!(h.ui.bd.shown.is_some());
+        let mut changed = sample(None);
+        changed.selector.mode.selected += 1;
+        h.ui.on_snapshot(&Snapshot::Calcs(Arc::new(changed)));
+        let out = h.frame_out(h.time + 0.01, vec![]);
+        assert_eq!(
+            debug(&out.queries),
+            [format!("{:?}", Command::Breakdown(target()))],
+            "the cell on show is asked about again"
+        );
+        answer(&mut h, table(&[("new", None, false)]));
+        let out = h.frame_out(h.time + 0.01, vec![]);
+        assert!(out.queries.is_empty());
+        assert!(h.ui.bd.shown.is_some());
+    }
+
+    #[test]
+    fn search_does_not_requery_pinned_breakdown() {
+        let mut h = Harness::new(sample(None));
+        h.click_out(CELL);
+        answer(&mut h, table(&[("a", None, false)]));
+        let mut searched = sample(None);
+        searched.search = "li".into();
+        searched.sections[0].subs[0].search_match = !searched.sections[0].subs[0].search_match;
+        searched.sections[0].subs[0].rows[0].search_match =
+            !searched.sections[0].subs[0].rows[0].search_match;
+        h.ui.on_snapshot(&Snapshot::Calcs(Arc::new(searched)));
+        let out = h.frame_out(h.time + 0.01, vec![]);
+        assert!(out.queries.is_empty(), "only match flags changed");
+        let mut changed = sample(None);
+        changed.selector.mode.selected += 1;
+        h.ui.on_snapshot(&Snapshot::Calcs(Arc::new(changed)));
+        let out = h.frame_out(h.time + 0.02, vec![]);
+        assert_eq!(out.queries.len(), 1);
     }
 
     #[test]
@@ -864,6 +939,7 @@ mod tests {
             BreakdownView {
                 cell: target(),
                 sections: vec![],
+                error: None,
             },
         );
         assert_eq!(h.ui.bd.pinned, None);
@@ -984,7 +1060,7 @@ mod tests {
     fn failed_query_says_so() {
         let mut h = Harness::new(sample(None));
         h.click_out(CELL);
-        h.ui.breakdown_failed();
+        answer(&mut h, failure());
         assert!(h.ui.bd.visible());
         assert!(h.ui.breakdown_unavailable());
         h.frame(vec![]);
@@ -995,7 +1071,7 @@ mod tests {
         h.frame_out(t, vec![Event::PointerMoved(pos)]);
         let asked = h.frame_out(t + 0.2, vec![]);
         assert_eq!(asked.queries.len(), 1);
-        h.ui.breakdown_failed();
+        answer(&mut h, failure());
         let again = h.frame_out(t + 0.4, vec![]);
         assert!(
             again.queries.is_empty(),

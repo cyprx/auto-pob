@@ -238,9 +238,11 @@ impl Backend for PobBackend {
             }
             Command::Save => {
                 self.call::<_, ()>("save", ())?;
+                // PoB's save rewrites the notes' `^_` escapes
                 Ok(Affected {
                     build: true,
                     list: true,
+                    notes: true,
                     ..Affected::default()
                 })
             }
@@ -250,9 +252,11 @@ impl Backend for PobBackend {
                 overwrite,
             } => {
                 self.call::<_, ()>("save_as", (folder, name, overwrite))?;
+                // PoB's save rewrites the notes' `^_` escapes
                 Ok(Affected {
                     build: true,
                     list: true,
+                    notes: true,
                     ..Affected::default()
                 })
             }

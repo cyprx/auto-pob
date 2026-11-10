@@ -113,18 +113,14 @@ impl State {
         self.shown.is_some() || self.pinned.is_some() || self.failed
     }
 
-    /// New numbers from the engine: whatever is on show is out of date.
+    /// New numbers from the engine: whatever is on show is out of date, so it is asked for
+    /// again (the pinned cell, or else the one on show).
     pub fn calcs_changed(&mut self) {
-        if self.pinned.is_some() {
+        if self.pinned.is_some() || self.shown.is_some() {
             self.requery = true;
         } else {
             self.requested = None;
         }
-    }
-
-    pub fn query_failed(&mut self) {
-        self.failed = true;
-        self.shown = None;
     }
 
     /// A click on a cell: pins it, or unpins it if it is the pinned one.
@@ -146,7 +142,11 @@ impl State {
         if !wanted {
             return;
         }
-        self.failed = false;
+        self.failed = view.error.is_some();
+        if self.failed {
+            self.shown = None;
+            return;
+        }
         if view.sections.is_empty() {
             // a cell with no breakdown (any more) can't stay pinned
             self.pinned = None;
@@ -174,6 +174,13 @@ impl State {
                 queries.push(Command::Breakdown(cell.clone()));
             }
             return;
+        }
+        if std::mem::take(&mut self.requery)
+            && let Some(shown) = &self.shown
+        {
+            // new numbers: the panel on show is refreshed even if the pointer has moved on
+            self.requested = Some(shown.cell.clone());
+            queries.push(Command::Breakdown(shown.cell.clone()));
         }
         let Some(cell) = hovered else {
             self.hover = None;

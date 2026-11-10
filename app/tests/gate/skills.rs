@@ -695,6 +695,7 @@ fn gem_recipes_match_pob() {
     let _guard = lock();
     let gems = check_skills_recipe("gems");
     let checks = checkpoints(&gems);
+    let gem_checks = checks.clone();
     let all_gems = || {
         checks
             .iter()
@@ -709,12 +710,22 @@ fn gem_recipes_match_pob() {
         all_gems().any(|g| g.count.is_some_and(|c| c > 1)),
         "a count above 1"
     );
+    // the two toggles are told apart: one off at a time, each at its own checkpoint
     let vaal = check_skills_recipe("vaal");
     let checks = checkpoints(&vaal);
-    let toggled = &checks[0].groups.last().unwrap().gems[0];
-    let (t1, t2) = (toggled.toggle1.as_ref(), toggled.toggle2.as_ref());
-    assert!(t1.is_some_and(|t| !t.on), "{toggled:?}");
-    assert!(t2.is_some_and(|t| !t.on), "{toggled:?}");
+    let state = |i: usize| {
+        let gem = &checks[i].groups.last().unwrap().gems[0];
+        (
+            gem.toggle1.as_ref().expect("toggle 1").on,
+            gem.toggle2.as_ref().expect("toggle 2").on,
+        )
+    };
+    assert_eq!(state(0), (true, false));
+    assert_eq!(state(1), (false, true));
+    // the empty-text fallbacks are visible: Melee Splash goes from level 18 to its natural max
+    let level = |i: usize| gem_checks[i].groups.last().unwrap().gems[1].level;
+    assert_eq!(level(0), 18);
+    assert_ne!(level(1), 18);
 }
 
 /// The attack fixture with the `Fireblal` group (a gem PoB doesn't know) pasted as the last group.
@@ -819,7 +830,7 @@ fn enabled_on_unknown_gem_is_refused() {
             on: false,
         })
         .unwrap_err();
-    assert!(err.to_string().contains("unknown"), "{err}");
+    assert!(err.to_string().contains("isn't in PoB's data"), "{err}");
     assert_eq!(s.backend.skills_view().unwrap(), before);
 }
 
@@ -850,5 +861,13 @@ fn overlong_level_is_refused() {
         let err = s.run(command).expect_err(&shown);
         assert!(err.to_string().contains("too long"), "{shown}: {err}");
     }
+    assert_eq!(s.backend.skills_view().unwrap(), before);
+    // text the filter removes entirely does nothing, as EditControl:Insert does
+    s.run(Command::SetGemLevel {
+        group: 0,
+        slot: 0,
+        text: "abc".into(),
+    })
+    .unwrap();
     assert_eq!(s.backend.skills_view().unwrap(), before);
 }

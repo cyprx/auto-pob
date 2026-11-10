@@ -259,7 +259,12 @@ end
 -- Types into an edit control as PoB's EditControl would (R3)
 local function type_into(control, text)
 	text = text:gsub("\r", "")
+	local typed = text
 	text = text:gsub(control.filterPattern, "")
+	-- everything was filtered out: EditControl:Insert does nothing
+	if typed ~= "" and text == "" then
+		return
+	end
 	if control.limit and #text > control.limit then
 		error("the text is too long", 0)
 	end
@@ -392,7 +397,7 @@ function glue.skills_set_gem_enabled(group_index, slot_index, on)
 	local group, slot = gem_slot(group_index, slot_index)
 	-- PoB's callback reads `gemData.vaalGem` first and would raise on a gem it doesn't know
 	if not group.gemList[slot_index].gemData then
-		error("the gem is unknown", 0)
+		error("the gem isn't in PoB's data", 0)
 	end
 	press_check(slot.enabled, on)
 end

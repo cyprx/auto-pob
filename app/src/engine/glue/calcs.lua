@@ -180,17 +180,31 @@ function selector_view(calcs)
 	}
 end
 
--- A control of the selector, after the model is synced. Hidden ones can be pressed too: the
--- model decides what is shown, and the UI only offers what is.
+-- A control of the selector, after the model is synced. Used by the commands that may press a
+-- control the selector hides: show-minion (the check box only shows once the minion is on,
+-- yet the player fallback must work) and the counts (the stage box can be pressed hidden).
 local function selector_control(name)
 	local control = refreshed_select(pob.build.calcsTab).controls[name]
 	if not control then error("no such control", 0) end
 	return control
 end
 
+local NAMES = {
+	mainSocketGroup = "Group", mainSkill = "Skill", mainSkillPart = "Part",
+	mainSkillMinion = "Minion", mainSkillMinionSkill = "Minion skill", mode = "Mode",
+}
+
 -- `index` is 1-based. PoB's own `selFunc` runs; `SetSel` clamps, so check the range first.
 function glue.calcs_select(name, index)
-	local control = selector_control(name)
+	-- A hidden list can be stale (an earlier skill's) and PoB's callbacks assume the control
+	-- is shown, so only the controls the selector shows can be pressed.
+	local calcs = pob.build.calcsTab
+	local section = refreshed_select(calcs)
+	local always = name == "mainSocketGroup" or name == "mode"
+	local control = shown_control(calcs, section, name, always)
+	if not control or (name == "mainSocketGroup" and #pob.build.skillsTab.socketGroupList == 0) then
+		error((NAMES[name] or name) .. " isn't available for this skill", 0)
+	end
 	if index < 1 or index > #control.list then error("no such choice", 0) end
 	control:SetSel(index)
 end

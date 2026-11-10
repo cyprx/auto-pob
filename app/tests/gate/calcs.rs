@@ -265,8 +265,10 @@ fn skill_selector_matches_pob() {
     assert_eq!(first.mode.labels.len(), 4);
     assert_eq!(first.mode.selected, 3);
     assert!(first.mode_tooltip.contains("Unbuffed"));
+    let before = s.backend.calcs_view().unwrap().sections;
     select(&mut s, &lua, CalcsControl::Part, "mainSkillPart", 1);
     let after = assert_matches_pob(&mut s, &lua, "attack part 1");
+    assert_ne!(before, s.backend.calcs_view().unwrap().sections, "part 1");
     assert_eq!(after.part.unwrap().selected, 1);
     for (i, mode) in MODES.iter().enumerate() {
         select(&mut s, &lua, CalcsControl::Mode, "mode", i);
@@ -279,29 +281,65 @@ fn skill_selector_matches_pob() {
     let first = assert_matches_pob(&mut s, &lua, "dot start");
     let skill = first.skill.expect("a skill list");
     assert!(skill.labels.len() > 1, "{:?}", skill.labels);
+    let before = s.backend.calcs_view().unwrap().sections;
     select(&mut s, &lua, CalcsControl::Skill, "mainSkill", 1);
     let after = assert_matches_pob(&mut s, &lua, "dot skill 1");
+    assert_ne!(before, s.backend.calcs_view().unwrap().sections, "skill 1");
     assert_eq!(after.skill.unwrap().selected, 1);
 
     // minion: show the minion, then pick its other skill
     let (mut s, lua) = both("minion");
     let first = assert_matches_pob(&mut s, &lua, "minion start");
     assert_eq!(first.show_minion, Some(false));
+    let before = s.backend.calcs_view().unwrap().sections;
     s.run(Command::SetShowMinion { show: true }).unwrap();
     lua.load("calcsShowMinion(true)").exec().unwrap();
     let shown = assert_matches_pob(&mut s, &lua, "minion shown");
     assert_eq!(shown.show_minion, Some(true));
+    let minion_cells = s.backend.calcs_view().unwrap().sections;
+    assert_ne!(before, minion_cells, "showing the minion changed nothing");
     let skills = shown.minion_skill.expect("a minion skill list");
-    if skills.labels.len() > 1 {
-        select(
-            &mut s,
-            &lua,
-            CalcsControl::MinionSkill,
-            "mainSkillMinionSkill",
-            1,
-        );
-        let after = assert_matches_pob(&mut s, &lua, "minion skill 1");
-        assert_eq!(after.minion_skill.unwrap().selected, 1);
+    assert!(skills.labels.len() > 1, "{:?}", skills.labels);
+    select(
+        &mut s,
+        &lua,
+        CalcsControl::MinionSkill,
+        "mainSkillMinionSkill",
+        1,
+    );
+    let after = assert_matches_pob(&mut s, &lua, "minion skill 1");
+    assert_eq!(after.minion_skill.unwrap().selected, 1);
+    assert_ne!(
+        minion_cells,
+        s.backend.calcs_view().unwrap().sections,
+        "the minion skill changed nothing"
+    );
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn hidden_calcs_control_is_an_error() {
+    let _guard = lock();
+    let (mut s, _lua) = both("dot");
+    let before = s.backend.calcs_view().unwrap();
+    assert!(before.selector.part.is_none());
+    let err = s
+        .run(Command::SetCalcsSelect {
+            control: CalcsControl::Part,
+            index: 0,
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("isn't available"), "{err}");
+    assert_eq!(s.backend.calcs_view().unwrap(), before);
+    assert!(!s.backend.build_view().unwrap().unsaved);
+
+    let mut s = Session::start("calcs-hidden-new");
+    s.open_fixture("new", &fixture_xml("new"));
+    for control in [CalcsControl::Skill, CalcsControl::Group] {
+        let err = s
+            .run(Command::SetCalcsSelect { control, index: 0 })
+            .unwrap_err();
+        assert!(err.to_string().contains("isn't available"), "{err}");
     }
 }
 

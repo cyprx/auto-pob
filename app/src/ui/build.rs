@@ -16,13 +16,14 @@ pub enum BuildAction {
 pub enum BuildTab {
     #[default]
     Tree,
+    Calcs,
     Config,
 }
 
 impl BuildTab {
-    /// The Config and Tree tabs have undo history.
+    /// The Config, Tree and Calcs tabs have undo history.
     pub fn has_undo(self) -> bool {
-        matches!(self, BuildTab::Config | BuildTab::Tree)
+        matches!(self, BuildTab::Config | BuildTab::Tree | BuildTab::Calcs)
     }
 }
 
@@ -72,6 +73,7 @@ pub fn top_bar(
 pub fn tab_strip(ui: &mut egui::Ui, tab: &mut BuildTab) {
     ui.horizontal(|ui| {
         ui.selectable_value(tab, BuildTab::Tree, "Tree");
+        ui.selectable_value(tab, BuildTab::Calcs, "Calcs");
         ui.selectable_value(tab, BuildTab::Config, "Config");
     });
 }

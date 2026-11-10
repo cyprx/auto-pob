@@ -1,6 +1,7 @@
 pub mod app;
 pub mod build;
 pub mod build_list;
+pub mod calcs;
 pub mod config;
 pub mod sidebar;
 pub mod startup;

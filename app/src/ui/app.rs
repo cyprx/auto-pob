@@ -9,6 +9,7 @@ use crate::pob_files::DownloadProgress;
 use crate::theme;
 use crate::ui::build::{self, BuildAction, BuildTab};
 use crate::ui::build_list::{BuildListUi, ListScreenAction};
+use crate::ui::calcs::{CalcsOutput, CalcsUi};
 use crate::ui::config::ConfigUi;
 use crate::ui::tree::{TreeOutput, TreeTab};
 use crate::ui::unsaved::{Pending, PromptChoice, Resolution, needs_prompt, resolve};
@@ -67,6 +68,7 @@ pub struct AutoPobApp {
     entering: Option<u64>,
     tab: BuildTab,
     tree: TreeTab,
+    calcs: CalcsUi,
     config_ui: ConfigUi,
     list_ui: BuildListUi,
 
@@ -108,6 +110,7 @@ impl AutoPobApp {
             entering: None,
             tab: BuildTab::default(),
             tree: TreeTab::default(),
+            calcs: CalcsUi::default(),
             config_ui: ConfigUi::default(),
             list_ui: BuildListUi::default(),
             notices: Vec::new(),
@@ -185,6 +188,7 @@ impl AutoPobApp {
                 if self.entering.is_some_and(|e| seq >= e) {
                     self.entering = None;
                     self.tree.reset();
+                    self.calcs.reset();
                 }
                 match snapshot {
                     Snapshot::Build(view) => {
@@ -199,8 +203,9 @@ impl AutoPobApp {
                         self.stats = Some(view);
                     }
                     Snapshot::Config(view) => self.config = Some(view),
-                    // the Calcs and Notes tabs' UI comes later
-                    Snapshot::Calcs(_) | Snapshot::Breakdown(_) | Snapshot::Notes(_) => {}
+                    Snapshot::Calcs(_) => self.calcs.on_snapshot(&snapshot),
+                    // the breakdown and the Notes tab's UI come later
+                    Snapshot::Breakdown(_) | Snapshot::Notes(_) => {}
                     // power results of the build being left
                     Snapshot::NodePower(_) | Snapshot::PowerReport(_)
                         if self.entering.is_some() => {}
@@ -339,6 +344,7 @@ impl AutoPobApp {
         let tab = match self.tab {
             BuildTab::Config => Tab::Config,
             BuildTab::Tree => Tab::Tree,
+            BuildTab::Calcs => Tab::Calcs,
         };
         self.send(if redo {
             Command::Redo(tab)
@@ -498,6 +504,7 @@ impl AutoPobApp {
         egui::Panel::top("top_bar").show(ui, |ui| {
             let history = match self.tab {
                 BuildTab::Tree => self.tree.history(),
+                BuildTab::Calcs => self.calcs.history(),
                 _ => (view.can_undo, view.can_redo),
             };
             action = build::top_bar(ui, &view, self.tab, history).or(action);
@@ -510,12 +517,14 @@ impl AutoPobApp {
 
         let mut config_commands = Vec::new();
         let mut tree_out = TreeOutput::default();
+        let mut calcs_out = CalcsOutput::default();
         let config = self.config.clone();
         egui::CentralPanel::default().show(ui, |ui| {
             build::tab_strip(ui, &mut self.tab);
             ui.separator();
             match self.tab {
                 BuildTab::Tree => tree_out = self.tree.show(ui, behind),
+                BuildTab::Calcs => calcs_out = self.calcs.show(ui, behind),
                 BuildTab::Config => match &config {
                     Some(config) => {
                         config_commands = self.config_ui.show(ui, config, behind);
@@ -537,6 +546,13 @@ impl AutoPobApp {
         }
         // questions are answered with snapshots but never leave the app waiting
         for query in tree_out.queries {
+            self.engine.send(query);
+        }
+
+        for command in calcs_out.commands {
+            self.send(command);
+        }
+        for query in calcs_out.queries {
             self.engine.send(query);
         }
 
@@ -1737,6 +1753,24 @@ mod tests {
             ),
         );
         assert_eq!(sent_since(&app, before), ["Undo(Tree)", "Redo(Tree)"]);
+    }
+
+    #[test]
+    fn ctrl_z_on_calcs_sends_calcs_undo() {
+        let (mut app, ctx) = tree_app();
+        app.tab = BuildTab::Calcs;
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        frame(&mut app, &ctx, ctrl(egui::Key::Z));
+        frame(
+            &mut app,
+            &ctx,
+            key_with(
+                egui::Key::Z,
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            ),
+        );
+        assert_eq!(sent_since(&app, before), ["Undo(Calcs)", "Redo(Calcs)"]);
     }
 
     #[test]

@@ -2058,6 +2058,57 @@ fn delete_last_spec_is_an_error() {
     assert_eq!(s.backend.tree_state_view().unwrap().specs.len(), 1);
 }
 
+/// No link makes the import click fail after it added the tree (decoding errors come first),
+/// so the step that follows the append, the new tree's first undo state, is made to fail.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn failed_import_leaves_no_half_added_tree() {
+    let _guard = lock();
+    let mut s = attack_session("tree-half-import");
+    let before = our_checkpoint(&mut s);
+    let link = upstream_link("attack");
+    s.backend
+        .lua
+        .load(
+            "local class = getmetatable(pob.build.spec).__index
+             real_add_undo_state = class.AddUndoState
+             class.AddUndoState = function() error('boom') end",
+        )
+        .exec()
+        .unwrap();
+    let result = s.run(Command::ImportTreeLink {
+        title: "Half".into(),
+        url: link,
+    });
+    // put the real step back before asserting
+    s.backend
+        .lua
+        .load("getmetatable(pob.build.spec).__index.AddUndoState = real_add_undo_state")
+        .exec()
+        .unwrap();
+    let error = result.unwrap_err();
+    assert!(error.to_string().ends_with("boom"), "{error}");
+    assert_eq!(
+        our_checkpoint(&mut s),
+        before,
+        "a failed import left a tree"
+    );
+    let restored: bool = s
+        .backend
+        .lua
+        .load("return getmetatable(pob.build.spec).__index.AddUndoState == real_add_undo_state")
+        .eval()
+        .unwrap();
+    assert!(restored);
+    // the engine still works: a good import adds the tree
+    s.run(Command::ImportTreeLink {
+        title: "Whole".into(),
+        url: upstream_link("attack"),
+    })
+    .unwrap();
+    assert_eq!(our_checkpoint(&mut s).spec_titles.len(), 2);
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn spec_command_errors() {

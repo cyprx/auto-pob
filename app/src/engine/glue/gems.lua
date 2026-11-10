@@ -86,6 +86,14 @@ with_search = function(fn)
 	return result, false
 end
 
+-- Starts the DPS sort again after it failed: PoB's cache check is satisfied, so it wouldn't.
+function glue.gem_dps_restart()
+	if search then
+		search.control.dpsBuilder = nil
+		search.control.dpsBuildFlag = true
+	end
+end
+
 -- Whether the search's DPS sort has work: PoB's own cache check (UpdateSortCache, which
 -- notices a new output revision, changed options, group or gem) starts it again when needed,
 -- then a pending start or a live coroutine is work (GemSelectControl.lua:492-509). A search

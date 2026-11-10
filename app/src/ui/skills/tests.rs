@@ -527,3 +527,17 @@ fn picker_replies_reach_the_open_picker_and_closing_sends_close() {
     assert_eq!(debug(&o.commands), ["CloseGemSearch"]);
     assert!(!h.ui.has_dialog());
 }
+
+#[test]
+fn the_picker_closes_when_the_groups_change_under_it() {
+    let mut h = Harness::new(sample());
+    h.click("gem_2_name");
+    assert!(h.ui.has_dialog());
+    // a group was added: index 0 may mean something else now
+    let mut more = sample();
+    more.groups.push(group("New", vec![]));
+    h.ui.on_snapshot(&Snapshot::Skills(Arc::new(more)));
+    let o = h.frame(vec![]);
+    assert_eq!(debug(&o.commands), ["CloseGemSearch"]);
+    assert!(!h.ui.has_dialog());
+}

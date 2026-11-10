@@ -2259,11 +2259,23 @@ fn gem_search_ends_and_refuses() {
     // structural commands end the search
     let query = gem_query(0, GemTarget::Slot(0), "fire", GemFilter::All);
     s.run(Command::SearchGems(query.clone())).unwrap();
-    s.run(Command::AddSocketGroup).unwrap();
+    let affected = s.run(Command::AddSocketGroup).unwrap();
+    // the picker is told: one last view, then nothing
+    assert!(affected.gem_search);
+    let last = s.backend.gem_search_view().unwrap().expect("an ended view");
+    assert!(last.ended && last.rows.is_empty() && last.query == query);
     assert!(s.backend.gem_search_view().unwrap().is_none());
     assert_eq!(s.backend.next_background(), None);
     s.run(Command::SearchGems(query.clone())).unwrap();
-    s.run(Command::CloseGemSearch).unwrap();
+    // closing is the picker's own doing: no last view
+    let affected = s.run(Command::CloseGemSearch).unwrap();
+    assert!(!affected.gem_search);
+    assert!(s.backend.gem_search_view().unwrap().is_none());
+    // a delete during a search ends it the same way
+    s.run(Command::SearchGems(query.clone())).unwrap();
+    s.run(Command::DeleteGem { group: 0, slot: 0 }).unwrap();
+    let last = s.backend.gem_search_view().unwrap().expect("an ended view");
+    assert!(last.ended);
     assert!(s.backend.gem_search_view().unwrap().is_none());
     // an option PoB's sort cache checks restarts the sort; it is asked of PoB's control, so
     // choosing the field already chosen starts nothing
@@ -2302,6 +2314,46 @@ fn gem_search_ends_and_refuses() {
     assert!(last.ended && !last.sorting && last.rows.is_empty());
     assert!(s.backend.gem_search_view().unwrap().is_none());
     assert_eq!(s.backend.next_background(), None);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn gem_dps_retry_restarts_a_failed_sort() {
+    let _guard = lock();
+    let (mut s, _) = session_on("attack", "dps-retry");
+    let query = gem_query(0, GemTarget::Slot(0), "", GemFilter::All);
+    // break the sort on our side only
+    let box_lua = "pob.build.skillsTab.gemSlots[1].nameSpec";
+    s.backend
+        .lua
+        .load(format!(
+            "{box_lua}.DPSBuilder = function() error('broken', 0) end"
+        ))
+        .exec()
+        .unwrap();
+    s.run(Command::SearchGems(query.clone())).unwrap();
+    assert_eq!(s.backend.next_background(), Some(BackgroundTask::GemDps));
+    assert!(
+        s.backend
+            .background_step(BackgroundTask::GemDps, &|_| {})
+            .is_err()
+    );
+    assert_eq!(
+        s.backend.next_background(),
+        None,
+        "a failed job stays stopped"
+    );
+    // undo the breakage and send the same search again (Retry)
+    s.backend
+        .lua
+        .load(format!("{box_lua}.DPSBuilder = nil"))
+        .exec()
+        .unwrap();
+    s.run(Command::SearchGems(query.clone())).unwrap();
+    assert_eq!(s.backend.next_background(), Some(BackgroundTask::GemDps));
+    finish_gem_dps(&mut s);
+    let view = s.backend.gem_search_view().unwrap().unwrap();
+    assert!(!view.sorting && view.rows.iter().any(|r| r.dps.is_some()));
 }
 
 #[test]

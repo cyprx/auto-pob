@@ -59,6 +59,8 @@ pub struct SkillsUi {
     tooltip_asked: Option<usize>,
     sets: sets::State,
     picker: Option<GemPicker>,
+    /// A snapshot changed the groups under the open picker
+    close_picker: bool,
     /// The frame's time, for what opens a picker
     now: f64,
     /// A gem name in the table hovered since this time
@@ -135,6 +137,15 @@ impl SkillsUi {
                 }
                 let old = self.view.as_ref().map_or(0, |v| v.groups.len());
                 let n = view.groups.len();
+                // the picker's group index may mean another group now (or none)
+                if self.view.is_some()
+                    && self
+                        .picker
+                        .as_ref()
+                        .is_some_and(|p| n != old || p.group() >= n)
+                {
+                    self.close_picker = true;
+                }
                 if std::mem::take(&mut self.select_new) && n > old {
                     self.selected = n - 1;
                 }
@@ -227,6 +238,9 @@ impl SkillsUi {
         let ctx = ui.ctx().clone();
         self.dialogs(&ctx, &view, &mut out);
         self.sets_window(&ctx, &view, &mut out);
+        if std::mem::take(&mut self.close_picker) && self.picker.take().is_some() {
+            out.commands.push(Command::CloseGemSearch);
+        }
         if let Some(picker) = &mut self.picker {
             let shown = picker.show(ui, now);
             out.commands.extend(shown.commands);

@@ -207,10 +207,13 @@ impl GemPicker {
                 self.scroll_to_selected = true;
                 PickerAction::None
             }
-            PickerKey::Enter => match self.pick(self.selected.unwrap_or(0)) {
-                Some(command) => PickerAction::Pick(command),
-                None => PickerAction::None,
-            },
+            // nothing highlighted picks the first gem, never the imbued popup's "None"
+            PickerKey::Enter => {
+                match self.pick(self.selected.unwrap_or(usize::from(self.imbued()))) {
+                    Some(command) => PickerAction::Pick(command),
+                    None => PickerAction::None,
+                }
+            }
         }
     }
 
@@ -225,6 +228,10 @@ impl GemPicker {
         }
         self.failed = false;
         self.percent = None;
+        // a tooltip answers the list it was asked about
+        self.tooltip_asked = None;
+        self.tooltip = None;
+        self.hover = None;
         self.sent = Some(want.clone());
         Some(Command::SearchGems(want))
     }
@@ -261,7 +268,7 @@ impl GemPicker {
 
         let ctx = ui.ctx().clone();
         let mut open = true;
-        egui::Window::new(match self.target {
+        let window = egui::Window::new(match self.target {
             GemTarget::Imbued => "Imbued support",
             GemTarget::Slot(_) => "Choose a gem",
         })
@@ -270,6 +277,18 @@ impl GemPicker {
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(&ctx, |ui| self.body(ui, now, &mut out));
+        // a press outside the popup closes it
+        if let Some(window) = &window {
+            let outside = ctx.input(|i| {
+                i.pointer.primary_pressed()
+                    && i.pointer
+                        .interact_pos()
+                        .is_some_and(|p| !window.response.rect.contains(p))
+            });
+            if outside {
+                out.close = true;
+            }
+        }
         if !open || self.ended {
             out.close = true;
         }
@@ -626,6 +645,60 @@ mod tests {
             debug(&o.commands),
             ["SetImbuedSupport { group: 0, gem_id: Some(\"a\") }"]
         );
+    }
+
+    #[test]
+    fn enter_in_the_imbued_popup_picks_the_first_gem_not_none() {
+        let mut p = answered(GemTarget::Imbued, &["a", "b"]);
+        let PickerAction::Pick(c) = p.key(PickerKey::Enter) else {
+            panic!("Enter picks");
+        };
+        assert_eq!(
+            format!("{c:?}"),
+            "SetImbuedSupport { group: 0, gem_id: Some(\"a\") }"
+        );
+        // None is reached by the arrows
+        let mut p = answered(GemTarget::Imbued, &["a", "b"]);
+        p.key(PickerKey::Down);
+        let PickerAction::Pick(c) = p.key(PickerKey::Enter) else {
+            panic!("Enter picks");
+        };
+        assert_eq!(
+            format!("{c:?}"),
+            "SetImbuedSupport { group: 0, gem_id: None }"
+        );
+    }
+
+    #[test]
+    fn a_press_outside_closes_the_picker() {
+        let mut h = Harness::new(GemTarget::Slot(0), &["a"]);
+        for _ in 0..3 {
+            h.frame(vec![]);
+        }
+        let pos = Pos2::new(3.0, 3.0);
+        let o = h.frame(vec![
+            Event::PointerMoved(pos),
+            Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            },
+        ]);
+        assert!(o.close && o.commands.is_empty());
+    }
+
+    #[test]
+    fn a_new_query_forgets_the_tooltip() {
+        let mut p = answered(GemTarget::Slot(0), &["a"]);
+        p.tooltip_asked = Some(GemTooltipQuery {
+            group: 0,
+            target: GemTarget::Slot(0),
+            gem_id: Some("a".into()),
+        });
+        p.set_text("x", 1.0);
+        assert!(p.tick(1.2).is_some());
+        assert!(p.tooltip_asked.is_none() && p.tooltip.is_none());
     }
 
     #[test]

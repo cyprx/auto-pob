@@ -32,6 +32,8 @@ pub struct PobBackend {
     gem_search: Option<GemSearchQuery>,
     /// A DPS step failed; the job stays stopped until the next `SearchGems`.
     gem_failed: bool,
+    /// A command ended the open search; its last view (`ended: true`) is still to be sent.
+    gem_ended: Option<GemSearchQuery>,
 }
 
 /// Runs before the bootstrap.
@@ -117,6 +119,7 @@ impl PobBackend {
             power_failed: false,
             gem_search: None,
             gem_failed: false,
+            gem_ended: None,
         })
     }
 
@@ -279,8 +282,13 @@ impl PobBackend {
                         query.filter.pob_tag(),
                     ),
                 )?;
+                // a failed sort stopped with PoB's cache check satisfied, so the same search
+                // wouldn't start it again: Retry asks for the restart
+                if std::mem::take(&mut self.gem_failed) {
+                    self.call::<_, ()>("gem_dps_restart", ())?;
+                }
                 self.gem_search = Some(query);
-                self.gem_failed = false;
+                self.gem_ended = None;
                 Ok(Affected {
                     gem_search: true,
                     ..Affected::default()
@@ -728,9 +736,16 @@ impl Backend for PobBackend {
         // a structural command ends the search only when it went through (R13); one that
         // failed changed nothing, and a changed group table ends the search on its own
         let ends = ends_gem_search(&command);
-        let affected = self.apply_command(command, send)?;
+        let closes = matches!(command, Command::CloseGemSearch);
+        let mut affected = self.apply_command(command, send)?;
         if ends {
+            // the picker is told it ended, unless it asked to close
+            let live = self.gem_search.clone();
             self.end_gem_search()?;
+            if !closes && live.is_some() {
+                self.gem_ended = live;
+                affected.gem_search = true;
+            }
         }
         Ok(affected)
     }
@@ -863,6 +878,16 @@ impl Backend for PobBackend {
             percent: Option<u32>,
             #[serde(default)]
             ended: bool,
+        }
+        if let Some(query) = self.gem_ended.take() {
+            return Ok(Some(GemSearchView {
+                query,
+                rows: vec![],
+                base_dps: 0.0,
+                sorting: false,
+                percent: None,
+                ended: true,
+            }));
         }
         let Some(query) = self.gem_search.clone() else {
             return Ok(None);

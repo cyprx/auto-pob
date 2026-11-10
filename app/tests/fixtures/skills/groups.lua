@@ -13,4 +13,11 @@ function recipe()
 	act.redo()
 	act.undo()
 	checkpoint()
+	-- move a group down, full DPS, the "None" slot, then delete everything
+	act.move_group(0, 2)
+	act.full_dps(0, true)
+	act.slot(0, nil)
+	checkpoint()
+	act.delete_all()
+	checkpoint()
 end

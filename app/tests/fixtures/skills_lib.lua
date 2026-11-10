@@ -205,11 +205,14 @@ end
 -- The slot dropdown (SkillsTab.lua:168-184)
 function act.slot(index, name)
 	local _, c = clickRow(index)
+	local found
 	for i, choice in ipairs(c.groupSlot.list) do
 		if choice.slotName == name then
 			c.groupSlot:SetSel(i)
+			found = true
 		end
 	end
+	assert(found, "no slot " .. tostring(name))
 	record({ cmd = "SetGroupSlot", group = index, slot = name })
 end
 

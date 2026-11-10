@@ -275,6 +275,36 @@ fn assert_view_matches(
     }
 }
 
+/// `StripEscapes`: removes `^x` + 6 hex digits and `^` + a digit.
+fn strip_escapes(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '^' {
+            if chars.get(i + 1) == Some(&'x')
+                && chars.len() >= i + 8
+                && chars[i + 2..i + 8].iter().all(|c| c.is_ascii_hexdigit())
+            {
+                i += 8;
+                continue;
+            }
+            if chars.get(i + 1).is_some_and(|c| c.is_ascii_digit()) {
+                i += 2;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// A row's notes in the golden data's shape (no colour codes).
+fn plain_notes(notes: &[String]) -> Vec<String> {
+    notes.iter().map(|n| strip_escapes(n)).collect()
+}
+
 /// The rows must be exactly the lines PoB's own sidebar showed, in order.
 fn assert_sidebar(
     name: &str,
@@ -291,6 +321,13 @@ fn assert_sidebar(
         .map(|l| (l.label.as_str(), l.text.as_str()))
         .collect();
     assert_eq!(got, want, "{name}: {what} sidebar lines");
+    let got_notes: Vec<Vec<String>> = rows.iter().map(|r| plain_notes(&r.notes)).collect();
+    let want_notes: Vec<&Vec<String>> = sidebar.iter().map(|l| &l.notes).collect();
+    assert_eq!(
+        got_notes.iter().collect::<Vec<_>>(),
+        want_notes,
+        "{name}: {what} sidebar notes"
+    );
 }
 
 #[test]
@@ -2094,6 +2131,7 @@ fn our_tree_result(s: &mut Session) -> TreeResult {
         .map(|r| auto_pob::engine::upstream::SidebarLine {
             label: r.label.clone(),
             text: r.text.clone(),
+            notes: plain_notes(&r.notes),
         })
         .collect();
     TreeResult {

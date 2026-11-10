@@ -2,8 +2,8 @@
 //! Included from `gate.rs`, whose helpers it reaches through `super::`.
 
 use super::{
-    Session, fixtures, fixtures_dir, load_xml, lock, lua_value, pob_dir, recipe_setting,
-    snapshot_dir, upstream_lua,
+    Session, fixtures, fixtures_dir, load_xml, lock, lua_value, plain_notes, pob_dir,
+    recipe_setting, snapshot_dir, upstream_lua,
 };
 use auto_pob::engine::upstream::{SidebarLine, golden_of};
 use auto_pob::engine::{
@@ -465,6 +465,7 @@ fn our_skills_checkpoint(s: &mut Session) -> SkillsCheckpoint {
         .map(|r| SidebarLine {
             label: r.label.clone(),
             text: r.text.clone(),
+            notes: plain_notes(&r.notes),
         })
         .collect();
     SkillsCheckpoint {
@@ -1432,6 +1433,13 @@ fn item_and_imbued_recipes_match_pob() {
     let _guard = lock();
     let recipe = check_skills_recipe("item_group");
     let checks: Vec<_> = checkpoints(&recipe);
+    // the item's source shows under its Full DPS line, and the notes are compared
+    assert!(
+        checks
+            .iter()
+            .any(|c| c.sidebar.iter().any(|l| !l.notes.is_empty())),
+        "a sidebar note"
+    );
     let first = checks[0];
     let item = first
         .groups
@@ -1776,7 +1784,6 @@ fn main_skill_selector_matches_pob() {
         };
         assert_eq!(s.stats().main_skill, theirs, "{name}");
         assert!(!theirs.group.labels.is_empty(), "{name}: group list");
-        let _ = &mut s;
     }
 }
 
@@ -1805,4 +1812,76 @@ fn main_skill_mode_is_an_error() {
         .unwrap_err();
     assert!(err.to_string().contains("no such socket group"), "{err}");
     assert_eq!(s.stats().main_skill, before);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn main_skill_count_matches_pob() {
+    let _guard = lock();
+    let recipe = check_skills_recipe("main_skill_counts");
+    let checks = checkpoints(&recipe);
+    assert!(checks[0].main_skill.stages.is_some(), "a Stages box");
+    assert_eq!(checks[1].main_skill.stages.as_deref(), Some("56"));
+    assert_eq!(checks[2].main_skill.stages.as_deref(), Some("3"));
+    assert_ne!(
+        checks[1].sidebar, checks[2].sidebar,
+        "the stages change the stats"
+    );
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn hidden_sidebar_controls_are_refused() {
+    let _guard = lock();
+    let (mut s, _) = session_on("attack", "main-hidden");
+    // Cleave has one part, no stages and no mines
+    s.run(Command::PasteSocketGroup {
+        text: "Cleave 20/0  1\r\n".into(),
+    })
+    .unwrap();
+    s.run(Command::SetMainSocketGroup { group: 1 }).unwrap();
+    let selector = s.stats().main_skill;
+    assert!(selector.part.is_none() && selector.stages.is_none() && selector.mines.is_none());
+    let before = selector;
+    let err = s
+        .run(Command::SetMainSkillSelect {
+            control: CalcsControl::Part,
+            index: 0,
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("Part isn't available"), "{err}");
+    for control in [CalcsCount::Stages, CalcsCount::Mines] {
+        let err = s
+            .run(Command::SetMainSkillCount {
+                control,
+                text: "4".into(),
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("isn't available"), "{err}");
+    }
+    assert_eq!(s.stats().main_skill, before);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn main_skill_dropdowns_match_pob() {
+    let _guard = lock();
+    let minion = check_skills_recipe("main_skill_minion");
+    let checks = checkpoints(&minion);
+    assert!(checks[0].main_skill.minion.is_some(), "a minion dropdown");
+    assert_eq!(
+        checks[2].main_skill.minion_skill.as_ref().unwrap().selected,
+        1
+    );
+    assert_ne!(
+        checks[1].main_skill, checks[2].main_skill,
+        "the minion skill moves the selector"
+    );
+    let dot = check_skills_recipe("main_skill_dot");
+    let checks = checkpoints(&dot);
+    assert_eq!(checks[1].main_skill.skill.as_ref().unwrap().selected, 1);
+    assert_ne!(
+        checks[0].sidebar, checks[1].sidebar,
+        "the skill changes the stats"
+    );
 }

@@ -151,8 +151,12 @@ function glue.main_skill_set_count(name, text)
 		error("the sidebar has no " .. name .. " box", 0)
 	end
 	local controls = refreshed_controls()
-	if #pob.build.skillsTab.socketGroupList == 0 then error("there is no main skill", 0) end
-	controls[name]:SetText((text:gsub("%D", "")), true)
+	local control = controls[name]
+	-- as for the dropdowns: PoB's callback assumes the main skill has the box
+	if not control.shown or #pob.build.skillsTab.socketGroupList == 0 then
+		error((name == "mainSkillStageCount" and "Stages" or "Mines") .. " isn't available for this skill", 0)
+	end
+	control:SetText((text:gsub("%D", "")), true)
 end
 
 function glue.stats_view()

@@ -49,6 +49,10 @@ pub struct Golden {
 pub struct SidebarLine {
     pub label: String,
     pub text: String,
+    /// The one-column lines PoB draws under this one (a Full DPS skill's part and source),
+    /// colour codes removed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 const EXTRACT: &str = r#"
@@ -85,6 +89,10 @@ for _, row in ipairs(build.controls.statBox.list) do
 			target = minionSidebar
 		elseif plain == "Player:" then
 			target = sidebar
+		elseif #target > 0 then
+			local last = target[#target]
+			last.notes = last.notes or {}
+			last.notes[#last.notes + 1] = plain
 		end
 	end
 end

@@ -497,7 +497,9 @@ function act.sidebar_count(name, text)
 	frame()
 	local control = build.controls[name]
 	assert(countNames[name] and control.shown, "the sidebar doesn't show " .. tostring(name))
-	control:SetText(text, true)
+	-- typing: the box drops what its filter refuses
+	control:SetText("")
+	control:Insert(text)
 	record({ cmd = "SetMainSkillCount", control = countNames[name], text = text })
 end
 

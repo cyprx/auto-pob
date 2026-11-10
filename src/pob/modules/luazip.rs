@@ -156,3 +156,137 @@ impl UserData for ZipFileHandle {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        io::{Cursor, Write},
+        path::PathBuf,
+    };
+
+    use zip::{ZipWriter, write::SimpleFileOptions};
+
+    use super::*;
+
+    /// Deletes the temp zip when dropped, even if the test panics.
+    struct TempZip(PathBuf);
+
+    impl Drop for TempZip {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    /// Writes a zip with `files` to a temp file and returns a Lua state with `lzip` and `path` set.
+    fn lua_with_zip(test: &str, files: &[(&str, &str)]) -> (Lua, TempZip) {
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, data) in files {
+            writer
+                .start_file(*name, SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(data.as_bytes()).unwrap();
+        }
+        let bytes = writer.finish().unwrap().into_inner();
+
+        let path =
+            std::env::temp_dir().join(format!("auto-pob-lzip-{test}-{}.zip", std::process::id()));
+        std::fs::write(&path, bytes).unwrap();
+
+        let lua = Lua::new();
+        lua.globals()
+            .set("lzip", create_module(&lua).unwrap())
+            .unwrap();
+        lua.globals().set("path", path.to_str().unwrap()).unwrap();
+        (lua, TempZip(path))
+    }
+
+    #[test]
+    fn lists_entries_with_one_based_indices() {
+        let (lua, _zip) = lua_with_zip("list", &[("a.txt", "alpha"), ("dir/b.txt", "bravo!")]);
+        let result: (usize, String, String, u64, Option<String>, Option<u64>) = lua
+            .load(
+                r#"
+                local zip = lzip.open(path)
+                return zip:GetNumFiles(), zip:GetFileName(1), zip:GetFileName(2),
+                       zip:GetFileSize(2), zip:GetFileName(3), zip:GetFileSize(0)
+                "#,
+            )
+            .eval()
+            .unwrap();
+        assert_eq!(
+            result,
+            (2, "a.txt".into(), "dir/b.txt".into(), 6, None, None)
+        );
+    }
+
+    #[test]
+    fn opens_files_by_index_or_name_and_reads_them() {
+        let (lua, _zip) = lua_with_zip("read", &[("a.txt", "alpha"), ("b.txt", "bravo")]);
+        let result: (String, String, u64, String, String, bool) = lua
+            .load(
+                r#"
+                local zip = lzip.open(path)
+                local by_index = zip:OpenFile(1):Read("*a")
+                local file = zip:OpenFile("b.txt")
+                local length = file:Length()
+                local chunk1, chunk2, empty = file:Read(2), file:Read(10), file:Read(0)
+                return by_index, chunk1 .. "|" .. chunk2, length, empty,
+                       file:Read("*a"), zip:OpenFile("missing.txt") == nil
+                "#,
+            )
+            .eval()
+            .unwrap();
+        assert_eq!(
+            result,
+            (
+                "alpha".into(),
+                "br|avo".into(),
+                5,
+                "".into(),
+                "".into(),
+                true
+            )
+        );
+    }
+
+    #[test]
+    fn misuse_raises_lua_errors() {
+        let (lua, _zip) = lua_with_zip("errors", &[("a.txt", "alpha")]);
+        let errors: Vec<String> = lua
+            .load(
+                r#"
+                local function err(f) local ok, e = pcall(f); assert(not ok); return tostring(e) end
+                local zip = lzip.open(path)
+                local file = zip:OpenFile(1)
+                local errors = {
+                    err(function() zip:OpenFile(5) end),
+                    err(function() zip:OpenFile(true) end),
+                    err(function() file:Read("*l") end),
+                    err(function() lzip.open(path .. ".does-not-exist") end),
+                }
+                file:Close()
+                zip:Close()
+                errors[#errors + 1] = err(function() file:Read("*a") end)
+                errors[#errors + 1] = err(function() zip:GetNumFiles() end)
+                return errors
+                "#,
+            )
+            .eval()
+            .unwrap();
+        let expected = [
+            "invalid index",
+            "Usage: zip:OpenFile",
+            "unrecognised format",
+            "No such file",
+            "zip file handle is closed",
+            "zip handle is closed",
+        ];
+        assert_eq!(errors.len(), expected.len());
+        for (error, expected) in errors.iter().zip(expected) {
+            assert!(
+                error.contains(expected),
+                "{error:?} should contain {expected:?}"
+            );
+        }
+    }
+}

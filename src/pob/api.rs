@@ -51,6 +51,9 @@ mod subscript;
 mod text;
 mod window;
 
+#[cfg(test)]
+mod tests;
+
 /// Register functions that can be called from Lua
 pub fn register_globals(lua: &Lua) -> LuaResult<()> {
     let globals = lua.globals();

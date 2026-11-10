@@ -388,7 +388,7 @@ impl ApplicationHandler<GraphicsContext> for App {
     }
 }
 
-fn pob_font_definitions() -> FontDefinitions {
+pub(crate) fn pob_font_definitions() -> FontDefinitions {
     let mut definitions = FontDefinitions::default();
 
     definitions.font_data.insert(

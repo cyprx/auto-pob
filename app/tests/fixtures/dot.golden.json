@@ -4,17 +4,17 @@
     "AreaOfEffectRadiusMetres": 0.8,
     "Armour": 0.0,
     "AttackDodgeChance": 0.0,
-    "AverageBurstDamage": 850.059,
-    "AverageDamage": 850.059,
-    "AverageHit": 850.059,
+    "AverageBurstDamage": 1139.1799999999998,
+    "AverageDamage": 1139.1799999999998,
+    "AverageHit": 1139.1799999999998,
     "ChaosMaximumHitTaken": 745.0,
     "ChaosResist": -60.0,
     "ChaosResistOverCap": 0.0,
     "ColdMaximumHitTaken": 838.0,
     "ColdResist": -44.0,
     "ColdResistOverCap": 0.0,
-    "CombinedAvg": 850.059,
-    "CombinedDPS": 850.059,
+    "CombinedAvg": 1139.1799999999998,
+    "CombinedDPS": 1139.1799999999998,
     "CritChance": 6.0,
     "CritMultiplier": 1.5,
     "CullingDPS": 0.0,
@@ -53,9 +53,9 @@
     "LightningResist": -44.0,
     "LightningResistOverCap": 0.0,
     "Mana": 725.0,
-    "ManaCost": 23.0,
+    "ManaCost": 29.0,
     "ManaLeechGainPerHit": 0.0,
-    "ManaPerSecondCost": 34.5,
+    "ManaPerSecondCost": 43.5,
     "ManaPercentCost": 0.0,
     "ManaPercentPerSecondCost": 0.0,
     "ManaRegenRecovery": 12.7,
@@ -68,7 +68,7 @@
     "ProjectileEvadeChance": 0.0,
     "RageCost": 0.0,
     "RageRegenRecovery": 0.0,
-    "ReqDex": 68.0,
+    "ReqDex": 70.0,
     "ReqInt": 98.0,
     "ReservationDPS": 0.0,
     "SoulCost": 0.0,
@@ -80,20 +80,20 @@
     "Speed": 1.5,
     "SpellDodgeChance": 0.0,
     "Str": 34.0,
-    "TotalDPS": 1275.0884999999998,
-    "TotalDot": 2292.4439999999995,
-    "TotalDotDPS": 2292.4439999999995,
+    "TotalDPS": 1708.7699999999998,
+    "TotalDot": 3071.8749599999996,
+    "TotalDotDPS": 3071.8749599999996,
     "TotalEHP": 881.167443802741,
     "Ward": 0.0,
-    "WithBleedDPS": 850.059,
-    "WithDotDPS": 3142.5029999999997,
-    "WithIgniteDPS": 850.059,
-    "WithPoisonDPS": 850.059
+    "WithBleedDPS": 1139.1799999999998,
+    "WithDotDPS": 4211.0549599999995,
+    "WithIgniteDPS": 1139.1799999999998,
+    "WithPoisonDPS": 1139.1799999999998
   },
   "sidebar": [
     {
       "label": "Average Hit",
-      "text": "850.1"
+      "text": "1,139.2"
     },
     {
       "label": "Cast Rate",
@@ -109,7 +109,7 @@
     },
     {
       "label": "DoT DPS",
-      "text": "2,292.4"
+      "text": "3,071.9"
     },
     {
       "label": "AoE Radius",
@@ -117,11 +117,11 @@
     },
     {
       "label": "Mana Cost",
-      "text": "23"
+      "text": "29"
     },
     {
       "label": "Mana Cost per second",
-      "text": "34.5"
+      "text": "43.5"
     },
     {
       "label": "Strength",
@@ -133,7 +133,7 @@
     },
     {
       "label": "Dexterity Required",
-      "text": "68"
+      "text": "70"
     },
     {
       "label": "Intelligence",
@@ -233,10 +233,13 @@
     "buffTailwind",
     "buffUnholyMight",
     "conditionEnemyBlinded",
+    "conditionEnemyBurning",
     "conditionEnemyChilled",
     "conditionEnemyCoveredInAsh",
     "conditionEnemyCoveredInFrost",
     "conditionEnemyCrushed",
+    "conditionEnemyFrozen",
+    "conditionEnemyIgnited",
     "conditionEnemyIntimidated",
     "conditionEnemyShocked",
     "conditionEnemyUnnerved",

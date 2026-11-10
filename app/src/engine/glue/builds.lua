@@ -26,11 +26,29 @@ local function frame()
 	-- The tree view calculates node power in a frame when the heat map is on
 	-- (PassiveTreeView.lua:773-776); here `glue.power_step` does that, a slice at a time, so a
 	-- frame must leave it alone.
+	--
+	-- PoB draws the tab the build was saved on (`viewMode`, Build.lua:960) in every frame
+	-- (Build.lua:1276-1294). The Skills tab's draw resumes the gem DPS sort against whatever
+	-- group is shown (GemSelectControl.lua:492-509), and the Calcs tab's sets breakdown data, so
+	-- a frame always draws the tree tab instead: it is PoB's default (Build.lua:78), every
+	-- fixture and gate test so far ran on it, and its one calculation, node power, is held off
+	-- above. Its draw only lays out and reads the tree. The build's own `viewMode` is put back
+	-- afterwards, so Save still writes the tab it was saved on. Opening a build sets `viewMode`
+	-- in the same frame (Init, then OnFrame), so the swap happens inside OnFrame.
 	local build = pob.build
 	local viewer = build.treeTab and build.treeTab.viewer
 	local heatmap = viewer and viewer.showHeatMap
 	if viewer then viewer.showHeatMap = false end
+	local onFrame = rawget(build, "OnFrame")
+	build.OnFrame = function(self, ...)
+		local saved = self.viewMode
+		self.viewMode = "TREE"
+		local done, failure = pcall(onFrame, self, ...)
+		self.viewMode = saved
+		if not done then error(failure, 0) end
+	end
 	local ok, err = pcall(runCallback, "OnFrame")
+	build.OnFrame = onFrame
 	if viewer then viewer.showHeatMap = heatmap end
 	if not ok then error(err, 0) end
 	-- Launch.lua catches errors from a frame and shows them as a prompt

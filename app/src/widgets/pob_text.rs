@@ -71,6 +71,12 @@ pub fn pob_text(text: &str, size: f32, default: Color32) -> LayoutJob {
     job
 }
 
+/// The colour a PoB code such as `^xAABBCC` selects; `default` for anything else.
+pub fn pob_colour(code: &str, default: Color32) -> Color32 {
+    let job = pob_text(&format!("{code}x"), 14.0, default);
+    job.sections.first().map_or(default, |s| s.format.color)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3,16 +3,16 @@
   "stats": {
     "Armour": 0.0,
     "AttackDodgeChance": 0.0,
-    "AverageBurstDamage": 88.2896355,
-    "AverageDamage": 88.2896355,
+    "AverageBurstDamage": 168.6946972972876,
+    "AverageDamage": 168.6946972972876,
     "ChaosMaximumHitTaken": 734.0,
     "ChaosResist": -60.0,
     "ChaosResistOverCap": 0.0,
     "ColdMaximumHitTaken": 721.0,
     "ColdResist": -60.0,
     "ColdResistOverCap": 0.0,
-    "CombinedAvg": 102.438049588875,
-    "CombinedDPS": 102.851268635115,
+    "CombinedAvg": 177.08725848782765,
+    "CombinedDPS": 177.08725848782765,
     "CritChance": 1.54,
     "CritMultiplier": 1.5,
     "CullingDPS": 0.0,
@@ -36,8 +36,6 @@
     "FullDPS": 0.0,
     "FullDotDPS": 0.0,
     "HitChance": 22.0,
-    "IgniteDPS": 0.41321904624,
-    "IgniteDamage": 1.65287618496,
     "Int": 24.0,
     "Life": 1175.0,
     "LifeCost": 0.0,
@@ -53,9 +51,9 @@
     "LightningResist": -60.0,
     "LightningResistOverCap": 0.0,
     "Mana": 586.0,
-    "ManaCost": 12.0,
+    "ManaCost": 21.0,
     "ManaLeechGainRate": 0.0,
-    "ManaPerSecondCost": 13.923,
+    "ManaPerSecondCost": 22.04475,
     "ManaPercentCost": 0.0,
     "ManaPercentPerSecondCost": 0.0,
     "ManaRegenRecovery": 10.3,
@@ -76,26 +74,26 @@
     "Spec:EvasionInc": 0.0,
     "Spec:LifeInc": 0.0,
     "Spec:ManaInc": 0.0,
-    "Speed": 1.16025,
+    "Speed": 1.04975,
     "SpellDodgeChance": 0.0,
     "Str": 82.0,
-    "TotalDPS": 102.438049588875,
+    "TotalDPS": 177.08725848782765,
     "TotalDot": 0.0,
-    "TotalDotDPS": 0.41321904624,
+    "TotalDotDPS": 0.0,
     "TotalEHP": 788.1062521626768,
     "Ward": 0.0,
-    "WithBleedDPS": 102.438049588875,
-    "WithIgniteDPS": 102.851268635115,
-    "WithPoisonDPS": 102.438049588875
+    "WithBleedDPS": 177.08725848782765,
+    "WithIgniteDPS": 177.08725848782765,
+    "WithPoisonDPS": 177.08725848782765
   },
   "sidebar": [
     {
       "label": "Average Damage",
-      "text": "88.3"
+      "text": "168.7"
     },
     {
       "label": "Attack Rate",
-      "text": "1.16"
+      "text": "1.05"
     },
     {
       "label": "Crit Chance",
@@ -115,23 +113,15 @@
     },
     {
       "label": "Hit DPS",
-      "text": "102.4"
-    },
-    {
-      "label": "Ignite DPS",
-      "text": "0.4"
-    },
-    {
-      "label": "Total DPS inc. Ignite",
-      "text": "102.9"
+      "text": "177.1"
     },
     {
       "label": "Mana Cost",
-      "text": "12"
+      "text": "21"
     },
     {
       "label": "Mana Cost per second",
-      "text": "13.92"
+      "text": "22.04"
     },
     {
       "label": "Strength",
@@ -245,6 +235,7 @@
     "conditionEnemyCoveredInAsh",
     "conditionEnemyCoveredInFrost",
     "conditionEnemyCrushed",
+    "conditionEnemyFrozen",
     "conditionEnemyIgnited",
     "conditionEnemyIntimidated",
     "conditionEnemyShocked",

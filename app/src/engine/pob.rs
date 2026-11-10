@@ -1,10 +1,13 @@
 //! Starts Path of Building's Lua with our own bootstrap.
 
-use super::commands::{Command, ConfigValue, Tab};
+use super::commands::{
+    Command, ConfigValue, GemSearchQuery, GemTarget, GemToggle, GemTooltipQuery, SkillOption, Tab,
+};
 use super::run::{Affected, Backend, BackgroundTask, Engine, Event};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
-    NodeTooltip, NotesView, PowerReport, StatsView, TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, GemRow, GemSearchView,
+    GemTooltipView, GroupTooltipView, NodePower, NodeTooltip, NotesView, PowerReport, SkillsView,
+    SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -24,6 +27,13 @@ pub struct PobBackend {
     /// A power step failed. Until the next `SetHeatmap` there is no background work, or the
     /// loop would run the failing step again and again.
     power_failed: bool,
+    /// The open gem search (R9); `None` when the picker is closed. Whether its DPS sort has
+    /// work is asked of PoB's control (`gem_dps_pending`), so it can't drift.
+    gem_search: Option<GemSearchQuery>,
+    /// A DPS step failed; the job stays stopped until the next `SearchGems`.
+    gem_failed: bool,
+    /// A command ended the open search; its last view (`ended: true`) is still to be sent.
+    gem_ended: Option<GemSearchQuery>,
 }
 
 /// Runs before the bootstrap.
@@ -89,6 +99,8 @@ impl PobBackend {
             ("@glue/tree.lua", include_str!("glue/tree.lua")),
             ("@glue/power.lua", include_str!("glue/power.lua")),
             ("@glue/calcs.lua", include_str!("glue/calcs.lua")),
+            ("@glue/skills.lua", include_str!("glue/skills.lua")),
+            ("@glue/gems.lua", include_str!("glue/gems.lua")),
             ("@glue/notes.lua", include_str!("glue/notes.lua")),
         ] {
             lua.load(source)
@@ -105,6 +117,9 @@ impl PobBackend {
             last_layout_key: None,
             heatmap_on: false,
             power_failed: false,
+            gem_search: None,
+            gem_failed: false,
+            gem_ended: None,
         })
     }
 
@@ -166,6 +181,15 @@ impl PobBackend {
         self.power_failed = false;
     }
 
+    /// Closes the gem search, as the structural commands do (R13).
+    fn end_gem_search(&mut self) -> Result<()> {
+        self.gem_failed = false;
+        if self.gem_search.take().is_some() {
+            self.call::<_, ()>("gem_search_close", ())?;
+        }
+        Ok(())
+    }
+
     fn view<T: serde::de::DeserializeOwned>(
         &self,
         name: &str,
@@ -187,6 +211,17 @@ fn config_changed() -> Affected {
     }
 }
 
+/// A change to the socket groups (or their undo): the build is edited and everything is
+/// recalculated.
+fn skills_changed() -> Affected {
+    Affected {
+        build: true,
+        skills: true,
+        recalc: true,
+        ..Affected::default()
+    }
+}
+
 /// A change on the Calcs tab marks the build unsaved; `recalc` is for the ones that set PoB's
 /// `buildFlag`.
 fn calcs_changed(recalc: bool) -> Affected {
@@ -198,9 +233,73 @@ fn calcs_changed(recalc: bool) -> Affected {
     }
 }
 
-impl Backend for PobBackend {
-    fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> Result<Affected> {
+/// The gem box a target names, as `gems.lua` takes it: a 1-based slot or "imbued".
+fn lua_target(lua: &Lua, target: GemTarget) -> Result<mlua::Value> {
+    Ok(match target {
+        GemTarget::Slot(slot) => mlua::Value::Integer(slot as i64 + 1),
+        GemTarget::Imbued => {
+            mlua::Value::String(lua.create_string("imbued").map_err(|e| anyhow!("{e}"))?)
+        }
+    })
+}
+
+/// Commands that end the gem search (R13): they add, drop or reorder the groups or gems, or
+/// leave the build.
+fn ends_gem_search(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::AddSocketGroup
+            | Command::DeleteSocketGroup { .. }
+            | Command::DeleteAllSocketGroups
+            | Command::MoveSocketGroup { .. }
+            | Command::PasteSocketGroup { .. }
+            | Command::DeleteGem { .. }
+            | Command::SelectSkillSet { .. }
+            | Command::NewSkillSet { .. }
+            | Command::CopySkillSet { .. }
+            | Command::DeleteSkillSet { .. }
+            | Command::Undo(Tab::Skills)
+            | Command::Redo(Tab::Skills)
+            | Command::ListBuilds { .. }
+            | Command::NewBuild
+            | Command::OpenBuild { .. }
+            | Command::ImportShareCode { .. }
+            | Command::CloseGemSearch
+    )
+}
+
+impl PobBackend {
+    fn apply_command(&mut self, command: Command, _send: &dyn Fn(Event)) -> Result<Affected> {
         match command {
+            Command::SearchGems(query) => {
+                let target = lua_target(&self.lua, query.target)?;
+                self.call::<_, ()>(
+                    "gem_search_open",
+                    (
+                        query.group + 1,
+                        target,
+                        query.text.clone(),
+                        query.filter.pob_tag(),
+                    ),
+                )?;
+                // a failed sort stopped with PoB's cache check satisfied, so the same search
+                // wouldn't start it again: Retry asks for the restart
+                if std::mem::take(&mut self.gem_failed) {
+                    self.call::<_, ()>("gem_dps_restart", ())?;
+                }
+                self.gem_search = Some(query);
+                self.gem_ended = None;
+                Ok(Affected {
+                    gem_search: true,
+                    ..Affected::default()
+                })
+            }
+            // ended above
+            Command::CloseGemSearch => Ok(Affected::default()),
+            Command::GemTooltip(query) => Ok(Affected {
+                gem_tooltip: Some(query),
+                ..Affected::default()
+            }),
             Command::ListBuilds { folder } => {
                 // leaving a build stops the power work, as `SetHeatmap { stat: None }` does
                 if self.heatmap_on {
@@ -415,6 +514,18 @@ impl Backend for PobBackend {
                 self.call::<_, ()>("calcs_set_count", (control.pob_name(), text))?;
                 Ok(calcs_changed(true))
             }
+            Command::SetMainSocketGroup { group } => {
+                self.call::<_, ()>("skills_set_main", group + 1)?;
+                Ok(skills_changed())
+            }
+            Command::SetMainSkillSelect { control, index } => {
+                self.call::<_, ()>("main_skill_select", (control.pob_name(), index + 1))?;
+                Ok(skills_changed())
+            }
+            Command::SetMainSkillCount { control, text } => {
+                self.call::<_, ()>("main_skill_set_count", (control.pob_name(), text))?;
+                Ok(skills_changed())
+            }
             Command::SetShowMinion { show } => {
                 self.call::<_, ()>("calcs_show_minion", show)?;
                 Ok(calcs_changed(false))
@@ -451,6 +562,163 @@ impl Backend for PobBackend {
                 self.call::<_, ()>("calcs_redo", ())?;
                 Ok(calcs_changed(true))
             }
+            Command::AddSocketGroup => {
+                self.call::<_, ()>("skills_add_group", ())?;
+                Ok(skills_changed())
+            }
+            Command::DeleteSocketGroup { group } => {
+                self.call::<_, ()>("skills_delete_group", group + 1)?;
+                Ok(skills_changed())
+            }
+            Command::DeleteAllSocketGroups => {
+                self.call::<_, ()>("skills_delete_all", ())?;
+                Ok(skills_changed())
+            }
+            Command::MoveSocketGroup { from, to } => {
+                self.call::<_, ()>("skills_move_group", (from + 1, to + 1))?;
+                Ok(skills_changed())
+            }
+            Command::PasteSocketGroup { text } => {
+                self.call::<_, ()>("skills_paste", text)?;
+                Ok(skills_changed())
+            }
+            Command::SetGroupLabel { group, text } => {
+                self.call::<_, ()>("skills_set_label", (group + 1, text))?;
+                Ok(skills_changed())
+            }
+            Command::SetGroupSlot { group, slot } => {
+                self.call::<_, ()>("skills_set_slot", (group + 1, slot))?;
+                Ok(skills_changed())
+            }
+            Command::SetGroupEnabled { group, on } => {
+                self.call::<_, ()>("skills_set_enabled", (group + 1, on))?;
+                Ok(skills_changed())
+            }
+            Command::SetGroupFullDps { group, on } => {
+                self.call::<_, ()>("skills_set_full_dps", (group + 1, on))?;
+                Ok(skills_changed())
+            }
+            Command::SetGroupCount { group, text } => {
+                self.call::<_, ()>("skills_set_group_count", (group + 1, text))?;
+                Ok(skills_changed())
+            }
+            Command::SetImbuedSupport { group, gem_id } => {
+                self.call::<_, ()>("skills_set_imbued", (group + 1, gem_id))?;
+                Ok(skills_changed())
+            }
+            Command::OptimiseSockets { group } => {
+                self.call::<_, ()>("skills_optimise", group + 1)?;
+                Ok(skills_changed())
+            }
+            Command::GroupTooltip { group } => Ok(Affected {
+                group_tooltip: Some(group),
+                ..Affected::default()
+            }),
+            Command::CopySocketGroup { group } => Ok(Affected {
+                group_text: Some(group),
+                ..Affected::default()
+            }),
+            Command::SetGem {
+                group,
+                slot,
+                gem_id,
+            } => {
+                self.call::<_, ()>("skills_set_gem", (group + 1, slot + 1, gem_id))?;
+                Ok(skills_changed())
+            }
+            Command::SetGemLevel { group, slot, text } => {
+                self.call::<_, ()>("skills_set_gem_level", (group + 1, slot + 1, text))?;
+                Ok(skills_changed())
+            }
+            Command::SetGemQuality { group, slot, text } => {
+                self.call::<_, ()>("skills_set_gem_quality", (group + 1, slot + 1, text))?;
+                Ok(skills_changed())
+            }
+            Command::SetGemCount { group, slot, text } => {
+                self.call::<_, ()>("skills_set_gem_count", (group + 1, slot + 1, text))?;
+                Ok(skills_changed())
+            }
+            Command::SetGemEnabled { group, slot, on } => {
+                self.call::<_, ()>("skills_set_gem_enabled", (group + 1, slot + 1, on))?;
+                Ok(skills_changed())
+            }
+            Command::SetGemToggle {
+                group,
+                slot,
+                which,
+                on,
+            } => {
+                let which = if which == GemToggle::First { 1 } else { 2 };
+                self.call::<_, ()>("skills_set_gem_toggle", (group + 1, slot + 1, which, on))?;
+                Ok(skills_changed())
+            }
+            Command::DeleteGem { group, slot } => {
+                self.call::<_, ()>("skills_delete_gem", (group + 1, slot + 1))?;
+                Ok(skills_changed())
+            }
+            Command::SelectSkillSet { id } => {
+                self.call::<_, ()>("skills_select_set", id)?;
+                Ok(skills_changed())
+            }
+            Command::NewSkillSet { title } => {
+                self.call::<_, ()>("skills_new_set", title)?;
+                Ok(skills_changed())
+            }
+            Command::CopySkillSet { id, title } => {
+                self.call::<_, ()>("skills_copy_set", (id, title))?;
+                Ok(skills_changed())
+            }
+            Command::DeleteSkillSet { id } => {
+                self.call::<_, ()>("skills_delete_set", id)?;
+                Ok(skills_changed())
+            }
+            Command::RenameSkillSet { id, title } => {
+                self.call::<_, ()>("skills_rename_set", (id, title))?;
+                // a title feeds no calculation, but the build is edited
+                Ok(Affected {
+                    build: true,
+                    skills: true,
+                    ..Affected::default()
+                })
+            }
+            Command::SetSkillOption(option) => {
+                match option {
+                    SkillOption::SortByDps(on) => {
+                        self.call::<_, ()>("skills_option_check", ("sortGemsByDPS", on))?
+                    }
+                    SkillOption::ShowLegacy(on) => {
+                        self.call::<_, ()>("skills_option_check", ("showLegacyGems", on))?
+                    }
+                    SkillOption::SortField(i) => self.call::<_, ()>(
+                        "skills_option_drop",
+                        ("sortGemsByDPSFieldControl", i + 1),
+                    )?,
+                    SkillOption::DefaultLevel(i) => {
+                        self.call::<_, ()>("skills_option_drop", ("defaultLevel", i + 1))?
+                    }
+                    SkillOption::SupportTypes(i) => {
+                        self.call::<_, ()>("skills_option_drop", ("showSupportGemTypes", i + 1))?
+                    }
+                    SkillOption::DefaultQuality(text) => {
+                        self.call::<_, ()>("skills_option_quality", text)?
+                    }
+                }
+                // PoB's sort cache checks the options, so the DPS sort may start again
+                // not unsaved, no recalculation (R18)
+                Ok(Affected {
+                    skills: true,
+                    gem_search: self.gem_search.is_some(),
+                    ..Affected::default()
+                })
+            }
+            Command::Undo(Tab::Skills) => {
+                self.call::<_, ()>("skills_undo", ())?;
+                Ok(skills_changed())
+            }
+            Command::Redo(Tab::Skills) => {
+                self.call::<_, ()>("skills_redo", ())?;
+                Ok(skills_changed())
+            }
             Command::Undo(Tab::Config) => {
                 self.call::<_, ()>("undo", "config")?;
                 Ok(config_changed())
@@ -461,8 +729,29 @@ impl Backend for PobBackend {
             }
         }
     }
+}
+
+impl Backend for PobBackend {
+    fn apply(&mut self, command: Command, send: &dyn Fn(Event)) -> Result<Affected> {
+        // a structural command ends the search only when it went through (R13); one that
+        // failed changed nothing, and a changed group table ends the search on its own
+        let ends = ends_gem_search(&command);
+        let closes = matches!(command, Command::CloseGemSearch);
+        let mut affected = self.apply_command(command, send)?;
+        if ends {
+            // the picker is told it ended, unless it asked to close
+            let live = self.gem_search.clone();
+            self.end_gem_search()?;
+            if !closes && live.is_some() {
+                self.gem_ended = live;
+                affected.gem_search = true;
+            }
+        }
+        Ok(affected)
+    }
 
     fn recalculate(&mut self) -> Result<()> {
+        // a new output revision makes PoB's sort cache start the DPS sort again
         self.call::<_, ()>("recalculate", ())
     }
 
@@ -496,39 +785,141 @@ impl Backend for PobBackend {
         self.view("calcs_view", ())
     }
 
+    fn skills_view(&mut self) -> Result<SkillsView> {
+        self.view("skills_view", ())
+    }
+
+    fn socket_group_text(&mut self, group: usize) -> Result<SocketGroupText> {
+        let text: String = self.call("skills_copy", group + 1)?;
+        Ok(SocketGroupText { group, text })
+    }
+
+    fn group_tooltip_view(&mut self, group: usize) -> Result<GroupTooltipView> {
+        self.view("skills_group_tooltip", group + 1)
+    }
+
     fn notes_view(&mut self) -> Result<NotesView> {
         self.view("notes_view", ())
     }
 
-    fn has_background_work(&self) -> bool {
-        self.heatmap_on
+    fn next_background(&self) -> Option<BackgroundTask> {
+        if self.gem_search.is_some()
+            && !self.gem_failed
+            && self.call::<_, bool>("gem_dps_pending", ()).unwrap_or(false)
+        {
+            return Some(BackgroundTask::GemDps);
+        }
+        let power = self.heatmap_on
             && !self.power_failed
-            && self.call::<_, bool>("power_pending", ()).unwrap_or(false)
+            && self.call::<_, bool>("power_pending", ()).unwrap_or(false);
+        power.then_some(BackgroundTask::NodePower)
     }
 
-    fn background_step(&mut self, send: &dyn Fn(Event)) -> Result<Affected> {
+    fn background_step(&mut self, task: BackgroundTask, send: &dyn Fn(Event)) -> Result<Affected> {
         #[derive(serde::Deserialize)]
         struct Step {
             percent: Option<u32>,
             finished: bool,
         }
-        let step: Step = match self.view("power_step", ()) {
-            Ok(step) => step,
-            Err(e) => {
-                self.power_failed = true;
-                return Err(e);
+        match task {
+            BackgroundTask::NodePower => {
+                let step: Step = match self.view("power_step", ()) {
+                    Ok(step) => step,
+                    Err(e) => {
+                        self.power_failed = true;
+                        return Err(e);
+                    }
+                };
+                if let Some(percent) = step.percent {
+                    send(Event::Progress {
+                        task: BackgroundTask::NodePower,
+                        percent,
+                    });
+                }
+                Ok(Affected {
+                    power: true,
+                    report: step.finished,
+                    ..Affected::default()
+                })
             }
-        };
-        if let Some(percent) = step.percent {
-            send(Event::Progress {
-                task: BackgroundTask::NodePower,
-                percent,
-            });
+            BackgroundTask::GemDps => {
+                let step: Step = match self.view("gem_dps_step", ()) {
+                    Ok(step) => step,
+                    Err(e) => {
+                        self.gem_failed = true;
+                        return Err(e);
+                    }
+                };
+                if let Some(percent) = step.percent {
+                    send(Event::Progress {
+                        task: BackgroundTask::GemDps,
+                        percent,
+                    });
+                }
+                // an ended search has no more work; its view says so
+                Ok(Affected {
+                    gem_search: true,
+                    ..Affected::default()
+                })
+            }
         }
-        Ok(Affected {
-            power: true,
-            report: step.finished,
-            ..Affected::default()
+    }
+
+    fn gem_search_view(&mut self) -> Result<Option<GemSearchView>> {
+        #[derive(serde::Deserialize)]
+        struct Found {
+            #[serde(default)]
+            rows: Vec<GemRow>,
+            #[serde(default)]
+            base_dps: f64,
+            #[serde(default)]
+            sorting: bool,
+            #[serde(default)]
+            percent: Option<u32>,
+            #[serde(default)]
+            ended: bool,
+        }
+        if let Some(query) = self.gem_ended.take() {
+            return Ok(Some(GemSearchView {
+                query,
+                rows: vec![],
+                base_dps: 0.0,
+                sorting: false,
+                percent: None,
+                ended: true,
+            }));
+        }
+        let Some(query) = self.gem_search.clone() else {
+            return Ok(None);
+        };
+        let found: Found = self.view("gem_search_view", ())?;
+        if found.ended {
+            self.end_gem_search()?;
+        }
+        Ok(Some(GemSearchView {
+            query,
+            rows: found.rows,
+            base_dps: found.base_dps,
+            sorting: found.sorting && !found.ended && !self.gem_failed,
+            percent: found.percent,
+            ended: found.ended,
+        }))
+    }
+
+    fn gem_tooltip_view(&mut self, query: &GemTooltipQuery) -> Result<GemTooltipView> {
+        #[derive(serde::Deserialize)]
+        struct Found {
+            #[serde(default)]
+            lines: Vec<TooltipLine>,
+        }
+        let target = lua_target(&self.lua, query.target)?;
+        let found: Found = self.view(
+            "gem_tooltip",
+            (query.group + 1, target, query.gem_id.clone()),
+        )?;
+        Ok(GemTooltipView {
+            query: query.clone(),
+            lines: found.lines,
         })
     }
 

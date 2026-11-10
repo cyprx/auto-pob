@@ -1,0 +1,23 @@
+base = "attack"
+function recipe()
+	act.add_group()
+	act.paste("Label: Auras\r\nSlot: Body Armour\r\nHatred 20/0  1\r\nWrath 20/0  1\r\nDetermination 20/0  1\r\n")
+	checkpoint()
+	act.move_group(1, 0)
+	act.enable(2, false)
+	act.slot(1, "Helmet")
+	act.label(1, "Moved")
+	checkpoint()
+	act.delete_group(2)
+	act.undo()
+	act.redo()
+	act.undo()
+	checkpoint()
+	-- move a group down, full DPS, the "None" slot, then delete everything
+	act.move_group(0, 2)
+	act.full_dps(0, true)
+	act.slot(0, nil)
+	checkpoint()
+	act.delete_all()
+	checkpoint()
+end

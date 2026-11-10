@@ -10,7 +10,11 @@ numbers are PoB's numbers.
   share code, start a new build.
 - **Build screen**: tabs for the open build, with save, save as, undo/redo and an
   unsaved-changes prompt.
-- **Stats sidebar**: PoB's sidebar stats, recalculated after every change.
+- **Stats sidebar**: PoB's sidebar stats, recalculated after every change. At the top, pick
+  the main skill (socket group), the active skill, its part, the minion and minion skill, and
+  type the stage and mine counts (sent on Enter or when you leave the box, Esc puts the old
+  value back), as in PoB; controls PoB hides for the skill aren't shown. Each Full DPS skill
+  gets its own line with PoB's notes underneath.
 - **Config tab**: PoB's configuration options (checkboxes, numbers, lists, custom modifiers),
   with config sets, PoB's tooltips and validation. Changes recalculate the stats.
 - **Tree tab**: the passive tree, drawn with PoB's own art and rules. Drag to pan, scroll to
@@ -23,6 +27,17 @@ numbers are PoB's numbers.
     best nodes to take.
   - Show jewel radii, convert a tree to another tree version, import a tree link and copy
     the link of the current tree.
+- **Skills tab**: PoB's socket groups and gems.
+  - Keep several skill sets, switch between them, and create, rename, copy or delete them.
+  - Add, copy, paste and delete socket groups, move them in the list, and right-click one to
+    make it the main skill. Edit a group's label, slot, enabled and Full DPS flags and count.
+    Groups that come from an item are shown read-only.
+  - Edit each gem's name, level, quality, enabled state and count. Clicking a gem name opens
+    a picker with PoB's search, filters and gem tooltips; sort by DPS to see each gem's
+    effect on your damage, calculated in the background without blocking the UI. Fields
+    send when you press Enter or leave them, and Esc reverts.
+  - Gem options (sort, default level and quality, support types, legacy gems) are saved with
+    the build, and hovering a group shows PoB's tooltip.
 - **Calcs tab**: PoB's own calculation breakdown, in sections.
   - Pick the skill, part, minion skill and calculation mode at the top, as in PoB, and show
     the minion's numbers instead of the player's.
@@ -35,7 +50,7 @@ numbers are PoB's numbers.
   around the selection. Preview shows the text with the colours applied. Edits are sent to the
   build half a second after you stop typing.
 - **Shortcuts**: Ctrl+S saves. Ctrl+Z undoes and Ctrl+Y (or Ctrl+Shift+Z) redoes, on the
-  Tree, Config and Calcs tabs. Each tab has its own history. They wait while a dialog is open.
+  Tree, Skills, Config and Calcs tabs. Each tab has its own history. They wait while a dialog is open.
 
 ## Running
 
@@ -65,7 +80,7 @@ auto-pob shares `Builds/` and `Settings.xml` with the classic app
 - **Boundary rule**: only `src/engine/` touches PoB internals or Lua. `src/ui/` and
   `src/widgets/` use only `engine::views`, `engine::commands` and `Engine`/events.
 - **Glue files** (`src/engine/glue/*.lua`) are the code that calls into PoB, one per area:
-  `builds.lua`, `stats.lua`, `config.lua`, `tooltip.lua`, `tree.lua`, `power.lua`, `calcs.lua` and `notes.lua`. If PoB
+  `builds.lua`, `stats.lua`, `config.lua`, `tooltip.lua`, `tree.lua`, `power.lua`, `calcs.lua`, `skills.lua`, `gems.lua` and `notes.lua`. If PoB
   renames or restructures something we call, this is where it breaks.
   `src/engine/bootstrap.lua` sets up the headless environment and `src/engine/pob.rs` is the
   backend that runs the glue.

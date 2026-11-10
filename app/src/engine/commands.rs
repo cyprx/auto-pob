@@ -144,6 +144,21 @@ pub enum Command {
         control: CalcsCount,
         text: String,
     },
+    /// PoB's right-click on a group in the Skills tab, "Set as main skill". Undoable.
+    SetMainSocketGroup {
+        group: usize,
+    },
+    /// Presses one of the sidebar's main-skill dropdowns; `index` is 0-based. `Mode` is an error,
+    /// because the sidebar has no mode selector.
+    SetMainSkillSelect {
+        control: CalcsControl,
+        index: usize,
+    },
+    /// Types into the sidebar's stage or mine count.
+    SetMainSkillCount {
+        control: CalcsCount,
+        text: String,
+    },
     SetShowMinion {
         show: bool,
     },
@@ -163,6 +178,137 @@ pub enum Command {
         text: String,
     },
 
+    /// Socket groups are 0-based, in the order of `SkillsView.groups`.
+    AddSocketGroup,
+    DeleteSocketGroup {
+        group: usize,
+    },
+    DeleteAllSocketGroups,
+    /// `to` is the group's final position.
+    MoveSocketGroup {
+        from: usize,
+        to: usize,
+    },
+    /// Adds a group from the text PoB's copy writes; text with no gems is an error.
+    PasteSocketGroup {
+        text: String,
+    },
+    /// Types into the group's label box; PoB's filter and limit apply.
+    SetGroupLabel {
+        group: usize,
+        text: String,
+    },
+    /// The group's slot, by PoB's slot name; `None` is "None".
+    SetGroupSlot {
+        group: usize,
+        slot: Option<String>,
+    },
+    SetGroupEnabled {
+        group: usize,
+        on: bool,
+    },
+    SetGroupFullDps {
+        group: usize,
+        on: bool,
+    },
+    /// Gem slots are 0-based within the group. Only `SetGem` may use `slot == len`, which
+    /// appends; the other gem commands address existing gems.
+    SetGem {
+        group: usize,
+        slot: usize,
+        gem_id: String,
+    },
+    /// The level, quality and count take the text typed into PoB's edit box.
+    SetGemLevel {
+        group: usize,
+        slot: usize,
+        text: String,
+    },
+    SetGemQuality {
+        group: usize,
+        slot: usize,
+        text: String,
+    },
+    SetGemEnabled {
+        group: usize,
+        slot: usize,
+        on: bool,
+    },
+    SetGemCount {
+        group: usize,
+        slot: usize,
+        text: String,
+    },
+    SetGemToggle {
+        group: usize,
+        slot: usize,
+        which: GemToggle,
+        on: bool,
+    },
+    DeleteGem {
+        group: usize,
+        slot: usize,
+    },
+    /// Skill sets are addressed by PoB's id (`SkillsView.sets`). Select makes one active.
+    SelectSkillSet {
+        id: u32,
+    },
+    /// Adds a set, as the manager's New button and name popup do; a blank title is an error.
+    NewSkillSet {
+        title: String,
+    },
+    RenameSkillSet {
+        id: u32,
+        title: String,
+    },
+    /// Copies the set under a new title (PoB's Copy button asks for one).
+    CopySkillSet {
+        id: u32,
+        title: String,
+    },
+    /// The last set can't be deleted.
+    DeleteSkillSet {
+        id: u32,
+    },
+    /// One of the Skills tab's gem options. They are build state that Save writes, but not
+    /// undoable and not unsaved.
+    SetSkillOption(SkillOption),
+    /// The Count box of a group an equipped item grants; any other group is an error (R2).
+    SetGroupCount {
+        group: usize,
+        text: String,
+    },
+    /// The group's Imbued Support box: `Some` picks the gem like Enter in the box, `None` presses
+    /// its x button. Refused when PoB's box is disabled or hidden (an item's group).
+    SetImbuedSupport {
+        group: usize,
+        gem_id: Option<String>,
+    },
+    /// The Optimise Sockets button. It edits the item and records an Items undo state, not a
+    /// Skills one (R20).
+    OptimiseSockets {
+        group: usize,
+    },
+    /// A query: what hovering the group in the list shows, answered as a `GroupTooltip`; the
+    /// latest one in a batch is answered.
+    GroupTooltip {
+        group: usize,
+    },
+    /// A query: the text PoB copies for the group, answered as a `SocketGroupText`; the latest
+    /// one in a batch is answered. The engine never touches the system clipboard.
+    CopySocketGroup {
+        group: usize,
+    },
+
+    /// Opens or replaces the gem picker's search (R9); the latest one in a batch is answered
+    /// as a `GemSearch`. While it is open PoB's DPS sort runs in the background.
+    SearchGems(GemSearchQuery),
+    /// Closes the gem picker's search.
+    CloseGemSearch,
+    /// A query: a gem tooltip (R15), answered as a `GemTooltip`; the latest one in a batch is
+    /// answered.
+    GemTooltip(GemTooltipQuery),
+
     /// A query: the breakdown of a Calcs cell; the latest one in a batch is answered.
     Breakdown(CellRef),
 
@@ -180,11 +326,77 @@ pub enum ConfigValue {
     Clear,
 }
 
+/// The gem options of the Skills tab. Indices are 0-based positions in the dropdown's list.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SkillOption {
+    SortByDps(bool),
+    SortField(usize),
+    DefaultLevel(usize),
+    /// The text typed into the default quality box
+    DefaultQuality(String),
+    SupportTypes(usize),
+    ShowLegacy(bool),
+}
+
+/// The gem box a search or a gem tooltip is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GemTarget {
+    /// The name box of the group's gem in this 0-based slot; `len` is the empty row.
+    Slot(usize),
+    /// The group's Imbued Support box.
+    Imbued,
+}
+
+/// PoB's "S" and "A" overlay buttons on a gem box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GemFilter {
+    All,
+    Support,
+    Active,
+}
+
+impl GemFilter {
+    /// The gem tag PoB filters by (`sortGemsBy`, GemSelectControl.lua:732-741).
+    pub(crate) fn pob_tag(self) -> Option<&'static str> {
+        match self {
+            GemFilter::All => None,
+            GemFilter::Support => Some("support"),
+            GemFilter::Active => Some("grants_active_skill"),
+        }
+    }
+}
+
+/// What the gem picker searches: `text` is typed into the box of `target` in `group`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GemSearchQuery {
+    pub group: usize,
+    pub target: GemTarget,
+    pub text: String,
+    pub filter: GemFilter,
+}
+
+/// A gem tooltip: `Some(id)` is a picker row (what selecting the gem would give), `None` is
+/// the gem already in the box.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GemTooltipQuery {
+    pub group: usize,
+    pub target: GemTarget,
+    pub gem_id: Option<String>,
+}
+
+/// A Vaal gem's two "Enable <skill>" toggles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GemToggle {
+    First,
+    Second,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Config,
     Tree,
     Calcs,
+    Skills,
 }
 
 /// The dropdowns of the Calcs selector.

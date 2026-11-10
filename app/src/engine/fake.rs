@@ -3,11 +3,12 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use super::commands::Command;
-use super::run::{Affected, Backend, Event};
+use super::commands::{Command, GemSearchQuery, GemTooltipQuery};
+use super::run::{Affected, Backend, BackgroundTask, Event};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
-    NodeTooltip, NotesView, Points, PowerReport, StatsView, TooltipLine, TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, GemSearchView,
+    GemTooltipView, GroupTooltipView, NodePower, NodeTooltip, NotesView, Points, PowerReport,
+    SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
 };
 
 #[derive(Default, Debug)]
@@ -15,8 +16,16 @@ pub struct Log {
     pub set_configs: usize,
     pub recalculations: usize,
     pub steps: usize,
+    /// The task of each step, in order
+    pub step_tasks: Vec<BackgroundTask>,
+    /// The text of each gem search view sent
+    pub gem_searches: Vec<String>,
+    /// Recalculations that found a search open, and so marked its DPS job pending
+    pub gem_restarts: usize,
     pub previews: Vec<u32>,
     pub breakdowns: Vec<CellRef>,
+    pub copies: Vec<usize>,
+    pub tooltips: Vec<usize>,
 }
 
 /// One scripted background step: what it affects, or the error it fails with.
@@ -25,8 +34,12 @@ pub type Step = Result<Affected, String>;
 pub struct Fake {
     pub log: Arc<Mutex<Log>>,
     pub fail_set_config: Option<String>,
-    /// Steps still to run; the loop works through them while no command is waiting.
+    /// Node power steps still to run; the loop works through them while no command is waiting.
     pub background: Arc<Mutex<VecDeque<Step>>>,
+    /// Gem DPS steps still to run; they go before the power steps.
+    pub gem_background: Arc<Mutex<VecDeque<Step>>>,
+    /// The open gem search
+    pub gem_search: Option<GemSearchQuery>,
     /// Replaces the queue when a command returns `build` or `recalc`.
     pub restart_on_build: Vec<Step>,
     /// Called after each step with the number of steps run so far.
@@ -45,6 +58,8 @@ impl Fake {
                 log: log.clone(),
                 fail_set_config: None,
                 background: Arc::default(),
+                gem_background: Arc::default(),
+                gem_search: None,
                 restart_on_build: Vec::new(),
                 on_step: None,
                 tooltip_vanished: false,
@@ -80,6 +95,29 @@ impl Fake {
                 breakdown: Some(cell),
                 ..Affected::default()
             }),
+            Command::GroupTooltip { group } => Ok(Affected {
+                group_tooltip: Some(group),
+                ..Affected::default()
+            }),
+            Command::CopySocketGroup { group } => Ok(Affected {
+                group_text: Some(group),
+                ..Affected::default()
+            }),
+            Command::SearchGems(query) => {
+                self.gem_search = Some(query);
+                Ok(Affected {
+                    gem_search: true,
+                    ..Affected::default()
+                })
+            }
+            Command::CloseGemSearch => {
+                self.gem_search = None;
+                Ok(Affected::default())
+            }
+            Command::GemTooltip(query) => Ok(Affected {
+                gem_tooltip: Some(query),
+                ..Affected::default()
+            }),
             Command::ExportTreeLink => Ok(Affected {
                 link: true,
                 ..Affected::default()
@@ -99,7 +137,11 @@ impl Backend for Fake {
     }
 
     fn recalculate(&mut self) -> anyhow::Result<()> {
-        self.log.lock().unwrap().recalculations += 1;
+        let mut log = self.log.lock().unwrap();
+        log.recalculations += 1;
+        if self.gem_search.is_some() {
+            log.gem_restarts += 1;
+        }
         Ok(())
     }
 
@@ -127,6 +169,7 @@ impl Backend for Fake {
         Ok(StatsView {
             stats: vec![],
             minion: vec![],
+            ..StatsView::default()
         })
     }
 
@@ -151,19 +194,54 @@ impl Backend for Fake {
         Ok(CalcsView::default())
     }
 
+    fn skills_view(&mut self) -> anyhow::Result<SkillsView> {
+        Ok(SkillsView::default())
+    }
+
+    fn socket_group_text(&mut self, group: usize) -> anyhow::Result<SocketGroupText> {
+        self.log.lock().unwrap().copies.push(group);
+        Ok(SocketGroupText {
+            group,
+            text: format!("group {group}"),
+        })
+    }
+
+    fn group_tooltip_view(&mut self, group: usize) -> anyhow::Result<GroupTooltipView> {
+        self.log.lock().unwrap().tooltips.push(group);
+        Ok(GroupTooltipView {
+            group,
+            lines: vec![],
+        })
+    }
+
     fn notes_view(&mut self) -> anyhow::Result<NotesView> {
         Ok(NotesView::default())
     }
 
-    fn has_background_work(&self) -> bool {
-        !self.background.lock().unwrap().is_empty()
+    fn next_background(&self) -> Option<BackgroundTask> {
+        if !self.gem_background.lock().unwrap().is_empty() {
+            Some(BackgroundTask::GemDps)
+        } else if !self.background.lock().unwrap().is_empty() {
+            Some(BackgroundTask::NodePower)
+        } else {
+            None
+        }
     }
 
-    fn background_step(&mut self, _send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
-        let step = self.background.lock().unwrap().pop_front();
+    fn background_step(
+        &mut self,
+        task: BackgroundTask,
+        _send: &dyn Fn(Event),
+    ) -> anyhow::Result<Affected> {
+        let queue = match task {
+            BackgroundTask::GemDps => self.gem_background.clone(),
+            BackgroundTask::NodePower => self.background.clone(),
+        };
+        let step = queue.lock().unwrap().pop_front();
         let steps = {
             let mut log = self.log.lock().unwrap();
             log.steps += 1;
+            log.step_tasks.push(task);
             log.steps
         };
         if let Some(on_step) = &mut self.on_step {
@@ -173,11 +251,38 @@ impl Backend for Fake {
             Some(Ok(affected)) => Ok(affected),
             Some(Err(message)) => {
                 // a failed calculation has no more work
-                self.background.lock().unwrap().clear();
+                queue.lock().unwrap().clear();
                 anyhow::bail!("{message}")
             }
             None => Ok(Affected::default()),
         }
+    }
+
+    fn gem_search_view(&mut self) -> anyhow::Result<Option<GemSearchView>> {
+        let Some(query) = self.gem_search.clone() else {
+            return Ok(None);
+        };
+        self.log
+            .lock()
+            .unwrap()
+            .gem_searches
+            .push(query.text.clone());
+        let sorting = !self.gem_background.lock().unwrap().is_empty();
+        Ok(Some(GemSearchView {
+            query,
+            rows: vec![],
+            base_dps: 0.0,
+            sorting,
+            percent: None,
+            ended: false,
+        }))
+    }
+
+    fn gem_tooltip_view(&mut self, query: &GemTooltipQuery) -> anyhow::Result<GemTooltipView> {
+        Ok(GemTooltipView {
+            query: query.clone(),
+            lines: vec![],
+        })
     }
 
     fn node_power_view(&mut self) -> anyhow::Result<NodePower> {

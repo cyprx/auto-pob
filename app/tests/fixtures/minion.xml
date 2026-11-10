@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <PathOfBuilding>
-	<Build ascendClassName="None" className="Witch" targetVersion="3_0" pantheonMajorGod="None" pantheonMinorGod="None" viewMode="TREE" bandit="None" level="90" characterLevelAutoMode="false" mainSocketGroup="1">
+	<Build viewMode="TREE" ascendClassName="None" level="90" mainSocketGroup="1" targetVersion="3_0" pantheonMajorGod="None" pantheonMinorGod="None" bandit="None" className="Witch" characterLevelAutoMode="false">
 		<PlayerStat stat="ActiveMinionLimit" value="6"/>
 		<PlayerStat stat="AverageHit" value="0"/>
 		<PlayerStat stat="AverageBurstDamage" value="0"/>
@@ -16,9 +16,9 @@
 		<PlayerStat stat="CullingDPS" value="0"/>
 		<PlayerStat stat="ReservationDPS" value="0"/>
 		<PlayerStat stat="CombinedDPS" value="0"/>
-		<PlayerStat stat="ManaCost" value="28"/>
+		<PlayerStat stat="ManaCost" value="50"/>
 		<PlayerStat stat="ManaPercentCost" value="0"/>
-		<PlayerStat stat="ManaPerSecondCost" value="34.588235294118"/>
+		<PlayerStat stat="ManaPerSecondCost" value="61.764705882353"/>
 		<PlayerStat stat="ManaPercentPerSecondCost" value="0"/>
 		<PlayerStat stat="LifeCost" value="0"/>
 		<PlayerStat stat="LifePercentCost" value="0"/>
@@ -30,6 +30,7 @@
 		<PlayerStat stat="RageCost" value="0"/>
 		<PlayerStat stat="SoulCost" value="0"/>
 		<PlayerStat stat="Str" value="34"/>
+		<PlayerStat stat="ReqStr" value="111"/>
 		<PlayerStat stat="Dex" value="44"/>
 		<PlayerStat stat="Int" value="122"/>
 		<PlayerStat stat="ReqInt" value="155"/>
@@ -90,31 +91,31 @@
 		<PlayerStat stat="EnduranceCharges" value="0"/>
 		<PlayerStat stat="EnduranceChargesMax" value="3"/>
 		<PlayerStat stat="ActiveMinionLimit" value="6"/>
-		<MinionStat stat="AverageDamage" value="162.65375"/>
+		<MinionStat stat="AverageDamage" value="226.09125"/>
 		<MinionStat stat="Speed" value="0.85470085470085"/>
 		<MinionStat stat="Speed" value="0.85470085470085"/>
-		<MinionStat stat="TotalDPS" value="139.0202991453"/>
+		<MinionStat stat="TotalDPS" value="193.24038461538"/>
 		<MinionStat stat="TotalDot" value="0"/>
-		<MinionStat stat="WithBleedDPS" value="139.0202991453"/>
-		<MinionStat stat="WithIgniteDPS" value="139.0202991453"/>
-		<MinionStat stat="WithPoisonDPS" value="139.0202991453"/>
+		<MinionStat stat="WithBleedDPS" value="193.24038461538"/>
+		<MinionStat stat="WithIgniteDPS" value="193.24038461538"/>
+		<MinionStat stat="WithPoisonDPS" value="193.24038461538"/>
 		<MinionStat stat="TotalDotDPS" value="0"/>
 		<MinionStat stat="CullingDPS" value="0"/>
 		<MinionStat stat="ReservationDPS" value="0"/>
-		<MinionStat stat="CombinedDPS" value="139.0202991453"/>
-		<MinionStat stat="Life" value="7648"/>
+		<MinionStat stat="CombinedDPS" value="193.24038461538"/>
+		<MinionStat stat="Life" value="5708"/>
 		<MinionStat stat="LifeRegenRecovery" value="0"/>
 		<MinionStat stat="LifeLeechGainRate" value="0"/>
 		<MinionStat stat="EnergyShield" value="0"/>
 		<MinionStat stat="EnergyShieldRegenRecovery" value="0"/>
 		<MinionStat stat="EnergyShieldLeechGainRate" value="0"/>
-		<TimelessData devotionVariant1="1" devotionVariant2="1" searchList="" searchListFallback=""/>
+		<TimelessData devotionVariant2="1" searchList="" searchListFallback="" devotionVariant1="1"/>
 	</Build>
 	<Notes>
 		
 	</Notes>
 	<Tree activeSpec="1">
-		<Spec masteryEffects="" nodes="1346,7938,2292,8948,11420,4105,57226,4432,4397,11128,27929,127,7503,11659,27659,4184,32210,11784,21678,8135,54447" classId="3" ascendClassId="0" secondaryAscendClassId="nil" treeVersion="3_29" clusterHashFormatVersion="2">
+		<Spec masteryEffects="" secondaryAscendClassId="nil" nodes="1346,7938,2292,8948,11420,4105,57226,4432,4397,11128,27929,127,7503,11659,27659,4184,32210,11784,21678,8135,54447" clusterHashFormatVersion="2" treeVersion="3_29" ascendClassId="0" classId="3">
 			<URL>
 				https://www.pathofexile.com/passive-skill-tree/AAAABgMAFAVCHwII9CL0LJwQCd-KEVARLSt4bRkAfx1PLYtsCxBYfdIuCFSuH8cAAA==
 			</URL>
@@ -122,56 +123,56 @@
 			<Overrides/>
 		</Spec>
 	</Tree>
-	<Skills sortGemsByDPS="true" sortGemsByDPSField="CombinedDPS" showSupportGemTypes="ALL" defaultGemQuality="nil" defaultGemLevel="normalMaximum" showLegacyGems="false" activeSkillSet="1">
+	<Skills defaultGemLevel="normalMaximum" activeSkillSet="1" defaultGemQuality="nil" sortGemsByDPS="true" sortGemsByDPSField="CombinedDPS" showSupportGemTypes="ALL" showLegacyGems="false">
 		<SkillSet id="1">
-			<Skill enabled="true" mainActiveSkill="1" includeInFullDPS="nil" label="" mainActiveSkillCalcs="1">
-				<Gem nameSpec="Raise Zombie" skillMinionCalcs="RaisedZombie" skillMinionSkillCalcs="1" enableGlobal1="true" enableGlobal2="true" variantId="RaiseZombie" count="1" quality="0" level="20" skillMinionSkill="1" skillMinion="RaisedZombie" skillId="RaiseZombie" enabled="true" gemId="Metadata/Items/Gems/SkillGemRaiseZombie"/>
-				<Gem nameSpec="Minion Damage Support" enableGlobal1="true" enableGlobal2="true" count="1" quality="0" level="20" enabled="true"/>
-				<Gem nameSpec="Melee Splash Support" enableGlobal1="true" enableGlobal2="true" count="1" quality="0" level="20" enabled="true"/>
+			<Skill includeInFullDPS="nil" mainActiveSkillCalcs="1" label="" enabled="true" mainActiveSkill="1">
+				<Gem skillMinionCalcs="RaisedZombie" skillMinionSkillCalcs="1" enableGlobal1="true" enableGlobal2="true" level="20" enabled="true" count="1" gemId="Metadata/Items/Gems/SkillGemRaiseZombie" quality="0" skillId="RaiseZombie" skillMinion="RaisedZombie" variantId="RaiseZombie" nameSpec="Raise Zombie" skillMinionSkill="1"/>
+				<Gem enableGlobal1="true" enableGlobal2="true" level="20" enabled="true" count="1" gemId="Metadata/Items/Gems/SupportGemMinionDamage" quality="0" skillId="SupportMinionDamage" variantId="SupportMinionDamage" nameSpec="Minion Damage"/>
+				<Gem enableGlobal1="true" enableGlobal2="true" level="20" enabled="true" count="1" gemId="Metadata/Items/Gems/SupportGemMeleeSplash" quality="0" skillId="SupportMeleeSplash" variantId="SupportMeleeSplash" nameSpec="Melee Splash"/>
 			</Skill>
 		</SkillSet>
 	</Skills>
 	<Import exportParty="false"/>
 	<Config activeConfigSet="1">
 		<ConfigSet id="1">
-			<Placeholder number="15" name="multiplierWitheredStackCountSelf"/>
-			<Placeholder number="3" name="enemyFirePen"/>
-			<Placeholder number="61989" name="enemyArmour"/>
-			<Placeholder number="10143" name="enemyEvasion"/>
-			<Placeholder number="15" name="meleeDistance"/>
-			<Placeholder number="70" name="enemyDamageRollRange"/>
-			<Placeholder number="1" name="ShockStacks"/>
-			<Placeholder number="40" name="projectileDistance"/>
-			<Placeholder number="5" name="configSpectralTigerCount"/>
-			<Placeholder number="3" name="enemyColdPen"/>
-			<Placeholder number="1" name="multiplierEnemyHallowingFlame"/>
-			<Placeholder number="1" name="ScorchStacks"/>
-			<Placeholder number="50" name="enemyFireResist"/>
-			<Placeholder number="700" name="enemySpeed"/>
-			<Placeholder number="50" name="enemyColdResist"/>
-			<Placeholder number="5" name="enemyCritChance"/>
-			<Placeholder number="50" name="enemyLightningResist"/>
-			<Placeholder number="1" name="multiplierHallowingFlameStacksRemovedByAlly"/>
-			<Placeholder number="30" name="enemyChaosResist"/>
-			<Placeholder number="84" name="enemyLevel"/>
-			<Placeholder number="2241" name="enemyPhysicalDamage"/>
-			<Placeholder number="2241" name="enemyLightningDamage"/>
-			<Placeholder number="2241" name="enemyColdDamage"/>
-			<Placeholder number="2241" name="enemyFireDamage"/>
-			<Placeholder number="896" name="enemyChaosDamage"/>
-			<Placeholder number="1" name="sigilOfPowerStages"/>
-			<Placeholder number="30" name="enemyCritDamage"/>
-			<Placeholder number="3" name="enemyLightningPen"/>
-			<CustomModifierBlock title="Default" enabled="true">
+			<Placeholder name="multiplierHallowingFlameStacksRemovedByAlly" number="1"/>
+			<Placeholder name="enemyPhysicalDamage" number="2241"/>
+			<Placeholder name="meleeDistance" number="15"/>
+			<Placeholder name="enemyColdDamage" number="2241"/>
+			<Placeholder name="enemyFireDamage" number="2241"/>
+			<Placeholder name="projectileDistance" number="40"/>
+			<Placeholder name="multiplierWitheredStackCountSelf" number="15"/>
+			<Placeholder name="enemyFireResist" number="50"/>
+			<Placeholder name="configSpectralTigerCount" number="5"/>
+			<Placeholder name="enemyColdResist" number="50"/>
+			<Placeholder name="enemyFirePen" number="3"/>
+			<Placeholder name="enemyLightningResist" number="50"/>
+			<Placeholder name="ScorchStacks" number="1"/>
+			<Placeholder name="enemyChaosResist" number="30"/>
+			<Placeholder name="enemyDamageRollRange" number="70"/>
+			<Placeholder name="enemyEvasion" number="10143"/>
+			<Placeholder name="enemyArmour" number="61989"/>
+			<Placeholder name="enemyColdPen" number="3"/>
+			<Placeholder name="enemyLightningPen" number="3"/>
+			<Placeholder name="enemyLevel" number="84"/>
+			<Placeholder name="enemyChaosDamage" number="896"/>
+			<Placeholder name="enemyLightningDamage" number="2241"/>
+			<Placeholder name="ShockStacks" number="1"/>
+			<Placeholder name="sigilOfPowerStages" number="1"/>
+			<Placeholder name="multiplierEnemyHallowingFlame" number="1"/>
+			<Placeholder name="enemySpeed" number="700"/>
+			<Placeholder name="enemyCritChance" number="5"/>
+			<Placeholder name="enemyCritDamage" number="30"/>
+			<CustomModifierBlock enabled="true" title="Default">
 				
 			</CustomModifierBlock>
 		</ConfigSet>
 	</Config>
-	<TreeView zoomX="0" zoomY="0" showStatDifferences="true" searchStr="" zoomLevel="3"/>
-	<Party destination="All" ShowAdvanceTools="false" append="false"/>
+	<TreeView showStatDifferences="true" zoomLevel="3" zoomX="0" zoomY="0" searchStr=""/>
+	<Party append="false" destination="All" ShowAdvanceTools="false"/>
 	<Calcs>
-		<Input number="1" name="skill_number"/>
-		<Input string="EFFECTIVE" name="misc_buffMode"/>
+		<Input name="misc_buffMode" string="EFFECTIVE"/>
+		<Input name="skill_number" number="1"/>
 		<Section collapsed="false" id="SkillSelect" subsection="ViewSkillDetails"/>
 		<Section collapsed="false" id="HitDamage" subsection="SkillHitDamage"/>
 		<Section collapsed="false" id="Warcries" subsection="ExertingWarcries"/>
@@ -224,18 +225,21 @@
 		<Section collapsed="false" id="DamageTaken" subsection="DotsandBuildDegens"/>
 		<Section collapsed="true" id="DamageTaken" subsection="EnemyDegens"/>
 	</Calcs>
-	<Items activeItemSet="1" useSecondWeaponSet="nil" showStatDifferences="true">
+	<Items useSecondWeaponSet="nil" showStatDifferences="true" activeItemSet="1">
 		<ItemSet useSecondWeaponSet="nil" id="1">
-			<Slot itemPbURL="" name="Weapon 2 Abyssal Socket 2" itemId="0"/>
-			<Slot itemPbURL="" name="Weapon 2 Abyssal Socket 3" itemId="0"/>
-			<Slot itemPbURL="" name="Weapon 2 Abyssal Socket 4" itemId="0"/>
-			<Slot itemPbURL="" name="Weapon 2 Abyssal Socket 5" itemId="0"/>
-			<Slot itemPbURL="" name="Weapon 2 Abyssal Socket 6" itemId="0"/>
-			<Slot itemPbURL="" name="Helmet Abyssal Socket 1" itemId="0"/>
-			<Slot itemPbURL="" name="Helmet Abyssal Socket 2" itemId="0"/>
-			<Slot itemPbURL="" name="Helmet Abyssal Socket 3" itemId="0"/>
-			<Slot itemPbURL="" name="Helmet Abyssal Socket 4" itemId="0"/>
-			<Slot itemPbURL="" name="Helmet Abyssal Socket 5" itemId="0"/>
+			<Slot itemPbURL="" name="Belt" itemId="0"/>
+			<Slot itemPbURL="" name="Flask 5" itemId="0"/>
+			<Slot itemPbURL="" name="Weapon 1 Swap" itemId="0"/>
+			<Slot itemPbURL="" name="Weapon 1" itemId="0"/>
+			<Slot itemPbURL="" name="Amulet" itemId="0"/>
+			<Slot itemPbURL="" name="Helmet" itemId="0"/>
+			<Slot itemPbURL="" name="Weapon 2" itemId="0"/>
+			<Slot itemPbURL="" name="Body Armour" itemId="0"/>
+			<Slot itemPbURL="" name="Gloves" itemId="0"/>
+			<Slot itemPbURL="" name="Boots" itemId="0"/>
+			<Slot itemPbURL="" name="Graft 1" itemId="0"/>
+			<Slot itemPbURL="" name="Ring 2" itemId="0"/>
+			<Slot itemPbURL="" name="Graft 2" itemId="0"/>
 			<Slot itemPbURL="" name="Helmet Abyssal Socket 6" itemId="0"/>
 			<Slot itemPbURL="" name="Body Armour Abyssal Socket 1" itemId="0"/>
 			<Slot itemPbURL="" name="Body Armour Abyssal Socket 2" itemId="0"/>
@@ -265,22 +269,6 @@
 			<Slot itemPbURL="" name="Flask 2" itemId="0"/>
 			<Slot itemPbURL="" name="Flask 3" itemId="0"/>
 			<Slot itemPbURL="" name="Flask 4" itemId="0"/>
-			<Slot itemPbURL="" name="Weapon 1 Swap" itemId="0"/>
-			<Slot itemPbURL="" name="Weapon 2 Swap" itemId="0"/>
-			<Slot itemPbURL="" name="Graft 1" itemId="0"/>
-			<Slot itemPbURL="" name="Graft 2" itemId="0"/>
-			<Slot itemPbURL="" name="Weapon 1" itemId="0"/>
-			<Slot itemPbURL="" name="Amulet" itemId="0"/>
-			<Slot itemPbURL="" name="Helmet" itemId="0"/>
-			<Slot itemPbURL="" name="Weapon 2" itemId="0"/>
-			<Slot itemPbURL="" name="Body Armour" itemId="0"/>
-			<Slot itemPbURL="" name="Gloves" itemId="0"/>
-			<Slot itemPbURL="" name="Boots" itemId="0"/>
-			<Slot itemPbURL="" name="Ring 1" itemId="0"/>
-			<Slot itemPbURL="" name="Ring 2" itemId="0"/>
-			<Slot itemPbURL="" name="Ring 3" itemId="0"/>
-			<Slot itemPbURL="" name="Flask 5" itemId="0"/>
-			<Slot itemPbURL="" name="Belt" itemId="0"/>
 			<Slot itemPbURL="" name="Weapon 1 Swap Abyssal Socket 1" itemId="0"/>
 			<Slot itemPbURL="" name="Weapon 1 Swap Abyssal Socket 2" itemId="0"/>
 			<Slot itemPbURL="" name="Weapon 1 Swap Abyssal Socket 3" itemId="0"/>
@@ -300,6 +288,19 @@
 			<Slot itemPbURL="" name="Weapon 2 Swap Abyssal Socket 5" itemId="0"/>
 			<Slot itemPbURL="" name="Weapon 2 Swap Abyssal Socket 6" itemId="0"/>
 			<Slot itemPbURL="" name="Weapon 2 Abyssal Socket 1" itemId="0"/>
+			<Slot itemPbURL="" name="Weapon 2 Abyssal Socket 2" itemId="0"/>
+			<Slot itemPbURL="" name="Weapon 2 Abyssal Socket 3" itemId="0"/>
+			<Slot itemPbURL="" name="Weapon 2 Abyssal Socket 4" itemId="0"/>
+			<Slot itemPbURL="" name="Weapon 2 Abyssal Socket 5" itemId="0"/>
+			<Slot itemPbURL="" name="Weapon 2 Abyssal Socket 6" itemId="0"/>
+			<Slot itemPbURL="" name="Helmet Abyssal Socket 1" itemId="0"/>
+			<Slot itemPbURL="" name="Helmet Abyssal Socket 2" itemId="0"/>
+			<Slot itemPbURL="" name="Helmet Abyssal Socket 3" itemId="0"/>
+			<Slot itemPbURL="" name="Helmet Abyssal Socket 4" itemId="0"/>
+			<Slot itemPbURL="" name="Helmet Abyssal Socket 5" itemId="0"/>
+			<Slot itemPbURL="" name="Weapon 2 Swap" itemId="0"/>
+			<Slot itemPbURL="" name="Ring 3" itemId="0"/>
+			<Slot itemPbURL="" name="Ring 1" itemId="0"/>
 		</ItemSet>
 	</Items>
 </PathOfBuilding>

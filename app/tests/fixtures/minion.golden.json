@@ -53,9 +53,9 @@
     "LightningResist": -44.0,
     "LightningResistOverCap": 0.0,
     "Mana": 725.0,
-    "ManaCost": 28.0,
+    "ManaCost": 50.0,
     "ManaLeechGainRate": 0.0,
-    "ManaPerSecondCost": 34.58823529411765,
+    "ManaPerSecondCost": 61.76470588235294,
     "ManaPercentCost": 0.0,
     "ManaPercentPerSecondCost": 0.0,
     "ManaRegenRecovery": 12.7,
@@ -69,6 +69,7 @@
     "RageCost": 0.0,
     "RageRegenRecovery": 0.0,
     "ReqInt": 155.0,
+    "ReqStr": 111.0,
     "ReservationDPS": 0.0,
     "SoulCost": 0.0,
     "Spec:ArmourInc": 0.0,
@@ -89,23 +90,23 @@
     "WithPoisonDPS": 0.0
   },
   "minion_stats": {
-    "AverageDamage": 162.65374999999997,
-    "CombinedDPS": 139.02029914529913,
+    "AverageDamage": 226.09124999999997,
+    "CombinedDPS": 193.2403846153846,
     "CullingDPS": 0.0,
     "EnergyShield": 0.0,
     "EnergyShieldLeechGainRate": 0.0,
     "EnergyShieldRegenRecovery": 0.0,
-    "Life": 7648.0,
+    "Life": 5708.0,
     "LifeLeechGainRate": 0.0,
     "LifeRegenRecovery": 0.0,
     "ReservationDPS": 0.0,
     "Speed": 0.8547008547008548,
-    "TotalDPS": 139.02029914529913,
+    "TotalDPS": 193.2403846153846,
     "TotalDot": 0.0,
     "TotalDotDPS": 0.0,
-    "WithBleedDPS": 139.02029914529913,
-    "WithIgniteDPS": 139.02029914529913,
-    "WithPoisonDPS": 139.02029914529913
+    "WithBleedDPS": 193.2403846153846,
+    "WithIgniteDPS": 193.2403846153846,
+    "WithPoisonDPS": 193.2403846153846
   },
   "sidebar": [
     {
@@ -118,15 +119,19 @@
     },
     {
       "label": "Mana Cost",
-      "text": "28"
+      "text": "50"
     },
     {
       "label": "Mana Cost per second",
-      "text": "34.59"
+      "text": "61.76"
     },
     {
       "label": "Strength",
       "text": "34"
+    },
+    {
+      "label": "Strength Required",
+      "text": "111"
     },
     {
       "label": "Dexterity",
@@ -216,7 +221,7 @@
   "minion_sidebar": [
     {
       "label": "Average Damage",
-      "text": "162.7"
+      "text": "226.1"
     },
     {
       "label": "Attack/Cast Rate",
@@ -224,11 +229,11 @@
     },
     {
       "label": "Hit DPS",
-      "text": "139"
+      "text": "193.2"
     },
     {
       "label": "Total Life",
-      "text": "7,648"
+      "text": "5,708"
     }
   ],
   "visible_config": [

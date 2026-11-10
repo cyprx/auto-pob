@@ -1,6 +1,6 @@
 buildFixture {
 	class = "Witch",
 	level = 90,
-	gems = { "Raise Zombie", "Minion Damage Support", "Melee Splash Support" },
+	gems = { "Raise Zombie", "Minion Damage", "Melee Splash" },
 	nodes = 20,
 }

@@ -6,8 +6,8 @@
 use auto_pob::engine::pob::PobBackend;
 use auto_pob::engine::upstream::{Golden, golden_of, load_xml, run_recipe, upstream_lua};
 use auto_pob::engine::{
-    Backend, Command, CompareColour, ConfigOption, ConfigValue, ConfigView, Engine, Event,
-    Snapshot, StatsView, Tab,
+    Backend, BackgroundTask, Command, CompareColour, ConfigOption, ConfigValue, ConfigView, Engine,
+    Event, Snapshot, StatsView, Tab,
 };
 use auto_pob::game::Game;
 use mlua::LuaSerdeExt;
@@ -19,6 +19,8 @@ use std::{
 
 #[path = "gate/calcs.rs"]
 mod calcs;
+#[path = "gate/skills.rs"]
+mod skills;
 
 /// PoB loads files relative to the process working directory, so only one test may run it.
 static CWD: Mutex<()> = Mutex::new(());
@@ -120,29 +122,21 @@ const RECIPE_SHAPES: [(&str, &str, u32, u32, &[&str]); 4] = [
         "Marauder",
         90,
         20,
-        &[
-            "Boneshatter",
-            "Melee Physical Damage Support",
-            "Brutality Support",
-        ],
+        &["Boneshatter", "Melee Physical Damage", "Brutality"],
     ),
     (
         "dot",
         "Witch",
         90,
         20,
-        &["Essence Drain", "Contagion", "Void Manipulation Support"],
+        &["Essence Drain", "Contagion", "Void Manipulation"],
     ),
     (
         "minion",
         "Witch",
         90,
         20,
-        &[
-            "Raise Zombie",
-            "Minion Damage Support",
-            "Melee Splash Support",
-        ],
+        &["Raise Zombie", "Minion Damage", "Melee Splash"],
     ),
 ];
 
@@ -281,6 +275,36 @@ fn assert_view_matches(
     }
 }
 
+/// `StripEscapes`: removes `^x` + 6 hex digits and `^` + a digit.
+fn strip_escapes(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '^' {
+            if chars.get(i + 1) == Some(&'x')
+                && chars.len() >= i + 8
+                && chars[i + 2..i + 8].iter().all(|c| c.is_ascii_hexdigit())
+            {
+                i += 8;
+                continue;
+            }
+            if chars.get(i + 1).is_some_and(|c| c.is_ascii_digit()) {
+                i += 2;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// A row's notes in the golden data's shape (no colour codes).
+fn plain_notes(notes: &[String]) -> Vec<String> {
+    notes.iter().map(|n| strip_escapes(n)).collect()
+}
+
 /// The rows must be exactly the lines PoB's own sidebar showed, in order.
 fn assert_sidebar(
     name: &str,
@@ -297,6 +321,13 @@ fn assert_sidebar(
         .map(|l| (l.label.as_str(), l.text.as_str()))
         .collect();
     assert_eq!(got, want, "{name}: {what} sidebar lines");
+    let got_notes: Vec<Vec<String>> = rows.iter().map(|r| plain_notes(&r.notes)).collect();
+    let want_notes: Vec<&Vec<String>> = sidebar.iter().map(|l| &l.notes).collect();
+    assert_eq!(
+        got_notes.iter().collect::<Vec<_>>(),
+        want_notes,
+        "{name}: {what} sidebar notes"
+    );
 }
 
 #[test]
@@ -2100,6 +2131,7 @@ fn our_tree_result(s: &mut Session) -> TreeResult {
         .map(|r| auto_pob::engine::upstream::SidebarLine {
             label: r.label.clone(),
             text: r.text.clone(),
+            notes: plain_notes(&r.notes),
         })
         .collect();
     TreeResult {
@@ -2682,10 +2714,11 @@ fn run_power(s: &mut Session, stat: &str, max_depth: Option<u32>) -> Vec<u32> {
     .unwrap();
     let progress = std::cell::RefCell::new(Vec::new());
     let mut steps = 0;
-    while s.backend.has_background_work() {
+    while let Some(task) = s.backend.next_background() {
+        assert_eq!(task, BackgroundTask::NodePower);
         let affected = s
             .backend
-            .background_step(&|event| {
+            .background_step(task, &|event| {
                 if let Event::Progress { percent, .. } = event {
                     progress.borrow_mut().push(percent);
                 }
@@ -2812,22 +2845,22 @@ fn no_power_work_without_heatmap() {
     let mut s = attack_session("tree-no-power");
     s.run(set("buffAdrenaline", ConfigValue::Bool(true)))
         .unwrap();
-    assert!(!s.backend.has_background_work());
+    assert!(s.backend.next_background().is_none());
     s.run(Command::SetHeatmap {
         stat: Some("Life".into()),
         max_depth: Some(5),
     })
     .unwrap();
-    assert!(s.backend.has_background_work());
+    assert!(s.backend.next_background() == Some(BackgroundTask::NodePower));
     s.run(Command::SetHeatmap {
         stat: None,
         max_depth: None,
     })
     .unwrap();
-    assert!(!s.backend.has_background_work());
+    assert!(s.backend.next_background().is_none());
     s.run(set("buffAdrenaline", ConfigValue::Bool(false)))
         .unwrap();
-    assert!(!s.backend.has_background_work());
+    assert!(s.backend.next_background().is_none());
     let state = s.backend.tree_state_view().unwrap();
     assert_eq!(state.heatmap, None);
     let off = s.backend.node_power_view().unwrap();
@@ -2849,12 +2882,12 @@ fn leaving_for_the_list_stops_power_work() {
         max_depth: Some(5),
     })
     .unwrap();
-    assert!(s.backend.has_background_work());
+    assert!(s.backend.next_background() == Some(BackgroundTask::NodePower));
     s.run(Command::ListBuilds {
         folder: String::new(),
     })
     .unwrap();
-    assert!(!s.backend.has_background_work());
+    assert!(s.backend.next_background().is_none());
 }
 
 #[test]
@@ -2880,7 +2913,10 @@ fn unknown_heatmap_stat_changes_nothing() {
     let state = s.backend.tree_state_view().unwrap();
     assert_eq!(state.heatmap.as_deref(), Some("Life"));
     assert_eq!(state.max_depth, Some(5));
-    assert!(s.backend.has_background_work(), "the heat map is still on");
+    assert!(
+        s.backend.next_background() == Some(BackgroundTask::NodePower),
+        "the heat map is still on"
+    );
 }
 
 #[test]
@@ -2898,8 +2934,11 @@ fn failed_power_step_stops_background_work() {
         .load("pob.build.calcsTab.PowerBuilder = function() error('boom', 0) end")
         .exec()
         .unwrap();
-    assert!(s.backend.has_background_work());
-    let error = s.backend.background_step(&|_| {}).unwrap_err();
+    assert!(s.backend.next_background() == Some(BackgroundTask::NodePower));
+    let error = s
+        .backend
+        .background_step(BackgroundTask::NodePower, &|_| {})
+        .unwrap_err();
     assert!(error.to_string().contains("boom"), "{error}");
     // a recalculation sets powerBuildFlag again (CalcsTab.lua:435)
     s.run(set("buffAdrenaline", ConfigValue::Bool(true)))
@@ -2912,7 +2951,7 @@ fn failed_power_step_stops_background_work() {
         .unwrap();
     assert!(pending, "the recalculation queued the power calculation");
     assert!(
-        !s.backend.has_background_work(),
+        s.backend.next_background().is_none(),
         "a failed step must end the background work until the next SetHeatmap"
     );
     // the next SetHeatmap tries again
@@ -2922,7 +2961,7 @@ fn failed_power_step_stops_background_work() {
         .exec()
         .unwrap();
     s.run(heatmap()).unwrap();
-    assert!(s.backend.has_background_work());
+    assert!(s.backend.next_background() == Some(BackgroundTask::NodePower));
 }
 
 #[test]

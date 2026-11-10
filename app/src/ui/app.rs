@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::engine::views::{BuildListView, BuildView, ConfigView, StatsView};
-use crate::engine::{Command, Engine, Event, Snapshot, Tab};
+use crate::engine::{BackgroundTask, Command, Engine, Event, Snapshot, Tab};
 use crate::game::Game;
 use crate::pob_files::DownloadProgress;
 use crate::theme;
@@ -12,6 +12,7 @@ use crate::ui::build_list::{BuildListUi, ListScreenAction};
 use crate::ui::calcs::{CalcsOutput, CalcsUi};
 use crate::ui::config::ConfigUi;
 use crate::ui::notes::NotesUi;
+use crate::ui::skills::{SkillsOutput, SkillsUi};
 use crate::ui::tree::{TreeOutput, TreeTab};
 use crate::ui::unsaved::{Pending, PromptChoice, Resolution, needs_prompt, resolve};
 use crate::ui::{sidebar, startup};
@@ -70,6 +71,8 @@ pub struct AutoPobApp {
     tab: BuildTab,
     tree: TreeTab,
     calcs: CalcsUi,
+    skills: SkillsUi,
+    sidebar: sidebar::SidebarState,
     notes: NotesUi,
     config_ui: ConfigUi,
     list_ui: BuildListUi,
@@ -113,6 +116,8 @@ impl AutoPobApp {
             tab: BuildTab::default(),
             tree: TreeTab::default(),
             calcs: CalcsUi::default(),
+            skills: SkillsUi::default(),
+            sidebar: sidebar::SidebarState::default(),
             notes: NotesUi::default(),
             config_ui: ConfigUi::default(),
             list_ui: BuildListUi::default(),
@@ -164,7 +169,10 @@ impl AutoPobApp {
     fn current_unsaved(&self) -> bool {
         self.screen == Screen::Build
             && self.entering.is_none()
-            && (self.notes.has_pending() || self.build.as_ref().is_some_and(|b| b.unsaved))
+            && (self.notes.has_pending()
+                || self.skills.has_pending()
+                || self.sidebar.has_pending()
+                || self.build.as_ref().is_some_and(|b| b.unsaved))
     }
 
     fn list_folder(&self) -> String {
@@ -196,6 +204,8 @@ impl AutoPobApp {
                     self.entering = None;
                     self.tree.reset();
                     self.calcs.reset();
+                    self.skills.reset();
+                    self.sidebar = sidebar::SidebarState::default();
                     self.notes.reset();
                 }
                 match snapshot {
@@ -212,6 +222,11 @@ impl AutoPobApp {
                     }
                     Snapshot::Config(view) => self.config = Some(view),
                     Snapshot::Calcs(_) => self.calcs.on_snapshot(&snapshot),
+                    Snapshot::Skills(_)
+                    | Snapshot::SocketGroupText(_)
+                    | Snapshot::GroupTooltip(_)
+                    | Snapshot::GemSearch(_)
+                    | Snapshot::GemTooltip(_) => self.skills.on_snapshot(&snapshot),
                     Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
@@ -223,6 +238,15 @@ impl AutoPobApp {
             Event::Error { seq, message } => self.on_error(seq, message),
             // power events of the build being left arrive before the new build's snapshots
             Event::Progress { .. } | Event::BackgroundFailed { .. } if self.entering.is_some() => {}
+            Event::Progress {
+                task: BackgroundTask::GemDps,
+                percent,
+            } => self.skills.on_gem_progress(percent),
+            // the picker offers Retry; a failure with no picker open has nothing to tell
+            Event::BackgroundFailed {
+                task: BackgroundTask::GemDps,
+                ..
+            } => self.skills.on_gem_failed(),
             Event::Progress { percent, .. } => self.tree.on_progress(percent),
             Event::BackgroundFailed { message, .. } => {
                 self.tree.power_failed();
@@ -284,8 +308,19 @@ impl AutoPobApp {
         }
     }
 
-    fn run_action(&mut self, ctx: &egui::Context, action: Pending) {
+    /// Sends every editor's pending edit (notes, then a Skills field still being typed in).
+    fn flush_edits(&mut self) {
         self.flush_notes();
+        if let Some(command) = self.sidebar.flush() {
+            self.send(command);
+        }
+        if let Some(command) = self.skills.flush() {
+            self.send(command);
+        }
+    }
+
+    fn run_action(&mut self, ctx: &egui::Context, action: Pending) {
+        self.flush_edits();
         match action {
             Pending::Close => {
                 self.allow_close = true;
@@ -315,7 +350,7 @@ impl AutoPobApp {
     }
 
     fn save(&mut self, then: Option<Pending>) {
-        self.flush_notes();
+        self.flush_edits();
         if self.build.as_ref().is_some_and(|b| b.path.is_some()) {
             let seq = self.send(Command::Save);
             self.pending_save = Some(PendingSave {
@@ -344,7 +379,7 @@ impl AutoPobApp {
     }
 
     fn send_save_as(&mut self, overwrite: bool) {
-        self.flush_notes();
+        self.flush_edits();
         let Some(dialog) = &mut self.save_as else {
             return;
         };
@@ -368,6 +403,7 @@ impl AutoPobApp {
         let tab = match self.tab {
             BuildTab::Config => Tab::Config,
             BuildTab::Tree => Tab::Tree,
+            BuildTab::Skills => Tab::Skills,
             BuildTab::Calcs => Tab::Calcs,
             // the notes editor keeps its own history
             BuildTab::Notes => return,
@@ -506,8 +542,10 @@ impl AutoPobApp {
         let modal = self.prompt.is_some()
             || self.save_as.is_some()
             || self.import.is_some()
-            || self.tree.has_dialog();
-        let typing = ui.ctx().egui_wants_keyboard_input();
+            || self.tree.has_dialog()
+            || self.skills.has_dialog();
+        // a focused button or row doesn't take Ctrl+Z from the tab
+        let typing = ui.ctx().text_edit_focused();
         let mut action = None;
         if !modal {
             let command = egui::Modifiers::COMMAND;
@@ -530,20 +568,30 @@ impl AutoPobApp {
         egui::Panel::top("top_bar").show(ui, |ui| {
             let history = match self.tab {
                 BuildTab::Tree => self.tree.history(),
+                BuildTab::Skills => self.skills.history(),
                 BuildTab::Calcs => self.calcs.history(),
                 _ => (view.can_undo, view.can_redo),
             };
             action = build::top_bar(ui, &view, self.tab, history).or(action);
         });
         let behind = self.behind();
+        self.skills.set_modal(modal);
+        let mut sidebar_commands = Vec::new();
         egui::Panel::left("stats_sidebar")
             .resizable(true)
             .default_size(300.0)
-            .show(ui, |ui| sidebar::show(ui, self.stats.as_deref(), behind));
+            .show(ui, |ui| {
+                sidebar_commands =
+                    sidebar::show(ui, self.stats.as_deref(), behind, &mut self.sidebar);
+            });
+        for command in sidebar_commands {
+            self.send(command);
+        }
 
         let mut config_commands = Vec::new();
         let mut tree_out = TreeOutput::default();
         let mut calcs_out = CalcsOutput::default();
+        let mut skills_out = SkillsOutput::default();
         let mut notes_command = None;
         let config = self.config.clone();
         egui::CentralPanel::default().show(ui, |ui| {
@@ -551,6 +599,10 @@ impl AutoPobApp {
             ui.separator();
             match self.tab {
                 BuildTab::Tree => tree_out = self.tree.show(ui, behind),
+                BuildTab::Skills => {
+                    let now = ui.input(|i| i.time);
+                    skills_out = self.skills.show(ui, now, behind);
+                }
                 BuildTab::Calcs => calcs_out = self.calcs.show(ui, behind),
                 BuildTab::Notes => {
                     let now = ui.input(|i| i.time);
@@ -578,6 +630,22 @@ impl AutoPobApp {
         if self.tab != BuildTab::Tree {
             self.tree.close_dialog();
         }
+        if self.tab != BuildTab::Skills {
+            // leaving the tab sends an edit still being typed and closes its dialogs
+            if let Some(command) = self.skills.flush() {
+                self.send(command);
+            }
+            if let Some(command) = self.skills.close_dialogs() {
+                self.send(command);
+            }
+        }
+        for command in skills_out.commands {
+            self.send(command);
+        }
+        // questions never leave the app waiting
+        for query in skills_out.queries {
+            self.engine.send(query);
+        }
         for command in tree_out.commands {
             self.send(command);
         }
@@ -600,7 +668,7 @@ impl AutoPobApp {
 
         // Back goes through the unsaved prompt, which knows about the pending edit
         if matches!(action, Some(BuildAction::Save | BuildAction::SaveAs)) {
-            self.flush_notes();
+            self.flush_edits();
         }
         match action {
             Some(BuildAction::Back) => self.request(Pending::BackToList),
@@ -656,6 +724,8 @@ impl AutoPobApp {
             Resolution::Proceed => {
                 // "Don't save" drops the edit still waiting to be sent
                 self.notes.discard();
+                self.skills.discard();
+                self.sidebar.discard();
                 self.ready_actions.push(pending);
             }
             Resolution::Stay => {}
@@ -937,10 +1007,12 @@ mod tests {
                 value: 1.0,
                 text: "1,000".into(),
                 color: Some("^xE05030".into()),
+                notes: vec![],
             };
             Ok(StatsView {
                 stats: vec![row("Life")],
                 minion: vec![row("Minion Life")],
+                ..StatsView::default()
             })
         }
 
@@ -978,6 +1050,30 @@ mod tests {
             Ok(crate::engine::CalcsView::default())
         }
 
+        fn skills_view(&mut self) -> anyhow::Result<crate::engine::SkillsView> {
+            Ok(crate::engine::SkillsView::default())
+        }
+
+        fn socket_group_text(
+            &mut self,
+            group: usize,
+        ) -> anyhow::Result<crate::engine::SocketGroupText> {
+            Ok(crate::engine::SocketGroupText {
+                group,
+                text: String::new(),
+            })
+        }
+
+        fn group_tooltip_view(
+            &mut self,
+            group: usize,
+        ) -> anyhow::Result<crate::engine::GroupTooltipView> {
+            Ok(crate::engine::GroupTooltipView {
+                group,
+                lines: vec![],
+            })
+        }
+
         fn notes_view(&mut self) -> anyhow::Result<crate::engine::NotesView> {
             Ok(crate::engine::NotesView::default())
         }
@@ -1009,11 +1105,16 @@ mod tests {
             }))?)
         }
 
-        fn has_background_work(&self) -> bool {
+        fn next_background(&self) -> Option<crate::engine::BackgroundTask> {
             self.power_work
+                .then_some(crate::engine::BackgroundTask::NodePower)
         }
 
-        fn background_step(&mut self, send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
+        fn background_step(
+            &mut self,
+            _task: crate::engine::BackgroundTask,
+            send: &dyn Fn(Event),
+        ) -> anyhow::Result<Affected> {
             self.power_work = false;
             if self.fail_power {
                 anyhow::bail!("power calculation failed");
@@ -1025,6 +1126,20 @@ mod tests {
             Ok(Affected {
                 power: true,
                 ..Affected::default()
+            })
+        }
+
+        fn gem_search_view(&mut self) -> anyhow::Result<Option<crate::engine::GemSearchView>> {
+            Ok(None)
+        }
+
+        fn gem_tooltip_view(
+            &mut self,
+            query: &crate::engine::GemTooltipQuery,
+        ) -> anyhow::Result<crate::engine::GemTooltipView> {
+            Ok(crate::engine::GemTooltipView {
+                query: query.clone(),
+                lines: vec![],
             })
         }
 
@@ -1860,6 +1975,118 @@ mod tests {
         assert_eq!(sent_since(&app, before), ["Undo(Calcs)", "Redo(Calcs)"]);
     }
 
+    fn skills_app() -> (AutoPobApp, egui::Context) {
+        let (mut app, ctx) = tree_app();
+        app.on_event(Event::Snapshot {
+            seq: 90,
+            snapshot: Snapshot::Skills(Arc::new(crate::ui::skills::tests::sample())),
+        });
+        app.tab = BuildTab::Skills;
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        (app, ctx)
+    }
+
+    #[test]
+    fn ctrl_z_on_skills_sends_skills_undo() {
+        let (mut app, ctx) = skills_app();
+        // a focused row must not count as typing
+        let pos = app.skills.rect("row_0").center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        assert!(ctx.egui_wants_keyboard_input() && !ctx.text_edit_focused());
+        let before = app.sent_full.len();
+        frame(&mut app, &ctx, ctrl(egui::Key::Z));
+        frame(
+            &mut app,
+            &ctx,
+            key_with(
+                egui::Key::Z,
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            ),
+        );
+        assert_eq!(sent_since(&app, before), ["Undo(Skills)", "Redo(Skills)"]);
+    }
+
+    #[test]
+    fn ctrl_z_while_typing_does_not_undo() {
+        let (mut app, ctx) = skills_app();
+        let pos = app.skills.rect("default_quality").center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        assert!(ctx.text_edit_focused(), "the quality box has focus");
+        let before = app.sent_full.len();
+        frame(&mut app, &ctx, ctrl(egui::Key::Z));
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn back_or_close_with_a_pending_skills_edit_asks_first() {
+        let (mut app, ctx) = skills_app();
+        let pos = app.skills.rect("g0_label").center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![egui::Event::Text("x".into())],
+            vec![],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        assert!(app.skills.has_pending());
+        app.request(Pending::BackToList);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.prompt, Some(Pending::BackToList));
+        app.prompt = None;
+        ctx.run_ui(
+            egui::RawInput {
+                viewports: std::iter::once((
+                    egui::ViewportId::ROOT,
+                    egui::ViewportInfo {
+                        events: vec![egui::ViewportEvent::Close],
+                        ..Default::default()
+                    },
+                ))
+                .collect(),
+                ..Default::default()
+            },
+            |ui| app.show(ui),
+        )
+        .drop_without_applying_deltas();
+        assert_eq!(app.prompt, Some(Pending::Close));
+        // "Don't save" drops the edit
+        app.skills.discard();
+        assert!(!app.skills.has_pending());
+    }
+
     #[test]
     fn class_change_with_nodes_asks_and_connect_sends_connect_true() {
         let (mut app, ctx) = tree_app();
@@ -2084,6 +2311,29 @@ mod tests {
     }
 
     #[test]
+    fn gem_dps_events_leave_the_tree_alone() {
+        let (mut app, ctx) = tree_app();
+        app.on_event(Event::Progress {
+            task: BackgroundTask::NodePower,
+            percent: 40,
+        });
+        app.on_event(Event::Progress {
+            task: BackgroundTask::GemDps,
+            percent: 90,
+        });
+        assert_eq!(app.tree.progress, Some(40), "gem progress reached the tree");
+        app.on_event(Event::BackgroundFailed {
+            task: BackgroundTask::GemDps,
+            message: "dps broke".into(),
+        });
+        assert!(app.notices.is_empty(), "the picker shows gem failures");
+        // power_failed would have cleared the progress and offered a retry
+        assert_eq!(app.tree.progress, Some(40));
+        frame(&mut app, &ctx, vec![]);
+        assert!(!app.tree.rects.map.contains_key("heat_retry"));
+    }
+
+    #[test]
     fn power_events_of_the_previous_build_are_dropped_when_another_opens() {
         let (mut app, ctx) = tree_app();
         app.request(Pending::New);
@@ -2187,6 +2437,92 @@ mod tests {
         app.tab = BuildTab::Notes;
         frame(&mut app, &ctx, vec![]);
         (app, ctx)
+    }
+
+    fn stages_app() -> (AutoPobApp, egui::Context, egui::Pos2) {
+        let (mut app, ctx) = notes_app();
+        app.stats = Some(Arc::new(crate::engine::views::StatsView {
+            main_skill: crate::engine::views::MainSkillSelector {
+                stages: Some("1".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        let rect: egui::Rect = ctx
+            .data(|d| d.get_temp(egui::Id::NULL.with(("sidebar_rect", "stages".to_owned()))))
+            .expect("the stages box is drawn");
+        let pos = rect.center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![egui::Event::Text("2".into())],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        (app, ctx, pos)
+    }
+
+    #[test]
+    fn a_stage_count_being_typed_counts_as_unsaved_and_flushes_before_save() {
+        let (mut app, ctx, _) = stages_app();
+        assert!(app.sidebar.has_pending());
+        assert!(app.current_unsaved());
+        let before = app.sent_full.len();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::S, egui::Modifiers::COMMAND),
+        );
+        assert_eq!(
+            sent_since(&app, before),
+            [
+                "SetMainSkillCount { control: Stages, text: \"12\" }",
+                "Save"
+            ]
+        );
+        // leaving the box doesn't send it again
+        let before = app.sent_full.len();
+        let away = egui::Pos2::new(900.0, 600.0);
+        let press = |pressed| egui::Event::PointerButton {
+            pos: away,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(away)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        let sent = sent_since(&app, before);
+        assert!(
+            !sent.iter().any(|c| c.contains("SetMainSkillCount")),
+            "{sent:?}"
+        );
+    }
+
+    #[test]
+    fn a_build_switch_clears_a_pending_stage_count() {
+        let (mut app, _ctx, _) = stages_app();
+        assert!(app.sidebar.has_pending());
+        app.entering = Some(5);
+        app.on_event(Event::Snapshot {
+            seq: 5,
+            snapshot: Snapshot::Skills(Arc::new(crate::ui::skills::tests::sample())),
+        });
+        assert!(!app.sidebar.has_pending());
     }
 
     #[test]

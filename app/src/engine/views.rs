@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use super::commands::{GemSearchQuery, GemTooltipQuery};
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -40,13 +42,17 @@ pub struct BuildListEntry {
     pub level: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct StatsView {
+    /// The player's rows. The "Skill DPS" stat is one row per Full DPS skill, in PoB's order.
     #[serde(default)]
     pub stats: Vec<StatRow>,
     /// The main skill's minion, when it has one.
     #[serde(default)]
     pub minion: Vec<StatRow>,
+    /// The sidebar's main-skill dropdowns.
+    #[serde(default)]
+    pub main_skill: MainSkillSelector,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -57,6 +63,30 @@ pub struct StatRow {
     pub text: String,
     #[serde(default)]
     pub color: Option<String>,
+    /// Lines PoB draws under the row, colour codes kept: a Full DPS skill's part and source.
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+/// The sidebar's main-skill selector (`RefreshSkillSelectControls` on the build's controls). A
+/// control is `None` while PoB doesn't show it for the main skill.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MainSkillSelector {
+    pub group: DropList,
+    #[serde(default)]
+    pub skill: Option<DropList>,
+    #[serde(default)]
+    pub part: Option<DropList>,
+    /// The stage count's text
+    #[serde(default)]
+    pub stages: Option<String>,
+    /// The mine count's text
+    #[serde(default)]
+    pub mines: Option<String>,
+    #[serde(default)]
+    pub minion: Option<DropList>,
+    #[serde(default)]
+    pub minion_skill: Option<DropList>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -188,6 +218,13 @@ pub struct PowerReportRow {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct NodeTooltip {
     pub id: u32,
+    pub lines: Vec<TooltipLine>,
+}
+
+/// What PoB's group list shows when the mouse is over a socket group (`AddValueTooltip`).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct GroupTooltipView {
+    pub group: usize,
     pub lines: Vec<TooltipLine>,
 }
 
@@ -407,6 +444,165 @@ pub struct NoteColour {
     pub code: String,
 }
 
+/// The gem picker's list for a search, while or after PoB's DPS sort runs (R9-R14).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GemSearchView {
+    pub query: GemSearchQuery,
+    pub rows: Vec<GemRow>,
+    /// The DPS without the gem, which the rows' `dps` compare against
+    pub base_dps: f64,
+    /// The DPS sort hasn't finished
+    pub sorting: bool,
+    /// The last progress the sort reported
+    pub percent: Option<u32>,
+    /// The search's group is gone (a recalculation added or dropped an item group); this is
+    /// the last view of the search.
+    pub ended: bool,
+}
+
+/// One gem the picker lists, in PoB's order.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct GemRow {
+    pub gem_id: String,
+    pub name: String,
+    /// The PoB colour code PoB draws the name in
+    pub colour: String,
+    pub tags: String,
+    pub support: bool,
+    /// The gem can support the group's skills
+    pub can_support: bool,
+    /// The DPS with this gem, once PoB has calculated it
+    #[serde(default)]
+    pub dps: Option<f64>,
+    /// PoB's colour for that DPS: better, worse or the same
+    #[serde(default)]
+    pub dps_colour: Option<String>,
+    #[serde(default)]
+    pub mark: Option<DpsMark>,
+}
+
+/// What PoB draws beside a calculated gem (R14).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum DpsMark {
+    /// A support that can support the group's skills
+    Check,
+    /// A skill with a global effect
+    Plus,
+}
+
+/// The lines of a gem tooltip (R15).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GemTooltipView {
+    pub query: GemTooltipQuery,
+    pub lines: Vec<TooltipLine>,
+}
+
+/// The Skills tab: PoB's skill sets, socket groups, gems and gem options.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SkillsView {
+    #[serde(default)]
+    pub sets: Vec<SkillSetEntry>,
+    pub active_set: u32,
+    #[serde(default)]
+    pub groups: Vec<SocketGroupView>,
+    #[serde(default)]
+    pub slot_choices: Vec<SlotChoice>,
+    pub options: SkillOptionsView,
+    #[serde(default)]
+    pub can_undo: bool,
+    #[serde(default)]
+    pub can_redo: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SkillSetEntry {
+    pub id: u32,
+    /// PoB shows "Default" for a set with no title
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SocketGroupView {
+    pub label: String,
+    /// The group list's row text, with PoB's colour codes
+    pub display_label: String,
+    #[serde(default)]
+    pub slot: Option<String>,
+    pub enabled: bool,
+    pub slot_enabled: bool,
+    pub full_dps: bool,
+    /// The group count's text; only item-sourced groups have one
+    #[serde(default)]
+    pub count: Option<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub source_note: Option<String>,
+    pub is_main: bool,
+    #[serde(default)]
+    pub imbued: Option<ImbuedView>,
+    #[serde(default)]
+    pub sockets_line: Option<String>,
+    pub can_optimise: bool,
+    #[serde(default)]
+    pub gems: Vec<GemView>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ImbuedView {
+    #[serde(default)]
+    pub name: Option<String>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GemView {
+    pub name_spec: String,
+    #[serde(default)]
+    pub gem_id: Option<String>,
+    pub level: u32,
+    pub quality: u32,
+    pub enabled: bool,
+    #[serde(default)]
+    pub count: Option<u32>,
+    /// A PoB colour code
+    pub colour: String,
+    pub support: bool,
+    pub matches_socket: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub toggle1: Option<GemToggleView>,
+    #[serde(default)]
+    pub toggle2: Option<GemToggleView>,
+}
+
+/// A Vaal gem's "Enable <skill>" check box.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GemToggleView {
+    pub label: String,
+    pub on: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SlotChoice {
+    pub label: String,
+    #[serde(default)]
+    pub slot: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SkillOptionsView {
+    pub sort_by_dps: bool,
+    pub sort_field: DropList,
+    pub default_level: DropList,
+    #[serde(default)]
+    pub default_level_help: Vec<String>,
+    pub default_quality: String,
+    pub support_types: DropList,
+    pub show_legacy: bool,
+}
+
 /// The Calcs tab: PoB's sections as `CalcSectionControl:DrawContent` shows them.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CalcsView {
@@ -511,6 +707,13 @@ pub struct CellRef {
     pub sub: usize,
     pub row: usize,
     pub cell: usize,
+}
+
+/// What PoB's Copy button writes for a socket group.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SocketGroupText {
+    pub group: usize,
+    pub text: String,
 }
 
 /// What PoB's breakdown control shows for a [`CellRef`]; no sections when the cell has none

@@ -2,8 +2,15 @@
 //! Included from `gate.rs`, whose helpers it reaches through `super::`. It lives in `tests/gate/`
 //! because cargo would build a file in `tests/` as a test binary of its own.
 
-use super::{Session, fixtures, fixtures_dir, load_xml, lock, lua_value, pob_dir, upstream_lua};
-use auto_pob::engine::{Backend, CalcsSection};
+use super::{
+    Session, assert_sidebar, fixtures, fixtures_dir, load_xml, lock, lua_value, pob_dir,
+    upstream_lua,
+};
+use auto_pob::engine::upstream::golden_of;
+use auto_pob::engine::{
+    Backend, CalcsControl, CalcsCount, CalcsSection, CalcsSelector, Command, Tab,
+};
+use auto_pob::game::Game;
 use std::fs;
 
 const MODES: [&str; 4] = ["UNBUFFED", "BUFFED", "COMBAT", "EFFECTIVE"];
@@ -19,32 +26,14 @@ fn upstream_with_calcs_lib(xml: &std::path::Path, name: &str) -> mlua::Lua {
     lua
 }
 
-/// Picks the calculation mode through the dropdown's own callback, as `SetCalcsSelect` will.
+/// Picks the calculation mode through the selector's dropdown, as the UI does.
 fn set_our_mode(s: &mut Session, buff_mode: &str) {
-    s.backend
-        .lua
-        .load(format!(
-            r#"
-            local calcs = pob.build.calcsTab
-            for _, section in ipairs(calcs.sectionList) do
-                for _, subSec in ipairs(section.subSection) do
-                    for _, rowData in ipairs(subSec.data) do
-                        for _, colData in ipairs(rowData) do
-                            if colData.controlName == "mode" then
-                                colData.control:SelByValue(calcs.input.misc_buffMode, "buffMode")
-                                for i, item in ipairs(colData.control.list) do
-                                    if item.buffMode == "{buff_mode}" then colData.control:SetSel(i) end
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-            "#
-        ))
-        .exec()
-        .unwrap();
-    s.backend.recalculate().unwrap();
+    let index = MODES.iter().position(|m| *m == buff_mode).unwrap();
+    s.run(Command::SetCalcsSelect {
+        control: CalcsControl::Mode,
+        index,
+    })
+    .unwrap();
 }
 
 #[test]
@@ -214,4 +203,249 @@ fn section_ids_are_unique() {
         ids.dedup();
         assert_eq!(ids.len(), total, "{name}: duplicate section ids");
     }
+}
+
+fn fixture_xml(name: &str) -> std::path::PathBuf {
+    fixtures()
+        .into_iter()
+        .find(|(n, _)| n == name)
+        .unwrap_or_else(|| panic!("no fixture named {name}"))
+        .1
+}
+
+/// A session and an upstream state on the same fixture.
+fn both(name: &str) -> (Session, mlua::Lua) {
+    let xml = fixture_xml(name);
+    let mut s = Session::start(&format!("calcs-sel-{name}"));
+    s.open_fixture(name, &xml);
+    (s, upstream_with_calcs_lib(&xml, name))
+}
+
+/// Our sections, selector and sidebar against upstream's, after `step`.
+fn assert_matches_pob(s: &mut Session, lua: &mlua::Lua, step: &str) -> CalcsSelector {
+    let ours = s.backend.calcs_view().unwrap();
+    let sections: Vec<CalcsSection> = lua_value(lua, "return calcsDump()");
+    assert_eq!(
+        serde_json::to_value(&ours.sections).unwrap(),
+        serde_json::to_value(&sections).unwrap(),
+        "{step}: sections"
+    );
+    let selector: CalcsSelector = lua_value(lua, "return selectorDump()");
+    assert_eq!(
+        serde_json::to_value(&ours.selector).unwrap(),
+        serde_json::to_value(&selector).unwrap(),
+        "{step}: selector"
+    );
+    let want = golden_of(lua, Game::Poe1.pob_version()).unwrap();
+    let stats = s.stats();
+    assert_sidebar(step, "calcs", &stats.stats, &want.sidebar);
+    if let Some(minion) = &want.minion_sidebar {
+        assert_sidebar(step, "calcs minion", &stats.minion, minion);
+    }
+    ours.selector
+}
+
+fn select(s: &mut Session, lua: &mlua::Lua, control: CalcsControl, pob_name: &str, index: usize) {
+    s.run(Command::SetCalcsSelect { control, index }).unwrap();
+    lua.load(format!("calcsSelect('{pob_name}', {})", index + 1))
+        .exec()
+        .unwrap();
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn skill_selector_matches_pob() {
+    let _guard = lock();
+
+    // attack: a multi-part skill, then every mode
+    let (mut s, lua) = both("attack");
+    let first = assert_matches_pob(&mut s, &lua, "attack start");
+    let part = first.part.expect("Boneshatter has parts");
+    assert!(part.labels.len() > 1);
+    assert_eq!(first.mode.labels.len(), 4);
+    assert_eq!(first.mode.selected, 3);
+    assert!(first.mode_tooltip.contains("Unbuffed"));
+    select(&mut s, &lua, CalcsControl::Part, "mainSkillPart", 1);
+    let after = assert_matches_pob(&mut s, &lua, "attack part 1");
+    assert_eq!(after.part.unwrap().selected, 1);
+    for (i, mode) in MODES.iter().enumerate() {
+        select(&mut s, &lua, CalcsControl::Mode, "mode", i);
+        let sel = assert_matches_pob(&mut s, &lua, &format!("attack {mode}"));
+        assert_eq!(sel.mode.selected, i);
+    }
+
+    // dot: the second skill of the group
+    let (mut s, lua) = both("dot");
+    let first = assert_matches_pob(&mut s, &lua, "dot start");
+    let skill = first.skill.expect("a skill list");
+    assert!(skill.labels.len() > 1, "{:?}", skill.labels);
+    select(&mut s, &lua, CalcsControl::Skill, "mainSkill", 1);
+    let after = assert_matches_pob(&mut s, &lua, "dot skill 1");
+    assert_eq!(after.skill.unwrap().selected, 1);
+
+    // minion: show the minion, then pick its other skill
+    let (mut s, lua) = both("minion");
+    let first = assert_matches_pob(&mut s, &lua, "minion start");
+    assert_eq!(first.show_minion, Some(false));
+    s.run(Command::SetShowMinion { show: true }).unwrap();
+    lua.load("calcsShowMinion(true)").exec().unwrap();
+    let shown = assert_matches_pob(&mut s, &lua, "minion shown");
+    assert_eq!(shown.show_minion, Some(true));
+    let skills = shown.minion_skill.expect("a minion skill list");
+    if skills.labels.len() > 1 {
+        select(
+            &mut s,
+            &lua,
+            CalcsControl::MinionSkill,
+            "mainSkillMinionSkill",
+            1,
+        );
+        let after = assert_matches_pob(&mut s, &lua, "minion skill 1");
+        assert_eq!(after.minion_skill.unwrap().selected, 1);
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn show_minion_without_minion_falls_back_to_player() {
+    let _guard = lock();
+    let (mut s, lua) = both("dot");
+    let before = s.backend.calcs_view().unwrap();
+    s.run(Command::SetShowMinion { show: true }).unwrap();
+    let after = s.backend.calcs_view().unwrap();
+    assert_eq!(
+        serde_json::to_value(&before.sections).unwrap(),
+        serde_json::to_value(&after.sections).unwrap()
+    );
+    lua.load("calcsShowMinion(true)").exec().unwrap();
+    assert_matches_pob(&mut s, &lua, "dot minion shown");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn stage_count_text_is_filtered_like_pob() {
+    let _guard = lock();
+    let (mut s, lua) = both("attack");
+    // the box is hidden for Boneshatter, but its callback works all the same
+    for (text, want) in [("abc", ""), ("12x", "12")] {
+        s.run(Command::SetCalcsCount {
+            control: CalcsCount::Stages,
+            text: text.into(),
+        })
+        .unwrap();
+        lua.load(format!("calcsSetCount('mainSkillStageCount', '{text}')"))
+            .exec()
+            .unwrap();
+        let ours: String = s
+            .backend
+            .lua
+            .load(
+                r#"for _, section in ipairs(pob.build.calcsTab.sectionList) do
+                    if section.id == "SkillSelect" then return section.controls.mainSkillStageCount.buf end
+                end"#,
+            )
+            .eval()
+            .unwrap();
+        let theirs: String = lua_value(&lua, "return calcsCountBuf('mainSkillStageCount')");
+        assert_eq!(ours, want, "{text}");
+        assert_eq!(theirs, want, "{text}");
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn calcs_collapse_is_saved_and_marks_unsaved() {
+    let _guard = lock();
+    let (mut s, _lua) = both("attack");
+    assert!(!s.backend.build_view().unwrap().unsaved);
+    s.run(Command::SetCalcsCollapsed {
+        section: "HitDamage".into(),
+        sub: 0,
+        collapsed: true,
+    })
+    .unwrap();
+    let collapsed = |s: &mut Session| {
+        let view = s.backend.calcs_view().unwrap();
+        view.sections
+            .iter()
+            .find(|x| x.id == "HitDamage")
+            .unwrap()
+            .subs[0]
+            .collapsed
+    };
+    assert!(collapsed(&mut s));
+    assert!(s.backend.build_view().unwrap().unsaved);
+    s.run(Command::Save).unwrap();
+    assert!(!s.backend.build_view().unwrap().unsaved);
+    let path = s.backend.build_view().unwrap().path.unwrap();
+    s.run(Command::NewBuild).unwrap();
+    s.run(Command::OpenBuild { path }).unwrap();
+    assert!(collapsed(&mut s));
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn calcs_undo_restores_mode() {
+    let _guard = lock();
+    let (mut s, _lua) = both("attack");
+    let original = s.backend.calcs_view().unwrap();
+    assert!(!original.can_undo);
+    set_our_mode(&mut s, "UNBUFFED");
+    let changed = s.backend.calcs_view().unwrap();
+    assert_eq!(changed.selector.mode.selected, 0);
+    assert!(changed.can_undo);
+    assert_ne!(changed.sections, original.sections);
+    s.run(Command::Undo(Tab::Calcs)).unwrap();
+    let undone = s.backend.calcs_view().unwrap();
+    assert_eq!(undone.selector.mode.selected, 3);
+    assert_eq!(undone.sections, original.sections);
+    assert!(undone.can_redo);
+    s.run(Command::Redo(Tab::Calcs)).unwrap();
+    assert_eq!(s.backend.calcs_view().unwrap().selector.mode.selected, 0);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn calcs_search_flags_labels() {
+    let _guard = lock();
+    let (mut s, _lua) = both("attack");
+    let unsaved = s.backend.build_view().unwrap().unsaved;
+    let before = s.backend.calcs_view().unwrap();
+    assert!(
+        before
+            .sections
+            .iter()
+            .flat_map(|x| &x.subs)
+            .all(|x| !x.search_match)
+    );
+    s.run(Command::SetCalcsSearch {
+        text: "damage".into(),
+    })
+    .unwrap();
+    let view = s.backend.calcs_view().unwrap();
+    assert_eq!(view.search, "damage");
+    assert!(
+        view.sections
+            .iter()
+            .flat_map(|x| &x.subs)
+            .any(|x| x.search_match)
+    );
+    assert!(
+        view.sections
+            .iter()
+            .flat_map(|x| &x.subs)
+            .flat_map(|x| &x.rows)
+            .any(|r| r.search_match)
+    );
+    // the cells (values) are the same
+    let cells = |v: &auto_pob::engine::CalcsView| -> Vec<_> {
+        v.sections
+            .iter()
+            .flat_map(|x| &x.subs)
+            .flat_map(|x| &x.rows)
+            .map(|r| r.cells.clone())
+            .collect()
+    };
+    assert_eq!(cells(&before), cells(&view));
+    assert_eq!(s.backend.build_view().unwrap().unsaved, unsaved);
 }

@@ -104,3 +104,88 @@ function setMode(buffMode)
 	end
 	runCallback("OnFrame")
 end
+
+-- Selector helpers. A frame would run the SkillSelect section's own `updateFunc` (it syncs
+-- the dropdowns with `calcsTab.input` and the build, CalcsTab.lua:138); run it before
+-- reading or pressing a control.
+local function skillSelect()
+	for _, section in ipairs(build.calcsTab.sectionList) do
+		if section.id == "SkillSelect" then return section end
+	end
+end
+
+local function rowOf(section, controlName)
+	for _, subSec in ipairs(section.subSection) do
+		for _, rowData in ipairs(subSec.data) do
+			for _, colData in ipairs(rowData) do
+				if colData.controlName == controlName then return rowData end
+			end
+		end
+	end
+end
+
+local function refreshedSelect()
+	local section = skillSelect()
+	section:updateFunc()
+	return section
+end
+
+-- Presses a dropdown by PoB's control name (`select` would hide Lua's own); 1-based.
+function calcsSelect(controlName, index)
+	refreshedSelect().controls[controlName]:SetSel(index)
+	runCallback("OnFrame")
+end
+
+-- Types into the stage or mine count: the edit box filters the text itself.
+function calcsSetCount(controlName, text)
+	local control = refreshedSelect().controls[controlName]
+	control:SetText("")
+	control:Insert(text)
+	runCallback("OnFrame")
+end
+
+function calcsShowMinion(show)
+	local control = refreshedSelect().controls.showMinion
+	control.state = show
+	control.changeFunc(show)
+	runCallback("OnFrame")
+end
+
+function calcsCountBuf(controlName)
+	return skillSelect().controls[controlName].buf
+end
+
+-- The selector as the Calcs tab would show it.
+function selectorDump()
+	local calcs = build.calcsTab
+	local section = refreshedSelect()
+	local function visible(name)
+		local control = section.controls[name]
+		return control and control.shown ~= false and calcs:CheckFlag(rowOf(section, name)) and control
+	end
+	local function dropList(name)
+		local control = visible(name)
+		if not control then return nil end
+		local labels = {}
+		for i, item in ipairs(control.list) do
+			labels[i] = type(item) == "table" and item.label or item
+		end
+		return { labels = labels, selected = control.selIndex - 1, enabled = control.enabled ~= false }
+	end
+	local stages, mines = visible("mainSkillStageCount"), visible("mainSkillMineCount")
+	local showMinion = visible("showMinion")
+	local minionShown = nil
+	if showMinion then minionShown = showMinion.state and true or false end
+	return {
+		group = dropList("mainSocketGroup"),
+		skill = dropList("mainSkill"),
+		part = dropList("mainSkillPart"),
+		stages = stages and stages.buf or nil,
+		mines = mines and mines.buf or nil,
+		show_minion = minionShown,
+		minion = dropList("mainSkillMinion"),
+		minion_skill = dropList("mainSkillMinionSkill"),
+		mode = dropList("mode"),
+		mode_tooltip = section.controls.mode.tooltipText,
+	}
+end

@@ -132,6 +132,30 @@ pub enum Command {
         url: String,
     },
 
+    /// Presses one of the Calcs selector's dropdowns; `index` is 0-based.
+    SetCalcsSelect {
+        control: CalcsControl,
+        index: usize,
+    },
+    /// Types into the stage or mine count; PoB's filter removes what isn't a digit.
+    SetCalcsCount {
+        control: CalcsCount,
+        text: String,
+    },
+    SetShowMinion {
+        show: bool,
+    },
+    /// The Calcs search box; "" clears it.
+    SetCalcsSearch {
+        text: String,
+    },
+    /// `sub` is the sub-section's 0-based position in its section.
+    SetCalcsCollapsed {
+        section: String,
+        sub: usize,
+        collapsed: bool,
+    },
+
     Undo(Tab),
     Redo(Tab),
     Shutdown,
@@ -150,4 +174,45 @@ pub enum ConfigValue {
 pub enum Tab {
     Config,
     Tree,
+    Calcs,
+}
+
+/// The dropdowns of the Calcs selector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CalcsControl {
+    Group,
+    Skill,
+    Part,
+    Minion,
+    MinionSkill,
+    Mode,
+}
+
+impl CalcsControl {
+    /// The name of PoB's control.
+    pub(crate) fn pob_name(self) -> &'static str {
+        match self {
+            CalcsControl::Group => "mainSocketGroup",
+            CalcsControl::Skill => "mainSkill",
+            CalcsControl::Part => "mainSkillPart",
+            CalcsControl::Minion => "mainSkillMinion",
+            CalcsControl::MinionSkill => "mainSkillMinionSkill",
+            CalcsControl::Mode => "mode",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CalcsCount {
+    Stages,
+    Mines,
+}
+
+impl CalcsCount {
+    pub(crate) fn pob_name(self) -> &'static str {
+        match self {
+            CalcsCount::Stages => "mainSkillStageCount",
+            CalcsCount::Mines => "mainSkillMineCount",
+        }
+    }
 }

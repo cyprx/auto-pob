@@ -405,9 +405,41 @@ pub struct CalcsView {
     pub can_redo: bool,
 }
 
-/// The skill and mode selectors (filled in by a later task).
+/// One of the selector's dropdowns. Labels keep PoB's colour codes.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct CalcsSelector {}
+pub struct DropList {
+    #[serde(default)]
+    pub labels: Vec<String>,
+    /// 0-based
+    pub selected: usize,
+    pub enabled: bool,
+}
+
+/// The Calcs tab's skill and mode selector. A control is `None` while PoB doesn't show it for
+/// the main skill.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CalcsSelector {
+    pub group: DropList,
+    #[serde(default)]
+    pub skill: Option<DropList>,
+    #[serde(default)]
+    pub part: Option<DropList>,
+    /// The stage count's text
+    #[serde(default)]
+    pub stages: Option<String>,
+    /// The mine count's text
+    #[serde(default)]
+    pub mines: Option<String>,
+    #[serde(default)]
+    pub show_minion: Option<bool>,
+    #[serde(default)]
+    pub minion: Option<DropList>,
+    #[serde(default)]
+    pub minion_skill: Option<DropList>,
+    pub mode: DropList,
+    #[serde(default)]
+    pub mode_tooltip: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CalcsSection {

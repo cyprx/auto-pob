@@ -186,6 +186,17 @@ fn config_changed() -> Affected {
     }
 }
 
+/// A change on the Calcs tab marks the build unsaved; `recalc` is for the ones that set PoB's
+/// `buildFlag`.
+fn calcs_changed(recalc: bool) -> Affected {
+    Affected {
+        build: true,
+        calcs: true,
+        recalc,
+        ..Affected::default()
+    }
+}
+
 impl Backend for PobBackend {
     fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> Result<Affected> {
         match command {
@@ -386,6 +397,41 @@ impl Backend for PobBackend {
             Command::Redo(Tab::Tree) => {
                 self.call::<_, ()>("tree_redo", ())?;
                 self.tree_edited()
+            }
+            Command::SetCalcsSelect { control, index } => {
+                self.call::<_, ()>("calcs_select", (control.pob_name(), index + 1))?;
+                Ok(calcs_changed(true))
+            }
+            Command::SetCalcsCount { control, text } => {
+                self.call::<_, ()>("calcs_set_count", (control.pob_name(), text))?;
+                Ok(calcs_changed(true))
+            }
+            Command::SetShowMinion { show } => {
+                self.call::<_, ()>("calcs_show_minion", show)?;
+                Ok(calcs_changed(false))
+            }
+            Command::SetCalcsSearch { text } => {
+                self.call::<_, ()>("calcs_search", text)?;
+                Ok(Affected {
+                    calcs: true,
+                    ..Affected::default()
+                })
+            }
+            Command::SetCalcsCollapsed {
+                section,
+                sub,
+                collapsed,
+            } => {
+                self.call::<_, ()>("calcs_collapse", (section, sub + 1, collapsed))?;
+                Ok(calcs_changed(false))
+            }
+            Command::Undo(Tab::Calcs) => {
+                self.call::<_, ()>("calcs_undo", ())?;
+                Ok(calcs_changed(true))
+            }
+            Command::Redo(Tab::Calcs) => {
+                self.call::<_, ()>("calcs_redo", ())?;
+                Ok(calcs_changed(true))
             }
             Command::Undo(Tab::Config) => {
                 self.call::<_, ()>("undo", "config")?;

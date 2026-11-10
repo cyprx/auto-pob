@@ -3,8 +3,8 @@
 use super::commands::{Command, ConfigValue, Tab};
 use super::run::{Affected, Backend, BackgroundTask, Engine, Event};
 use super::views::{
-    BuildListView, BuildView, ConfigView, NodePower, NodeTooltip, PowerReport, StatsView,
-    TreeLayout, TreeState,
+    BuildListView, BuildView, CalcsView, ConfigView, NodePower, NodeTooltip, PowerReport,
+    StatsView, TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -88,6 +88,7 @@ impl PobBackend {
             ("@glue/config.lua", include_str!("glue/config.lua")),
             ("@glue/tree.lua", include_str!("glue/tree.lua")),
             ("@glue/power.lua", include_str!("glue/power.lua")),
+            ("@glue/calcs.lua", include_str!("glue/calcs.lua")),
         ] {
             lua.load(source)
                 .set_name(name)
@@ -425,6 +426,10 @@ impl Backend for PobBackend {
 
     fn tree_state_view(&mut self) -> Result<TreeState> {
         self.view("tree_state", ())
+    }
+
+    fn calcs_view(&mut self) -> Result<CalcsView> {
+        self.view("calcs_view", ())
     }
 
     fn has_background_work(&self) -> bool {

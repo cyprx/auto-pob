@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use super::commands::Command;
 use super::run::{Affected, Backend, Event};
 use super::views::{
-    BuildListView, BuildView, ConfigView, NodePower, NodeTooltip, Points, PowerReport, StatsView,
-    TooltipLine, TreeLayout, TreeState,
+    BuildListView, BuildView, CalcsView, ConfigView, NodePower, NodeTooltip, Points, PowerReport,
+    StatsView, TooltipLine, TreeLayout, TreeState,
 };
 
 #[derive(Default, Debug)]
@@ -137,6 +137,10 @@ impl Backend for Fake {
 
     fn tree_state_view(&mut self) -> anyhow::Result<TreeState> {
         Ok(empty_tree_state())
+    }
+
+    fn calcs_view(&mut self) -> anyhow::Result<CalcsView> {
+        Ok(CalcsView::default())
     }
 
     fn has_background_work(&self) -> bool {

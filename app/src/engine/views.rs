@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct BuildView {
@@ -389,6 +389,80 @@ pub struct SpecEntry {
     pub title: String,
     pub version: String,
     pub points: u32,
+}
+
+/// The Calcs tab: PoB's sections as `CalcSectionControl:DrawContent` shows them.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CalcsView {
+    #[serde(default)]
+    pub sections: Vec<CalcsSection>,
+    #[serde(default)]
+    pub selector: CalcsSelector,
+    /// The search box's text
+    #[serde(default)]
+    pub search: String,
+    pub can_undo: bool,
+    pub can_redo: bool,
+}
+
+/// The skill and mode selectors (filled in by a later task).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CalcsSelector {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CalcsSection {
+    pub id: String,
+    pub group: u32,
+    pub width_cols: u32,
+    /// A PoB colour code, `^xRRGGBB`
+    pub colour: String,
+    pub enabled: bool,
+    #[serde(default)]
+    pub subs: Vec<CalcsSub>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CalcsSub {
+    pub label: String,
+    #[serde(default)]
+    pub extra: Option<String>,
+    pub collapsed: bool,
+    pub search_match: bool,
+    #[serde(default)]
+    pub rows: Vec<CalcsRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CalcsRow {
+    /// Position in PoB's `subSec.data`, 0-based
+    pub index: usize,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub colour: Option<String>,
+    pub text_size: u32,
+    pub search_match: bool,
+    #[serde(default)]
+    pub cells: Vec<CalcsCell>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CalcsCell {
+    /// Position in PoB's `rowData`, 0-based
+    pub index: usize,
+    /// As `formatCalcStr` gives it, colour codes included
+    pub text: String,
+    /// The cell has a breakdown to show
+    pub breakdown: bool,
+}
+
+/// One cell of the Calcs tab, by 0-based positions in PoB's own (unfiltered) data.
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+pub struct CellRef {
+    pub section: String,
+    pub sub: usize,
+    pub row: usize,
+    pub cell: usize,
 }
 
 #[cfg(test)]

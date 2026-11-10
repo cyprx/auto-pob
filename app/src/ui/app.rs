@@ -199,6 +199,8 @@ impl AutoPobApp {
                         self.stats = Some(view);
                     }
                     Snapshot::Config(view) => self.config = Some(view),
+                    // the Calcs tab's UI comes later
+                    Snapshot::Calcs(_) => {}
                     // power results of the build being left
                     Snapshot::NodePower(_) | Snapshot::PowerReport(_)
                         if self.entering.is_some() => {}
@@ -904,6 +906,10 @@ mod tests {
                 sheets: vec![],
                 key: "fake".into(),
             })
+        }
+
+        fn calcs_view(&mut self) -> anyhow::Result<crate::engine::CalcsView> {
+            Ok(crate::engine::CalcsView::default())
         }
 
         fn tree_state_view(&mut self) -> anyhow::Result<crate::engine::TreeState> {

@@ -17,6 +17,9 @@ use std::{
     sync::Mutex,
 };
 
+#[path = "gate/calcs.rs"]
+mod calcs;
+
 /// PoB loads files relative to the process working directory, so only one test may run it.
 static CWD: Mutex<()> = Mutex::new(());
 

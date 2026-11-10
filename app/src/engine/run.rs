@@ -3,13 +3,16 @@
 use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use crate::pob_files::DownloadProgress;
 
 use super::commands::Command;
 use super::lab::LabEvent;
-use super::views::{BuildListView, BuildView, ConfigView, StatsView, TreeLayout, TreeState};
+use super::views::{
+    BuildListView, BuildView, ConfigView, NodePower, NodeTooltip, PowerReport, StatsView,
+    TreeLayout, TreeState,
+};
 
 #[derive(Debug, Clone)]
 pub enum Snapshot {
@@ -19,6 +22,16 @@ pub enum Snapshot {
     Config(Arc<ConfigView>),
     TreeLayout(Arc<TreeLayout>),
     Tree(Arc<TreeState>),
+    NodePower(Arc<NodePower>),
+    PowerReport(Arc<PowerReport>),
+    NodeTooltip(Arc<NodeTooltip>),
+    TreeLink(Arc<String>),
+}
+
+/// Long-running work the engine does between commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundTask {
+    NodePower,
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +42,7 @@ pub enum Event {
     Snapshot { seq: u64, snapshot: Snapshot },
     Error { seq: u64, message: String },
     Lab(LabEvent),
+    Progress { task: BackgroundTask, percent: u32 },
 }
 
 /// What a command changed, so the loop knows which snapshots to send.
@@ -43,6 +57,14 @@ pub struct Affected {
     /// The build's state on the tree changed
     pub tree: bool,
     pub recalc: bool,
+    /// Node power changed (a background step ran)
+    pub power: bool,
+    /// The power report is ready
+    pub report: bool,
+    /// A tooltip was requested for this node; the latest request wins
+    pub preview: Option<u32>,
+    /// The tree link was requested
+    pub link: bool,
 }
 
 impl Affected {
@@ -54,6 +76,10 @@ impl Affected {
         tree_layout: false,
         tree: true,
         recalc: false,
+        power: false,
+        report: false,
+        preview: None,
+        link: false,
     };
 
     fn merge(&mut self, other: Affected) {
@@ -64,6 +90,10 @@ impl Affected {
         self.tree_layout |= other.tree_layout;
         self.tree |= other.tree;
         self.recalc |= other.recalc;
+        self.power |= other.power;
+        self.report |= other.report;
+        self.preview = other.preview.or(self.preview);
+        self.link |= other.link;
     }
 }
 
@@ -76,6 +106,15 @@ pub trait Backend {
     fn config_view(&mut self) -> anyhow::Result<ConfigView>;
     fn tree_layout_view(&mut self) -> anyhow::Result<TreeLayout>;
     fn tree_state_view(&mut self) -> anyhow::Result<TreeState>;
+    /// True while a background calculation has steps left. After a failed step it must be false.
+    fn has_background_work(&self) -> bool;
+    /// Runs one slice; may `send` Progress. Returns what to snapshot (power/report).
+    fn background_step(&mut self, send: &dyn Fn(Event)) -> anyhow::Result<Affected>;
+    fn node_power_view(&mut self) -> anyhow::Result<NodePower>;
+    fn power_report_view(&mut self) -> anyhow::Result<PowerReport>;
+    /// `Ok(None)` when the node no longer exists: nothing is sent.
+    fn node_tooltip_view(&mut self, id: u32) -> anyhow::Result<Option<NodeTooltip>>;
+    fn tree_link_view(&mut self) -> anyhow::Result<String>;
 }
 
 fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &dyn Fn(Event)) {
@@ -115,24 +154,76 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
     if flags.tree {
         emit(seq, send, backend.tree_state_view(), Snapshot::Tree);
     }
+    if flags.power {
+        emit(seq, send, backend.node_power_view(), Snapshot::NodePower);
+    }
+    if flags.report {
+        emit(
+            seq,
+            send,
+            backend.power_report_view(),
+            Snapshot::PowerReport,
+        );
+    }
+    if let Some(id) = flags.preview {
+        match backend.node_tooltip_view(id) {
+            Ok(Some(tooltip)) => send(Event::Snapshot {
+                seq,
+                snapshot: Snapshot::NodeTooltip(Arc::new(tooltip)),
+            }),
+            Ok(None) => {}
+            Err(e) => send(Event::Error {
+                seq,
+                message: format!("{e:#}"),
+            }),
+        }
+    }
+    if flags.link {
+        emit(seq, send, backend.tree_link_view(), Snapshot::TreeLink);
+    }
 }
 
 /// Processes commands until `Shutdown` or until every sender is gone.
 ///
 /// Each wake-up drains the queue into a batch, applies it, recalculates at most once, and
 /// sends one snapshot per affected view, tagged with the batch's last `seq`.
+///
+/// While the backend has background work, the loop runs one step whenever no command is
+/// waiting, so commands always go first. Background snapshots carry the last command's `seq`
+/// (0 before any), so the UI's idea of "behind" never moves backwards.
 pub fn run_loop(
     backend: &mut dyn Backend,
     commands: &Receiver<(u64, Command)>,
     send: &dyn Fn(Event),
 ) {
-    while let Ok(first) = commands.recv() {
+    let mut last_seq = 0;
+    loop {
+        let first = if backend.has_background_work() {
+            match commands.try_recv() {
+                Ok(first) => first,
+                Err(TryRecvError::Empty) => {
+                    match backend.background_step(send) {
+                        Ok(affected) => send_snapshots(backend, last_seq, affected, send),
+                        Err(e) => send(Event::Error {
+                            seq: last_seq,
+                            message: format!("{e:#}"),
+                        }),
+                    }
+                    continue;
+                }
+                Err(TryRecvError::Disconnected) => return,
+            }
+        } else {
+            match commands.recv() {
+                Ok(first) => first,
+                Err(_) => return,
+            }
+        };
         let mut batch = vec![first];
         while let Ok(next) = commands.try_recv() {
             batch.push(next);
         }
         let mut affected = Affected::default();
-        let mut last_seq = 0;
         let mut shutdown = false;
         for (seq, command) in batch {
             last_seq = seq;
@@ -334,6 +425,7 @@ mod tests {
                     Snapshot::Config(_) => "config",
                     Snapshot::TreeLayout(_) => "tree_layout",
                     Snapshot::Tree(_) => "tree",
+                    other => panic!("unexpected {other:?}"),
                 }
             })
             .collect();
@@ -458,5 +550,216 @@ mod tests {
         while engine.events.recv().is_ok() {}
         assert!(!engine.is_alive());
         engine.send(Command::Save);
+    }
+
+    fn step_affecting_power() -> Result<Affected, String> {
+        Ok(Affected {
+            power: true,
+            ..Affected::default()
+        })
+    }
+
+    fn is_power(event: &Event) -> bool {
+        matches!(
+            event,
+            Event::Snapshot {
+                snapshot: Snapshot::NodePower(_),
+                ..
+            }
+        )
+    }
+
+    /// Runs the loop on this thread with a live sender; the fake's `on_step` ends it.
+    fn run_live(backend: &mut Fake, rx: &Receiver<(u64, Command)>) -> Vec<Event> {
+        let events = RefCell::new(Vec::new());
+        run_loop(backend, rx, &|e| events.borrow_mut().push(e));
+        events.into_inner()
+    }
+
+    #[test]
+    fn background_runs_only_when_idle() {
+        let (mut fake, log) = Fake::new();
+        fake.background
+            .lock()
+            .unwrap()
+            .extend((0..3).map(|_| step_affecting_power()));
+        let (tx, rx) = mpsc::channel();
+        let stop = tx.clone();
+        fake.on_step = Some(Box::new(move |n| {
+            if n == 3 {
+                stop.send((9, Command::Shutdown)).unwrap();
+            }
+        }));
+        tx.send((1, set_config())).unwrap();
+        let events = run_live(&mut fake, &rx);
+        assert_eq!(log.lock().unwrap().steps, 3);
+        let first_power = events.iter().position(is_power).unwrap();
+        let last_command_snapshot = events
+            .iter()
+            .rposition(|e| {
+                matches!(
+                    e,
+                    Event::Snapshot {
+                        snapshot: Snapshot::Config(_),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        assert!(last_command_snapshot < first_power);
+        assert_eq!(events.iter().filter(|e| is_power(e)).count(), 3);
+    }
+
+    #[test]
+    fn command_mid_calculation_runs_before_next_step() {
+        let (mut fake, log) = Fake::new();
+        fake.background
+            .lock()
+            .unwrap()
+            .extend((0..3).map(|_| step_affecting_power()));
+        let (tx, rx) = mpsc::channel();
+        let inject = tx.clone();
+        fake.on_step = Some(Box::new(move |n| {
+            if n == 1 {
+                inject.send((5, set_config())).unwrap();
+            }
+            if n == 3 {
+                inject.send((6, Command::Shutdown)).unwrap();
+            }
+        }));
+        let events = run_live(&mut fake, &rx);
+        assert_eq!(log.lock().unwrap().steps, 3);
+        // step 1's snapshot, then the command's stats snapshot, only then step 2's
+        let kinds: Vec<&str> = snapshots(&events)
+            .iter()
+            .map(|(_, s)| match s {
+                Snapshot::NodePower(_) => "power",
+                Snapshot::Stats(_) => "stats",
+                _ => "other",
+            })
+            .filter(|k| *k != "other")
+            .collect();
+        assert_eq!(&kinds[..3], ["power", "stats", "power"]);
+    }
+
+    #[test]
+    fn build_change_restarts_background_work() {
+        let (mut fake, log) = Fake::new();
+        fake.restart_on_build = (0..3).map(|_| step_affecting_power()).collect();
+        fake.background
+            .lock()
+            .unwrap()
+            .extend((0..3).map(|_| step_affecting_power()));
+        let (tx, rx) = mpsc::channel();
+        let inject = tx.clone();
+        fake.on_step = Some(Box::new(move |n| {
+            if n == 2 {
+                inject.send((5, set_config())).unwrap();
+            }
+            if n == 5 {
+                inject.send((6, Command::Shutdown)).unwrap();
+            }
+        }));
+        run_live(&mut fake, &rx);
+        // 2 steps, the config change refills the queue, so 3 more run
+        assert_eq!(log.lock().unwrap().steps, 5);
+        assert!(fake.background.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn only_latest_preview_runs() {
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(
+            &mut fake,
+            (1..=3).map(|id| Command::PreviewNode { id }).collect(),
+        );
+        let tooltips: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Snapshot {
+                    snapshot: Snapshot::NodeTooltip(t),
+                    ..
+                } => Some(t.id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tooltips, [3]);
+        assert_eq!(log.lock().unwrap().previews, [3]);
+    }
+
+    #[test]
+    fn vanished_preview_sends_nothing() {
+        let (mut fake, log) = Fake::new();
+        fake.tooltip_vanished = true;
+        let events = run_queued(&mut fake, vec![Command::PreviewNode { id: 7 }]);
+        assert_eq!(log.lock().unwrap().previews, [7]);
+        assert!(events.is_empty(), "{events:?}");
+    }
+
+    #[test]
+    fn failed_background_step_stops() {
+        let (mut fake, log) = Fake::new();
+        {
+            let mut queue = fake.background.lock().unwrap();
+            queue.push_back(step_affecting_power());
+            queue.push_back(Err("calc broke".into()));
+            queue.push_back(step_affecting_power());
+        }
+        let (tx, rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        let events = RefCell::new(Vec::new());
+        // With no work left the loop blocks in recv, so end it from the sender side.
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                done_rx.recv().unwrap();
+                drop(tx);
+            });
+            run_loop(&mut fake, &rx, &|e| {
+                if matches!(e, Event::Error { .. }) {
+                    done_tx.send(()).unwrap();
+                }
+                events.borrow_mut().push(e);
+            });
+        });
+        let events = events.into_inner();
+        assert_eq!(log.lock().unwrap().steps, 2);
+        let errors: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Error { message, .. } => Some(message.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("calc broke"), "{errors:?}");
+    }
+
+    #[test]
+    fn background_snapshots_keep_last_seq() {
+        let (mut fake, _log) = Fake::new();
+        fake.background
+            .lock()
+            .unwrap()
+            .extend((0..2).map(|_| step_affecting_power()));
+        let (tx, rx) = mpsc::channel();
+        let stop = tx.clone();
+        fake.on_step = Some(Box::new(move |n| {
+            if n == 2 {
+                stop.send((9, Command::Shutdown)).unwrap();
+            }
+        }));
+        tx.send((4, set_config())).unwrap();
+        let events = run_live(&mut fake, &rx);
+        let power: Vec<u64> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Snapshot {
+                    seq,
+                    snapshot: Snapshot::NodePower(_),
+                } => Some(*seq),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(power, [4, 4]);
     }
 }

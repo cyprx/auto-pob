@@ -56,6 +56,13 @@ pub enum Command {
         group: usize,
     },
 
+    /// Ask for the tooltip of a tree node; only the latest request of a batch is answered.
+    PreviewNode {
+        id: u32,
+    },
+    /// Ask for the active tree's link.
+    ExportTreeLink,
+
     Undo(Tab),
     Redo(Tab),
     Lab(LabCommand),

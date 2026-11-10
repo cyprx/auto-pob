@@ -142,6 +142,54 @@ pub enum TooltipLine {
     Separator { separator: u32 },
 }
 
+/// Power of each unallocated node for the chosen stat, while or after PoB calculates it.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct NodePower {
+    pub stat: Option<String>,
+    pub nodes: Vec<NodePowerEntry>,
+    pub max_single: f64,
+    pub max_offence: f64,
+    pub max_defence: f64,
+    pub finished: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct NodePowerEntry {
+    pub id: u32,
+    pub single: f64,
+    #[serde(default)]
+    pub path: Option<f64>,
+    #[serde(default)]
+    pub offence: Option<f64>,
+    #[serde(default)]
+    pub defence: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct PowerReport {
+    pub stat: String,
+    pub rows: Vec<PowerReportRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct PowerReportRow {
+    pub id: u32,
+    pub name: String,
+    pub kind: String,
+    pub power: f64,
+    pub power_text: String,
+    pub path_power: f64,
+    pub path_power_text: String,
+    pub allocated: bool,
+    pub path_dist: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct NodeTooltip {
+    pub id: u32,
+    pub lines: Vec<TooltipLine>,
+}
+
 /// The passive tree's geometry for the active spec, in PoB's tree coordinates. It changes only
 /// with the tree version or cluster jewel subgraphs, so it is sent apart from [`TreeState`].
 #[derive(Debug, Clone)]

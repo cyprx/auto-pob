@@ -2,7 +2,10 @@
 
 use super::commands::{Command, ConfigValue, Tab};
 use super::run::{Affected, Backend, Engine, Event};
-use super::views::{BuildListView, BuildView, ConfigView, StatsView, TreeLayout, TreeState};
+use super::views::{
+    BuildListView, BuildView, ConfigView, NodePower, NodeTooltip, PowerReport, StatsView,
+    TreeLayout, TreeState,
+};
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
 use mlua::{FromLuaMulti, IntoLuaMulti, Lua, LuaSerdeExt};
@@ -191,6 +194,14 @@ impl Backend for PobBackend {
             }
             // run_loop handles Shutdown before applying commands; nothing to do here
             Command::Shutdown => Ok(Affected::default()),
+            Command::PreviewNode { id } => Ok(Affected {
+                preview: Some(id),
+                ..Affected::default()
+            }),
+            Command::ExportTreeLink => Ok(Affected {
+                link: true,
+                ..Affected::default()
+            }),
             Command::Lab(lab) => super::lab::apply(&self.lua, &self.pob_dir, lab, send),
             Command::SetConfig { var, value } => {
                 let value = match value {
@@ -279,6 +290,30 @@ impl Backend for PobBackend {
 
     fn tree_state_view(&mut self) -> Result<TreeState> {
         self.view("tree_state", ())
+    }
+
+    fn has_background_work(&self) -> bool {
+        false
+    }
+
+    fn background_step(&mut self, _send: &dyn Fn(Event)) -> Result<Affected> {
+        anyhow::bail!("not yet")
+    }
+
+    fn node_power_view(&mut self) -> Result<NodePower> {
+        anyhow::bail!("not yet")
+    }
+
+    fn power_report_view(&mut self) -> Result<PowerReport> {
+        anyhow::bail!("not yet")
+    }
+
+    fn node_tooltip_view(&mut self, _id: u32) -> Result<Option<NodeTooltip>> {
+        anyhow::bail!("not yet")
+    }
+
+    fn tree_link_view(&mut self) -> Result<String> {
+        anyhow::bail!("not yet")
     }
 }
 

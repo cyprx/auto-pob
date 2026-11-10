@@ -199,7 +199,12 @@ impl AutoPobApp {
                     }
                     Snapshot::Config(view) => self.config = Some(view),
                     // the tree tab arrives in a later task
-                    Snapshot::TreeLayout(_) | Snapshot::Tree(_) => {}
+                    Snapshot::TreeLayout(_)
+                    | Snapshot::Tree(_)
+                    | Snapshot::NodePower(_)
+                    | Snapshot::PowerReport(_)
+                    | Snapshot::NodeTooltip(_)
+                    | Snapshot::TreeLink(_) => {}
                 }
                 if self.entering.is_some_and(|e| seq >= e) {
                     self.entering = None;
@@ -207,6 +212,8 @@ impl AutoPobApp {
             }
             Event::Error { seq, message } => self.on_error(seq, message),
             Event::Lab(event) => self.lab.on_event(event),
+            // the tree tab shows progress in a later task
+            Event::Progress { .. } => {}
         }
     }
 
@@ -719,7 +726,7 @@ mod tests {
                 config: true,
                 tree_layout: false,
                 tree: true,
-                recalc: false,
+                ..Affected::default()
             };
             match command {
                 Command::NewBuild => {
@@ -859,6 +866,33 @@ mod tests {
 
         fn tree_state_view(&mut self) -> anyhow::Result<crate::engine::TreeState> {
             Ok(crate::engine::fake::empty_tree_state())
+        }
+
+        fn has_background_work(&self) -> bool {
+            false
+        }
+
+        fn background_step(&mut self, _send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
+            Ok(Affected::default())
+        }
+
+        fn node_power_view(&mut self) -> anyhow::Result<crate::engine::NodePower> {
+            anyhow::bail!("unused")
+        }
+
+        fn power_report_view(&mut self) -> anyhow::Result<crate::engine::PowerReport> {
+            anyhow::bail!("unused")
+        }
+
+        fn node_tooltip_view(
+            &mut self,
+            _id: u32,
+        ) -> anyhow::Result<Option<crate::engine::NodeTooltip>> {
+            Ok(None)
+        }
+
+        fn tree_link_view(&mut self) -> anyhow::Result<String> {
+            Ok(String::new())
         }
     }
 

@@ -1356,3 +1356,73 @@ fn lab_draws_the_tree_and_ranks_nodes() {
         "progress is streamed"
     );
 }
+
+#[test]
+#[ignore = "spike: prints numbers, needs the pinned PoB install"]
+fn spike_tree_numbers() {
+    let _guard = lock();
+    let mut s = Session::start("spike-tree");
+    let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "attack").unwrap();
+    s.open_fixture("attack", &xml);
+    let lua = &s.backend.lua;
+
+    let paths: String = lua
+        .load(
+            r#"
+            local out = {}
+            for id, node in pairs(pob.build.spec.nodes) do
+                if node.path and not node.alloc then
+                    local ids = {}
+                    for _, p in ipairs(node.path) do ids[#ids + 1] = p.id end
+                    out[#out + 1] = { node_id = id, path = ids }
+                end
+            end
+            return require("dkjson").encode(out)
+            "#,
+        )
+        .eval()
+        .expect("collect paths");
+    let parsed: serde_json::Value = serde_json::from_str(&paths).expect("paths json");
+    let bytes = serde_json::to_vec(&parsed).unwrap().len();
+    println!(
+        "SPIKE path records: {}",
+        parsed.as_array().map_or(0, |a| a.len())
+    );
+    println!("SPIKE path json bytes: {bytes}");
+    assert!(bytes < 1_000_000, "path json is {bytes} bytes");
+
+    // PoB's PowerBuilder yields once up front, whatever the clock says, so the
+    // first BuildPower proves nothing. The second runs real work and only
+    // yields mid-way when GetTime advances past its 100 ms slice.
+    let (first_ms, second_ms, alive, steps): (i64, i64, bool, i64) = lua
+        .load(
+            r#"
+            local calcs = pob.build.calcsTab
+            for _, entry in ipairs(data.powerStatList) do
+                if entry.stat == "Life" then calcs.powerStat = entry end
+            end
+            calcs.powerBuildFlag = true
+            local t0 = GetTime()
+            calcs:BuildPower()
+            local t1 = GetTime()
+            calcs:BuildPower()
+            local t2 = GetTime()
+            local alive = calcs.powerBuilder ~= nil
+            local steps = 2
+            while calcs.powerBuilder do
+                calcs:BuildPower()
+                steps = steps + 1
+            end
+            return t1 - t0, t2 - t1, alive, steps
+            "#,
+        )
+        .eval()
+        .expect("BuildPower");
+    println!(
+        "SPIKE BuildPower #1: {first_ms} ms, #2: {second_ms} ms, alive after #2={alive}, steps to finish={steps}"
+    );
+    assert!(
+        alive,
+        "the power coroutine should still be alive after its first real step"
+    );
+}

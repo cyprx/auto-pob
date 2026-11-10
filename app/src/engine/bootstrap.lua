@@ -94,9 +94,7 @@ function IsKeyDown(keyName) end
 function Copy(text) end
 function Paste() end
 -- Inflate/Deflate are native (Rust)
-function GetTime()
-	return 0
-end
+-- GetTime is native (Rust)
 function GetRuntimePath()
 	return ""
 end

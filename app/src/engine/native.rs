@@ -6,7 +6,7 @@ use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
-    time::UNIX_EPOCH,
+    time::{Instant, UNIX_EPOCH},
 };
 
 /// Registers `Inflate`, `Deflate`, `NewFileSearch`, `ConPrintf` support and the path functions.
@@ -54,6 +54,13 @@ pub fn register(lua: &Lua, pob_dir: &Path, user_dir: &Path) -> mlua::Result<()> 
         "RemoveDir",
         // only an empty folder goes; anything else is left alone
         lua.create_function(|_, path: String| Ok(fs::remove_dir(path).is_ok()))?,
+    )?;
+    // Whole milliseconds since registration. A constant clock would stop PoB's
+    // power coroutine from ever yielding (CalcsTab.lua:648).
+    let start = Instant::now();
+    g.set(
+        "GetTime",
+        lua.create_function(move |_, ()| Ok(start.elapsed().as_millis() as i64))?,
     )?;
     Ok(())
 }

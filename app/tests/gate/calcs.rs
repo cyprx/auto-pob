@@ -522,27 +522,31 @@ fn assert_breakdown_matches(s: &mut Session, lua: &mlua::Lua, cell: &CellRef, st
 fn breakdowns_match_pob() {
     let _guard = lock();
     let (mut s, lua) = both("attack");
-    // PoB gives some cells no breakdown in a build (Life, with no increases), which both sides
-    // must agree on; most of them have one
-    let mut with_sections = 0;
-    for stat in ["Life", "Armour", "FireResist", "TotalDPS"] {
+    // Life has no breakdown without increases or more/less, and Armour none without armour
+    // slots (this build has neither); both sides must agree on the empty answer.
+    for (stat, empty) in [
+        ("Life", true),
+        ("Armour", true),
+        ("FireResist", false),
+        ("TotalDPS", false),
+    ] {
         let cell = find_cell(&lua, stat);
         let n = assert_breakdown_matches(&mut s, &lua, &cell, stat);
         // asking again must not depend on the control's earlier data
         assert_eq!(assert_breakdown_matches(&mut s, &lua, &cell, stat), n);
-        with_sections += usize::from(n > 0);
+        assert_eq!(n == 0, empty, "{stat}: {n} sections");
     }
     // Skill Average Hit shows for a skill that isn't an attack (`notFlag = "attack"`)
     let (mut s, lua) = both("dot");
     let cell = find_cell(&lua, "AverageHit");
     let n = assert_breakdown_matches(&mut s, &lua, &cell, "dot AverageHit");
-    with_sections += usize::from(n > 0);
-    assert!(with_sections >= 3, "{with_sections} cells have a breakdown");
+    assert!(n > 0, "dot AverageHit has no sections");
     let (mut s, lua) = both("minion");
     s.run(Command::SetShowMinion { show: true }).unwrap();
     lua.load("calcsShowMinion(true)").exec().unwrap();
     let cell = find_cell(&lua, "Life");
-    assert_breakdown_matches(&mut s, &lua, &cell, "minion Life");
+    let n = assert_breakdown_matches(&mut s, &lua, &cell, "minion Life");
+    assert!(n > 0, "minion Life has no sections");
 }
 
 #[test]

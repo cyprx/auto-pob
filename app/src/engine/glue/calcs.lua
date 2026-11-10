@@ -256,7 +256,9 @@ end
 
 -- ---- Breakdowns ----
 
--- The cell's data (`colData`), when the cell is still there and PoB would show it.
+-- The cell's data (`colData`), when the cell is still there and its own flags hold. Like PoB's
+-- `SetBreakdownData`, this doesn't check the row or section flags: the UI only asks for cells
+-- it shows.
 local function find_col_data(calcs, ref)
 	for _, section in ipairs(calcs.sectionList) do
 		if section.id == ref.section then

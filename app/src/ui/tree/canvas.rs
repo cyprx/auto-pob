@@ -4,7 +4,7 @@
 use super::TreeTab;
 use super::geometry::{arc_points, node_radius};
 use super::overlays::{self, ALLOCATED, Legend};
-use crate::engine::{NodePower, Sprite, TreeLayout, TreeNode, TreeState};
+use crate::engine::{NodePower, NodeTooltip, Sprite, TooltipLine, TreeLayout, TreeNode, TreeState};
 use crate::theme;
 use crate::widgets::tooltip_ui;
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, TextureHandle, Tooltip, Vec2};
@@ -54,7 +54,10 @@ pub fn show(
         tab.camera.fit(rect, layout);
         tab.needs_fit = tab.camera.zoom == 0.0;
     }
-    handle_input(ui, tab, &response);
+    let valid_zoom = tab.camera.zoom > 0.0;
+    if valid_zoom {
+        handle_input(ui, tab, &response);
+    }
     let sheets = upload_sheets(tab, ui.ctx(), layout);
     let camera = tab.camera;
     let zoom = camera.zoom;
@@ -65,7 +68,7 @@ pub fn show(
     // the node under the pointer; none while panning
     let hovered = response
         .hover_pos()
-        .filter(|_| !response.dragged())
+        .filter(|_| valid_zoom && !response.dragged())
         .and_then(|p| tab.grid.node_at(layout, camera.to_tree(rect, p), zoom));
     let hovered_id = hovered.map(|i| layout.nodes[i].id);
     let mut actions = Vec::new();
@@ -224,29 +227,47 @@ pub fn show(
     }
 
     let jewel = state.jewels.iter().find(|j| j.node == node.id);
-    let extra = tab.tooltip.as_ref().filter(|t| t.id == node.id);
-    Tooltip::for_widget(&response).at_pointer().show(|ui| {
-        ui.strong(if node.name.is_empty() {
-            &node.kind
-        } else {
-            &node.name
+    let body = tooltip_body(node, tab.tooltip.as_deref());
+    Tooltip::for_widget(&response)
+        .at_pointer()
+        .show(|ui| match body {
+            // PoB's lines start with the name and hold the stats, and the jewel for a socket
+            TooltipBody::Lines(lines) => tooltip_ui(ui, lines),
+            TooltipBody::Instant => {
+                ui.strong(if node.name.is_empty() {
+                    &node.kind
+                } else {
+                    &node.name
+                });
+                for line in &node.stats {
+                    ui.label(line);
+                }
+                if let Some(jewel) = jewel.filter(|j| !j.name.is_empty()) {
+                    ui.colored_label(overlays::JEWEL_RING, &jewel.name);
+                }
+            }
         });
-        for line in &node.stats {
-            ui.label(line);
-        }
-        if let Some(jewel) = jewel.filter(|j| !j.name.is_empty()) {
-            ui.colored_label(overlays::JEWEL_RING, &jewel.name);
-        }
-        if let Some(extra) = extra {
-            ui.separator();
-            tooltip_ui(ui, &extra.lines);
-        }
-    });
     actions
 }
 
+/// What a node tooltip shows.
+#[derive(Debug, PartialEq)]
+pub enum TooltipBody<'a> {
+    /// The name and stats the layout already holds, until the engine's tooltip arrives
+    Instant,
+    /// The engine's tooltip, which replaces the instant one
+    Lines(&'a [TooltipLine]),
+}
+
+pub fn tooltip_body<'a>(node: &TreeNode, reply: Option<&'a NodeTooltip>) -> TooltipBody<'a> {
+    match reply {
+        Some(t) if t.id == node.id && !t.lines.is_empty() => TooltipBody::Lines(&t.lines),
+        _ => TooltipBody::Instant,
+    }
+}
+
 fn handle_input(ui: &egui::Ui, tab: &mut TreeTab, response: &egui::Response) {
-    if response.dragged() {
+    if response.dragged() && tab.camera.zoom > 0.0 {
         tab.camera.center -= response.drag_delta() / tab.camera.zoom;
     }
     if let Some(pointer) = response.hover_pos() {
@@ -324,5 +345,33 @@ fn kind_color(kind: &str) -> Color32 {
         "Socket" => Color32::from_rgb(60, 110, 110),
         "ClassStart" => Color32::from_gray(200),
         _ => Color32::from_gray(90),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::geometry::tests::node;
+    use super::*;
+
+    fn reply(id: u32, lines: usize) -> NodeTooltip {
+        NodeTooltip {
+            id,
+            lines: (0..lines)
+                .map(|_| TooltipLine::Line {
+                    size: 14,
+                    text: "x".into(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn tooltip_body_prefers_the_engines_lines_for_the_hovered_node() {
+        let n = node(5, [0.0, 0.0], "Normal");
+        assert_eq!(tooltip_body(&n, None), TooltipBody::Instant);
+        let r = reply(5, 2);
+        assert_eq!(tooltip_body(&n, Some(&r)), TooltipBody::Lines(&r.lines));
+        assert_eq!(tooltip_body(&n, Some(&reply(6, 2))), TooltipBody::Instant);
+        assert_eq!(tooltip_body(&n, Some(&reply(5, 0))), TooltipBody::Instant);
     }
 }

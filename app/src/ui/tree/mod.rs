@@ -441,6 +441,30 @@ mod tests {
     }
 
     #[test]
+    fn empty_and_single_node_layouts_draw_and_hover() {
+        let (_, state) = sample();
+        for nodes in [vec![], vec![node(1, [0.0, 0.0], "Normal")]] {
+            let mut h = Harness::new(Arc::new(layout(nodes, vec![])), state.clone());
+            assert!(h.tab.camera.zoom > 0.0);
+            h.frame(vec![Event::PointerMoved(Pos2::new(400.0, 300.0))]);
+            h.frame(vec![Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                source: egui::MouseWheelSource::Wheel,
+                delta: Vec2::new(0.0, 50.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+        }
+        // a camera that was never fitted must not hang or divide by zero either
+        let (l, s) = sample();
+        let mut h = Harness::new(l, s);
+        h.tab.camera.zoom = 0.0;
+        h.tab.needs_fit = false;
+        h.frame(vec![Event::PointerMoved(Pos2::new(400.0, 300.0))]);
+        assert_eq!(h.tab.hover, None);
+    }
+
+    #[test]
     fn unknown_ids_are_skipped() {
         let (layout, _) = sample();
         let state: TreeState = serde_json::from_value(serde_json::json!({

@@ -36,17 +36,20 @@ impl Camera {
         self.center = under_cursor - (cursor - rect.center()) / self.zoom;
     }
 
-    /// Shows the whole tree. Does nothing for a layout without extent.
+    /// Shows the whole tree. An empty, single-node or flat layout gets the centre of its nodes
+    /// and a usable zoom, so the zoom is never 0.
     pub fn fit(&mut self, rect: Rect, layout: &TreeLayout) {
         let bounds = layout.nodes.iter().fold(Rect::NOTHING, |r, n| {
             r.union(Rect::from_pos(Pos2::from(n.pos)))
         });
-        if bounds.is_positive() {
-            self.center = bounds.center().to_vec2();
-            self.zoom = ((rect.width() / bounds.width()).min(rect.height() / bounds.height())
-                * 0.95)
-                .clamp(MIN_ZOOM, MAX_ZOOM);
+        if bounds.is_negative() {
+            self.center = Vec2::ZERO;
+            self.zoom = 0.3;
+            return;
         }
+        self.center = bounds.center().to_vec2();
+        let (w, h) = (bounds.width().max(1.0), bounds.height().max(1.0));
+        self.zoom = ((rect.width() / w).min(rect.height() / h) * 0.95).clamp(MIN_ZOOM, MAX_ZOOM);
     }
 }
 
@@ -74,6 +77,9 @@ impl HitGrid {
 
     /// The node nearest to `tree_pos` among those whose hit radius contains it.
     pub fn node_at(&self, layout: &TreeLayout, tree_pos: [f32; 2], zoom: f32) -> Option<usize> {
+        if zoom.is_nan() || zoom <= 0.0 {
+            return None;
+        }
         let floor = MIN_HIT_POINTS / zoom;
         let reach = floor.max(node_radius("ClassStart"));
         let (x0, y0) = cell_of([tree_pos[0] - reach, tree_pos[1] - reach]);
@@ -217,6 +223,27 @@ pub(super) mod tests {
         // empty space
         assert_eq!(grid.node_at(&l, [500.0, 500.0], 1.0), None);
         assert_eq!(grid.node_at(&l, [0.0, 80.0], 1.0), None);
+    }
+
+    #[test]
+    fn node_at_is_none_without_a_zoom_and_works_at_extremes() {
+        let l = layout(vec![node(1, [0.0, 0.0], "Normal")], vec![]);
+        let grid = HitGrid::new(&l);
+        assert_eq!(grid.node_at(&l, [0.0, 0.0], 0.0), None);
+        assert_eq!(grid.node_at(&l, [0.0, 0.0], f32::NAN), None);
+        assert_eq!(grid.node_at(&l, [100.0, 0.0], 0.05), Some(0));
+        assert_eq!(grid.node_at(&l, [100.0, 0.0], 2.0), None);
+        assert_eq!(grid.node_at(&l, [20.0, 0.0], 2.0), Some(0));
+    }
+
+    #[test]
+    fn fit_gives_degenerate_layouts_a_positive_zoom() {
+        for nodes in [vec![], vec![node(1, [50.0, 70.0], "Normal")]] {
+            let l = layout(nodes, vec![]);
+            let mut c = Camera::default();
+            c.fit(rect(), &l);
+            assert!(c.zoom > 0.0 && c.zoom.is_finite());
+        }
     }
 
     #[test]

@@ -2108,7 +2108,15 @@ fn spec_command_errors() {
                 title: "Odd".into(),
                 url: "https://www.pathofexile.com/passive-skill-tree/abc".into(),
             },
-            "that isn't a valid tree link",
+            "Classes/PassiveSpec.lua:42: attempt to index field 'tree' (a nil value)",
+        ),
+        (
+            // a valid header naming a class that doesn't exist
+            Command::ImportTreeLink {
+                title: "Corrupt".into(),
+                url: "https://www.pathofexile.com/passive-skill-tree/3.29.0/AAAABsgAAAAA".into(),
+            },
+            "Invalid tree link (bad class ID '200')",
         ),
     ];
     for (command, message) in cases {

@@ -634,17 +634,31 @@ function glue.import_tree_link(title, url)
 		error("short links need the network; paste the full link", 0)
 	end
 	local tab = pob.build.treeTab
-	local count = #tab.specList
+	local count, active = #tab.specList, tab.activeSpec
+	local function plain(text)
+		return (tostring(text or ""):gsub("%^x%x%x%x%x%x%x", ""):gsub("%^%d", ""))
+	end
 	in_popups(function()
 		tab:OpenImportPopup()
 		local controls = main_module().popups[1].controls
 		controls.name.buf = title
 		controls.edit.buf = url
-		local ok = pcall(controls.import.onClick)
-		if #tab.specList == count then
-			local message = ok and (controls.msg.label or ""):gsub("%^x%x%x%x%x%x%x", ""):gsub("%^%d", "") or ""
-			error(message ~= "" and message or "that isn't a valid tree link", 0)
+		local ok, err = pcall(controls.import.onClick)
+		if ok and #tab.specList > count then
+			return
 		end
+		-- a click that failed after adding the tree must not leave it behind
+		if #tab.specList > count then
+			while #tab.specList > count do
+				table.remove(tab.specList)
+			end
+			tab:SetActiveSpec(active)
+		end
+		local message = plain(controls.msg.label)
+		if message == "" and not ok then
+			message = plain(tostring(err):match("[^\n]+"))
+		end
+		error(message ~= "" and message or "that isn't a valid tree link", 0)
 	end)
 end
 

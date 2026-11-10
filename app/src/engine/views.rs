@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use super::commands::{GemSearchQuery, GemTooltipQuery};
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -440,6 +442,59 @@ pub struct NoteColour {
     pub label: String,
     /// The caret code the button inserts, such as `^xAF6025`
     pub code: String,
+}
+
+/// The gem picker's list for a search, while or after PoB's DPS sort runs (R9-R14).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GemSearchView {
+    pub query: GemSearchQuery,
+    pub rows: Vec<GemRow>,
+    /// The DPS without the gem, which the rows' `dps` compare against
+    pub base_dps: f64,
+    /// The DPS sort hasn't finished
+    pub sorting: bool,
+    /// The last progress the sort reported
+    pub percent: Option<u32>,
+    /// The search's group is gone (a recalculation added or dropped an item group); this is
+    /// the last view of the search.
+    pub ended: bool,
+}
+
+/// One gem the picker lists, in PoB's order.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct GemRow {
+    pub gem_id: String,
+    pub name: String,
+    /// The PoB colour code PoB draws the name in
+    pub colour: String,
+    pub tags: String,
+    pub support: bool,
+    /// The gem can support the group's skills
+    pub can_support: bool,
+    /// The DPS with this gem, once PoB has calculated it
+    #[serde(default)]
+    pub dps: Option<f64>,
+    /// PoB's colour for that DPS: better, worse or the same
+    #[serde(default)]
+    pub dps_colour: Option<String>,
+    #[serde(default)]
+    pub mark: Option<DpsMark>,
+}
+
+/// What PoB draws beside a calculated gem (R14).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum DpsMark {
+    /// A support that can support the group's skills
+    Check,
+    /// A skill with a global effect
+    Plus,
+}
+
+/// The lines of a gem tooltip (R15).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GemTooltipView {
+    pub query: GemTooltipQuery,
+    pub lines: Vec<TooltipLine>,
 }
 
 /// The Skills tab: PoB's skill sets, socket groups, gems and gem options.

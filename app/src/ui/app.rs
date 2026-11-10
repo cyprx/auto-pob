@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::engine::views::{BuildListView, BuildView, ConfigView, StatsView};
-use crate::engine::{Command, Engine, Event, Snapshot, Tab};
+use crate::engine::{BackgroundTask, Command, Engine, Event, Snapshot, Tab};
 use crate::game::Game;
 use crate::pob_files::DownloadProgress;
 use crate::theme;
@@ -215,7 +215,9 @@ impl AutoPobApp {
                     // the Skills tab itself is a later task
                     Snapshot::Skills(_)
                     | Snapshot::SocketGroupText(_)
-                    | Snapshot::GroupTooltip(_) => {}
+                    | Snapshot::GroupTooltip(_)
+                    | Snapshot::GemSearch(_)
+                    | Snapshot::GemTooltip(_) => {}
                     Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
@@ -227,6 +229,15 @@ impl AutoPobApp {
             Event::Error { seq, message } => self.on_error(seq, message),
             // power events of the build being left arrive before the new build's snapshots
             Event::Progress { .. } | Event::BackgroundFailed { .. } if self.entering.is_some() => {}
+            // the gem picker is a later task; its sort's progress has nowhere to go yet
+            Event::Progress {
+                task: BackgroundTask::GemDps,
+                ..
+            } => {}
+            Event::BackgroundFailed {
+                task: BackgroundTask::GemDps,
+                message,
+            } => self.notices.push(message),
             Event::Progress { percent, .. } => self.tree.on_progress(percent),
             Event::BackgroundFailed { message, .. } => {
                 self.tree.power_failed();
@@ -1039,11 +1050,16 @@ mod tests {
             }))?)
         }
 
-        fn has_background_work(&self) -> bool {
+        fn next_background(&self) -> Option<crate::engine::BackgroundTask> {
             self.power_work
+                .then_some(crate::engine::BackgroundTask::NodePower)
         }
 
-        fn background_step(&mut self, send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
+        fn background_step(
+            &mut self,
+            _task: crate::engine::BackgroundTask,
+            send: &dyn Fn(Event),
+        ) -> anyhow::Result<Affected> {
             self.power_work = false;
             if self.fail_power {
                 anyhow::bail!("power calculation failed");
@@ -1055,6 +1071,20 @@ mod tests {
             Ok(Affected {
                 power: true,
                 ..Affected::default()
+            })
+        }
+
+        fn gem_search_view(&mut self) -> anyhow::Result<Option<crate::engine::GemSearchView>> {
+            Ok(None)
+        }
+
+        fn gem_tooltip_view(
+            &mut self,
+            query: &crate::engine::GemTooltipQuery,
+        ) -> anyhow::Result<crate::engine::GemTooltipView> {
+            Ok(crate::engine::GemTooltipView {
+                query: query.clone(),
+                lines: vec![],
             })
         }
 

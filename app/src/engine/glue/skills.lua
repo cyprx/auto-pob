@@ -171,6 +171,7 @@ local function show_group(index)
 	tab:SetDisplayGroup(group)
 	return group, tab.controls
 end
+glue.skills_show_group = show_group
 
 -- Runs `fn`, then closes every popup it left open, also when it fails.
 local function in_popups(fn)
@@ -367,6 +368,13 @@ end
 -- Enter in the gem's name box with `gem_id` highlighted (GemSelectControl.lua:763-773, R5).
 -- The control must offer the gem, so a hidden one can't make PoB delete the slot's gem.
 local function pick(control, gem_id)
+	-- A search's S or A filter (`sortGemsBy`) hides gems from `control.gems`. A click on the
+	-- box body clears it (GemSelectControl.lua:732-741), and UpdateSortCache repopulates the
+	-- gems with it, so `gems` and `lastSortGemsBy` keep agreeing for the next search.
+	if control.sortGemsBy ~= nil or control.lastSortGemsBy ~= nil then
+		control.sortGemsBy = nil
+		control:UpdateSortCache()
+	end
 	control:PopulateGemList()
 	-- the imbued box offers what can support the group's skill (R5)
 	if control.imbuedSelect then

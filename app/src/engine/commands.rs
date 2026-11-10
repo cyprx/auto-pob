@@ -300,6 +300,15 @@ pub enum Command {
         group: usize,
     },
 
+    /// Opens or replaces the gem picker's search (R9); the latest one in a batch is answered
+    /// as a `GemSearch`. While it is open PoB's DPS sort runs in the background.
+    SearchGems(GemSearchQuery),
+    /// Closes the gem picker's search.
+    CloseGemSearch,
+    /// A query: a gem tooltip (R15), answered as a `GemTooltip`; the latest one in a batch is
+    /// answered.
+    GemTooltip(GemTooltipQuery),
+
     /// A query: the breakdown of a Calcs cell; the latest one in a batch is answered.
     Breakdown(CellRef),
 
@@ -327,6 +336,52 @@ pub enum SkillOption {
     DefaultQuality(String),
     SupportTypes(usize),
     ShowLegacy(bool),
+}
+
+/// The gem box a search or a gem tooltip is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GemTarget {
+    /// The name box of the group's gem in this 0-based slot; `len` is the empty row.
+    Slot(usize),
+    /// The group's Imbued Support box.
+    Imbued,
+}
+
+/// PoB's "S" and "A" overlay buttons on a gem box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GemFilter {
+    All,
+    Support,
+    Active,
+}
+
+impl GemFilter {
+    /// The gem tag PoB filters by (`sortGemsBy`, GemSelectControl.lua:732-741).
+    pub(crate) fn pob_tag(self) -> Option<&'static str> {
+        match self {
+            GemFilter::All => None,
+            GemFilter::Support => Some("support"),
+            GemFilter::Active => Some("grants_active_skill"),
+        }
+    }
+}
+
+/// What the gem picker searches: `text` is typed into the box of `target` in `group`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GemSearchQuery {
+    pub group: usize,
+    pub target: GemTarget,
+    pub text: String,
+    pub filter: GemFilter,
+}
+
+/// A gem tooltip: `Some(id)` is a picker row (what selecting the gem would give), `None` is
+/// the gem already in the box.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GemTooltipQuery {
+    pub group: usize,
+    pub target: GemTarget,
+    pub gem_id: Option<String>,
 }
 
 /// A Vaal gem's two "Enable <skill>" toggles.

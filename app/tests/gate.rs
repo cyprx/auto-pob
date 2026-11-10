@@ -6,8 +6,8 @@
 use auto_pob::engine::pob::PobBackend;
 use auto_pob::engine::upstream::{Golden, golden_of, load_xml, run_recipe, upstream_lua};
 use auto_pob::engine::{
-    Backend, Command, CompareColour, ConfigOption, ConfigValue, ConfigView, Engine, Event,
-    Snapshot, StatsView, Tab,
+    Backend, BackgroundTask, Command, CompareColour, ConfigOption, ConfigValue, ConfigView, Engine,
+    Event, Snapshot, StatsView, Tab,
 };
 use auto_pob::game::Game;
 use mlua::LuaSerdeExt;
@@ -2714,10 +2714,11 @@ fn run_power(s: &mut Session, stat: &str, max_depth: Option<u32>) -> Vec<u32> {
     .unwrap();
     let progress = std::cell::RefCell::new(Vec::new());
     let mut steps = 0;
-    while s.backend.has_background_work() {
+    while let Some(task) = s.backend.next_background() {
+        assert_eq!(task, BackgroundTask::NodePower);
         let affected = s
             .backend
-            .background_step(&|event| {
+            .background_step(task, &|event| {
                 if let Event::Progress { percent, .. } = event {
                     progress.borrow_mut().push(percent);
                 }
@@ -2844,22 +2845,22 @@ fn no_power_work_without_heatmap() {
     let mut s = attack_session("tree-no-power");
     s.run(set("buffAdrenaline", ConfigValue::Bool(true)))
         .unwrap();
-    assert!(!s.backend.has_background_work());
+    assert!(s.backend.next_background().is_none());
     s.run(Command::SetHeatmap {
         stat: Some("Life".into()),
         max_depth: Some(5),
     })
     .unwrap();
-    assert!(s.backend.has_background_work());
+    assert!(s.backend.next_background() == Some(BackgroundTask::NodePower));
     s.run(Command::SetHeatmap {
         stat: None,
         max_depth: None,
     })
     .unwrap();
-    assert!(!s.backend.has_background_work());
+    assert!(s.backend.next_background().is_none());
     s.run(set("buffAdrenaline", ConfigValue::Bool(false)))
         .unwrap();
-    assert!(!s.backend.has_background_work());
+    assert!(s.backend.next_background().is_none());
     let state = s.backend.tree_state_view().unwrap();
     assert_eq!(state.heatmap, None);
     let off = s.backend.node_power_view().unwrap();
@@ -2881,12 +2882,12 @@ fn leaving_for_the_list_stops_power_work() {
         max_depth: Some(5),
     })
     .unwrap();
-    assert!(s.backend.has_background_work());
+    assert!(s.backend.next_background() == Some(BackgroundTask::NodePower));
     s.run(Command::ListBuilds {
         folder: String::new(),
     })
     .unwrap();
-    assert!(!s.backend.has_background_work());
+    assert!(s.backend.next_background().is_none());
 }
 
 #[test]
@@ -2912,7 +2913,10 @@ fn unknown_heatmap_stat_changes_nothing() {
     let state = s.backend.tree_state_view().unwrap();
     assert_eq!(state.heatmap.as_deref(), Some("Life"));
     assert_eq!(state.max_depth, Some(5));
-    assert!(s.backend.has_background_work(), "the heat map is still on");
+    assert!(
+        s.backend.next_background() == Some(BackgroundTask::NodePower),
+        "the heat map is still on"
+    );
 }
 
 #[test]
@@ -2930,8 +2934,11 @@ fn failed_power_step_stops_background_work() {
         .load("pob.build.calcsTab.PowerBuilder = function() error('boom', 0) end")
         .exec()
         .unwrap();
-    assert!(s.backend.has_background_work());
-    let error = s.backend.background_step(&|_| {}).unwrap_err();
+    assert!(s.backend.next_background() == Some(BackgroundTask::NodePower));
+    let error = s
+        .backend
+        .background_step(BackgroundTask::NodePower, &|_| {})
+        .unwrap_err();
     assert!(error.to_string().contains("boom"), "{error}");
     // a recalculation sets powerBuildFlag again (CalcsTab.lua:435)
     s.run(set("buffAdrenaline", ConfigValue::Bool(true)))
@@ -2944,7 +2951,7 @@ fn failed_power_step_stops_background_work() {
         .unwrap();
     assert!(pending, "the recalculation queued the power calculation");
     assert!(
-        !s.backend.has_background_work(),
+        s.backend.next_background().is_none(),
         "a failed step must end the background work until the next SetHeatmap"
     );
     // the next SetHeatmap tries again
@@ -2954,7 +2961,7 @@ fn failed_power_step_stops_background_work() {
         .exec()
         .unwrap();
     s.run(heatmap()).unwrap();
-    assert!(s.backend.has_background_work());
+    assert!(s.backend.next_background() == Some(BackgroundTask::NodePower));
 }
 
 #[test]

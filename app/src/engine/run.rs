@@ -7,11 +7,11 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use crate::pob_files::DownloadProgress;
 
-use super::commands::Command;
+use super::commands::{Command, GemTooltipQuery};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, GroupTooltipView,
-    NodePower, NodeTooltip, NotesView, PowerReport, SkillsView, SocketGroupText, StatsView,
-    TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, GemSearchView,
+    GemTooltipView, GroupTooltipView, NodePower, NodeTooltip, NotesView, PowerReport, SkillsView,
+    SocketGroupText, StatsView, TreeLayout, TreeState,
 };
 
 #[derive(Debug, Clone)]
@@ -31,12 +31,16 @@ pub enum Snapshot {
     Skills(Arc<SkillsView>),
     SocketGroupText(Arc<SocketGroupText>),
     GroupTooltip(Arc<GroupTooltipView>),
+    GemSearch(Arc<GemSearchView>),
+    GemTooltip(Arc<GemTooltipView>),
     Notes(Arc<NotesView>),
 }
 
 /// Long-running work the engine does between commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackgroundTask {
+    /// The gem picker's DPS sort; it goes first whenever it has work (R12)
+    GemDps,
     NodePower,
 }
 
@@ -86,6 +90,8 @@ pub struct Affected {
     pub notes: bool,
     /// Node power changed (a background step ran)
     pub power: bool,
+    /// The gem search changed: it opened, its text changed or a DPS step ran
+    pub gem_search: bool,
     /// The power report is ready
     pub report: bool,
     /// A tooltip was requested for this node; the latest request wins
@@ -96,6 +102,8 @@ pub struct Affected {
     pub group_text: Option<usize>,
     /// The tooltip of this socket group was requested; the latest request wins
     pub group_tooltip: Option<usize>,
+    /// This gem tooltip was requested; the latest request wins
+    pub gem_tooltip: Option<GemTooltipQuery>,
     /// The tree link was requested
     pub link: bool,
 }
@@ -113,11 +121,13 @@ impl Affected {
         skills: true,
         notes: true,
         power: false,
+        gem_search: false,
         report: false,
         preview: None,
         breakdown: None,
         group_text: None,
         group_tooltip: None,
+        gem_tooltip: None,
         link: false,
     };
 
@@ -133,6 +143,7 @@ impl Affected {
         self.skills |= other.skills;
         self.notes |= other.notes;
         self.power |= other.power;
+        self.gem_search |= other.gem_search;
         self.report |= other.report;
         self.preview = other.preview.or(self.preview);
         if other.breakdown.is_some() {
@@ -140,6 +151,9 @@ impl Affected {
         }
         self.group_text = other.group_text.or(self.group_text);
         self.group_tooltip = other.group_tooltip.or(self.group_tooltip);
+        if other.gem_tooltip.is_some() {
+            self.gem_tooltip = other.gem_tooltip;
+        }
         self.link |= other.link;
     }
 }
@@ -160,10 +174,19 @@ pub trait Backend {
     fn socket_group_text(&mut self, group: usize) -> anyhow::Result<SocketGroupText>;
     /// What hovering this socket group shows. A failure is answered with empty lines (R15).
     fn group_tooltip_view(&mut self, group: usize) -> anyhow::Result<GroupTooltipView>;
-    /// True while a background calculation has steps left. After a failed step it must be false.
-    fn has_background_work(&self) -> bool;
-    /// Runs one slice; may `send` Progress. Returns what to snapshot (power/report).
-    fn background_step(&mut self, send: &dyn Fn(Event)) -> anyhow::Result<Affected>;
+    /// The background job to run a step of next, by priority (R12); `None` when no job has
+    /// steps left. After a job's step failed it must not be offered again until restarted.
+    fn next_background(&self) -> Option<BackgroundTask>;
+    /// Runs one slice of `task`; may `send` Progress. Returns what to snapshot.
+    fn background_step(
+        &mut self,
+        task: BackgroundTask,
+        send: &dyn Fn(Event),
+    ) -> anyhow::Result<Affected>;
+    /// The open gem search as it stands; `None` when no search is open.
+    fn gem_search_view(&mut self) -> anyhow::Result<Option<GemSearchView>>;
+    /// A gem tooltip. A failure is answered with empty lines (R15).
+    fn gem_tooltip_view(&mut self, query: &GemTooltipQuery) -> anyhow::Result<GemTooltipView>;
     fn node_power_view(&mut self) -> anyhow::Result<NodePower>;
     fn power_report_view(&mut self) -> anyhow::Result<PowerReport>;
     /// `Ok(None)` when the node no longer exists: nothing is sent.
@@ -278,6 +301,31 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
             snapshot: Snapshot::GroupTooltip(Arc::new(view)),
         });
     }
+    if flags.gem_search {
+        match backend.gem_search_view() {
+            Ok(Some(view)) => send(Event::Snapshot {
+                seq,
+                snapshot: Snapshot::GemSearch(Arc::new(view)),
+            }),
+            Ok(None) => {}
+            Err(e) => send(Event::Error {
+                seq,
+                message: format!("{e:#}"),
+            }),
+        }
+    }
+    if let Some(query) = &flags.gem_tooltip {
+        let view = backend
+            .gem_tooltip_view(query)
+            .unwrap_or_else(|_| GemTooltipView {
+                query: query.clone(),
+                lines: vec![],
+            });
+        send(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::GemTooltip(Arc::new(view)),
+        });
+    }
     if flags.link {
         emit(seq, send, backend.tree_link_view(), Snapshot::TreeLink);
     }
@@ -298,14 +346,14 @@ pub fn run_loop(
 ) {
     let mut last_seq = 0;
     loop {
-        let first = if backend.has_background_work() {
+        let first = if let Some(task) = backend.next_background() {
             match commands.try_recv() {
                 Ok(first) => first,
                 Err(TryRecvError::Empty) => {
-                    match backend.background_step(send) {
+                    match backend.background_step(task, send) {
                         Ok(affected) => send_snapshots(backend, last_seq, affected, send),
                         Err(e) => send(Event::BackgroundFailed {
-                            task: BackgroundTask::NodePower,
+                            task,
                             message: format!("{e:#}"),
                         }),
                     }
@@ -973,6 +1021,153 @@ mod tests {
             .collect();
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("calc broke"), "{errors:?}");
+    }
+
+    fn gem_query(text: &str) -> crate::engine::GemSearchQuery {
+        crate::engine::GemSearchQuery {
+            group: 0,
+            target: crate::engine::GemTarget::Slot(3),
+            text: text.into(),
+            filter: crate::engine::GemFilter::All,
+        }
+    }
+
+    fn step_affecting_gems() -> Result<Affected, String> {
+        Ok(Affected {
+            gem_search: true,
+            ..Affected::default()
+        })
+    }
+
+    /// Runs the loop until a `BackgroundFailed`, or until every step has run and the
+    /// loop is idle, then ends it from the sender side.
+    fn run_until_idle(fake: &mut Fake, commands: Vec<Command>, total_steps: usize) -> Vec<Event> {
+        let (tx, rx) = mpsc::channel();
+        for (i, c) in commands.into_iter().enumerate() {
+            tx.send((i as u64 + 1, c)).unwrap();
+        }
+        let stop = tx.clone();
+        let mut stop = Some(stop);
+        fake.on_step = Some(Box::new(move |n| {
+            if n == total_steps {
+                stop.take();
+            }
+        }));
+        drop(tx);
+        run_live(fake, &rx)
+    }
+
+    #[test]
+    fn gem_dps_runs_before_power() {
+        let (mut fake, log) = Fake::new();
+        fake.background
+            .lock()
+            .unwrap()
+            .extend((0..3).map(|_| step_affecting_power()));
+        fake.gem_background
+            .lock()
+            .unwrap()
+            .extend((0..3).map(|_| step_affecting_gems()));
+        let events = run_until_idle(&mut fake, vec![Command::SearchGems(gem_query(""))], 6);
+        use BackgroundTask::{GemDps, NodePower};
+        assert_eq!(
+            log.lock().unwrap().step_tasks,
+            [GemDps, GemDps, GemDps, NodePower, NodePower, NodePower]
+        );
+        // each gem step sends the search again: once for the command, three for the steps
+        let searches = snapshots(&events)
+            .iter()
+            .filter(|(_, s)| matches!(s, Snapshot::GemSearch(_)))
+            .count();
+        assert_eq!(searches, 4);
+    }
+
+    #[test]
+    fn failed_gem_step_reports_gem_dps() {
+        let (mut fake, log) = Fake::new();
+        fake.background
+            .lock()
+            .unwrap()
+            .extend((0..2).map(|_| step_affecting_power()));
+        {
+            let mut gems = fake.gem_background.lock().unwrap();
+            gems.push_back(step_affecting_gems());
+            gems.push_back(Err("dps broke".into()));
+            gems.push_back(step_affecting_gems());
+        }
+        let events = run_until_idle(&mut fake, vec![Command::SearchGems(gem_query(""))], 4);
+        let failures: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::BackgroundFailed { task, message } => Some((*task, message.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert_eq!(failures[0].0, BackgroundTask::GemDps);
+        assert!(failures[0].1.contains("dps broke"));
+        // the failed job stops; the power job still runs to its end
+        use BackgroundTask::{GemDps, NodePower};
+        assert_eq!(
+            log.lock().unwrap().step_tasks,
+            [GemDps, GemDps, NodePower, NodePower]
+        );
+        assert_eq!(events.iter().filter(|e| is_power(e)).count(), 2);
+    }
+
+    #[test]
+    fn only_latest_search_runs() {
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(
+            &mut fake,
+            ["a", "ab", "abc"]
+                .into_iter()
+                .map(|t| Command::SearchGems(gem_query(t)))
+                .collect(),
+        );
+        let searches: Vec<_> = snapshots(&events)
+            .into_iter()
+            .filter_map(|(seq, s)| match s {
+                Snapshot::GemSearch(v) => Some((seq, v.query.text.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(searches, [(3, "abc".to_string())]);
+        assert_eq!(log.lock().unwrap().gem_searches, ["abc"]);
+    }
+
+    #[test]
+    fn only_latest_gem_tooltip_runs() {
+        let (mut fake, _log) = Fake::new();
+        let query = |id: &str| crate::engine::GemTooltipQuery {
+            group: 0,
+            target: crate::engine::GemTarget::Slot(0),
+            gem_id: Some(id.into()),
+        };
+        let events = run_queued(
+            &mut fake,
+            ["a", "b"]
+                .into_iter()
+                .map(|id| Command::GemTooltip(query(id)))
+                .collect(),
+        );
+        let tooltips: Vec<_> = snapshots(&events)
+            .into_iter()
+            .filter_map(|(_, s)| match s {
+                Snapshot::GemTooltip(t) => Some(t.query.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tooltips, [query("b")]);
+    }
+
+    #[test]
+    fn recalc_restarts_gem_dps() {
+        let (mut fake, log) = Fake::new();
+        run_queued(&mut fake, vec![Command::SearchGems(gem_query("a"))]);
+        assert_eq!(log.lock().unwrap().gem_restarts, 0, "a search alone");
+        run_queued(&mut fake, vec![set_config()]);
+        assert_eq!(log.lock().unwrap().gem_restarts, 1);
     }
 
     #[test]

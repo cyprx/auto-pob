@@ -7,7 +7,8 @@ use super::{
 };
 use auto_pob::engine::upstream::{SidebarLine, golden_of};
 use auto_pob::engine::{
-    Backend, CalcsControl, CalcsCount, Command, GemToggle, MainSkillSelector, SkillOption,
+    Backend, BackgroundTask, CalcsControl, CalcsCount, Command, DpsMark, GemFilter, GemSearchQuery,
+    GemSearchView, GemTarget, GemToggle, GemTooltipQuery, MainSkillSelector, SkillOption,
     SkillSetEntry, SkillsView, SocketGroupView, Tab,
 };
 use auto_pob::game::Game;
@@ -1350,6 +1351,14 @@ fn no_silent_writes_skills() {
             which: GemToggle::First,
             on: false,
         },
+        Command::SearchGems(gem_query(0, GemTarget::Slot(0), "", GemFilter::All)),
+        Command::GemTooltip(GemTooltipQuery {
+            group: 0,
+            target: GemTarget::Slot(0),
+            gem_id: None,
+        }),
+        Command::SearchGems(gem_query(0, GemTarget::Slot(1), "", GemFilter::Support)),
+        Command::CloseGemSearch,
         Command::DeleteGem { group: 0, slot: 0 },
         Command::NewSkillSet {
             title: text("Mapping"),
@@ -1377,17 +1386,28 @@ fn no_silent_writes_skills() {
         Command::DeleteAllSocketGroups,
     ]);
     let mut ran = 0;
+    let mut dps_steps = 0;
     for command in commands {
         let shown = format!("{command:?}");
         // a command PoB doesn't offer for this build may fail, but it must not write either
-        if let Err(e) = s.run(command) {
-            eprintln!("{shown}: {e}");
-        } else {
-            ran += 1;
+        match s.run(command) {
+            Err(e) => eprintln!("{shown}: {e}"),
+            Ok(affected) => {
+                ran += 1;
+                // a search's whole DPS sort runs before the next command
+                dps_steps += finish_gem_dps(&mut s).0;
+                if affected.gem_search {
+                    s.backend.gem_search_view().unwrap();
+                }
+                if let Some(query) = &affected.gem_tooltip {
+                    s.backend.gem_tooltip_view(query).unwrap();
+                }
+            }
         }
         assert_eq!(snapshot_dir(&dir), before, "{shown} wrote a file");
     }
     assert!(ran > 25, "only {ran} commands ran");
+    assert!(dps_steps > 1, "no DPS sort ran");
     assert!(s.backend.build_view().unwrap().unsaved);
     s.run(Command::SaveAs {
         folder: String::new(),
@@ -1884,4 +1904,474 @@ fn main_skill_dropdowns_match_pob() {
         checks[0].sidebar, checks[1].sidebar,
         "the skill changes the stats"
     );
+}
+
+// ---- Gem search, DPS sort and gem tooltips (Task 7) ----
+
+fn gem_query(group: usize, target: GemTarget, text: &str, filter: GemFilter) -> GemSearchQuery {
+    GemSearchQuery {
+        group,
+        target,
+        text: text.into(),
+        filter,
+    }
+}
+
+/// Runs the background work to its end, as the engine loop does when idle; returns the number
+/// of steps and the time they took. Only the DPS sort may run.
+fn finish_gem_dps(s: &mut Session) -> (usize, std::time::Duration) {
+    let start = std::time::Instant::now();
+    let mut steps = 0;
+    while let Some(task) = s.backend.next_background() {
+        assert_eq!(task, BackgroundTask::GemDps);
+        s.backend.background_step(task, &|_| {}).unwrap();
+        steps += 1;
+        assert!(steps < 100_000, "the DPS sort never ends");
+    }
+    (steps, start.elapsed())
+}
+
+/// Opens the search in our engine, runs its DPS sort to the end and returns the list.
+fn our_search(s: &mut Session, query: GemSearchQuery) -> GemSearchView {
+    let affected = s.run(Command::SearchGems(query.clone())).unwrap();
+    assert!(affected.gem_search);
+    finish_gem_dps(s);
+    let view = s
+        .backend
+        .gem_search_view()
+        .unwrap()
+        .expect("an open search");
+    assert_eq!(view.query, query);
+    assert!(!view.sorting, "{query:?} still sorting");
+    assert!(!view.ended);
+    view
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct UpstreamSearch {
+    #[serde(default)]
+    ids: Vec<String>,
+    #[serde(default)]
+    dps: std::collections::BTreeMap<String, f64>,
+    #[serde(default)]
+    colours: std::collections::BTreeMap<String, String>,
+    base_dps: f64,
+}
+
+fn lua_target(lua: &mlua::Lua, target: GemTarget) -> mlua::Value {
+    match target {
+        GemTarget::Slot(slot) => mlua::Value::Integer(slot as i64),
+        GemTarget::Imbued => mlua::Value::String(lua.create_string("imbued").unwrap()),
+    }
+}
+
+/// Upstream's `gemSearch`, which must leave the Skills tab as it was.
+fn upstream_search(lua: &mlua::Lua, query: &GemSearchQuery) -> UpstreamSearch {
+    let globals = lua.globals();
+    globals.set("q_group", query.group).unwrap();
+    globals
+        .set("q_target", lua_target(lua, query.target))
+        .unwrap();
+    globals.set("q_text", query.text.as_str()).unwrap();
+    let filter = match query.filter {
+        GemFilter::All => None,
+        GemFilter::Support => Some("support"),
+        GemFilter::Active => Some("grants_active_skill"),
+    };
+    globals.set("q_filter", filter).unwrap();
+    let before = upstream_dump(lua);
+    let found = lua_value(lua, "return gemSearch(q_group, q_target, q_text, q_filter)");
+    assert_eq!(
+        upstream_dump(lua),
+        before,
+        "{query:?} changed the Skills tab"
+    );
+    found
+}
+
+fn ids(view: &GemSearchView) -> Vec<&str> {
+    view.rows.iter().map(|r| r.gem_id.as_str()).collect()
+}
+
+fn our_dps(view: &GemSearchView) -> std::collections::BTreeMap<String, f64> {
+    view.rows
+        .iter()
+        .filter_map(|r| r.dps.map(|d| (r.gem_id.clone(), d)))
+        .collect()
+}
+
+fn set_sort_by_dps(s: &mut Session, lua: &mlua::Lua, on: bool) {
+    s.run(Command::SetSkillOption(SkillOption::SortByDps(on)))
+        .unwrap();
+    lua.load(format!("act.option('sort_by_dps', {on})"))
+        .exec()
+        .unwrap();
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn search_matches_pob() {
+    let _guard = lock();
+    let cases = [
+        ("", GemFilter::All),
+        ("ad", GemFilter::All),
+        ("cold", GemFilter::All),
+        (":fire:-support", GemFilter::All),
+        ("", GemFilter::Support),
+        ("", GemFilter::Active),
+    ];
+    for (fixture, slot) in [("attack", 3), ("minion", 1)] {
+        let (mut s, lua) = session_on(fixture, "search");
+        for sort in [false, true] {
+            set_sort_by_dps(&mut s, &lua, sort);
+            for (text, filter) in cases {
+                let query = gem_query(0, GemTarget::Slot(slot), text, filter);
+                let ours = our_search(&mut s, query.clone());
+                let theirs = upstream_search(&lua, &query);
+                assert_eq!(ids(&ours), theirs.ids, "{fixture} sort {sort}: {query:?}");
+                if text.is_empty() {
+                    assert!(ours.rows.len() > 50, "{fixture}: {query:?}");
+                } else {
+                    assert!(!ours.rows.is_empty(), "{fixture}: {query:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn gem_dps_matches_pob() {
+    let _guard = lock();
+    for (fixture, slot) in [("attack", 3), ("minion", 1)] {
+        let (mut s, lua) = session_on(fixture, "gem-dps");
+        let query = gem_query(0, GemTarget::Slot(slot), "", GemFilter::All);
+        s.run(Command::SearchGems(query.clone())).unwrap();
+        let first = s.backend.gem_search_view().unwrap().unwrap();
+        assert!(first.sorting, "{fixture}: the sort hasn't started");
+        let (steps, took) = finish_gem_dps(&mut s);
+        let ours = s.backend.gem_search_view().unwrap().unwrap();
+        let theirs = upstream_search(&lua, &query);
+        let calculated = our_dps(&ours);
+        eprintln!(
+            "{fixture}: DPS sort of {} gems ({} calculated) took {took:?} in {steps} steps",
+            ours.rows.len(),
+            calculated.len()
+        );
+        assert!(calculated.len() > 20, "{fixture}: {}", calculated.len());
+        assert_eq!(calculated, theirs.dps, "{fixture}");
+        let colours: std::collections::BTreeMap<_, _> = ours
+            .rows
+            .iter()
+            .filter_map(|r| r.dps_colour.clone().map(|c| (r.gem_id.clone(), c)))
+            .collect();
+        assert_eq!(colours, theirs.colours, "{fixture}");
+        assert_eq!(ours.base_dps, theirs.base_dps, "{fixture}");
+        assert!(ours.base_dps > 0.0, "{fixture}");
+        // the marks follow Draw: a check for supports that can support, + for global effects
+        for row in &ours.rows {
+            match row.mark {
+                Some(DpsMark::Check) => assert!(row.support && row.can_support, "{row:?}"),
+                Some(DpsMark::Plus) => assert!(!row.support, "{row:?}"),
+                None => {}
+            }
+        }
+        assert!(ours.rows.iter().any(|r| r.mark == Some(DpsMark::Check)));
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn imbued_search_matches_pob() {
+    let _guard = lock();
+    let (mut s, lua) = session_on("attack", "imbued-search");
+    s.run(Command::SetGroupSlot {
+        group: 0,
+        slot: Some("Weapon 1".into()),
+    })
+    .unwrap();
+    lua.load("act.slot(0, 'Weapon 1')").exec().unwrap();
+    let query = gem_query(0, GemTarget::Imbued, "", GemFilter::All);
+    let ours = our_search(&mut s, query.clone());
+    let theirs = upstream_search(&lua, &query);
+    assert!(!ours.rows.is_empty());
+    assert!(ours.rows.iter().all(|r| r.support && r.can_support));
+    assert_eq!(ids(&ours), theirs.ids);
+    assert_eq!(our_dps(&ours), theirs.dps);
+    // the box has no S or A buttons
+    let err = s
+        .run(Command::SearchGems(gem_query(
+            0,
+            GemTarget::Imbued,
+            "",
+            GemFilter::Support,
+        )))
+        .unwrap_err();
+    assert!(err.to_string().contains("filter"), "{err}");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn gem_tooltip_matches_pob() {
+    let _guard = lock();
+    let (mut s, lua) = session_on("attack", "gem-tooltip");
+    lua.load(include_str!("../../src/engine/glue/tooltip.lua"))
+        .set_name("=recorder")
+        .exec()
+        .unwrap();
+    let melee = "Metadata/Items/Gems/SkillGemSupportMeleePhysicalDamage";
+    for (slot, gem_id) in [(3, Some(melee)), (0, None)] {
+        let query = GemTooltipQuery {
+            group: 0,
+            target: GemTarget::Slot(slot),
+            gem_id: gem_id.map(String::from),
+        };
+        let affected = s.run(Command::GemTooltip(query.clone())).unwrap();
+        assert_eq!(affected.gem_tooltip.as_ref(), Some(&query));
+        let ours = s.backend.gem_tooltip_view(&query).unwrap();
+        assert_eq!(ours.query, query);
+        lua.globals().set("q_slot", slot).unwrap();
+        lua.globals().set("q_id", gem_id).unwrap();
+        let theirs: Vec<auto_pob::engine::TooltipLine> =
+            lua_value(&lua, "return gemTooltip(0, q_slot, q_id)");
+        assert!(theirs.len() > 3, "{query:?}: {theirs:?}");
+        assert_eq!(ours.lines, theirs, "{query:?}");
+    }
+    // a failing tooltip is answered with no lines
+    let bad = GemTooltipQuery {
+        group: 0,
+        target: GemTarget::Slot(3),
+        gem_id: Some("Metadata/Items/Gems/NoSuchGem".into()),
+    };
+    assert!(s.backend.gem_tooltip_view(&bad).is_err());
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn gem_dps_survives_interleaved_commands() {
+    let _guard = lock();
+    let query = gem_query(0, GemTarget::Slot(3), "", GemFilter::All);
+    let label = || Command::SetGroupLabel {
+        group: 1,
+        text: "x".into(),
+    };
+    // the fixture has one group; a second one is the other group a command shows
+    let second = || Command::PasteSocketGroup {
+        text: "Label: Auras\r\nHatred 20/0  1\r\n".into(),
+    };
+    // uninterrupted, on the same build with the same label
+    let (mut plain, _) = session_on("attack", "interleaved-plain");
+    plain.run(second()).unwrap();
+    plain.run(label()).unwrap();
+    let expected = our_search(&mut plain, query.clone());
+
+    let (mut s, _) = session_on("attack", "interleaved");
+    s.run(second()).unwrap();
+    s.run(Command::SearchGems(query.clone())).unwrap();
+    for _ in 0..2 {
+        s.backend
+            .background_step(BackgroundTask::GemDps, &|_| {})
+            .unwrap();
+    }
+    assert_eq!(
+        s.backend.next_background(),
+        Some(BackgroundTask::GemDps),
+        "the sort ended within two steps"
+    );
+    let affected = s.run(Command::GroupTooltip { group: 1 }).unwrap();
+    assert_eq!(affected.group_tooltip, Some(1));
+    assert!(!s.backend.group_tooltip_view(1).unwrap().lines.is_empty());
+    s.run(label()).unwrap();
+    finish_gem_dps(&mut s);
+    let ours = s.backend.gem_search_view().unwrap().unwrap();
+    assert!(!ours.sorting);
+    assert_eq!(our_dps(&ours), our_dps(&expected));
+    assert_eq!(ours.base_dps, expected.base_dps);
+    assert_eq!(ids(&ours), ids(&expected));
+    assert_eq!(s.backend.skills_view().unwrap().groups[1].label, "x");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn set_gem_after_filtered_search() {
+    let _guard = lock();
+    let (mut s, lua) = session_on("attack", "filtered-pick");
+    let support = gem_query(0, GemTarget::Slot(3), "", GemFilter::Support);
+    our_search(&mut s, support.clone());
+    upstream_search(&lua, &support);
+    // an active gem, which the S filter hid, picked in the same box
+    let view = s.backend.skills_view().unwrap();
+    let active = &view.groups[0].gems[0];
+    assert!(!active.support);
+    let gem_id = active.gem_id.clone().unwrap();
+    s.run(Command::SetGem {
+        group: 0,
+        slot: 3,
+        gem_id: gem_id.clone(),
+    })
+    .expect("a stale S filter refused the gem");
+    lua.globals()
+        .set("q_name", active.name_spec.as_str())
+        .unwrap();
+    lua.load("act.gem(0, 3, q_name)").exec().unwrap();
+    assert_eq!(
+        s.backend.skills_view().unwrap().groups[0].gems[3].gem_id,
+        Some(gem_id)
+    );
+    // the same filtered search again lists only supports, as upstream's does
+    let again = our_search(&mut s, support.clone());
+    let theirs = upstream_search(&lua, &support);
+    assert!(again.rows.iter().all(|r| r.support), "the S filter is lost");
+    assert_eq!(ids(&again), theirs.ids);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn gem_search_ends_and_refuses() {
+    let _guard = lock();
+    let (mut s, _) = session_on("attack", "search-ends");
+    // a box PoB doesn't have is an error, and opens no job (slot 3 is the empty row)
+    for target in [GemTarget::Slot(4), GemTarget::Slot(99)] {
+        assert!(
+            s.run(Command::SearchGems(gem_query(
+                0,
+                target,
+                "",
+                GemFilter::All
+            )))
+            .is_err()
+        );
+        assert_eq!(s.backend.next_background(), None);
+        assert!(s.backend.gem_search_view().unwrap().is_none());
+    }
+    assert!(
+        s.run(Command::SearchGems(gem_query(
+            42,
+            GemTarget::Slot(0),
+            "",
+            GemFilter::All
+        )))
+        .is_err()
+    );
+    assert_eq!(s.backend.next_background(), None);
+    // structural commands end the search
+    let query = gem_query(0, GemTarget::Slot(0), "fire", GemFilter::All);
+    s.run(Command::SearchGems(query.clone())).unwrap();
+    s.run(Command::AddSocketGroup).unwrap();
+    assert!(s.backend.gem_search_view().unwrap().is_none());
+    assert_eq!(s.backend.next_background(), None);
+    s.run(Command::SearchGems(query.clone())).unwrap();
+    s.run(Command::CloseGemSearch).unwrap();
+    assert!(s.backend.gem_search_view().unwrap().is_none());
+    // an option restarts the sort
+    our_search(&mut s, query.clone());
+    assert_eq!(s.backend.next_background(), None);
+    s.run(Command::SetSkillOption(SkillOption::SortField(1)))
+        .unwrap();
+    assert_eq!(s.backend.next_background(), Some(BackgroundTask::GemDps));
+    finish_gem_dps(&mut s);
+    // a group table that is no longer at its index (as when a recalculation adds an item's
+    // group) ends the search with a last view
+    s.backend
+        .lua
+        .load(
+            r#"local list = pob.build.skillsTab.socketGroupList
+            local copy = {}
+            for k, v in pairs(list[1]) do copy[k] = v end
+            list[1] = copy"#,
+        )
+        .exec()
+        .unwrap();
+    s.backend.recalculate().unwrap();
+    assert_eq!(s.backend.next_background(), Some(BackgroundTask::GemDps));
+    let affected = s
+        .backend
+        .background_step(BackgroundTask::GemDps, &|_| {})
+        .unwrap();
+    assert!(affected.gem_search);
+    let last = s.backend.gem_search_view().unwrap().expect("a last view");
+    assert!(last.ended && !last.sorting && last.rows.is_empty());
+    assert!(s.backend.gem_search_view().unwrap().is_none());
+    assert_eq!(s.backend.next_background(), None);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn commands_answered_during_gem_dps() {
+    use auto_pob::engine::{Engine, Event, Snapshot};
+    use std::time::{Duration, Instant};
+    let _guard = lock();
+    pob_dir();
+    let user = std::env::temp_dir().join(format!("auto-pob-gate-gem-dps-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&user);
+    fs::create_dir_all(&user).unwrap();
+    let build = user.join("attack.xml");
+    fs::copy(fixtures_dir().join("attack.xml"), &build).unwrap();
+    let engine = Engine::spawn(Game::Poe1, std::env::temp_dir(), user.clone(), || {});
+    engine.send(Command::OpenBuild { path: build });
+    engine.send(Command::SearchGems(gem_query(
+        0,
+        GemTarget::Slot(3),
+        "",
+        GemFilter::All,
+    )));
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let next = || {
+        let wait = deadline.saturating_duration_since(Instant::now());
+        engine.events.recv_timeout(wait).expect("an event")
+    };
+    // the sort has started when a search view says so
+    loop {
+        match next() {
+            Event::Snapshot {
+                snapshot: Snapshot::GemSearch(view),
+                ..
+            } => {
+                assert!(view.sorting, "the sort ended before the label was sent");
+                break;
+            }
+            Event::Error { message, .. } | Event::StartupFailed { message } => {
+                panic!("{message}")
+            }
+            _ => {}
+        }
+    }
+    let label_seq = engine.send(Command::SetGroupLabel {
+        group: 0,
+        text: "Mid sort".into(),
+    });
+    let mut labelled = false;
+    let mut progress = 0;
+    loop {
+        match next() {
+            Event::Snapshot {
+                seq,
+                snapshot: Snapshot::Skills(view),
+            } if seq >= label_seq => {
+                assert_eq!(view.groups[0].label, "Mid sort");
+                labelled = true;
+            }
+            Event::Snapshot {
+                snapshot: Snapshot::GemSearch(view),
+                ..
+            } if !view.sorting => {
+                assert!(labelled, "the sort ended before the label was answered");
+                assert!(!view.rows.is_empty());
+                break;
+            }
+            Event::Progress {
+                task: BackgroundTask::GemDps,
+                ..
+            } => progress += 1,
+            Event::Error { message, .. } | Event::BackgroundFailed { message, .. } => {
+                panic!("{message}")
+            }
+            _ => {}
+        }
+    }
+    assert!(progress > 0, "the sort reported no progress");
+    engine.send(Command::Shutdown);
+    while engine.events.recv_timeout(Duration::from_secs(30)).is_ok() {}
+    assert!(!engine.is_alive());
+    let _ = fs::remove_dir_all(&user);
 }

@@ -265,11 +265,13 @@ local function gemSlot(g, s, empty)
 end
 
 -- Typing a gem's name into its box and pressing Enter (GemSelectControl.lua:699-706, 722-773):
--- focus, an empty box, the name typed (whose changeFunc builds the list and previews the
+-- a click on the box body, focus, an empty box, the name typed (whose changeFunc builds the list and previews the
 -- gem), then the RETURN key. `text` is the gem's name as the list shows it.
 function act.gem(g, s, name)
 	local group, slot = gemSlot(g, s, true)
 	local control = slot.nameSpec
+	-- the click lands on the box body, which clears an S or A filter (GemSelectControl.lua:739)
+	control.sortGemsBy = nil
 	control:OnFocusGained()
 	control:SetText("")
 	control:Insert(name)
@@ -540,4 +542,98 @@ function checkpoint()
 		can_undo = dump.can_undo, can_redo = dump.can_redo, sidebar = sidebar_lines(),
 		main_skill = mainSkillDump(),
 	} })
+end
+
+-- ---- Gem search and tooltips (R23) ----
+
+-- The gem box `target` names: a 0-based gem slot, or "imbued" for the Imbued Support box
+local function gemBox(g, target)
+	local _, c = clickRow(g)
+	if target == "imbued" then
+		return c.imbuedSupport
+	end
+	local slot = skillsTab().gemSlots[target + 1]
+	assert(slot, "no gem slot " .. tostring(target))
+	return slot.nameSpec
+end
+
+local viewport = { x = 0, y = 0, width = 1920, height = 1080 }
+
+-- Searching in a gem box as a user does: a click on the box (the S or A overlay sets
+-- `sortGemsBy`, GemSelectControl.lua:732-741) focuses it, which drops the list and starts the
+-- DPS sort; the text is typed (a keystroke without its UpdateGem, R9); the box is drawn until
+-- the DPS sort ends, then the list is built again for the typed text. `filter` is nil,
+-- "support" or "grants_active_skill". Returns the ids in list order, PoB's DPS and colours
+-- by id, and the base DPS.
+function gemSearch(g, target, text, filter)
+	local control = gemBox(g, target)
+	control.sortGemsBy = filter
+	control:OnFocusGained()
+	control.buf = text
+	control:BuildList(text)
+	local draws = 0
+	repeat
+		control:Draw(viewport)
+		draws = draws + 1
+		assert(draws < 10000, "the DPS sort never ended")
+	until not control.dpsBuilder and not control.dpsBuildFlag
+	control:BuildList(text)
+	local ids, dps, colours = {}, {}, {}
+	for _, key in ipairs(control.list) do
+		if key ~= "" then
+			local id = key:gsub("^Default:", "")
+			ids[#ids + 1] = id
+			if control.sortCache.dpsColor[key] ~= "" then
+				dps[id] = control.sortCache.dps[key]
+				colours[id] = control.sortCache.dpsColor[key]
+			end
+		end
+	end
+	local base = control.sortCache.baseDPS
+	control.dropped = false
+	return { ids = ids, dps = dps, colours = colours, base_dps = base, draws = draws }
+end
+
+-- A gem tooltip as the box shows it (R15), recorded with the host's `glue.tooltip()` recorder.
+-- With `id`, the hover over that row of the dropped list (GemSelectControl.lua:582-604);
+-- without, the box's own gem (:629-646). The box's tooltip is swapped for the recorder.
+function gemTooltip(g, target, id)
+	local control = gemBox(g, target)
+	local tab = skillsTab()
+	local recorder = glue.tooltip()
+	local saved = control.tooltip
+	control.tooltip = recorder
+	local ok, err = pcall(function()
+		if id then
+			local gemData = build.data.gems[id]
+			assert(gemData, "no gem " .. id)
+			local calcFunc, calcBase = tab.build.calcsTab:GetMiscCalculator(control.build)
+			local output = control:CalcOutputWithThisGem(calcFunc, gemData, tab.sortGemsByDPSField == "FullDPS")
+			local gemInstance = {
+				level = tab:ProcessGemLevel(gemData, control.imbuedSelect),
+				quality = tab.defaultGemQuality or 0,
+				qualityId = "Default",
+				count = 1,
+				enabled = true,
+				enableGlobal1 = true,
+				enableGlobal2 = true,
+				gemId = gemData.id,
+				nameSpec = gemData.name,
+				skillId = gemData.grantedEffectId,
+				displayEffect = nil,
+				gemData = gemData,
+			}
+			control:AddGemTooltip(gemInstance)
+			control.tooltip:AddSeparator(10)
+			tab.build:AddStatComparesToTooltip(control.tooltip, calcBase, output, "^7Selecting this gem will give you:")
+		else
+			local gemInstance = tab.displayGroup.gemList[control.index]
+			if gemInstance and gemInstance.gemData then
+				control:AddGemTooltip(gemInstance)
+			end
+		end
+	end)
+	control.tooltip = saved
+	if not ok then error(err, 0) end
+	return recorder:lines()
 end

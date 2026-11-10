@@ -58,6 +58,10 @@ impl Toolbar {
         self.dialog.is_some()
     }
 
+    pub(super) fn close_dialog(&mut self) {
+        self.dialog = None;
+    }
+
     /// A link snapshot arrived.
     pub(super) fn link_arrived(&mut self) {
         self.link_fresh = true;

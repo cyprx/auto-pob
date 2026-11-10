@@ -151,6 +151,11 @@ impl TreeTab {
         *self = kept;
     }
 
+    /// Drops a pending confirmation; its dialog only draws on this tab.
+    pub fn close_dialog(&mut self) {
+        self.toolbar.close_dialog();
+    }
+
     /// A toolbar dialog is open, so shortcuts must wait.
     pub fn has_dialog(&self) -> bool {
         self.toolbar.has_dialog()

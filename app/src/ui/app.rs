@@ -532,6 +532,9 @@ impl AutoPobApp {
         for command in config_commands {
             self.send(command);
         }
+        if self.tab != BuildTab::Tree {
+            self.tree.close_dialog();
+        }
         for command in tree_out.commands {
             self.send(command);
         }
@@ -1995,6 +1998,18 @@ mod tests {
         pump_until(&mut app, &ctx, "notice", |a| !a.notices.is_empty());
         assert_eq!(app.notices, ["search broke"]);
         assert!(!app.tree.rects.map.contains_key("heat_retry"));
+    }
+
+    #[test]
+    fn leaving_the_tree_tab_closes_its_dialog_and_frees_the_shortcuts() {
+        let (mut app, ctx) = tree_app();
+        click(&mut app, &ctx, "reset");
+        assert!(app.tree.has_dialog());
+        app.tab = BuildTab::Config;
+        frame(&mut app, &ctx, vec![]);
+        assert!(!app.tree.has_dialog());
+        frame(&mut app, &ctx, ctrl(egui::Key::S));
+        assert!(app.save_as.is_some(), "Ctrl+S reached the save command");
     }
 
     #[test]

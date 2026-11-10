@@ -220,9 +220,9 @@ impl AutoPobApp {
                     Snapshot::Calcs(_) => self.calcs.on_snapshot(&snapshot),
                     Snapshot::Skills(_)
                     | Snapshot::SocketGroupText(_)
-                    | Snapshot::GroupTooltip(_) => self.skills.on_snapshot(&snapshot),
-                    // the gem picker is a later task
-                    Snapshot::GemSearch(_) | Snapshot::GemTooltip(_) => {}
+                    | Snapshot::GroupTooltip(_)
+                    | Snapshot::GemSearch(_)
+                    | Snapshot::GemTooltip(_) => self.skills.on_snapshot(&snapshot),
                     Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
@@ -234,15 +234,15 @@ impl AutoPobApp {
             Event::Error { seq, message } => self.on_error(seq, message),
             // power events of the build being left arrive before the new build's snapshots
             Event::Progress { .. } | Event::BackgroundFailed { .. } if self.entering.is_some() => {}
-            // the gem picker is a later task; its sort's progress has nowhere to go yet
             Event::Progress {
                 task: BackgroundTask::GemDps,
-                ..
-            } => {}
+                percent,
+            } => self.skills.on_gem_progress(percent),
+            // the picker offers Retry; a failure with no picker open has nothing to tell
             Event::BackgroundFailed {
                 task: BackgroundTask::GemDps,
-                message,
-            } => self.notices.push(message),
+                ..
+            } => self.skills.on_gem_failed(),
             Event::Progress { percent, .. } => self.tree.on_progress(percent),
             Event::BackgroundFailed { message, .. } => {
                 self.tree.power_failed();
@@ -621,7 +621,9 @@ impl AutoPobApp {
             if let Some(command) = self.skills.flush() {
                 self.send(command);
             }
-            self.skills.close_dialogs();
+            if let Some(command) = self.skills.close_dialogs() {
+                self.send(command);
+            }
         }
         for command in skills_out.commands {
             self.send(command);
@@ -2309,7 +2311,7 @@ mod tests {
             task: BackgroundTask::GemDps,
             message: "dps broke".into(),
         });
-        assert_eq!(app.notices, ["dps broke"]);
+        assert!(app.notices.is_empty(), "the picker shows gem failures");
         // power_failed would have cleared the progress and offered a retry
         assert_eq!(app.tree.progress, Some(40));
         frame(&mut app, &ctx, vec![]);

@@ -433,7 +433,8 @@ fn gem_fields_send_text_on_enter() {
 fn clicking_a_gem_name_asks_for_the_picker() {
     let mut h = Harness::new(sample());
     h.click("gem_2_name");
-    assert_eq!(h.ui.picker, Some((0, GemTarget::Slot(2))));
+    let p = h.ui.picker.as_ref().expect("picker open");
+    assert_eq!((p.group(), p.target()), (0, GemTarget::Slot(2)));
 }
 
 #[test]
@@ -475,4 +476,54 @@ fn a_field_that_vanishes_without_a_blur_is_flushed() {
         ["SetGroupLabel { group: 1, text: \"Empty!\" }"]
     );
     assert!(!h.ui.has_pending());
+}
+
+#[test]
+fn an_open_picker_blocks_paste_and_closes_with_the_tab() {
+    let mut h = Harness::new(sample());
+    let o = h.click("gem_2_name");
+    assert!(h.ui.has_dialog(), "the picker is a dialog");
+    assert!(
+        debug(&o.queries)
+            .iter()
+            .any(|q| q.starts_with("SearchGems")),
+        "{:?}",
+        o.queries
+    );
+    let o = h.frame(vec![Event::Paste("Boneshatter".into())]);
+    assert!(
+        !debug(&o.commands)
+            .iter()
+            .any(|c| c.starts_with("PasteSocketGroup")),
+        "Paste fired under the picker"
+    );
+    assert!(matches!(
+        h.ui.close_dialogs(),
+        Some(Command::CloseGemSearch)
+    ));
+    assert!(!h.ui.has_dialog());
+}
+
+#[test]
+fn picker_replies_reach_the_open_picker_and_closing_sends_close() {
+    use crate::engine::GemSearchQuery;
+    use crate::engine::views::GemSearchView;
+    let mut h = Harness::new(sample());
+    h.click("gem_2_name");
+    h.ui.on_snapshot(&Snapshot::GemSearch(Arc::new(GemSearchView {
+        query: GemSearchQuery {
+            group: 0,
+            target: GemTarget::Slot(2),
+            text: String::new(),
+            filter: crate::engine::GemFilter::All,
+        },
+        rows: vec![],
+        base_dps: 0.0,
+        sorting: false,
+        percent: None,
+        ended: true,
+    })));
+    let o = h.frame(vec![]);
+    assert_eq!(debug(&o.commands), ["CloseGemSearch"]);
+    assert!(!h.ui.has_dialog());
 }

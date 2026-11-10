@@ -3,12 +3,14 @@
 
 pub mod group;
 pub mod groups;
+pub mod picker;
 pub mod sets;
 
-use crate::engine::views::{GroupTooltipView, SkillsView};
-use crate::engine::{Command, GemTarget, Snapshot};
+use crate::engine::views::{GemTooltipView, GroupTooltipView, SkillsView};
+use crate::engine::{Command, GemTarget, GemTooltipQuery, Snapshot};
 use crate::ui::tree::Rects;
 use eframe::egui;
+use picker::GemPicker;
 use std::{collections::HashMap, sync::Arc};
 
 /// A group row must be hovered this long before its tooltip is asked for.
@@ -56,8 +58,13 @@ pub struct SkillsUi {
     hover: Option<(usize, f64)>,
     tooltip_asked: Option<usize>,
     sets: sets::State,
-    /// Where the gem picker was asked to open; Task 9 replaces this stub
-    picker: Option<(usize, GemTarget)>,
+    picker: Option<GemPicker>,
+    /// The frame's time, for what opens a picker
+    now: f64,
+    /// A gem name in the table hovered since this time
+    gem_hover: Option<((usize, usize), f64)>,
+    gem_tooltip_asked: Option<(usize, usize)>,
+    gem_tooltip: Option<Arc<GemTooltipView>>,
     /// An app-level dialog is open, so Ctrl+V is left alone
     modal: bool,
     pub(crate) rects: Rects,
@@ -93,16 +100,21 @@ impl SkillsUi {
 
     /// A confirm or the set manager is open, so shortcuts are left alone.
     pub fn has_dialog(&self) -> bool {
-        self.confirm_delete.is_some() || self.confirm_delete_all || self.sets.is_open()
+        self.confirm_delete.is_some()
+            || self.confirm_delete_all
+            || self.sets.is_open()
+            || self.picker.is_some()
     }
 
     /// Closes the dialogs, as when the user leaves the tab.
-    pub fn close_dialogs(&mut self) {
+    /// Returns the command that closes the gem picker's search, if one was open.
+    pub fn close_dialogs(&mut self) -> Option<Command> {
         self.confirm_delete = None;
         self.confirm_delete_all = false;
         self.copy_asked = None;
         self.clipboard = None;
         self.sets.close();
+        self.picker.take().map(|_| Command::CloseGemSearch)
     }
 
     /// The edit typed into a field that hasn't lost focus yet, so a Save or a tab change
@@ -137,19 +149,45 @@ impl SkillsUi {
                 }
             }
             Snapshot::GroupTooltip(t) => self.tooltip = Some(t.clone()),
+            Snapshot::GemSearch(v) => {
+                if let Some(p) = &mut self.picker {
+                    p.on_search(v.clone());
+                }
+            }
+            Snapshot::GemTooltip(t) => match (&mut self.picker, &t.query.gem_id) {
+                (Some(p), Some(_)) => p.on_tooltip(t.clone()),
+                (_, None) if self.gem_tooltip_asked == Some((t.query.group, slot_of(&t.query))) => {
+                    self.gem_tooltip = Some(t.clone());
+                }
+                _ => {}
+            },
             _ => {}
         }
     }
 
-    /// The gem picker is a later task; this records the request.
+    /// The DPS sort reported progress.
+    pub fn on_gem_progress(&mut self, percent: u32) {
+        if let Some(p) = &mut self.picker {
+            p.on_progress(percent);
+        }
+    }
+
+    /// The DPS sort failed; the picker offers Retry.
+    pub fn on_gem_failed(&mut self) {
+        if let Some(p) = &mut self.picker {
+            p.on_failed();
+        }
+    }
+
     pub(crate) fn open_picker(&mut self, group: usize, target: GemTarget) {
-        self.picker = Some((group, target));
+        self.picker = Some(GemPicker::open(group, target, self.now));
     }
 
     /// `busy`: the engine hasn't caught up with what was sent, so typed text stays.
     pub fn show(&mut self, ui: &mut egui::Ui, now: f64, busy: bool) -> SkillsOutput {
         let mut out = SkillsOutput::default();
         self.frame += 1;
+        self.now = now;
         let Some(view) = self.view.clone() else {
             ui.spinner();
             return out;
@@ -189,6 +227,15 @@ impl SkillsUi {
         let ctx = ui.ctx().clone();
         self.dialogs(&ctx, &view, &mut out);
         self.sets_window(&ctx, &view, &mut out);
+        if let Some(picker) = &mut self.picker {
+            let shown = picker.show(ui, now);
+            out.commands.extend(shown.commands);
+            out.queries.extend(shown.queries);
+            if shown.close {
+                self.picker = None;
+                out.commands.push(Command::CloseGemSearch);
+            }
+        }
 
         // an edit whose field wasn't drawn this frame (another group was selected) is sent now
         if self.pending.is_some() && self.pending_frame != self.frame {
@@ -270,7 +317,19 @@ impl SkillsUi {
 
     #[cfg(test)]
     pub(crate) fn rect(&self, key: &str) -> egui::Rect {
-        self.rects.map[key]
+        self.picker
+            .as_ref()
+            .and_then(|p| p.rects.map.get(key))
+            .copied()
+            .unwrap_or_else(|| self.rects.map[key])
+    }
+}
+
+/// The slot a table gem's tooltip query is for.
+fn slot_of(query: &GemTooltipQuery) -> usize {
+    match query.target {
+        GemTarget::Slot(s) => s,
+        GemTarget::Imbued => usize::MAX,
     }
 }
 

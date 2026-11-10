@@ -2,8 +2,8 @@
 
 use super::{SkillsOutput, SkillsUi};
 use crate::engine::views::{GemView, SkillsView, SocketGroupView};
-use crate::engine::{Command, GemTarget, GemToggle};
-use crate::widgets::{pob_colour, pob_text};
+use crate::engine::{Command, GemTarget, GemToggle, GemTooltipQuery};
+use crate::widgets::{pob_colour, pob_text, tooltip_ui};
 use eframe::egui::{self, Color32, Stroke};
 
 const ERROR: Color32 = Color32::from_rgb(255, 80, 80);
@@ -189,6 +189,51 @@ impl SkillsUi {
             });
     }
 
+    /// A gem name hovered long enough asks for the gem's own tooltip (R15).
+    fn gem_tooltip_hover(
+        &mut self,
+        name: &egui::Response,
+        gi: usize,
+        si: usize,
+        gem: &GemView,
+        out: &mut SkillsOutput,
+    ) {
+        if gem.gem_id.is_none() || self.picker.is_some() || !name.hovered() {
+            if !name.hovered() && self.gem_hover.is_some_and(|(k, _)| k == (gi, si)) {
+                self.gem_hover = None;
+            }
+            return;
+        }
+        let since = match self.gem_hover {
+            Some((k, since)) if k == (gi, si) => since,
+            _ => {
+                self.gem_hover = Some(((gi, si), self.now));
+                self.now
+            }
+        };
+        if self.gem_tooltip_asked != Some((gi, si)) {
+            if self.now - since >= super::HOVER_DELAY - 1e-6 {
+                self.gem_tooltip_asked = Some((gi, si));
+                out.queries.push(Command::GemTooltip(GemTooltipQuery {
+                    group: gi,
+                    target: GemTarget::Slot(si),
+                    gem_id: None,
+                }));
+            } else {
+                name.ctx
+                    .request_repaint_after(std::time::Duration::from_millis(50));
+            }
+        }
+        if self.gem_tooltip_asked == Some((gi, si))
+            && let Some(t) = &self.gem_tooltip
+            && t.query.group == gi
+            && t.query.target == GemTarget::Slot(si)
+            && !t.lines.is_empty()
+        {
+            name.clone().on_hover_ui(|ui| tooltip_ui(ui, &t.lines));
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn gem_row(
         &mut self,
@@ -232,6 +277,7 @@ impl SkillsUi {
         if name.clicked() {
             self.open_picker(gi, GemTarget::Slot(si));
         }
+        self.gem_tooltip_hover(&name, gi, si, gem, out);
         if let Some(error) = &gem.error {
             name.on_hover_text(error);
         }

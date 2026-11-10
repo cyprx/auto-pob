@@ -12,6 +12,7 @@ use crate::ui::build_list::{BuildListUi, ListScreenAction};
 use crate::ui::calcs::{CalcsOutput, CalcsUi};
 use crate::ui::config::ConfigUi;
 use crate::ui::notes::NotesUi;
+use crate::ui::skills::{SkillsOutput, SkillsUi};
 use crate::ui::tree::{TreeOutput, TreeTab};
 use crate::ui::unsaved::{Pending, PromptChoice, Resolution, needs_prompt, resolve};
 use crate::ui::{sidebar, startup};
@@ -70,6 +71,7 @@ pub struct AutoPobApp {
     tab: BuildTab,
     tree: TreeTab,
     calcs: CalcsUi,
+    skills: SkillsUi,
     notes: NotesUi,
     config_ui: ConfigUi,
     list_ui: BuildListUi,
@@ -113,6 +115,7 @@ impl AutoPobApp {
             tab: BuildTab::default(),
             tree: TreeTab::default(),
             calcs: CalcsUi::default(),
+            skills: SkillsUi::default(),
             notes: NotesUi::default(),
             config_ui: ConfigUi::default(),
             list_ui: BuildListUi::default(),
@@ -196,6 +199,7 @@ impl AutoPobApp {
                     self.entering = None;
                     self.tree.reset();
                     self.calcs.reset();
+                    self.skills.reset();
                     self.notes.reset();
                 }
                 match snapshot {
@@ -212,12 +216,11 @@ impl AutoPobApp {
                     }
                     Snapshot::Config(view) => self.config = Some(view),
                     Snapshot::Calcs(_) => self.calcs.on_snapshot(&snapshot),
-                    // the Skills tab itself is a later task
                     Snapshot::Skills(_)
                     | Snapshot::SocketGroupText(_)
-                    | Snapshot::GroupTooltip(_)
-                    | Snapshot::GemSearch(_)
-                    | Snapshot::GemTooltip(_) => {}
+                    | Snapshot::GroupTooltip(_) => self.skills.on_snapshot(&snapshot),
+                    // the gem picker is a later task
+                    Snapshot::GemSearch(_) | Snapshot::GemTooltip(_) => {}
                     Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
@@ -295,6 +298,10 @@ impl AutoPobApp {
     /// Sends the notes editor's pending edit, so it precedes whatever command comes next.
     fn flush_notes(&mut self) {
         if let Some(command) = self.notes.flush() {
+            self.send(command);
+        }
+        // a Skills field still being typed in goes first too
+        if let Some(command) = self.skills.flush() {
             self.send(command);
         }
     }
@@ -383,6 +390,7 @@ impl AutoPobApp {
         let tab = match self.tab {
             BuildTab::Config => Tab::Config,
             BuildTab::Tree => Tab::Tree,
+            BuildTab::Skills => Tab::Skills,
             BuildTab::Calcs => Tab::Calcs,
             // the notes editor keeps its own history
             BuildTab::Notes => return,
@@ -521,8 +529,10 @@ impl AutoPobApp {
         let modal = self.prompt.is_some()
             || self.save_as.is_some()
             || self.import.is_some()
-            || self.tree.has_dialog();
-        let typing = ui.ctx().egui_wants_keyboard_input();
+            || self.tree.has_dialog()
+            || self.skills.has_dialog();
+        // a focused button or row doesn't take Ctrl+Z from the tab
+        let typing = ui.ctx().text_edit_focused();
         let mut action = None;
         if !modal {
             let command = egui::Modifiers::COMMAND;
@@ -545,6 +555,7 @@ impl AutoPobApp {
         egui::Panel::top("top_bar").show(ui, |ui| {
             let history = match self.tab {
                 BuildTab::Tree => self.tree.history(),
+                BuildTab::Skills => self.skills.history(),
                 BuildTab::Calcs => self.calcs.history(),
                 _ => (view.can_undo, view.can_redo),
             };
@@ -559,6 +570,7 @@ impl AutoPobApp {
         let mut config_commands = Vec::new();
         let mut tree_out = TreeOutput::default();
         let mut calcs_out = CalcsOutput::default();
+        let mut skills_out = SkillsOutput::default();
         let mut notes_command = None;
         let config = self.config.clone();
         egui::CentralPanel::default().show(ui, |ui| {
@@ -566,6 +578,10 @@ impl AutoPobApp {
             ui.separator();
             match self.tab {
                 BuildTab::Tree => tree_out = self.tree.show(ui, behind),
+                BuildTab::Skills => {
+                    let now = ui.input(|i| i.time);
+                    skills_out = self.skills.show(ui, now, behind);
+                }
                 BuildTab::Calcs => calcs_out = self.calcs.show(ui, behind),
                 BuildTab::Notes => {
                     let now = ui.input(|i| i.time);
@@ -592,6 +608,20 @@ impl AutoPobApp {
         }
         if self.tab != BuildTab::Tree {
             self.tree.close_dialog();
+        }
+        if self.tab != BuildTab::Skills {
+            // leaving the tab sends an edit still being typed and closes its dialogs
+            if let Some(command) = self.skills.flush() {
+                self.send(command);
+            }
+            self.skills.close_dialogs();
+        }
+        for command in skills_out.commands {
+            self.send(command);
+        }
+        // questions never leave the app waiting
+        for query in skills_out.queries {
+            self.engine.send(query);
         }
         for command in tree_out.commands {
             self.send(command);
@@ -1918,6 +1948,57 @@ mod tests {
             ),
         );
         assert_eq!(sent_since(&app, before), ["Undo(Calcs)", "Redo(Calcs)"]);
+    }
+
+    fn skills_app() -> (AutoPobApp, egui::Context) {
+        let (mut app, ctx) = tree_app();
+        app.on_event(Event::Snapshot {
+            seq: 90,
+            snapshot: Snapshot::Skills(Arc::new(crate::ui::skills::tests::sample())),
+        });
+        app.tab = BuildTab::Skills;
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        (app, ctx)
+    }
+
+    #[test]
+    fn ctrl_z_on_skills_sends_skills_undo() {
+        let (mut app, ctx) = skills_app();
+        let before = app.sent_full.len();
+        frame(&mut app, &ctx, ctrl(egui::Key::Z));
+        frame(
+            &mut app,
+            &ctx,
+            key_with(
+                egui::Key::Z,
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            ),
+        );
+        assert_eq!(sent_since(&app, before), ["Undo(Skills)", "Redo(Skills)"]);
+    }
+
+    #[test]
+    fn ctrl_z_while_typing_does_not_undo() {
+        let (mut app, ctx) = skills_app();
+        let pos = app.skills.rect("default_quality").center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        assert!(ctx.text_edit_focused(), "the quality box has focus");
+        let before = app.sent_full.len();
+        frame(&mut app, &ctx, ctrl(egui::Key::Z));
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
     }
 
     #[test]

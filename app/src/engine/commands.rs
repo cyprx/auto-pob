@@ -60,6 +60,17 @@ pub enum Command {
     PreviewNode {
         id: u32,
     },
+    /// Highlights the nodes that match the text (PoB's tree search); "" clears it. It isn't an
+    /// edit, so the build stays as saved.
+    SetTreeSearch {
+        text: String,
+    },
+    /// Node power: `stat` is one of `TreeState.power_stats`, `None` switches it off.
+    /// `max_depth` limits how far from the tree the nodes are calculated; `None` is no limit.
+    SetHeatmap {
+        stat: Option<String>,
+        max_depth: Option<u32>,
+    },
     /// Ask for the active tree's link.
     ExportTreeLink,
 

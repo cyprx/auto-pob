@@ -1,7 +1,7 @@
 //! Starts Path of Building's Lua with our own bootstrap.
 
 use super::commands::{Command, ConfigValue, Tab};
-use super::run::{Affected, Backend, Engine, Event};
+use super::run::{Affected, Backend, BackgroundTask, Engine, Event};
 use super::views::{
     BuildListView, BuildView, ConfigView, NodePower, NodeTooltip, PowerReport, StatsView,
     TreeLayout, TreeState,
@@ -19,6 +19,11 @@ pub struct PobBackend {
     folder: String,
     /// The key of the last tree layout sent, so an unchanged layout isn't sent again.
     last_layout_key: Option<String>,
+    /// Whether the heat map is on, as the last `SetHeatmap` left it.
+    heatmap_on: bool,
+    /// A power step failed. Until the next `SetHeatmap` there is no background work, or the
+    /// loop would run the failing step again and again.
+    power_failed: bool,
 }
 
 /// Runs before the bootstrap.
@@ -82,6 +87,7 @@ impl PobBackend {
             ("@glue/tooltip.lua", include_str!("glue/tooltip.lua")),
             ("@glue/config.lua", include_str!("glue/config.lua")),
             ("@glue/tree.lua", include_str!("glue/tree.lua")),
+            ("@glue/power.lua", include_str!("glue/power.lua")),
             ("@glue/lab.lua", include_str!("glue/lab.lua")),
         ] {
             lua.load(source)
@@ -96,6 +102,8 @@ impl PobBackend {
             pob_dir: pob_dir.to_owned(),
             folder: String::new(),
             last_layout_key: None,
+            heatmap_on: false,
+            power_failed: false,
         })
     }
 
@@ -133,6 +141,12 @@ impl PobBackend {
             tree_layout: self.last_layout_key.as_deref() != Some(key.as_str()),
             ..Affected::default()
         })
+    }
+
+    /// A build that is opened or replaced starts with the heat map off.
+    fn reset_heatmap(&mut self) {
+        self.heatmap_on = false;
+        self.power_failed = false;
     }
 
     fn view<T: serde::de::DeserializeOwned>(
@@ -184,14 +198,17 @@ impl Backend for PobBackend {
                 })
             }
             Command::NewBuild => {
+                self.reset_heatmap();
                 self.call::<_, ()>("new_build", ())?;
                 self.all_views()
             }
             Command::OpenBuild { path } => {
+                self.reset_heatmap();
                 self.call::<_, ()>("open_build", path.to_string_lossy().into_owned())?;
                 self.all_views()
             }
             Command::ImportShareCode { code } => {
+                self.reset_heatmap();
                 self.call::<_, ()>("import_code", code)?;
                 self.all_views()
             }
@@ -225,6 +242,26 @@ impl Backend for PobBackend {
                 link: true,
                 ..Affected::default()
             }),
+            Command::SetTreeSearch { text } => {
+                self.call::<_, ()>("set_tree_search", text)?;
+                Ok(Affected {
+                    tree: true,
+                    ..Affected::default()
+                })
+            }
+            Command::SetHeatmap { stat, max_depth } => {
+                self.heatmap_on = false;
+                self.power_failed = false;
+                let off = stat.is_none();
+                self.call::<_, ()>("set_heatmap", (stat, max_depth))?;
+                self.heatmap_on = !off;
+                Ok(Affected {
+                    tree: true,
+                    power: true,
+                    recalc: true,
+                    ..Affected::default()
+                })
+            }
             Command::Lab(lab) => super::lab::apply(&self.lua, &self.pob_dir, lab, send),
             Command::SetConfig { var, value } => {
                 let value = match value {
@@ -380,23 +417,47 @@ impl Backend for PobBackend {
     }
 
     fn has_background_work(&self) -> bool {
-        false
+        self.heatmap_on
+            && !self.power_failed
+            && self.call::<_, bool>("power_pending", ()).unwrap_or(false)
     }
 
-    fn background_step(&mut self, _send: &dyn Fn(Event)) -> Result<Affected> {
-        anyhow::bail!("not yet")
+    fn background_step(&mut self, send: &dyn Fn(Event)) -> Result<Affected> {
+        #[derive(serde::Deserialize)]
+        struct Step {
+            percent: Option<u32>,
+            finished: bool,
+        }
+        let step: Step = match self.view("power_step", ()) {
+            Ok(step) => step,
+            Err(e) => {
+                self.power_failed = true;
+                return Err(e);
+            }
+        };
+        if let Some(percent) = step.percent {
+            send(Event::Progress {
+                task: BackgroundTask::NodePower,
+                percent,
+            });
+        }
+        Ok(Affected {
+            power: true,
+            report: step.finished,
+            ..Affected::default()
+        })
     }
 
     fn node_power_view(&mut self) -> Result<NodePower> {
-        anyhow::bail!("not yet")
+        self.view("node_power", ())
     }
 
     fn power_report_view(&mut self) -> Result<PowerReport> {
-        anyhow::bail!("not yet")
+        self.view("power_report", ())
     }
 
-    fn node_tooltip_view(&mut self, _id: u32) -> Result<Option<NodeTooltip>> {
-        anyhow::bail!("not yet")
+    fn node_tooltip_view(&mut self, id: u32) -> Result<Option<NodeTooltip>> {
+        self.view("node_tooltip", id)
     }
 
     fn tree_link_view(&mut self) -> Result<String> {

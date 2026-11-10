@@ -278,6 +278,13 @@ function pick.notable(minDist)
 	end)
 end
 
+-- The nearest unallocated main-tree jewel socket.
+function pick.socket()
+	return nearest(function(node)
+		return node.type == "Socket" and not node.ascendancyName and not node.isProxy
+	end)
+end
+
 -- The nearest reachable Mastery that offers effects.
 function pick.mastery()
 	return nearest(function(node)

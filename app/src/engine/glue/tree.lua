@@ -234,6 +234,73 @@ local function compare_state(build)
 	return colours, compareSpec and tab.activeCompareSpec - 1 or nil
 end
 
+-- The words PassiveTreeView:Draw splits the search text into (PassiveTreeView.lua:783-798).
+local function search_words(search)
+	search = search:lower()
+	local words = {}
+	for matchstring in search:gmatch('"([^"]*)"') do
+		words[#words + 1] = matchstring
+		search = search:gsub('"' .. matchstring:gsub("([%(%)])", "%%%1") .. '"', "")
+	end
+	for matchstring in search:gmatch("(%S*)") do
+		if matchstring:match("%S") ~= nil then
+			words[#words + 1] = matchstring
+		end
+	end
+	return words
+end
+
+-- Ids of the nodes the viewer would highlight for its search text: Draw caches
+-- `DoesNodeMatchSearchParams` for every node when the text changes (PassiveTreeView.lua:780-802).
+local function search_matches(build)
+	local viewer = build.treeTab.viewer
+	viewer.searchParams = search_words(viewer.searchStr)
+	local matches = {}
+	if #viewer.searchParams > 0 then
+		for id, node in pairs(build.spec.nodes) do
+			if viewer:DoesNodeMatchSearchParams(node) then
+				matches[#matches + 1] = id
+			end
+		end
+		table.sort(matches)
+	end
+	return matches
+end
+
+-- The sockets that hold a jewel. The radius is the table PoB highlights on hover
+-- (PassiveTreeView.lua:977-995) and the ring is drawn from `data.jewelRadius`
+-- (PassiveTreeView.lua:1163); a jewel without a radius has neither.
+local function jewel_sockets(build)
+	local spec = build.spec
+	local sockets = {}
+	for id, node in pairs(spec.nodes) do
+		local jewel = node.type == "Socket" and spec:GetSocketedJewel(id)
+		if jewel then
+			local radiusNodes, ring = {}, nil
+			local index = jewel.jewelRadiusIndex
+			local rings = build.data.jewelRadius[index]
+			if index and rings and node.nodesInRadius and node.nodesInRadius[index] then
+				for radiusId in pairs(node.nodesInRadius[index]) do
+					radiusNodes[#radiusNodes + 1] = radiusId
+				end
+				table.sort(radiusNodes)
+				ring = { rings.inner, rings.outer }
+			end
+			sockets[#sockets + 1] = { node = id, name = jewel.title or jewel.name or "", radius_nodes = radiusNodes, ring = ring }
+		end
+	end
+	table.sort(sockets, function(a, b) return a.node < b.node end)
+	return sockets
+end
+
+local function power_stat_labels(tab)
+	local labels = {}
+	for i, stat in ipairs(tab.powerStatList) do
+		labels[i] = stat.label
+	end
+	return labels
+end
+
 local function spec_entries()
 	local entries = {}
 	for i, spec in ipairs(pob.build.treeTab.specList) do
@@ -270,14 +337,16 @@ function glue.tree_state()
 		paths = node_paths(spec, "path", function(node) return not node.alloc end),
 		-- allocated nodes: what deallocating each one drops
 		depends = node_paths(spec, "depends", function(node) return node.alloc end),
-		search = "",
-		search_matches = {},
+		search = build.treeTab.viewer.searchStr,
+		search_matches = search_matches(build),
 		compare = compare,
 		compare_spec = compareSpec,
-		jewels = {},
+		jewels = jewel_sockets(build),
 		specs = spec_entries(),
 		active_spec = build.treeTab.activeSpec - 1,
-		power_stats = {},
+		power_stats = power_stat_labels(build.treeTab),
+		heatmap = build.treeTab.viewer.showHeatMap and build.calcsTab.powerStat and build.calcsTab.powerStat.label or nil,
+		max_depth = build.calcsTab.nodePowerMaxDepth,
 		can_undo = spec.undo[2] ~= nil,
 		can_redo = spec.redo[1] ~= nil,
 	}
@@ -666,4 +735,37 @@ end
 function glue.tree_link()
 	local spec = pob.build.spec
 	return spec:EncodeURL(treeVersions[spec.treeVersion].url)
+end
+
+-- ---- Search and tooltips ----
+
+-- The treeSearch box's callback (TreeTab.lua:180); TreeTab:Draw copies the text back into the box.
+function glue.set_tree_search(text)
+	local viewer = pob.build.treeTab.viewer
+	viewer.searchStr = text
+	pob.build.treeTab.searchFlag = text ~= viewer.searchStrSaved
+end
+
+-- What the tree draws when the mouse is over a node (PassiveTreeView.lua:1458), or nil when the
+-- node is gone. A plain hover has no trace path (PassiveTreeView.lua:286-289), which is what
+-- the tooltip reads besides the node; it doesn't read `hoverNode`.
+function glue.node_tooltip(id)
+	local build = pob.build
+	local node = build.spec.nodes[id]
+	if not node then
+		return nil
+	end
+	local tab = build.treeTab
+	local viewer = tab.viewer
+	local tooltip = glue.tooltip()
+	local tracePath, compareSpec = viewer.tracePath, viewer.compareSpec
+	viewer.tracePath = nil
+	-- as TreeTab:Draw sets it (TreeTab.lua:445)
+	viewer.compareSpec = tab.isComparing and tab.specList[tab.activeCompareSpec] or nil
+	local ok, err = pcall(viewer.AddNodeTooltip, viewer, tooltip, node, build)
+	viewer.tracePath, viewer.compareSpec = tracePath, compareSpec
+	if not ok then
+		error(tostring(err):match("[^\n]+") or "couldn't build the tooltip", 0)
+	end
+	return { id = id, lines = tooltip:lines() }
 end

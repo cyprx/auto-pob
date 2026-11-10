@@ -1731,6 +1731,8 @@ struct TreeRecipe {
     setup_xml: Option<String>,
     actions: Vec<TreeAction>,
     result: TreeResult,
+    /// The saved build at the end, for a recipe that sets `save_xml`
+    xml: Option<String>,
 }
 
 /// Loads a fixture into fresh upstream PoB and defines the recipe helpers from `tree_lib.lua`.
@@ -1862,6 +1864,11 @@ fn upstream_tree_recipe(name: &str) -> TreeRecipe {
         setup_xml,
         actions,
         result: upstream_result(&lua),
+        xml: lua
+            .globals()
+            .get::<bool>("save_xml")
+            .unwrap_or(false)
+            .then(|| auto_pob::engine::upstream::save_xml(&lua).expect("saving the build")),
     }
 }
 
@@ -2252,6 +2259,449 @@ fn tree_command_errors() {
             "{command:?} changed the tree"
         );
     }
+}
+
+// ---- search, jewels, tooltips and node power ----
+
+/// Reads a value from Lua code run in `lua`.
+fn lua_value<T: serde::de::DeserializeOwned>(lua: &mlua::Lua, code: &str) -> T {
+    let value: mlua::Value = lua.load(code).eval().expect("upstream Lua");
+    lua.from_value(value).expect("upstream value")
+}
+
+fn search(text: &str) -> Command {
+    Command::SetTreeSearch { text: text.into() }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn search_matches_pob() {
+    let _guard = lock();
+    let mut s = attack_session("tree-search");
+    let lua = upstream_with_tree_lib("attack");
+    let unsaved = |s: &mut Session| s.backend.build_view().unwrap().unsaved;
+    let before = unsaved(&mut s);
+    for text in ["life", "increased.fire.damage|area", ""] {
+        let affected = s.run(search(text)).unwrap();
+        assert_eq!(
+            affected,
+            auto_pob::engine::Affected {
+                tree: true,
+                ..Default::default()
+            }
+        );
+        let ours = s.backend.tree_state_view().unwrap();
+        assert_eq!(ours.search, text);
+        // upstream: the viewer's own Draw caches the match of every node
+        lua.globals().set("query", text).unwrap();
+        let theirs: Vec<u32> = lua_value(
+            &lua,
+            r#"
+            local viewer = build.treeTab.viewer
+            viewer.searchStr = query
+            runCallback("OnFrame")
+            assert(viewer.searchParams, "the tree view didn't prepare the search")
+            local ids = {}
+            -- Draw tests nodes only when there are words to look for (PassiveTreeView.lua:801)
+            for id, node in pairs(build.spec.nodes) do
+                if #viewer.searchParams > 0 and viewer:DoesNodeMatchSearchParams(node) then
+                    ids[#ids + 1] = id
+                end
+            end
+            table.sort(ids)
+            return ids
+            "#,
+        );
+        assert_eq!(ours.search_matches, theirs, "search {text:?}");
+        if text.is_empty() {
+            assert!(theirs.is_empty());
+        } else {
+            assert!(!theirs.is_empty(), "search {text:?} matches nothing");
+        }
+    }
+    assert_eq!(unsaved(&mut s), before, "searching doesn't edit the build");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn jewel_radius_matches_pob() {
+    let _guard = lock();
+    let recipe = upstream_tree_recipe("jewel");
+    let xml = recipe.xml.expect("the jewel recipe saves its build");
+    let mut s = Session::start("tree-jewel");
+    let path = s.user.join("jewel.xml");
+    fs::create_dir_all(&s.user).unwrap();
+    fs::write(&path, &xml).unwrap();
+    s.open_fixture("jewel", &path);
+    let ours = s.backend.tree_state_view().unwrap();
+    assert_eq!(ours.jewels.len(), 1, "{:?}", ours.jewels);
+    let lua = upstream_lua(&pob_dir()).unwrap();
+    load_xml(&lua, &xml, "jewel").unwrap();
+    #[derive(serde::Deserialize)]
+    struct Theirs {
+        node: u32,
+        name: String,
+        radius_nodes: Vec<u32>,
+        ring: [f32; 2],
+    }
+    let theirs: Vec<Theirs> = lua_value(
+        &lua,
+        r#"
+        local list = {}
+        for id, node in pairs(build.spec.nodes) do
+            local jewel = node.type == "Socket" and build.spec:GetSocketedJewel(id)
+            if jewel then
+                local index = jewel.jewelRadiusIndex
+                local radius = {}
+                for nodeId in pairs(node.nodesInRadius[index]) do radius[#radius + 1] = nodeId end
+                table.sort(radius)
+                local ring = data.jewelRadius[index]
+                list[#list + 1] = { node = id, name = jewel.title, radius_nodes = radius, ring = { ring.inner, ring.outer } }
+            end
+        end
+        return list
+        "#,
+    );
+    assert_eq!(theirs.len(), 1);
+    let (ours, theirs) = (&ours.jewels[0], &theirs[0]);
+    assert_eq!(ours.node, theirs.node);
+    assert_eq!(ours.name, theirs.name);
+    assert_eq!(ours.name, "Eldritch Knowledge");
+    let mut radius = ours.radius_nodes.clone();
+    radius.sort_unstable();
+    assert_eq!(radius, theirs.radius_nodes);
+    assert!(radius.len() > 10, "{}", radius.len());
+    assert_eq!(ours.ring, Some(theirs.ring));
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tooltip_matches_pob() {
+    let _guard = lock();
+    let mut s = attack_session("tree-tooltip");
+    let socket = upstream_node("dot", "pick.socket()");
+    let lua = upstream_with_tree_lib("attack");
+    // the recorder of glue/tooltip.lua, which draws nothing and keeps the lines
+    lua.load(include_str!("../src/engine/glue/tooltip.lua"))
+        .set_name("=recorder")
+        .exec()
+        .unwrap();
+    lua.globals().set("socket_id", socket).unwrap();
+    let theirs: Vec<auto_pob::engine::NodeTooltip> = lua_value(
+        &lua,
+        r#"
+        -- the lowest id of each kind among the unallocated nodes
+        local ids = {}
+        for _, kind in ipairs({ "Normal", "Notable", "Keystone", "Mastery" }) do
+            local best
+            for id, node in pairs(build.spec.nodes) do
+                if node.type == kind and not node.alloc and (kind ~= "Mastery" or node.masteryEffects)
+                    and (not best or id < best) then
+                    best = id
+                end
+            end
+            ids[#ids + 1] = best
+        end
+        ids[#ids + 1] = socket_id
+        local list = {}
+        for _, id in ipairs(ids) do
+            local node = build.spec.nodes[id]
+            assert(not node.alloc, "node " .. id .. " is allocated")
+            local tooltip = glue.tooltip()
+            build.treeTab.viewer:AddNodeTooltip(tooltip, node, build)
+            list[#list + 1] = { id = id, lines = tooltip:lines() }
+        end
+        return list
+        "#,
+    );
+    assert_eq!(theirs.len(), 5);
+    for expected in &theirs {
+        assert!(expected.lines.len() > 3, "{expected:?}");
+        let affected = s.run(Command::PreviewNode { id: expected.id }).unwrap();
+        assert_eq!(affected.preview, Some(expected.id));
+        let ours = s
+            .backend
+            .node_tooltip_view(expected.id)
+            .unwrap()
+            .expect("the node exists");
+        assert_eq!(&ours, expected, "node {}", expected.id);
+    }
+    assert!(
+        s.backend
+            .node_tooltip_view(4_000_000_000)
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// Runs `SetHeatmap` and then steps until the backend has no work left.
+fn run_power(s: &mut Session, stat: &str, max_depth: Option<u32>) -> Vec<u32> {
+    s.run(Command::SetHeatmap {
+        stat: Some(stat.into()),
+        max_depth,
+    })
+    .unwrap();
+    let progress = std::cell::RefCell::new(Vec::new());
+    let mut steps = 0;
+    while s.backend.has_background_work() {
+        let affected = s
+            .backend
+            .background_step(&|event| {
+                if let Event::Progress { percent, .. } = event {
+                    progress.borrow_mut().push(percent);
+                }
+            })
+            .expect("power step");
+        assert!(!affected.recalc);
+        steps += 1;
+        assert!(steps < 100_000, "the power calculation never ends");
+    }
+    progress.into_inner()
+}
+
+/// Upstream's node power for `stat`: `SetPowerCalc`, a frame, then `BuildPower` to the end.
+fn upstream_power(stat: &str, max_depth: u32) -> mlua::Lua {
+    let lua = upstream_with_tree_lib("attack");
+    lua.globals().set("stat_label", stat).unwrap();
+    lua.globals().set("max_depth", max_depth).unwrap();
+    lua.load(
+        r#"
+        local tab = build.treeTab
+        for _, entry in ipairs(tab.powerStatList) do
+            if entry.label == stat_label then stat = entry end
+        end
+        tab:SetPowerCalc(stat)
+        build.calcsTab.nodePowerMaxDepth = max_depth
+        runCallback("OnFrame")
+        repeat build.calcsTab:BuildPower() until not build.calcsTab.powerBuilder
+        "#,
+    )
+    .exec()
+    .unwrap();
+    lua
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn node_power_matches_pob() {
+    let _guard = lock();
+    let mut s = attack_session("tree-node-power");
+    let state = s.backend.tree_state_view().unwrap();
+    let dps = state
+        .power_stats
+        .iter()
+        .find(|label| label.contains("DPS"))
+        .expect("a DPS stat")
+        .clone();
+    assert!(state.power_stats.iter().any(|label| label == "Life"));
+    for stat in ["Life", dps.as_str()] {
+        run_power(&mut s, stat, Some(5));
+        let ours = s.backend.node_power_view().unwrap();
+        assert!(ours.finished, "{stat}");
+        assert_eq!(ours.stat.as_deref(), Some(stat));
+        let state = s.backend.tree_state_view().unwrap();
+        assert_eq!(state.heatmap.as_deref(), Some(stat));
+        assert_eq!(state.max_depth, Some(5));
+        let lua = upstream_power(stat, 5);
+        let theirs: Vec<auto_pob::engine::NodePowerEntry> = lua_value(
+            &lua,
+            r#"
+            local list = {}
+            for id, node in pairs(build.spec.nodes) do
+                local p = node.power
+                if p and (p.singleStat or p.pathPower or p.offence or p.defence) then
+                    list[#list + 1] = { id = id, single = p.singleStat or 0, path = p.pathPower,
+                        offence = p.offence, defence = p.defence }
+                end
+            end
+            table.sort(list, function(a, b) return a.id < b.id end)
+            return list
+            "#,
+        );
+        assert!(theirs.len() > 20, "{stat}: {} nodes", theirs.len());
+        assert!(theirs.iter().any(|n| n.single != 0.0), "{stat}");
+        assert_eq!(ours.nodes.len(), theirs.len(), "{stat}: node sets");
+        for (a, b) in ours.nodes.iter().zip(&theirs) {
+            assert_eq!(a, b, "{stat}: node {}", b.id);
+        }
+        let max_single: f64 = lua_value(&lua, "return build.calcsTab.powerMax.singleStat");
+        assert_eq!(ours.max_single, max_single, "{stat}");
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn power_report_matches_pob() {
+    let _guard = lock();
+    let mut s = attack_session("tree-power-report");
+    let progress = run_power(&mut s, "Life", Some(5));
+    assert!(progress.iter().all(|p| *p <= 100), "{progress:?}");
+    let mut ours = s.backend.power_report_view().unwrap();
+    assert_eq!(ours.stat, "Life");
+    let lua = upstream_power("Life", 5);
+    let mut theirs: Vec<auto_pob::engine::PowerReportRow> = lua_value(
+        &lua,
+        r#"
+        local calcs = build.calcsTab
+        local rows = {}
+        for _, row in ipairs(build.treeTab:BuildPowerReportList(calcs.powerStat)) do
+            rows[#rows + 1] = {
+                id = row.id, name = row.name, kind = row.type, power = row.power,
+                power_text = row.powerStr, path_power = row.pathPower,
+                path_power_text = row.pathPowerStr, allocated = row.allocated and true or false,
+                path_dist = type(row.pathDist) == "number" and row.pathDist or 0,
+            }
+        end
+        return rows
+        "#,
+    );
+    assert!(theirs.len() > 100, "{}", theirs.len());
+    // rows of equal power may sort either way
+    let key = |r: &auto_pob::engine::PowerReportRow| (r.id, r.name.clone());
+    for rows in [&mut ours.rows, &mut theirs] {
+        rows.sort_by_key(key);
+    }
+    assert_eq!(ours.rows, theirs);
+    // the text keeps PoB's colour codes
+    assert!(ours.rows.iter().any(|r| r.power_text.starts_with('^')));
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn no_power_work_without_heatmap() {
+    let _guard = lock();
+    let mut s = attack_session("tree-no-power");
+    s.run(set("buffAdrenaline", ConfigValue::Bool(true)))
+        .unwrap();
+    assert!(!s.backend.has_background_work());
+    s.run(Command::SetHeatmap {
+        stat: Some("Life".into()),
+        max_depth: Some(5),
+    })
+    .unwrap();
+    assert!(s.backend.has_background_work());
+    s.run(Command::SetHeatmap {
+        stat: None,
+        max_depth: None,
+    })
+    .unwrap();
+    assert!(!s.backend.has_background_work());
+    s.run(set("buffAdrenaline", ConfigValue::Bool(false)))
+        .unwrap();
+    assert!(!s.backend.has_background_work());
+    let state = s.backend.tree_state_view().unwrap();
+    assert_eq!(state.heatmap, None);
+    assert!(s.backend.node_power_view().unwrap().nodes.is_empty());
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn failed_power_step_stops_background_work() {
+    let _guard = lock();
+    let mut s = attack_session("tree-power-fails");
+    let heatmap = || Command::SetHeatmap {
+        stat: Some("Life".into()),
+        max_depth: Some(5),
+    };
+    s.run(heatmap()).unwrap();
+    s.backend
+        .lua
+        .load("pob.build.calcsTab.PowerBuilder = function() error('boom', 0) end")
+        .exec()
+        .unwrap();
+    assert!(s.backend.has_background_work());
+    let error = s.backend.background_step(&|_| {}).unwrap_err();
+    assert!(error.to_string().contains("boom"), "{error}");
+    assert!(
+        !s.backend.has_background_work(),
+        "a failed step must end the background work until the next SetHeatmap"
+    );
+    // the next SetHeatmap tries again
+    s.backend
+        .lua
+        .load("pob.build.calcsTab.PowerBuilder = nil")
+        .exec()
+        .unwrap();
+    s.run(heatmap()).unwrap();
+    assert!(s.backend.has_background_work());
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn commands_answered_during_power_report() {
+    use std::time::{Duration, Instant};
+    let _guard = lock();
+    pob_dir();
+    let user = std::env::temp_dir().join(format!("auto-pob-gate-power-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&user);
+    fs::create_dir_all(&user).unwrap();
+    let build = user.join("attack.xml");
+    fs::copy(fixtures_dir().join("attack.xml"), &build).unwrap();
+    let engine = Engine::spawn(Game::Poe1, std::env::temp_dir(), user.clone(), || {});
+    engine.send(Command::OpenBuild { path: build });
+    engine.send(Command::SetHeatmap {
+        stat: Some("Life".into()),
+        max_depth: None,
+    });
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let next = |deadline: Instant| {
+        let wait = deadline.saturating_duration_since(Instant::now());
+        engine.events.recv_timeout(wait).expect("an event")
+    };
+    let mut finished = false;
+    // the calculation has started when its first progress arrives
+    loop {
+        match next(deadline) {
+            Event::Progress { .. } => break,
+            Event::Error { message, .. } | Event::StartupFailed { message } => {
+                panic!("{message}")
+            }
+            Event::Snapshot {
+                snapshot: Snapshot::NodePower(power),
+                ..
+            } => finished |= power.finished,
+            _ => {}
+        }
+    }
+    assert!(
+        !finished,
+        "the calculation ended before it reported progress"
+    );
+    for text in ["life", "fire", "area"] {
+        engine.send(search(text));
+        loop {
+            match next(deadline) {
+                Event::Snapshot {
+                    snapshot: Snapshot::Tree(tree),
+                    ..
+                } if tree.search == text => break,
+                Event::Snapshot {
+                    snapshot: Snapshot::NodePower(power),
+                    ..
+                } => assert!(
+                    !power.finished,
+                    "the calculation ended before the search {text:?} was answered"
+                ),
+                Event::Error { message, .. } => panic!("{message}"),
+                _ => {}
+            }
+        }
+    }
+    // the calculation still ends
+    loop {
+        if let Event::Snapshot {
+            snapshot: Snapshot::NodePower(power),
+            ..
+        } = next(deadline)
+            && power.finished
+        {
+            break;
+        }
+    }
+    engine.send(Command::Shutdown);
+    while engine.events.recv_timeout(Duration::from_secs(30)).is_ok() {}
+    assert!(!engine.is_alive());
+    let _ = fs::remove_dir_all(&user);
 }
 
 #[test]

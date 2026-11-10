@@ -18,10 +18,11 @@ pub enum BuildTab {
     Tree,
     Calcs,
     Config,
+    Notes,
 }
 
 impl BuildTab {
-    /// The Config, Tree and Calcs tabs have undo history.
+    /// The Config, Tree and Calcs tabs have undo history; the notes editor has its own.
     pub fn has_undo(self) -> bool {
         matches!(self, BuildTab::Config | BuildTab::Tree | BuildTab::Calcs)
     }
@@ -75,5 +76,6 @@ pub fn tab_strip(ui: &mut egui::Ui, tab: &mut BuildTab) {
         ui.selectable_value(tab, BuildTab::Tree, "Tree");
         ui.selectable_value(tab, BuildTab::Calcs, "Calcs");
         ui.selectable_value(tab, BuildTab::Config, "Config");
+        ui.selectable_value(tab, BuildTab::Notes, "Notes");
     });
 }

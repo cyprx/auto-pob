@@ -23,7 +23,16 @@ local function error_reason(message)
 end
 
 local function frame()
-	runCallback("OnFrame")
+	-- The tree view calculates node power in a frame when the heat map is on
+	-- (PassiveTreeView.lua:773-776); here `glue.power_step` does that, a slice at a time, so a
+	-- frame must leave it alone.
+	local build = pob.build
+	local viewer = build.treeTab and build.treeTab.viewer
+	local heatmap = viewer and viewer.showHeatMap
+	if viewer then viewer.showHeatMap = false end
+	local ok, err = pcall(runCallback, "OnFrame")
+	if viewer then viewer.showHeatMap = heatmap end
+	if not ok then error(err, 0) end
 	-- Launch.lua catches errors from a frame and shows them as a prompt
 	local message = pob.main.promptMsg
 	if message then
@@ -31,6 +40,10 @@ local function frame()
 		error(error_reason(message), 0)
 	end
 end
+
+-- For the other glue files: a frame that doesn't calculate (unless a flag asks for it) but
+-- lets PoB refresh `unsaved` (Build.lua:1303).
+glue.frame = frame
 
 -- Switches mode and runs a frame so PoB initialises the build and calculates it.
 -- A build file PoB can't load sends it back to the list; fall back to a new build then.

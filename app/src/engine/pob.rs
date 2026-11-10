@@ -1,8 +1,11 @@
 //! Starts Path of Building's Lua with our own bootstrap.
 
 use super::commands::{Command, ConfigValue, Tab};
-use super::run::{Affected, Backend, Engine, Event};
-use super::views::{BuildListView, BuildView, ConfigView, StatsView};
+use super::run::{Affected, Backend, BackgroundTask, Engine, Event};
+use super::views::{
+    BuildListView, BuildView, ConfigView, NodePower, NodeTooltip, PowerReport, StatsView,
+    TreeLayout, TreeState,
+};
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
 use mlua::{FromLuaMulti, IntoLuaMulti, Lua, LuaSerdeExt};
@@ -14,6 +17,13 @@ pub struct PobBackend {
     pob_dir: PathBuf,
     /// The Builds sub-folder the list view shows; "" is the root.
     folder: String,
+    /// The key of the last tree layout sent, so an unchanged layout isn't sent again.
+    last_layout_key: Option<String>,
+    /// Whether the heat map is on, as the last `SetHeatmap` left it.
+    heatmap_on: bool,
+    /// A power step failed. Until the next `SetHeatmap` there is no background work, or the
+    /// loop would run the failing step again and again.
+    power_failed: bool,
 }
 
 /// Runs before the bootstrap.
@@ -76,7 +86,8 @@ impl PobBackend {
             ("@glue/stats.lua", include_str!("glue/stats.lua")),
             ("@glue/tooltip.lua", include_str!("glue/tooltip.lua")),
             ("@glue/config.lua", include_str!("glue/config.lua")),
-            ("@glue/lab.lua", include_str!("glue/lab.lua")),
+            ("@glue/tree.lua", include_str!("glue/tree.lua")),
+            ("@glue/power.lua", include_str!("glue/power.lua")),
         ] {
             lua.load(source)
                 .set_name(name)
@@ -89,6 +100,9 @@ impl PobBackend {
             game,
             pob_dir: pob_dir.to_owned(),
             folder: String::new(),
+            last_layout_key: None,
+            heatmap_on: false,
+            power_failed: false,
         })
     }
 
@@ -103,6 +117,51 @@ impl PobBackend {
             }
             other => anyhow!("{other}"),
         })
+    }
+
+    /// Whether the layout the UI holds no longer matches what the tree draws.
+    fn layout_changed(&self) -> Result<bool> {
+        let key = super::tree::layout_key(&self.lua).map_err(|e| anyhow!("{e}"))?;
+        Ok(self.last_layout_key.as_deref() != Some(key.as_str()))
+    }
+
+    /// Every view, plus the tree layout when it differs from the one last sent. For commands
+    /// that replace the whole build.
+    fn all_views(&self) -> Result<Affected> {
+        Ok(Affected {
+            tree_layout: self.layout_changed()?,
+            ..Affected::ALL_VIEWS
+        })
+    }
+
+    /// A change to the trees: the layout goes out only if it differs from the last one sent.
+    /// `rebuild` is false for changes that leave the build as it is.
+    fn spec_edited(&self, rebuild: bool) -> Result<Affected> {
+        Ok(Affected {
+            build: rebuild,
+            recalc: rebuild,
+            tree: true,
+            tree_layout: self.layout_changed()?,
+            ..Affected::default()
+        })
+    }
+
+    /// A tree edit changes the build and the tree state, and needs a recalculation. It can
+    /// change node text too (a mastery's effect), so the layout is checked.
+    fn tree_edited(&self) -> Result<Affected> {
+        Ok(Affected {
+            build: true,
+            tree: true,
+            recalc: true,
+            tree_layout: self.layout_changed()?,
+            ..Affected::default()
+        })
+    }
+
+    /// A build that is opened or replaced starts with the heat map off.
+    fn reset_heatmap(&mut self) {
+        self.heatmap_on = false;
+        self.power_failed = false;
     }
 
     fn view<T: serde::de::DeserializeOwned>(
@@ -127,9 +186,15 @@ fn config_changed() -> Affected {
 }
 
 impl Backend for PobBackend {
-    fn apply(&mut self, command: Command, send: &dyn Fn(Event)) -> Result<Affected> {
+    fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> Result<Affected> {
         match command {
             Command::ListBuilds { folder } => {
+                // leaving a build stops the power work, as `SetHeatmap { stat: None }` does
+                if self.heatmap_on {
+                    self.call::<_, ()>("set_heatmap", (None::<String>, None::<u32>))?;
+                    self.heatmap_on = false;
+                    self.power_failed = false;
+                }
                 if folder.contains("..") || folder.starts_with('/') {
                     anyhow::bail!("that isn't a valid folder");
                 }
@@ -144,16 +209,19 @@ impl Backend for PobBackend {
                 })
             }
             Command::NewBuild => {
+                self.reset_heatmap();
                 self.call::<_, ()>("new_build", ())?;
-                Ok(Affected::ALL_VIEWS)
+                self.all_views()
             }
             Command::OpenBuild { path } => {
+                self.reset_heatmap();
                 self.call::<_, ()>("open_build", path.to_string_lossy().into_owned())?;
-                Ok(Affected::ALL_VIEWS)
+                self.all_views()
             }
             Command::ImportShareCode { code } => {
+                self.reset_heatmap();
                 self.call::<_, ()>("import_code", code)?;
-                Ok(Affected::ALL_VIEWS)
+                self.all_views()
             }
             Command::Save => {
                 self.call::<_, ()>("save", ())?;
@@ -177,7 +245,35 @@ impl Backend for PobBackend {
             }
             // run_loop handles Shutdown before applying commands; nothing to do here
             Command::Shutdown => Ok(Affected::default()),
-            Command::Lab(lab) => super::lab::apply(&self.lua, &self.pob_dir, lab, send),
+            Command::PreviewNode { id } => Ok(Affected {
+                preview: Some(id),
+                ..Affected::default()
+            }),
+            Command::ExportTreeLink => Ok(Affected {
+                link: true,
+                ..Affected::default()
+            }),
+            Command::SetTreeSearch { text } => {
+                self.call::<_, ()>("set_tree_search", text)?;
+                Ok(Affected {
+                    build: true,
+                    tree: true,
+                    ..Affected::default()
+                })
+            }
+            Command::SetHeatmap { stat, max_depth } => {
+                let off = stat.is_none();
+                // an unknown stat is an error that changes nothing, so the flags stay too
+                self.call::<_, ()>("set_heatmap", (stat, max_depth))?;
+                self.power_failed = false;
+                self.heatmap_on = !off;
+                Ok(Affected {
+                    tree: true,
+                    power: true,
+                    recalc: true,
+                    ..Affected::default()
+                })
+            }
             Command::SetConfig { var, value } => {
                 let value = match value {
                     ConfigValue::Bool(b) => mlua::Value::Boolean(b),
@@ -226,6 +322,70 @@ impl Backend for PobBackend {
                 self.call::<_, ()>("remove_custom_mod_group", group + 1)?;
                 Ok(config_changed())
             }
+            Command::AllocNode { id } => {
+                self.call::<_, ()>("alloc_node", id)?;
+                self.tree_edited()
+            }
+            Command::DeallocNode { id } => {
+                self.call::<_, ()>("dealloc_node", id)?;
+                self.tree_edited()
+            }
+            Command::SelectClass { id, connect } => {
+                self.call::<_, ()>("select_class", (id, connect))?;
+                self.tree_edited()
+            }
+            Command::SelectAscendancy { id } => {
+                self.call::<_, ()>("select_ascendancy", id)?;
+                self.tree_edited()
+            }
+            Command::ResetTree => {
+                self.call::<_, ()>("reset_tree", ())?;
+                self.tree_edited()
+            }
+            Command::SetMastery { node, effect } => {
+                self.call::<_, ()>("set_mastery", (node, effect))?;
+                self.tree_edited()
+            }
+            Command::SelectSpec { index } => {
+                self.call::<_, ()>("select_spec", index + 1)?;
+                self.spec_edited(true)
+            }
+            Command::NewSpec { title } => {
+                self.call::<_, ()>("new_spec", title)?;
+                self.spec_edited(true)
+            }
+            Command::RenameSpec { index, title } => {
+                self.call::<_, ()>("rename_spec", (index + 1, title))?;
+                self.spec_edited(true)
+            }
+            Command::DeleteSpec { index } => {
+                self.call::<_, ()>("delete_spec", index + 1)?;
+                self.spec_edited(true)
+            }
+            Command::SetCompareSpec { index } => {
+                self.call::<_, ()>("set_compare_spec", index.map(|i| i + 1))?;
+                self.spec_edited(false)
+            }
+            Command::ConvertSpec { version, keep_copy } => {
+                self.call::<_, ()>("convert_spec", (version, keep_copy))?;
+                self.spec_edited(true)
+            }
+            Command::ConvertAllSpecs { version } => {
+                self.call::<_, ()>("convert_all_specs", version)?;
+                self.spec_edited(true)
+            }
+            Command::ImportTreeLink { title, url } => {
+                self.call::<_, ()>("import_tree_link", (title, url))?;
+                self.spec_edited(true)
+            }
+            Command::Undo(Tab::Tree) => {
+                self.call::<_, ()>("tree_undo", ())?;
+                self.tree_edited()
+            }
+            Command::Redo(Tab::Tree) => {
+                self.call::<_, ()>("tree_redo", ())?;
+                self.tree_edited()
+            }
             Command::Undo(Tab::Config) => {
                 self.call::<_, ()>("undo", "config")?;
                 Ok(config_changed())
@@ -255,6 +415,64 @@ impl Backend for PobBackend {
 
     fn config_view(&mut self) -> Result<ConfigView> {
         self.view("config_view", ())
+    }
+
+    fn tree_layout_view(&mut self) -> Result<TreeLayout> {
+        let layout = super::tree::layout(&self.lua, &self.pob_dir).map_err(|e| anyhow!("{e}"))?;
+        self.last_layout_key = Some(layout.key.clone());
+        Ok(layout)
+    }
+
+    fn tree_state_view(&mut self) -> Result<TreeState> {
+        self.view("tree_state", ())
+    }
+
+    fn has_background_work(&self) -> bool {
+        self.heatmap_on
+            && !self.power_failed
+            && self.call::<_, bool>("power_pending", ()).unwrap_or(false)
+    }
+
+    fn background_step(&mut self, send: &dyn Fn(Event)) -> Result<Affected> {
+        #[derive(serde::Deserialize)]
+        struct Step {
+            percent: Option<u32>,
+            finished: bool,
+        }
+        let step: Step = match self.view("power_step", ()) {
+            Ok(step) => step,
+            Err(e) => {
+                self.power_failed = true;
+                return Err(e);
+            }
+        };
+        if let Some(percent) = step.percent {
+            send(Event::Progress {
+                task: BackgroundTask::NodePower,
+                percent,
+            });
+        }
+        Ok(Affected {
+            power: true,
+            report: step.finished,
+            ..Affected::default()
+        })
+    }
+
+    fn node_power_view(&mut self) -> Result<NodePower> {
+        self.view("node_power", ())
+    }
+
+    fn power_report_view(&mut self) -> Result<PowerReport> {
+        self.view("power_report", ())
+    }
+
+    fn node_tooltip_view(&mut self, id: u32) -> Result<Option<NodeTooltip>> {
+        self.view("node_tooltip", id)
+    }
+
+    fn tree_link_view(&mut self) -> Result<String> {
+        self.call("tree_link", ())
     }
 }
 

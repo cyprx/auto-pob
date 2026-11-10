@@ -13,8 +13,18 @@ numbers are PoB's numbers.
 - **Stats sidebar**: PoB's sidebar stats, recalculated after every change.
 - **Config tab**: PoB's configuration options (checkboxes, numbers, lists, custom modifiers),
   with config sets, PoB's tooltips and validation. Changes recalculate the stats.
-- **Lab tab**: passive tree view (pan/zoom, tooltips) and a node power ranking, ranking
-  unallocated passives by how much they improve a stat.
+- **Tree tab**: the passive tree, drawn with PoB's own art and rules. Drag to pan, scroll to
+  zoom, hover for PoB's tooltip.
+  - Click a node to allocate it (with the path to it) or to deallocate it. Click a mastery
+    to pick its effect.
+  - Change class and ascendancy.
+  - Keep several trees, switch between them, rename, copy or delete them, and compare two.
+  - Search nodes, and colour the tree by a heatmap of node power. A power report lists the
+    best nodes to take.
+  - Show jewel radii, convert a tree to another tree version, import a tree link and copy
+    the link of the current tree.
+- **Shortcuts**: Ctrl+S saves. Ctrl+Z undoes and Ctrl+Y (or Ctrl+Shift+Z) redoes, on the
+  Tree and Config tabs. Each tab has its own history. They wait while a dialog is open.
 
 ## Running
 
@@ -44,9 +54,10 @@ auto-pob shares `Builds/` and `Settings.xml` with the classic app
 - **Boundary rule**: only `src/engine/` touches PoB internals or Lua. `src/ui/` and
   `src/widgets/` use only `engine::views`, `engine::commands` and `Engine`/events.
 - **Glue files** (`src/engine/glue/*.lua`) are the code that calls into PoB, one per area:
-  `builds.lua`, `stats.lua`, `config.lua`, `tooltip.lua` and `lab.lua`. If PoB renames or
-  restructures something we call, this is where it breaks. `src/engine/bootstrap.lua` sets up
-  the headless environment and `src/engine/pob.rs` is the backend that runs the glue.
+  `builds.lua`, `stats.lua`, `config.lua`, `tooltip.lua`, `tree.lua` and `power.lua`. If PoB
+  renames or restructures something we call, this is where it breaks.
+  `src/engine/bootstrap.lua` sets up the headless environment and `src/engine/pob.rs` is the
+  backend that runs the glue.
 - `src/game.rs` pins the PoB version and game-specific paths; `src/pob_files.rs` downloads
   and installs it.
 

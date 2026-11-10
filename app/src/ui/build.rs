@@ -15,18 +15,24 @@ pub enum BuildAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BuildTab {
     #[default]
+    Tree,
     Config,
-    Lab,
 }
 
 impl BuildTab {
-    /// Only the Config tab has undo history.
+    /// The Config and Tree tabs have undo history.
     pub fn has_undo(self) -> bool {
-        self == BuildTab::Config
+        matches!(self, BuildTab::Config | BuildTab::Tree)
     }
 }
 
-pub fn top_bar(ui: &mut egui::Ui, view: &BuildView, tab: BuildTab) -> Option<BuildAction> {
+/// `history`: whether the tab's undo and redo have anything to do.
+pub fn top_bar(
+    ui: &mut egui::Ui,
+    view: &BuildView,
+    tab: BuildTab,
+    history: (bool, bool),
+) -> Option<BuildAction> {
     let mut action = None;
     ui.horizontal(|ui| {
         if ui.button("< Builds").clicked() {
@@ -45,13 +51,13 @@ pub fn top_bar(ui: &mut egui::Ui, view: &BuildView, tab: BuildTab) -> Option<Bui
         ui.separator();
         let undo = tab.has_undo();
         if ui
-            .add_enabled(undo && view.can_undo, egui::Button::new("Undo"))
+            .add_enabled(undo && history.0, egui::Button::new("Undo"))
             .clicked()
         {
             action = Some(BuildAction::Undo);
         }
         if ui
-            .add_enabled(undo && view.can_redo, egui::Button::new("Redo"))
+            .add_enabled(undo && history.1, egui::Button::new("Redo"))
             .clicked()
         {
             action = Some(BuildAction::Redo);
@@ -65,7 +71,7 @@ pub fn top_bar(ui: &mut egui::Ui, view: &BuildView, tab: BuildTab) -> Option<Bui
 
 pub fn tab_strip(ui: &mut egui::Ui, tab: &mut BuildTab) {
     ui.horizontal(|ui| {
+        ui.selectable_value(tab, BuildTab::Tree, "Tree");
         ui.selectable_value(tab, BuildTab::Config, "Config");
-        ui.selectable_value(tab, BuildTab::Lab, "Lab");
     });
 }

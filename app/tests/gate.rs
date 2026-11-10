@@ -6,10 +6,11 @@
 use auto_pob::engine::pob::PobBackend;
 use auto_pob::engine::upstream::{Golden, golden_of, load_xml, run_recipe, upstream_lua};
 use auto_pob::engine::{
-    Backend, Command, ConfigOption, ConfigValue, ConfigView, Engine, Event, Snapshot, StatsView,
-    Tab,
+    Backend, Command, CompareColour, ConfigOption, ConfigValue, ConfigView, Engine, Event,
+    Snapshot, StatsView, Tab,
 };
 use auto_pob::game::Game;
+use mlua::LuaSerdeExt;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -1306,53 +1307,1765 @@ fn unknown_config_var_is_an_error() {
     );
 }
 
+// ---- tree layout and state ----
+
+/// What upstream PoB reports for the loaded build, as read from its own globals.
+#[derive(Debug, PartialEq)]
+struct UpstreamTree {
+    alloc: Vec<u32>,
+    class_id: u32,
+    ascendancy_id: u32,
+    spec_titles: Vec<String>,
+    used: u32,
+    available: u32,
+    ascendancy_used: u32,
+    ascendancy_available: u32,
+}
+
+fn upstream_tree(xml: &Path, name: &str) -> UpstreamTree {
+    let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
+    load_xml(&lua, &fs::read_to_string(xml).unwrap(), name).unwrap();
+    // The point display is Build.lua's `pointDisplay` text: "used / max   ascendancy / max"
+    let (alloc, class_id, ascendancy_id, titles, used, available, asc_used, asc_available): (
+        Vec<u32>,
+        u32,
+        u32,
+        Vec<String>,
+        u32,
+        u32,
+        u32,
+        u32,
+    ) = lua
+        .load(
+            r#"
+            local alloc = {}
+            for id in pairs(build.spec.allocNodes) do alloc[#alloc + 1] = id end
+            table.sort(alloc)
+            local titles = {}
+            for i, spec in ipairs(build.treeTab.specList) do titles[i] = spec.title or "Default" end
+            local text = build.controls.pointDisplay.str:gsub("%^x%x%x%x%x%x%x", ""):gsub("%^%d", "")
+            local used, available, ascUsed, ascAvailable =
+                text:match("^%s*(%d+)%s*/%s*(%d+)%s+(%d+)%s*/%s*(%d+)")
+            return alloc, build.spec.curClassId, build.spec.curAscendClassId, titles,
+                tonumber(used), tonumber(available), tonumber(ascUsed), tonumber(ascAvailable)
+            "#,
+        )
+        .eval()
+        .expect("reading upstream tree");
+    UpstreamTree {
+        alloc,
+        class_id,
+        ascendancy_id,
+        spec_titles: titles,
+        used,
+        available,
+        ascendancy_used: asc_used,
+        ascendancy_available: asc_available,
+    }
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
-fn lab_draws_the_tree_and_ranks_nodes() {
-    use auto_pob::engine::{LabCommand, LabEvent};
-    use std::cell::RefCell;
-
+fn tree_state_matches_pob() {
     let _guard = lock();
-    let mut s = Session::start("lab");
-    let (name, xml) = fixtures().into_iter().next().expect("a fixture");
-    s.open_fixture(&name, &xml);
+    let mut s = Session::start("tree-state");
+    for (name, xml) in fixtures() {
+        s.open_fixture(&name, &xml);
+        let ours = s.backend.tree_state_view().expect("tree state");
+        let theirs = upstream_tree(&xml, &name);
+        let mut allocated = ours.allocated.clone();
+        allocated.sort_unstable();
+        assert_eq!(allocated, theirs.alloc, "{name}: allocated");
+        assert_eq!(ours.class_id, theirs.class_id, "{name}: class");
+        assert_eq!(
+            ours.ascendancy_id, theirs.ascendancy_id,
+            "{name}: ascendancy"
+        );
+        let titles: Vec<&str> = ours.specs.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(titles, theirs.spec_titles, "{name}: spec titles");
+        let points = (
+            ours.points.used,
+            ours.points.available,
+            ours.points.ascendancy_used,
+            ours.points.ascendancy_available,
+        );
+        let want = (
+            theirs.used,
+            theirs.available,
+            theirs.ascendancy_used,
+            theirs.ascendancy_available,
+        );
+        assert_eq!(points, want, "{name}: points");
+        assert_eq!(ours.specs[ours.active_spec].points, theirs.used, "{name}");
+        assert!(ours.classes.windows(2).all(|w| w[0].name < w[1].name));
+        assert!(
+            ours.classes
+                .iter()
+                .any(|c| c.id == ours.class_id && !c.needs_confirm),
+            "{name}: the current class never asks"
+        );
+        assert!(!ours.can_redo, "{name}: nothing to redo after loading");
+        assert!(
+            ours.classes.iter().all(|c| c
+                .ascendancies
+                .first()
+                .is_some_and(|a| a.id == 0 && a.name == "None")),
+            "{name}: ascendancy 0 is None"
+        );
+        // With points spent, a class the tree doesn't connect to asks before resetting it.
+        assert_eq!(
+            ours.classes.iter().any(|c| c.needs_confirm),
+            ours.points.used > 0,
+            "{name}: needs_confirm"
+        );
+        assert!(
+            ours.mastery_options
+                .iter()
+                .any(|m| m.options.iter().any(|o| !o.text.is_empty())),
+            "{name}: masteries offer effects"
+        );
+    }
+}
 
-    let events = RefCell::new(Vec::new());
-    let mut lab = |command| {
-        s.backend
-            .apply(Command::Lab(command), &|e| events.borrow_mut().push(e))
-            .expect("lab command");
-    };
-    lab(LabCommand::Tree);
-    lab(LabCommand::NodePower {
-        metric: "Life",
-        max_distance: 4,
-    });
-    let events = events.into_inner();
-    let tree = events
-        .iter()
-        .find_map(|e| match e {
-            Event::Lab(LabEvent::Tree(t)) => Some(t),
-            _ => None,
-        })
-        .expect("tree");
-    assert!(tree.nodes.len() > 2000, "{}", tree.nodes.len());
-    assert!(tree.edges.len() > 2000);
-    assert!(!tree.allocated.is_empty(), "the build allocates nodes");
-    assert!(tree.sheets.iter().all(Option::is_some));
-    let scores = events
-        .iter()
-        .find_map(|e| match e {
-            Event::Lab(LabEvent::NodePower(s)) => Some(s),
-            _ => None,
-        })
-        .expect("node power");
-    assert!(!scores.is_empty());
-    assert!(scores.iter().all(|s| (1..=4).contains(&s.distance)));
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn layout_includes_spec_only_nodes() {
+    let _guard = lock();
+    let mut s = Session::start("layout-nodes");
+    let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "attack").unwrap();
+    s.open_fixture("attack", &xml);
+    // the fixture has no ascendancy yet; take the first one of its class
+    s.run(Command::SelectAscendancy { id: 1 }).unwrap();
+    let layout = s.backend.tree_layout_view().expect("layout");
+    let state = s.backend.tree_state_view().expect("state");
+    assert!(layout.nodes.len() > 2000, "{}", layout.nodes.len());
+    assert!(layout.edges.len() > 2000);
+    assert!(!layout.sheets.is_empty());
     assert!(
-        events
+        layout.sheets.iter().all(Option::is_some),
+        "every sprite sheet loads"
+    );
+    let ids: std::collections::HashSet<u32> = layout.nodes.iter().map(|n| n.id).collect();
+    // the current ascendancy's id is what its nodes carry in `ascendancy`
+    let current = state
+        .classes
+        .iter()
+        .find(|c| c.id == state.class_id)
+        .and_then(|c| c.ascendancies.iter().find(|a| a.id == state.ascendancy_id))
+        .filter(|a| a.id != 0)
+        .expect("the attack fixture has an ascendancy");
+    assert!(
+        layout
+            .nodes
             .iter()
-            .any(|e| matches!(e, Event::Lab(LabEvent::Progress { .. }))),
-        "progress is streamed"
+            .any(|n| n.ascendancy.as_deref() == Some(current.ascend_id.as_str())),
+        "no node carries the ascendancy id {:?}",
+        current.ascend_id
+    );
+    assert!(!state.allocated.is_empty());
+    for id in &state.allocated {
+        assert!(ids.contains(id), "allocated node {id} is not in the layout");
+    }
+    assert!(!state.paths.is_empty(), "the build can grow");
+    for path in &state.paths {
+        assert!(ids.contains(&path.node), "reachable node {}", path.node);
+        assert!(path.path.iter().all(|id| ids.contains(id)));
+    }
+    assert!(
+        layout.nodes.iter().any(|n| n.ascendancy.is_some()),
+        "ascendancy nodes are included"
+    );
+    assert!(layout.key.starts_with(&layout.version));
+    for &(a, b) in &layout.edges {
+        assert!(a < layout.nodes.len() && b < layout.nodes.len());
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn layout_resent_on_version_change() {
+    let _guard = lock();
+    let mut s = Session::start("layout-resent");
+    let fixtures = fixtures();
+    let (name, xml) = &fixtures[0];
+    // nothing has been sent yet, so opening a build brings the layout
+    let dest = s.builds_dir().join(format!("{name}.xml"));
+    fs::create_dir_all(dest.parent().unwrap()).unwrap();
+    fs::copy(xml, &dest).unwrap();
+    let affected = s.run(Command::OpenBuild { path: dest.clone() }).unwrap();
+    assert!(affected.tree_layout && affected.tree);
+    let layout = s.backend.tree_layout_view().unwrap();
+
+    // the same tree again needs no new layout
+    let affected = s.run(Command::OpenBuild { path: dest }).unwrap();
+    assert!(!affected.tree_layout, "an unchanged layout isn't resent");
+    assert!(affected.tree);
+
+    // the same build on an older tree version has another key, so the layout is resent
+    let older = s.builds_dir().join("older.xml");
+    let text = fs::read_to_string(xml).unwrap();
+    assert!(text.contains("treeVersion=\"3_29\""));
+    fs::write(
+        &older,
+        text.replace("treeVersion=\"3_29\"", "treeVersion=\"3_27\""),
+    )
+    .unwrap();
+    let affected = s
+        .run(Command::OpenBuild {
+            path: older.clone(),
+        })
+        .unwrap();
+    assert!(affected.tree_layout, "a new tree version brings its layout");
+    let older_layout = s.backend.tree_layout_view().unwrap();
+    assert_eq!(older_layout.version, "3_27");
+    assert_ne!(older_layout.key, layout.key);
+    assert_eq!(s.backend.tree_state_view().unwrap().version, "3_27");
+
+    // and going back resends again, while repeating it does not
+    let dest = s.builds_dir().join(format!("{name}.xml"));
+    let affected = s.run(Command::OpenBuild { path: dest.clone() }).unwrap();
+    assert!(affected.tree_layout);
+    assert_eq!(s.backend.tree_layout_view().unwrap().key, layout.key);
+    let affected = s.run(Command::OpenBuild { path: dest }).unwrap();
+    assert!(!affected.tree_layout);
+}
+
+/// The stat lines the tree gives a mastery effect.
+fn effect_stats(s: &Session, effect: u32) -> Vec<String> {
+    s.backend
+        .lua
+        .load(format!(
+            "return pob.build.spec.tree.masteryEffects[{effect}].sd"
+        ))
+        .eval()
+        .unwrap()
+}
+
+fn layout_stats(layout: &auto_pob::engine::TreeLayout, node: u32) -> Vec<String> {
+    layout
+        .nodes
+        .iter()
+        .find(|n| n.id == node)
+        .unwrap_or_else(|| panic!("node {node} is not in the layout"))
+        .stats
+        .clone()
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn choosing_a_mastery_effect_resends_the_layout() {
+    let _guard = lock();
+    let mut s = attack_session("layout-mastery");
+    let before = s.backend.tree_layout_view().unwrap();
+    let mastery = upstream_node("attack", "pick.mastery()");
+    let effect: u32 = upstream_with_tree_lib("attack")
+        .load("return pick.mastery_effects(pick.mastery())[2]")
+        .eval()
+        .unwrap();
+    // nothing else has changed: another edit leaves the layout alone
+    let affected = s
+        .run(Command::AllocNode {
+            id: upstream_node("attack", "pick.notable(2)"),
+        })
+        .unwrap();
+    assert!(!affected.tree_layout, "an unrelated allocation");
+    let affected = s
+        .run(Command::SetMastery {
+            node: mastery,
+            effect,
+        })
+        .unwrap();
+    assert!(affected.tree_layout, "the mastery's text changed");
+    let after = s.backend.tree_layout_view().unwrap();
+    assert_ne!(after.key, before.key);
+    assert!(after.key.starts_with(&after.version));
+    let wanted = effect_stats(&s, effect);
+    assert!(!wanted.is_empty());
+    assert_eq!(layout_stats(&after, mastery), wanted);
+    // a repeat of the same choice has nothing new to send
+    let affected = s
+        .run(Command::SetMastery {
+            node: mastery,
+            effect,
+        })
+        .unwrap();
+    assert!(!affected.tree_layout);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn opening_a_build_after_the_blank_start_up_build_brings_its_content() {
+    let _guard = lock();
+    // a build with a mastery effect chosen, saved in a throw-away folder
+    let mut first = attack_session("layout-open-source");
+    let mastery = upstream_node("attack", "pick.mastery()");
+    let effect: u32 = upstream_with_tree_lib("attack")
+        .load("return pick.mastery_effects(pick.mastery())[2]")
+        .eval()
+        .unwrap();
+    first
+        .run(Command::SetMastery {
+            node: mastery,
+            effect,
+        })
+        .unwrap();
+    first.run(Command::Save).unwrap();
+    let saved = fs::read(first.builds_dir().join("attack.xml")).unwrap();
+
+    // the engine's first layout comes from the blank build it starts with
+    let mut s = Session::start("layout-open");
+    let blank = s.backend.tree_layout_view().unwrap();
+    let path = s.builds_dir().join("chosen.xml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, saved).unwrap();
+    let affected = s.run(Command::OpenBuild { path }).unwrap();
+    assert!(affected.tree_layout, "the build's tree reads differently");
+    let layout = s.backend.tree_layout_view().unwrap();
+    assert_ne!(layout.key, blank.key);
+    assert_eq!(layout_stats(&layout, mastery), effect_stats(&s, effect));
+    // every node's name and stats are what the build's own tree holds
+    let lua = &s.backend.lua;
+    for node in &layout.nodes {
+        let (name, stats): (Option<String>, Vec<String>) = lua
+            .load(format!(
+                "local n = pob.build.spec.nodes[{}]; return n.dn, n.sd or {{}}",
+                node.id
+            ))
+            .eval()
+            .unwrap();
+        assert_eq!(node.name, name.unwrap_or_default(), "node {}", node.id);
+        assert_eq!(node.stats, stats, "node {}", node.id);
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn layout_nodes_are_sorted_by_id_and_the_key_is_cheap() {
+    let _guard = lock();
+    let mut s = attack_session("layout-key-cost");
+    let layout = s.backend.tree_layout_view().unwrap();
+    assert!(layout.nodes.windows(2).all(|w| w[0].id < w[1].id));
+    let digest: mlua::Function = s
+        .backend
+        .lua
+        .load("return glue.tree_layout_digest")
+        .eval()
+        .unwrap();
+    let start = std::time::Instant::now();
+    for _ in 0..20 {
+        let _: mlua::LuaString = digest.call(()).unwrap();
+    }
+    let each = start.elapsed() / 20;
+    eprintln!("layout key digest: {each:?} per command on attack");
+    assert!(each < std::time::Duration::from_millis(50), "{each:?}");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tree_editing_never_writes_files() {
+    let _guard = lock();
+    let mut s = Session::start("tree-no-writes");
+    let fixtures = fixture_xml("attack");
+    let text = fs::read_to_string(&fixtures).unwrap();
+    // an older tree for the conversion, on disk before the first snapshot
+    let older = s.builds_dir().join("older.xml");
+    fs::create_dir_all(older.parent().unwrap()).unwrap();
+    fs::write(
+        &older,
+        text.replace("treeVersion=\"3_29\"", "treeVersion=\"3_27\""),
+    )
+    .unwrap();
+    s.open_fixture("attack", &fixtures);
+    let dir = s.builds_dir();
+    let before = snapshot_dir(&dir);
+    let notable = upstream_node("attack", "pick.notable(2)");
+    let mastery = upstream_node("attack", "pick.mastery()");
+    let effect: u32 = upstream_with_tree_lib("attack")
+        .load("return pick.mastery_effects(pick.mastery())[2]")
+        .eval()
+        .unwrap();
+    let witch = s
+        .backend
+        .tree_state_view()
+        .unwrap()
+        .classes
+        .iter()
+        .find(|c| c.name == "Witch")
+        .unwrap()
+        .id;
+    let commands = vec![
+        Command::AllocNode { id: notable },
+        Command::SetMastery {
+            node: mastery,
+            effect,
+        },
+        Command::Undo(Tab::Tree),
+        Command::Redo(Tab::Tree),
+        Command::SelectClass {
+            id: witch,
+            connect: false,
+        },
+        Command::ResetTree,
+        Command::NewSpec {
+            title: "Extra".into(),
+        },
+        Command::RenameSpec {
+            index: 1,
+            title: "Renamed".into(),
+        },
+        Command::SelectSpec { index: 1 },
+        Command::SetCompareSpec { index: Some(0) },
+        Command::SelectSpec { index: 0 },
+        Command::DeleteSpec { index: 1 },
+        search("life"),
+    ];
+    for command in commands {
+        let shown = format!("{command:?}");
+        s.run(command).unwrap_or_else(|e| panic!("{shown}: {e}"));
+    }
+    // a heat map, calculated to the end
+    run_power(&mut s, "Life", Some(1));
+    // converting needs an older tree
+    s.run(Command::OpenBuild { path: older }).unwrap();
+    let latest = {
+        let latest: String = s
+            .backend
+            .lua
+            .load("return latestTreeVersion")
+            .eval()
+            .unwrap();
+        latest
+    };
+    s.run(Command::ConvertSpec {
+        version: latest,
+        keep_copy: true,
+    })
+    .unwrap();
+    assert_eq!(s.backend.tree_state_view().unwrap().specs.len(), 2);
+    let after = snapshot_dir(&dir);
+    assert_eq!(
+        after.keys().collect::<Vec<_>>(),
+        before.keys().collect::<Vec<_>>(),
+        "files appeared or went"
+    );
+    assert!(
+        snapshot_dir(&s.user)
+            .keys()
+            .all(|p| !p.to_string_lossy().contains("~~temp~~")),
+        "a temporary file was left"
+    );
+    for (path, bytes) in &before {
+        assert!(after[path] == *bytes, "{} changed", path.display());
+    }
+}
+
+// ---- tree editing ----
+
+/// One recorded step of a tree recipe, as upstream's `act.*` helpers log it in the global
+/// `actions`; each maps onto one of our commands.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(untagged)]
+enum TreeAction {
+    Alloc {
+        alloc: u32,
+    },
+    Dealloc {
+        dealloc: u32,
+    },
+    Class {
+        class: u32,
+        connect: bool,
+    },
+    Ascend {
+        ascend: u32,
+    },
+    Reset {
+        reset: bool,
+    },
+    Mastery {
+        mastery: u32,
+        effect: u32,
+    },
+    Undo {
+        undo: bool,
+    },
+    Redo {
+        redo: bool,
+    },
+    NewSpec {
+        new_spec: String,
+    },
+    SelectSpec {
+        select_spec: usize,
+    },
+    RenameSpec {
+        rename_spec: usize,
+        title: String,
+    },
+    DeleteSpec {
+        delete_spec: usize,
+    },
+    Compare {
+        compare: CompareTarget,
+    },
+    Convert {
+        convert: String,
+        keep_copy: bool,
+    },
+    ConvertAll {
+        convert_all: String,
+    },
+    Import {
+        import: String,
+        title: String,
+    },
+    /// Not a command: upstream's tree state at this point in the recipe.
+    Check {
+        check: Checkpoint,
+    },
+}
+
+/// A spec index, or `false` for "stop comparing" (the recipe's `act.compare`).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(untagged)]
+enum CompareTarget {
+    Spec(usize),
+    Off(bool),
+}
+
+/// The part of the tree state a recipe's `checkpoint()` records.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+struct Checkpoint {
+    allocated: Vec<u32>,
+    /// The active tree's version, so a conversion to the wrong one is noticed
+    tree_version: String,
+    spec_titles: Vec<String>,
+    active_spec: usize,
+    #[serde(deserialize_with = "colours")]
+    compare: Vec<CompareColour>,
+}
+
+/// A list from Lua, where an empty one arrives as an empty map.
+fn colours<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<CompareColour>, D::Error> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum List {
+        Items(Vec<CompareColour>),
+        Empty(#[allow(dead_code)] std::collections::BTreeMap<String, ()>),
+    }
+    Ok(match serde::Deserialize::deserialize(d)? {
+        List::Items(items) => items,
+        List::Empty(_) => Vec::new(),
+    })
+}
+
+impl TreeAction {
+    /// The command that replays this action; none for a checkpoint.
+    fn command(&self) -> Option<Command> {
+        Some(match self.clone() {
+            TreeAction::Alloc { alloc } => Command::AllocNode { id: alloc },
+            TreeAction::Dealloc { dealloc } => Command::DeallocNode { id: dealloc },
+            TreeAction::Class { class, connect } => Command::SelectClass { id: class, connect },
+            TreeAction::Ascend { ascend } => Command::SelectAscendancy { id: ascend },
+            TreeAction::Reset { reset } => {
+                assert!(reset);
+                Command::ResetTree
+            }
+            TreeAction::Mastery { mastery, effect } => Command::SetMastery {
+                node: mastery,
+                effect,
+            },
+            TreeAction::Undo { undo } => {
+                assert!(undo);
+                Command::Undo(Tab::Tree)
+            }
+            TreeAction::Redo { redo } => {
+                assert!(redo);
+                Command::Redo(Tab::Tree)
+            }
+            TreeAction::NewSpec { new_spec } => Command::NewSpec { title: new_spec },
+            TreeAction::SelectSpec { select_spec } => Command::SelectSpec { index: select_spec },
+            TreeAction::RenameSpec { rename_spec, title } => Command::RenameSpec {
+                index: rename_spec,
+                title,
+            },
+            TreeAction::DeleteSpec { delete_spec } => Command::DeleteSpec { index: delete_spec },
+            TreeAction::Compare { compare } => Command::SetCompareSpec {
+                index: match compare {
+                    CompareTarget::Spec(index) => Some(index),
+                    CompareTarget::Off(off) => {
+                        assert!(!off);
+                        None
+                    }
+                },
+            },
+            TreeAction::Convert { convert, keep_copy } => Command::ConvertSpec {
+                version: convert,
+                keep_copy,
+            },
+            TreeAction::ConvertAll { convert_all } => Command::ConvertAllSpecs {
+                version: convert_all,
+            },
+            TreeAction::Import { import, title } => Command::ImportTreeLink { title, url: import },
+            TreeAction::Check { .. } => return None,
+        })
+    }
+}
+
+/// What upstream PoB shows for the tree after a recipe.
+#[derive(Debug, PartialEq)]
+struct TreeResult {
+    /// Sorted
+    allocated: Vec<u32>,
+    /// The active tree's version
+    tree_version: String,
+    class_id: u32,
+    ascendancy_id: u32,
+    /// (node, effect), sorted
+    masteries: Vec<(u32, u32)>,
+    spec_titles: Vec<String>,
+    /// 0-based
+    active_spec: usize,
+    /// Sorted by node
+    compare: Vec<CompareColour>,
+    sidebar: Vec<auto_pob::engine::upstream::SidebarLine>,
+}
+
+/// A recipe run in upstream PoB: the steps it took and where they ended.
+struct TreeRecipe {
+    base: String,
+    /// The build to start from when the recipe prepared one (saved after its setup)
+    setup_xml: Option<String>,
+    actions: Vec<TreeAction>,
+    result: TreeResult,
+    /// The saved build at the end, for a recipe that sets `save_xml`
+    xml: Option<String>,
+}
+
+/// Loads a fixture into fresh upstream PoB and defines the recipe helpers from `tree_lib.lua`.
+fn upstream_with_tree_lib(base: &str) -> mlua::Lua {
+    let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
+    let xml = fixtures_dir().join(format!("{base}.xml"));
+    load_xml(&lua, &fs::read_to_string(xml).unwrap(), base).unwrap();
+    load_tree_lib(&lua);
+    lua
+}
+
+fn load_tree_lib(lua: &mlua::Lua) {
+    lua.load(fs::read_to_string(fixtures_dir().join("tree_lib.lua")).unwrap())
+        .set_name("=tree_lib")
+        .exec()
+        .expect("tree_lib.lua");
+}
+
+/// The tree link upstream exports for a fixture (`OpenExportPopup`).
+fn upstream_link(base: &str) -> String {
+    upstream_with_tree_lib(base)
+        .load("return exportLink()")
+        .eval()
+        .unwrap()
+}
+
+/// What upstream shows for the tree of the build it has loaded (with `tree_lib.lua`).
+fn upstream_result(lua: &mlua::Lua) -> TreeResult {
+    #[derive(serde::Deserialize)]
+    struct Mastery {
+        node: u32,
+        effect: u32,
+    }
+    #[derive(serde::Deserialize)]
+    struct Raw {
+        allocated: Vec<u32>,
+        tree_version: String,
+        class_id: u32,
+        ascendancy_id: u32,
+        #[serde(default)]
+        masteries: Vec<Mastery>,
+        #[serde(deserialize_with = "colours")]
+        compare: Vec<CompareColour>,
+        spec_titles: Vec<String>,
+        active_spec: usize,
+    }
+    let raw: Raw = lua
+        .from_value(
+            lua.load(
+                r#"
+                local allocated, masteries, titles = {}, {}, {}
+                for id in pairs(build.spec.allocNodes) do allocated[#allocated + 1] = id end
+                table.sort(allocated)
+                for node, effect in pairs(build.spec.masterySelections) do
+                    if build.spec.allocNodes[node] then masteries[#masteries + 1] = { node = node, effect = effect } end
+                end
+                table.sort(masteries, function(a, b) return a.node < b.node end)
+                for i, spec in ipairs(build.treeTab.specList) do titles[i] = spec.title or "Default" end
+                return {
+                    allocated = allocated, tree_version = build.spec.treeVersion,
+                    class_id = build.spec.curClassId,
+                    ascendancy_id = build.spec.curAscendClassId, masteries = masteries,
+                    compare = compareColours(),
+                    spec_titles = titles, active_spec = build.treeTab.activeSpec - 1,
+                }
+                "#,
+            )
+            .eval::<mlua::Value>()
+            .unwrap(),
+        )
+        .unwrap();
+    let sidebar = golden_of(lua, Game::Poe1.pob_version()).unwrap().sidebar;
+    TreeResult {
+        allocated: raw.allocated,
+        tree_version: raw.tree_version,
+        class_id: raw.class_id,
+        ascendancy_id: raw.ascendancy_id,
+        masteries: raw.masteries.iter().map(|m| (m.node, m.effect)).collect(),
+        compare: raw.compare,
+        spec_titles: raw.spec_titles,
+        active_spec: raw.active_spec,
+        sidebar,
+    }
+}
+
+/// The id of the node a `tree_lib.lua` expression picks in the base fixture,
+/// e.g. `pick.notable(2)`.
+fn upstream_node(base: &str, expr: &str) -> u32 {
+    let lua = upstream_with_tree_lib(base);
+    lua.load(format!("return ({expr}).id"))
+        .eval()
+        .unwrap_or_else(|e| panic!("{expr}: {e}"))
+}
+
+/// The quoted value of a `key = "value"` line in a recipe file.
+fn recipe_setting(source: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key} = \"");
+    source
+        .lines()
+        .find_map(|l| l.strip_prefix(&prefix)?.strip_suffix('"'))
+        .map(str::to_string)
+}
+
+/// Runs `tree/<name>.lua` in upstream PoB on its base fixture.
+fn upstream_tree_recipe(name: &str) -> TreeRecipe {
+    let source = fs::read_to_string(fixtures_dir().join(format!("tree/{name}.lua"))).unwrap();
+    // the recipe names its base fixture, which has to be loaded before its helpers run
+    let base = recipe_setting(&source, "base").unwrap_or_else(|| panic!("{name}: no base"));
+    // a recipe that imports a link names the fixture to export it from (in another upstream)
+    let link = recipe_setting(&source, "link_from").map(|from| upstream_link(&from));
+    let lua = upstream_with_tree_lib(&base);
+    if let Some(link) = link {
+        lua.globals().set("link_url", link).unwrap();
+    }
+    lua.load(source)
+        .set_name(format!("={name}"))
+        .exec()
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+    lua.load("recipe()")
+        .exec()
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+    let raw_actions: Vec<serde_json::Value> = lua
+        .from_value(lua.load("return actions").eval().unwrap())
+        .unwrap();
+    let actions: Vec<TreeAction> = raw_actions
+        .into_iter()
+        .map(|a| serde_json::from_value(a.clone()).unwrap_or_else(|e| panic!("{name}: {a}: {e}")))
+        .collect();
+    let setup_xml: Option<String> = lua.globals().get("setup_xml").unwrap();
+    TreeRecipe {
+        base,
+        setup_xml,
+        actions,
+        result: upstream_result(&lua),
+        xml: lua
+            .globals()
+            .get::<bool>("save_xml")
+            .unwrap_or(false)
+            .then(|| auto_pob::engine::upstream::save_xml(&lua).expect("saving the build")),
+    }
+}
+
+/// Our tree state and sidebar in the shape of `TreeResult`.
+fn our_tree_result(s: &mut Session) -> TreeResult {
+    let state = s.backend.tree_state_view().expect("tree state");
+    let mut allocated = state.allocated.clone();
+    allocated.sort_unstable();
+    let mut masteries: Vec<(u32, u32)> =
+        state.masteries.iter().map(|m| (m.node, m.effect)).collect();
+    masteries.sort_unstable();
+    let sidebar = s
+        .stats()
+        .stats
+        .iter()
+        .map(|r| auto_pob::engine::upstream::SidebarLine {
+            label: r.label.clone(),
+            text: r.text.clone(),
+        })
+        .collect();
+    TreeResult {
+        allocated,
+        tree_version: state.version.clone(),
+        class_id: state.class_id,
+        ascendancy_id: state.ascendancy_id,
+        masteries,
+        spec_titles: state.specs.iter().map(|e| e.title.clone()).collect(),
+        active_spec: state.active_spec,
+        compare: state.compare,
+        sidebar,
+    }
+}
+
+/// Our tree state in the shape of a recipe's `checkpoint()`.
+fn our_checkpoint(s: &mut Session) -> Checkpoint {
+    let state = s.backend.tree_state_view().expect("tree state");
+    let mut allocated = state.allocated;
+    allocated.sort_unstable();
+    Checkpoint {
+        allocated,
+        tree_version: state.version,
+        spec_titles: state.specs.iter().map(|e| e.title.clone()).collect(),
+        active_spec: state.active_spec,
+        compare: state.compare,
+    }
+}
+
+fn attack_session(test: &str) -> Session {
+    let mut s = Session::start(test);
+    s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+    s
+}
+
+/// Replays a recipe as our commands and checks every checkpoint and the end state against
+/// upstream.
+fn check_recipe(name: &str) -> TreeRecipe {
+    let recipe = upstream_tree_recipe(name);
+    assert!(!recipe.actions.is_empty(), "{name}: no actions recorded");
+    let mut s = Session::start(&format!("tree-recipe-{name}"));
+    match &recipe.setup_xml {
+        Some(xml) => {
+            let path = s.user.join("setup.xml");
+            fs::create_dir_all(&s.user).unwrap();
+            fs::write(&path, xml).unwrap();
+            s.open_fixture(&recipe.base, &path);
+        }
+        None => {
+            s.open_fixture(
+                &recipe.base,
+                &fixtures_dir().join(format!("{}.xml", recipe.base)),
+            );
+        }
+    }
+    let before = our_tree_result(&mut s);
+    for action in &recipe.actions {
+        match action.command() {
+            Some(command) => {
+                s.run(command)
+                    .unwrap_or_else(|e| panic!("{name}: {action:?}: {e}"));
+            }
+            None => {
+                let TreeAction::Check { check } = action else {
+                    unreachable!()
+                };
+                assert_eq!(&our_checkpoint(&mut s), check, "{name}: checkpoint");
+            }
+        }
+    }
+    let ours = our_tree_result(&mut s);
+    let checked = recipe
+        .actions
+        .iter()
+        .any(|a| matches!(a, TreeAction::Check { .. }));
+    assert!(
+        checked || ours != before,
+        "{name}: the recipe changes the tree"
+    );
+    assert_eq!(ours, recipe.result, "{name}");
+    recipe
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tree_recipes_match_pob() {
+    let _guard = lock();
+    for name in ["alloc_path", "class_change", "mastery", "class_paths"] {
+        check_recipe(name);
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn spec_recipes_match_pob() {
+    let _guard = lock();
+    for name in ["specs", "convert", "link_round_trip"] {
+        check_recipe(name);
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn compare_colours_match_pob() {
+    let _guard = lock();
+    // the `specs` recipe checks the colours while comparing with the second tree
+    let recipe = check_recipe("specs");
+    let compared = recipe
+        .actions
+        .iter()
+        .find_map(|a| match a {
+            TreeAction::Check { check } if !check.compare.is_empty() => Some(check),
+            _ => None,
+        })
+        .expect("a checkpoint while comparing");
+    assert!(compared.compare.iter().any(|c| c.rgb == [1.0, 0.0, 0.0]));
+    assert!(compared.compare.iter().any(|c| c.rgb == [0.0, 1.0, 0.0]));
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tree_link_matches_pob() {
+    let _guard = lock();
+    let mut s = attack_session("tree-link");
+    let affected = s.run(Command::ExportTreeLink).unwrap();
+    assert!(affected.link);
+    let link = s.backend.tree_link_view().unwrap();
+    assert!(link.starts_with("https://"), "{link}");
+    assert_eq!(link, upstream_link("attack"));
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tree_round_trip() {
+    let _guard = lock();
+    let mut s = attack_session("tree-round-trip");
+    let notable = upstream_node("attack", "pick.notable(2)");
+    let mastery = upstream_node("attack", "pick.mastery()");
+    let effect: u32 = upstream_with_tree_lib("attack")
+        .load("return pick.mastery_effects(pick.mastery())[2]")
+        .eval()
+        .unwrap();
+    s.run(Command::AllocNode { id: notable }).unwrap();
+    s.run(Command::NewSpec {
+        title: "Extra".into(),
+    })
+    .unwrap();
+    s.run(Command::SetMastery {
+        node: mastery,
+        effect,
+    })
+    .unwrap();
+    s.run(Command::SaveAs {
+        folder: String::new(),
+        name: "round-trip".into(),
+        overwrite: false,
+    })
+    .unwrap();
+    let saved = s.builds_dir().join("round-trip.xml");
+
+    let ours = our_tree_result(&mut s);
+    assert!(ours.allocated.contains(&notable));
+    assert_eq!(ours.masteries.len(), 1, "{:?}", ours.masteries);
+    assert_eq!(ours.spec_titles.len(), 2);
+    let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
+    load_xml(&lua, &fs::read_to_string(saved).unwrap(), "round-trip").unwrap();
+    load_tree_lib(&lua);
+    assert_eq!(ours, upstream_result(&lua));
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn delete_last_spec_is_an_error() {
+    let _guard = lock();
+    let mut s = attack_session("tree-delete-last");
+    let error = s.run(Command::DeleteSpec { index: 0 }).unwrap_err();
+    assert_eq!(error.to_string(), "the last tree can't be deleted");
+    assert_eq!(s.backend.tree_state_view().unwrap().specs.len(), 1);
+}
+
+/// No link makes the import click fail after it added the tree (decoding errors come first),
+/// so the step that follows the append, the new tree's first undo state, is made to fail.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn failed_import_leaves_no_half_added_tree() {
+    let _guard = lock();
+    let mut s = attack_session("tree-half-import");
+    let before = our_checkpoint(&mut s);
+    let link = upstream_link("attack");
+    s.backend
+        .lua
+        .load(
+            "local class = getmetatable(pob.build.spec).__index
+             real_add_undo_state = class.AddUndoState
+             class.AddUndoState = function() error('boom') end",
+        )
+        .exec()
+        .unwrap();
+    let result = s.run(Command::ImportTreeLink {
+        title: "Half".into(),
+        url: link,
+    });
+    // put the real step back before asserting
+    s.backend
+        .lua
+        .load("getmetatable(pob.build.spec).__index.AddUndoState = real_add_undo_state")
+        .exec()
+        .unwrap();
+    let error = result.unwrap_err();
+    assert!(error.to_string().ends_with("boom"), "{error}");
+    assert_eq!(
+        our_checkpoint(&mut s),
+        before,
+        "a failed import left a tree"
+    );
+    let restored: bool = s
+        .backend
+        .lua
+        .load("return getmetatable(pob.build.spec).__index.AddUndoState == real_add_undo_state")
+        .eval()
+        .unwrap();
+    assert!(restored);
+    // the engine still works: a good import adds the tree
+    s.run(Command::ImportTreeLink {
+        title: "Whole".into(),
+        url: upstream_link("attack"),
+    })
+    .unwrap();
+    assert_eq!(our_checkpoint(&mut s).spec_titles.len(), 2);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn spec_command_errors() {
+    let _guard = lock();
+    let mut s = attack_session("tree-spec-errors");
+    let before = our_checkpoint(&mut s);
+    let cases = [
+        (Command::SelectSpec { index: 5 }, "unknown tree 5"),
+        (
+            Command::RenameSpec {
+                index: 0,
+                title: "  ".into(),
+            },
+            "the tree needs a name",
+        ),
+        (Command::SetCompareSpec { index: Some(3) }, "unknown tree 3"),
+        (
+            Command::ConvertSpec {
+                version: "9_99".into(),
+                keep_copy: false,
+            },
+            "unknown tree version 9_99",
+        ),
+        (
+            Command::ConvertSpec {
+                version: "3_29".into(),
+                keep_copy: false,
+            },
+            "the tree already uses that version",
+        ),
+        (
+            Command::ImportTreeLink {
+                title: "Short".into(),
+                url: "http://poeurl.com/dABz".into(),
+            },
+            "short links need the network; paste the full link",
+        ),
+        (
+            Command::ImportTreeLink {
+                title: "Bad".into(),
+                url: "https://www.pathofexile.com/passive-skill-tree/3.29.0/abc".into(),
+            },
+            "Invalid tree link (unrecognised format)",
+        ),
+        (
+            // PoB's popup raises an error for a made-up tree type
+            Command::ImportTreeLink {
+                title: "Odd".into(),
+                url: "https://www.pathofexile.com/passive-skill-tree/abc".into(),
+            },
+            "Classes/PassiveSpec.lua:42: attempt to index field 'tree' (a nil value)",
+        ),
+        (
+            // a valid header naming a class that doesn't exist
+            Command::ImportTreeLink {
+                title: "Corrupt".into(),
+                url: "https://www.pathofexile.com/passive-skill-tree/3.29.0/AAAABsgAAAAA".into(),
+            },
+            "Invalid tree link (bad class ID '200')",
+        ),
+    ];
+    for (command, message) in cases {
+        let error = s.run(command.clone()).expect_err(&format!("{command:?}"));
+        assert_eq!(error.to_string(), message, "{command:?}");
+        assert_eq!(
+            our_checkpoint(&mut s),
+            before,
+            "{command:?} changed the trees"
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn edits_mark_unsaved_and_undo() {
+    let _guard = lock();
+    let mut s = attack_session("tree-unsaved");
+    let original = s.backend.tree_state_view().unwrap().allocated;
+    assert!(
+        !s.backend.build_view().unwrap().unsaved,
+        "a loaded build is saved"
+    );
+    assert!(!s.backend.tree_state_view().unwrap().can_undo);
+
+    let id = upstream_node("attack", "pick.notable(2)");
+    let affected = s.run(Command::AllocNode { id }).unwrap();
+    assert!(affected.build && affected.tree && affected.recalc);
+    let state = s.backend.tree_state_view().unwrap();
+    assert!(state.allocated.contains(&id));
+    assert!(state.can_undo && !state.can_redo);
+    assert!(
+        s.backend.build_view().unwrap().unsaved,
+        "an edit leaves unsaved changes"
+    );
+
+    s.run(Command::Undo(Tab::Tree)).unwrap();
+    let state = s.backend.tree_state_view().unwrap();
+    assert_eq!(state.allocated, original);
+    assert!(state.can_redo);
+
+    s.run(Command::Redo(Tab::Tree)).unwrap();
+    assert!(s.backend.tree_state_view().unwrap().allocated.contains(&id));
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tree_command_errors() {
+    let _guard = lock();
+    let mut s = attack_session("tree-errors");
+    let before = s.backend.tree_state_view().unwrap().allocated;
+    let mastery = upstream_node("attack", "pick.mastery()");
+    let unreachable = upstream_node("attack", "pick.unreachable()");
+    let cases = [
+        (
+            Command::AllocNode { id: 987_654_321 },
+            "unknown passive node 987654321",
+        ),
+        (
+            Command::DeallocNode { id: 987_654_321 },
+            "unknown passive node 987654321",
+        ),
+        (
+            Command::AllocNode { id: unreachable },
+            "that passive isn't connected to your tree",
+        ),
+        (
+            Command::SetMastery {
+                node: mastery,
+                effect: 987_654_321,
+            },
+            "that mastery effect isn't available here",
+        ),
+        (Command::AllocNode { id: mastery }, "pick a mastery effect"),
+    ];
+    for (command, message) in cases {
+        let error = s.run(command.clone()).expect_err(&format!("{command:?}"));
+        assert_eq!(error.to_string(), message, "{command:?}");
+        assert_eq!(
+            s.backend.tree_state_view().unwrap().allocated,
+            before,
+            "{command:?} changed the tree"
+        );
+    }
+}
+
+// ---- search, jewels, tooltips and node power ----
+
+/// Reads a value from Lua code run in `lua`.
+fn lua_value<T: serde::de::DeserializeOwned>(lua: &mlua::Lua, code: &str) -> T {
+    let value: mlua::Value = lua.load(code).eval().expect("upstream Lua");
+    lua.from_value(value).expect("upstream value")
+}
+
+fn search(text: &str) -> Command {
+    Command::SetTreeSearch { text: text.into() }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn search_matches_pob() {
+    let _guard = lock();
+    let mut s = attack_session("tree-search");
+    let lua = upstream_with_tree_lib("attack");
+    let unsaved = |s: &mut Session| s.backend.build_view().unwrap().unsaved;
+    let before = unsaved(&mut s);
+    for text in ["life", "increased.fire.damage|area", ""] {
+        let affected = s.run(search(text)).unwrap();
+        assert_eq!(
+            affected,
+            auto_pob::engine::Affected {
+                build: true,
+                tree: true,
+                ..Default::default()
+            }
+        );
+        let ours = s.backend.tree_state_view().unwrap();
+        assert_eq!(ours.search, text);
+        // upstream: the viewer's own Draw caches the match of every node
+        lua.globals().set("query", text).unwrap();
+        let theirs: Vec<u32> = lua_value(
+            &lua,
+            r#"
+            local viewer = build.treeTab.viewer
+            viewer.searchStr = query
+            runCallback("OnFrame")
+            assert(viewer.searchParams, "the tree view didn't prepare the search")
+            local ids = {}
+            -- Draw tests nodes only when there are words to look for (PassiveTreeView.lua:801)
+            for id, node in pairs(build.spec.nodes) do
+                if #viewer.searchParams > 0 and viewer:DoesNodeMatchSearchParams(node) then
+                    ids[#ids + 1] = id
+                end
+            end
+            table.sort(ids)
+            return ids
+            "#,
+        );
+        assert_eq!(ours.search_matches, theirs, "search {text:?}");
+        if text.is_empty() {
+            assert!(theirs.is_empty());
+        } else {
+            assert!(!theirs.is_empty(), "search {text:?} matches nothing");
+        }
+    }
+    // PoB saves the search with the build: a changed search is an unsaved change, and the
+    // saved text is not (Build.lua:1303, TreeTab.lua:180)
+    assert!(!before);
+    // the command alone does it: the loop runs no recalculation for a search
+    s.run(search("life")).unwrap();
+    assert!(unsaved(&mut s), "a changed search marks the build unsaved");
+    s.run(search("")).unwrap();
+    assert!(!unsaved(&mut s), "the saved search is not a change");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn jewel_radius_matches_pob() {
+    let _guard = lock();
+    let recipe = upstream_tree_recipe("jewel");
+    let xml = recipe.xml.expect("the jewel recipe saves its build");
+    let mut s = Session::start("tree-jewel");
+    let path = s.user.join("jewel.xml");
+    fs::create_dir_all(&s.user).unwrap();
+    fs::write(&path, &xml).unwrap();
+    s.open_fixture("jewel", &path);
+    let ours = s.backend.tree_state_view().unwrap();
+    assert_eq!(ours.jewels.len(), 1, "{:?}", ours.jewels);
+    let lua = upstream_lua(&pob_dir()).unwrap();
+    load_xml(&lua, &xml, "jewel").unwrap();
+    #[derive(serde::Deserialize)]
+    struct Theirs {
+        node: u32,
+        name: String,
+        radius_nodes: Vec<u32>,
+        ring: [f32; 2],
+    }
+    let theirs: Vec<Theirs> = lua_value(
+        &lua,
+        r#"
+        local list = {}
+        for id, node in pairs(build.spec.nodes) do
+            local jewel = node.type == "Socket" and build.spec:GetSocketedJewel(id)
+            if jewel then
+                local index = jewel.jewelRadiusIndex
+                local radius = {}
+                for nodeId in pairs(node.nodesInRadius[index]) do radius[#radius + 1] = nodeId end
+                table.sort(radius)
+                local ring = data.jewelRadius[index]
+                list[#list + 1] = { node = id, name = jewel.title, radius_nodes = radius, ring = { ring.inner, ring.outer } }
+            end
+        end
+        return list
+        "#,
+    );
+    assert_eq!(theirs.len(), 1);
+    let (ours, theirs) = (&ours.jewels[0], &theirs[0]);
+    assert_eq!(ours.node, theirs.node);
+    assert_eq!(ours.name, theirs.name);
+    assert_eq!(ours.name, "Eldritch Knowledge");
+    let mut radius = ours.radius_nodes.clone();
+    radius.sort_unstable();
+    assert_eq!(radius, theirs.radius_nodes);
+    assert!(radius.len() > 10, "{}", radius.len());
+    assert_eq!(ours.ring, Some(theirs.ring));
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tooltip_matches_pob() {
+    let _guard = lock();
+    // the allocated socket that holds the jewel recipe's jewel
+    let recipe = upstream_tree_recipe("jewel");
+    let xml = recipe.xml.expect("the jewel recipe saves its build");
+    let mut s = Session::start("tree-tooltip");
+    let path = s.user.join("jewel.xml");
+    fs::create_dir_all(&s.user).unwrap();
+    fs::write(&path, &xml).unwrap();
+    s.open_fixture("jewel", &path);
+    let socket = s.backend.tree_state_view().unwrap().jewels[0].node;
+    let lua = upstream_lua(&pob_dir()).unwrap();
+    load_xml(&lua, &xml, "jewel").unwrap();
+    load_tree_lib(&lua);
+    // the recorder of glue/tooltip.lua, which draws nothing and keeps the lines
+    lua.load(include_str!("../src/engine/glue/tooltip.lua"))
+        .set_name("=recorder")
+        .exec()
+        .unwrap();
+    lua.globals().set("socket_id", socket).unwrap();
+    let theirs: Vec<auto_pob::engine::NodeTooltip> = lua_value(
+        &lua,
+        r#"
+        -- the lowest id of each kind among the unallocated nodes
+        local ids = {}
+        for _, kind in ipairs({ "Normal", "Notable", "Keystone", "Mastery" }) do
+            local best
+            for id, node in pairs(build.spec.nodes) do
+                if node.type == kind and not node.alloc and (kind ~= "Mastery" or node.masteryEffects)
+                    and (not best or id < best) then
+                    best = id
+                end
+            end
+            ids[#ids + 1] = best
+        end
+        ids[#ids + 1] = socket_id
+        local list = {}
+        for _, id in ipairs(ids) do
+            local node = build.spec.nodes[id]
+            assert(id == socket_id or not node.alloc, "node " .. id .. " is allocated")
+            local tooltip = glue.tooltip()
+            build.treeTab.viewer:AddNodeTooltip(tooltip, node, build)
+            list[#list + 1] = { id = id, lines = tooltip:lines() }
+        end
+        return list
+        "#,
+    );
+    assert_eq!(theirs.len(), 5);
+    // the jewel is part of the socket's tooltip
+    let jewel_lines = &theirs[4].lines;
+    assert!(
+        jewel_lines.iter().any(|l| matches!(l,
+            auto_pob::engine::TooltipLine::Line { text, .. } if text.contains("Eldritch Knowledge"))),
+        "{jewel_lines:?}"
+    );
+    for expected in &theirs {
+        assert!(expected.lines.len() > 3, "{expected:?}");
+        let affected = s.run(Command::PreviewNode { id: expected.id }).unwrap();
+        assert_eq!(affected.preview, Some(expected.id));
+        let ours = s
+            .backend
+            .node_tooltip_view(expected.id)
+            .unwrap()
+            .expect("the node exists");
+        assert_eq!(&ours, expected, "node {}", expected.id);
+    }
+    assert!(
+        s.backend
+            .node_tooltip_view(4_000_000_000)
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// Runs `SetHeatmap` and then steps until the backend has no work left.
+fn run_power(s: &mut Session, stat: &str, max_depth: Option<u32>) -> Vec<u32> {
+    s.run(Command::SetHeatmap {
+        stat: Some(stat.into()),
+        max_depth,
+    })
+    .unwrap();
+    let progress = std::cell::RefCell::new(Vec::new());
+    let mut steps = 0;
+    while s.backend.has_background_work() {
+        let affected = s
+            .backend
+            .background_step(&|event| {
+                if let Event::Progress { percent, .. } = event {
+                    progress.borrow_mut().push(percent);
+                }
+            })
+            .expect("power step");
+        assert!(!affected.recalc);
+        steps += 1;
+        assert!(steps < 100_000, "the power calculation never ends");
+    }
+    progress.into_inner()
+}
+
+/// Upstream's node power for `stat`: `SetPowerCalc`, a frame, then `BuildPower` to the end.
+fn upstream_power(stat: &str, max_depth: u32) -> mlua::Lua {
+    let lua = upstream_with_tree_lib("attack");
+    lua.globals().set("stat_label", stat).unwrap();
+    lua.globals().set("max_depth", max_depth).unwrap();
+    lua.load(
+        r#"
+        local tab = build.treeTab
+        for _, entry in ipairs(tab.powerStatList) do
+            if entry.label == stat_label then stat = entry end
+        end
+        tab:SetPowerCalc(stat)
+        build.calcsTab.nodePowerMaxDepth = max_depth
+        runCallback("OnFrame")
+        repeat build.calcsTab:BuildPower() until not build.calcsTab.powerBuilder
+        "#,
+    )
+    .exec()
+    .unwrap();
+    lua
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn node_power_matches_pob() {
+    let _guard = lock();
+    let mut s = attack_session("tree-node-power");
+    let state = s.backend.tree_state_view().unwrap();
+    let dps = state
+        .power_stats
+        .iter()
+        .find(|label| label.contains("DPS"))
+        .expect("a DPS stat")
+        .clone();
+    assert!(state.power_stats.iter().any(|label| label == "Life"));
+    for stat in ["Life", dps.as_str()] {
+        run_power(&mut s, stat, Some(5));
+        let ours = s.backend.node_power_view().unwrap();
+        assert!(ours.finished, "{stat}");
+        assert_eq!(ours.stat.as_deref(), Some(stat));
+        let state = s.backend.tree_state_view().unwrap();
+        assert_eq!(state.heatmap.as_deref(), Some(stat));
+        assert_eq!(state.max_depth, Some(5));
+        let lua = upstream_power(stat, 5);
+        let theirs: Vec<auto_pob::engine::NodePowerEntry> = lua_value(
+            &lua,
+            r#"
+            local list = {}
+            for id, node in pairs(build.spec.nodes) do
+                local p = node.power
+                if p and (p.singleStat or p.pathPower or p.offence or p.defence) then
+                    list[#list + 1] = { id = id, single = p.singleStat or 0, path = p.pathPower,
+                        offence = p.offence, defence = p.defence }
+                end
+            end
+            table.sort(list, function(a, b) return a.id < b.id end)
+            return list
+            "#,
+        );
+        assert!(theirs.len() > 20, "{stat}: {} nodes", theirs.len());
+        assert!(theirs.iter().any(|n| n.single != 0.0), "{stat}");
+        assert_eq!(ours.nodes.len(), theirs.len(), "{stat}: node sets");
+        for (a, b) in ours.nodes.iter().zip(&theirs) {
+            assert_eq!(a, b, "{stat}: node {}", b.id);
+        }
+        let max_single: f64 = lua_value(&lua, "return build.calcsTab.powerMax.singleStat");
+        assert_eq!(ours.max_single, max_single, "{stat}");
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn power_report_matches_pob() {
+    let _guard = lock();
+    let mut s = attack_session("tree-power-report");
+    let progress = run_power(&mut s, "Life", Some(5));
+    assert!(progress.iter().all(|p| *p <= 100), "{progress:?}");
+    let mut ours = s.backend.power_report_view().unwrap();
+    assert_eq!(ours.stat, "Life");
+    let lua = upstream_power("Life", 5);
+    let mut theirs: Vec<auto_pob::engine::PowerReportRow> = lua_value(
+        &lua,
+        r#"
+        local calcs = build.calcsTab
+        local rows = {}
+        for _, row in ipairs(build.treeTab:BuildPowerReportList(calcs.powerStat)) do
+            rows[#rows + 1] = {
+                id = row.id, name = row.name, kind = row.type, power = row.power,
+                power_text = row.powerStr, path_power = row.pathPower,
+                path_power_text = row.pathPowerStr, allocated = row.allocated and true or false,
+                path_dist = type(row.pathDist) == "number" and row.pathDist or 0,
+            }
+        end
+        return rows
+        "#,
+    );
+    assert!(theirs.len() > 100, "{}", theirs.len());
+    // rows of equal power may sort either way
+    let key = |r: &auto_pob::engine::PowerReportRow| (r.id, r.name.clone());
+    for rows in [&mut ours.rows, &mut theirs] {
+        rows.sort_by_key(key);
+    }
+    assert_eq!(ours.rows, theirs);
+    // the text keeps PoB's colour codes
+    assert!(ours.rows.iter().any(|r| r.power_text.starts_with('^')));
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn no_power_work_without_heatmap() {
+    let _guard = lock();
+    let mut s = attack_session("tree-no-power");
+    s.run(set("buffAdrenaline", ConfigValue::Bool(true)))
+        .unwrap();
+    assert!(!s.backend.has_background_work());
+    s.run(Command::SetHeatmap {
+        stat: Some("Life".into()),
+        max_depth: Some(5),
+    })
+    .unwrap();
+    assert!(s.backend.has_background_work());
+    s.run(Command::SetHeatmap {
+        stat: None,
+        max_depth: None,
+    })
+    .unwrap();
+    assert!(!s.backend.has_background_work());
+    s.run(set("buffAdrenaline", ConfigValue::Bool(false)))
+        .unwrap();
+    assert!(!s.backend.has_background_work());
+    let state = s.backend.tree_state_view().unwrap();
+    assert_eq!(state.heatmap, None);
+    let off = s.backend.node_power_view().unwrap();
+    assert!(off.nodes.is_empty());
+    assert_eq!(off.stat, None);
+    assert!(
+        off.finished,
+        "nothing is calculated while the heat map is off"
+    );
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn leaving_for_the_list_stops_power_work() {
+    let _guard = lock();
+    let mut s = attack_session("tree-list-stops-power");
+    s.run(Command::SetHeatmap {
+        stat: Some("Life".into()),
+        max_depth: Some(5),
+    })
+    .unwrap();
+    assert!(s.backend.has_background_work());
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .unwrap();
+    assert!(!s.backend.has_background_work());
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn unknown_heatmap_stat_changes_nothing() {
+    let _guard = lock();
+    let mut s = attack_session("tree-heatmap-unknown");
+    let on = Command::SetHeatmap {
+        stat: Some("Life".into()),
+        max_depth: Some(5),
+    };
+    s.run(on).unwrap();
+    let error = s
+        .run(Command::SetHeatmap {
+            stat: Some("No Such Stat".into()),
+            max_depth: Some(10),
+        })
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("unknown heat map stat"),
+        "{error}"
+    );
+    let state = s.backend.tree_state_view().unwrap();
+    assert_eq!(state.heatmap.as_deref(), Some("Life"));
+    assert_eq!(state.max_depth, Some(5));
+    assert!(s.backend.has_background_work(), "the heat map is still on");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn failed_power_step_stops_background_work() {
+    let _guard = lock();
+    let mut s = attack_session("tree-power-fails");
+    let heatmap = || Command::SetHeatmap {
+        stat: Some("Life".into()),
+        max_depth: Some(5),
+    };
+    s.run(heatmap()).unwrap();
+    s.backend
+        .lua
+        .load("pob.build.calcsTab.PowerBuilder = function() error('boom', 0) end")
+        .exec()
+        .unwrap();
+    assert!(s.backend.has_background_work());
+    let error = s.backend.background_step(&|_| {}).unwrap_err();
+    assert!(error.to_string().contains("boom"), "{error}");
+    // a recalculation sets powerBuildFlag again (CalcsTab.lua:435)
+    s.run(set("buffAdrenaline", ConfigValue::Bool(true)))
+        .unwrap();
+    let pending: bool = s
+        .backend
+        .lua
+        .load("return glue.power_pending()")
+        .eval()
+        .unwrap();
+    assert!(pending, "the recalculation queued the power calculation");
+    assert!(
+        !s.backend.has_background_work(),
+        "a failed step must end the background work until the next SetHeatmap"
+    );
+    // the next SetHeatmap tries again
+    s.backend
+        .lua
+        .load("pob.build.calcsTab.PowerBuilder = nil")
+        .exec()
+        .unwrap();
+    s.run(heatmap()).unwrap();
+    assert!(s.backend.has_background_work());
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn commands_answered_during_power_report() {
+    use std::time::{Duration, Instant};
+    let _guard = lock();
+    pob_dir();
+    let user = std::env::temp_dir().join(format!("auto-pob-gate-power-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&user);
+    fs::create_dir_all(&user).unwrap();
+    let build = user.join("attack.xml");
+    fs::copy(fixtures_dir().join("attack.xml"), &build).unwrap();
+    let engine = Engine::spawn(Game::Poe1, std::env::temp_dir(), user.clone(), || {});
+    engine.send(Command::OpenBuild { path: build });
+    engine.send(Command::SetHeatmap {
+        stat: Some("Life".into()),
+        max_depth: None,
+    });
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let next = |deadline: Instant| {
+        let wait = deadline.saturating_duration_since(Instant::now());
+        engine.events.recv_timeout(wait).expect("an event")
+    };
+    let mut finished = false;
+    // the calculation has started when its first progress arrives
+    loop {
+        match next(deadline) {
+            Event::Progress { .. } => break,
+            Event::Error { message, .. } | Event::StartupFailed { message } => {
+                panic!("{message}")
+            }
+            Event::Snapshot {
+                snapshot: Snapshot::NodePower(power),
+                ..
+            } => finished |= power.finished,
+            _ => {}
+        }
+    }
+    assert!(
+        !finished,
+        "the calculation ended before it reported progress"
+    );
+    for text in ["life", "fire", "area"] {
+        engine.send(search(text));
+        loop {
+            match next(deadline) {
+                Event::Snapshot {
+                    snapshot: Snapshot::Tree(tree),
+                    ..
+                } if tree.search == text => break,
+                Event::Snapshot {
+                    snapshot: Snapshot::NodePower(power),
+                    ..
+                } => assert!(
+                    !power.finished,
+                    "the calculation ended before the search {text:?} was answered"
+                ),
+                Event::Error { message, .. } => panic!("{message}"),
+                _ => {}
+            }
+        }
+    }
+    // the calculation still ends
+    loop {
+        if let Event::Snapshot {
+            snapshot: Snapshot::NodePower(power),
+            ..
+        } = next(deadline)
+            && power.finished
+        {
+            break;
+        }
+    }
+    engine.send(Command::Shutdown);
+    while engine.events.recv_timeout(Duration::from_secs(30)).is_ok() {}
+    assert!(!engine.is_alive());
+    let _ = fs::remove_dir_all(&user);
+}
+
+#[test]
+#[ignore = "spike: prints numbers, needs the pinned PoB install"]
+fn spike_tree_numbers() {
+    let _guard = lock();
+    let mut s = Session::start("spike-tree");
+    let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "attack").unwrap();
+    s.open_fixture("attack", &xml);
+    let lua = &s.backend.lua;
+
+    let paths: String = lua
+        .load(
+            r#"
+            local out = {}
+            for id, node in pairs(pob.build.spec.nodes) do
+                if node.path and not node.alloc then
+                    local ids = {}
+                    for _, p in ipairs(node.path) do ids[#ids + 1] = p.id end
+                    out[#out + 1] = { node_id = id, path = ids }
+                end
+            end
+            return require("dkjson").encode(out)
+            "#,
+        )
+        .eval()
+        .expect("collect paths");
+    let parsed: serde_json::Value = serde_json::from_str(&paths).expect("paths json");
+    let bytes = serde_json::to_vec(&parsed).unwrap().len();
+    println!(
+        "SPIKE path records: {}",
+        parsed.as_array().map_or(0, |a| a.len())
+    );
+    println!("SPIKE path json bytes: {bytes}");
+    assert!(bytes < 1_000_000, "path json is {bytes} bytes");
+
+    // PoB's PowerBuilder yields once up front, whatever the clock says, so the
+    // first BuildPower proves nothing. The second runs real work and only
+    // yields mid-way when GetTime advances past its 100 ms slice.
+    let (first_ms, second_ms, alive, steps): (i64, i64, bool, i64) = lua
+        .load(
+            r#"
+            local calcs = pob.build.calcsTab
+            for _, entry in ipairs(data.powerStatList) do
+                if entry.stat == "Life" then calcs.powerStat = entry end
+            end
+            calcs.powerBuildFlag = true
+            local t0 = GetTime()
+            calcs:BuildPower()
+            local t1 = GetTime()
+            calcs:BuildPower()
+            local t2 = GetTime()
+            local alive = calcs.powerBuilder ~= nil
+            local steps = 2
+            while calcs.powerBuilder do
+                calcs:BuildPower()
+                steps = steps + 1
+            end
+            return t1 - t0, t2 - t1, alive, steps
+            "#,
+        )
+        .eval()
+        .expect("BuildPower");
+    println!(
+        "SPIKE BuildPower #1: {first_ms} ms, #2: {second_ms} ms, alive after #2={alive}, steps to finish={steps}"
+    );
+    assert!(
+        alive,
+        "the power coroutine should still be alive after its first real step"
     );
 }

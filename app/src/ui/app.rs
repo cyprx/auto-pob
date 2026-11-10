@@ -10,7 +10,7 @@ use crate::theme;
 use crate::ui::build::{self, BuildAction, BuildTab};
 use crate::ui::build_list::{BuildListUi, ListScreenAction};
 use crate::ui::config::ConfigUi;
-use crate::ui::lab::LabTab;
+use crate::ui::tree::{TreeOutput, TreeTab};
 use crate::ui::unsaved::{Pending, PromptChoice, Resolution, needs_prompt, resolve};
 use crate::ui::{sidebar, startup};
 use eframe::egui;
@@ -65,10 +65,8 @@ pub struct AutoPobApp {
     screen: Screen,
     /// A build is being opened; the build screen waits for this command's snapshots.
     entering: Option<u64>,
-    /// Seqs of recent Lab commands, so only their errors reset the Lab tab.
-    lab_seqs: Vec<u64>,
     tab: BuildTab,
-    lab: LabTab,
+    tree: TreeTab,
     config_ui: ConfigUi,
     list_ui: BuildListUi,
 
@@ -108,9 +106,8 @@ impl AutoPobApp {
             last_snapshot: 0,
             screen: Screen::List,
             entering: None,
-            lab_seqs: Vec::new(),
             tab: BuildTab::default(),
-            lab: LabTab::default(),
+            tree: TreeTab::default(),
             config_ui: ConfigUi::default(),
             list_ui: BuildListUi::default(),
             notices: Vec::new(),
@@ -182,6 +179,13 @@ impl AutoPobApp {
             Event::StartupFailed { message } => self.startup_error = Some(message),
             Event::Snapshot { seq, snapshot } => {
                 self.last_snapshot = self.last_snapshot.max(seq);
+                // The events are in order, so everything from the previous build has arrived
+                // by the new build's first snapshot. Only now is the tree tab's state for the
+                // old build (and any late power events) dropped.
+                if self.entering.is_some_and(|e| seq >= e) {
+                    self.entering = None;
+                    self.tree.reset();
+                }
                 match snapshot {
                     Snapshot::Build(view) => {
                         self.last_unsaved = view.unsaved;
@@ -192,27 +196,27 @@ impl AutoPobApp {
                     }
                     Snapshot::BuildList(view) => self.list = Some(view),
                     Snapshot::Stats(view) => {
-                        if self.stats.as_deref() != Some(&*view) {
-                            self.lab.stats_changed();
-                        }
                         self.stats = Some(view);
                     }
                     Snapshot::Config(view) => self.config = Some(view),
-                }
-                if self.entering.is_some_and(|e| seq >= e) {
-                    self.entering = None;
+                    // power results of the build being left
+                    Snapshot::NodePower(_) | Snapshot::PowerReport(_)
+                        if self.entering.is_some() => {}
+                    snapshot => self.tree.on_snapshot(&snapshot),
                 }
             }
             Event::Error { seq, message } => self.on_error(seq, message),
-            Event::Lab(event) => self.lab.on_event(event),
+            // power events of the build being left arrive before the new build's snapshots
+            Event::Progress { .. } | Event::BackgroundFailed { .. } if self.entering.is_some() => {}
+            Event::Progress { percent, .. } => self.tree.on_progress(percent),
+            Event::BackgroundFailed { message, .. } => {
+                self.tree.power_failed();
+                self.notices.push(message);
+            }
         }
     }
 
     fn on_error(&mut self, seq: u64, message: String) {
-        if let Some(at) = self.lab_seqs.iter().position(|s| *s == seq) {
-            self.lab_seqs.remove(at);
-            self.lab.failed();
-        }
         if self.entering == Some(seq) {
             // the build never opened; go back to where the user was
             self.entering = None;
@@ -260,6 +264,10 @@ impl AutoPobApp {
             }
             Pending::BackToList => {
                 self.screen = Screen::List;
+                // the heat map would go on calculating for a build nobody is looking at
+                if let Some(stop) = self.tree.stop_heatmap() {
+                    self.send(stop);
+                }
                 let folder = self.list_folder();
                 self.send(Command::ListBuilds { folder });
             }
@@ -274,7 +282,7 @@ impl AutoPobApp {
         self.entering = Some(seq);
         self.screen = Screen::Build;
         self.tab = BuildTab::default();
-        self.lab.build_changed();
+        // the tree tab resets when the build's first snapshot arrives (see `on_event`)
     }
 
     fn save(&mut self, then: Option<Pending>) {
@@ -326,10 +334,10 @@ impl AutoPobApp {
     }
 
     fn undo_redo(&mut self, redo: bool) {
-        if !self.tab.has_undo() {
-            return;
-        }
-        let tab = Tab::Config;
+        let tab = match self.tab {
+            BuildTab::Config => Tab::Config,
+            BuildTab::Tree => Tab::Tree,
+        };
         self.send(if redo {
             Command::Redo(tab)
         } else {
@@ -461,7 +469,10 @@ impl AutoPobApp {
 
         // Shortcuts. Nothing fires under a modal. While a text field has focus, Ctrl+Z and
         // Ctrl+Y are left unconsumed for the field's own undo; Ctrl+S still saves.
-        let modal = self.prompt.is_some() || self.save_as.is_some() || self.import.is_some();
+        let modal = self.prompt.is_some()
+            || self.save_as.is_some()
+            || self.import.is_some()
+            || self.tree.has_dialog();
         let typing = ui.ctx().egui_wants_keyboard_input();
         let mut action = None;
         if !modal {
@@ -483,7 +494,11 @@ impl AutoPobApp {
         }
 
         egui::Panel::top("top_bar").show(ui, |ui| {
-            action = build::top_bar(ui, &view, self.tab).or(action);
+            let history = match self.tab {
+                BuildTab::Tree => self.tree.history(),
+                _ => (view.can_undo, view.can_redo),
+            };
+            action = build::top_bar(ui, &view, self.tab, history).or(action);
         });
         let behind = self.behind();
         egui::Panel::left("stats_sidebar")
@@ -491,13 +506,14 @@ impl AutoPobApp {
             .default_size(300.0)
             .show(ui, |ui| sidebar::show(ui, self.stats.as_deref(), behind));
 
-        let mut lab_commands = Vec::new();
         let mut config_commands = Vec::new();
+        let mut tree_out = TreeOutput::default();
         let config = self.config.clone();
         egui::CentralPanel::default().show(ui, |ui| {
             build::tab_strip(ui, &mut self.tab);
             ui.separator();
             match self.tab {
+                BuildTab::Tree => tree_out = self.tree.show(ui, behind),
                 BuildTab::Config => match &config {
                     Some(config) => {
                         config_commands = self.config_ui.show(ui, config, behind);
@@ -506,19 +522,20 @@ impl AutoPobApp {
                         ui.spinner();
                     }
                 },
-                BuildTab::Lab => lab_commands = self.lab.show(ui, behind),
             }
         });
         for command in config_commands {
             self.send(command);
         }
-        for command in lab_commands {
-            // lab commands answer with events, not snapshots, so they don't count as "behind"
-            let seq = self.engine.send(Command::Lab(command));
-            self.lab_seqs.push(seq);
-            if self.lab_seqs.len() > 32 {
-                self.lab_seqs.remove(0);
-            }
+        if self.tab != BuildTab::Tree {
+            self.tree.close_dialog();
+        }
+        for command in tree_out.commands {
+            self.send(command);
+        }
+        // questions are answered with snapshots but never leave the app waiting
+        for query in tree_out.queries {
+            self.engine.send(query);
         }
 
         match action {
@@ -692,8 +709,7 @@ mod tests {
         BuildListEntry, ConfigKind, ConfigOption, ConfigSection, ConfigSet, CustomModGroup,
         StatRow, TooltipLine,
     };
-    use crate::engine::{Affected, Backend, ConfigValue, LabCommand, LabEvent, NodeScore, Tree};
-    use std::collections::HashSet;
+    use crate::engine::{Affected, Backend, ConfigValue};
     use std::path::PathBuf;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -706,19 +722,60 @@ mod tests {
         path: Option<PathBuf>,
         unsaved: bool,
         folder: String,
+        /// The build has one tree instead of two
+        single_spec: bool,
+        /// The node power calculation fails on its first step
+        fail_power: bool,
+        heatmap: Option<String>,
+        /// A node power calculation is running
+        power_work: bool,
+        /// The tree layout went out once; the engine resends it only when it changes
+        layout_sent: bool,
     }
 
     impl Backend for Fake {
-        fn apply(&mut self, command: Command, send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
+        fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
             let all = Affected {
                 build: true,
                 list: true,
                 stats: true,
                 config: true,
-                recalc: false,
+                tree_layout: !self.layout_sent,
+                tree: true,
+                ..Affected::default()
             };
             match command {
+                Command::SetHeatmap { stat, .. } => {
+                    self.power_work = stat.is_some();
+                    self.heatmap = stat;
+                    Ok(Affected {
+                        tree: true,
+                        power: true,
+                        ..Affected::default()
+                    })
+                }
+                Command::SetTreeSearch { text } if text == "boom" => {
+                    anyhow::bail!("search broke")
+                }
+                Command::SetTreeSearch { .. } => Ok(Affected {
+                    tree: true,
+                    ..Affected::default()
+                }),
+                // an allocation or reset restarts the calculation of a heat map that is on
+                Command::ResetTree => {
+                    self.power_work = self.heatmap.is_some();
+                    Ok(Affected {
+                        tree: true,
+                        power: true,
+                        ..Affected::default()
+                    })
+                }
+                Command::ExportTreeLink => Ok(Affected {
+                    link: true,
+                    ..Affected::default()
+                }),
                 Command::NewBuild => {
+                    self.layout_sent = true;
                     self.path = None;
                     self.unsaved = false;
                     Ok(all)
@@ -727,6 +784,7 @@ mod tests {
                     if path.to_string_lossy().contains("bad") {
                         anyhow::bail!("couldn't open that build");
                     }
+                    self.layout_sent = true;
                     self.path = Some(path);
                     self.unsaved = false;
                     Ok(all)
@@ -767,28 +825,6 @@ mod tests {
                         list: true,
                         ..Affected::default()
                     })
-                }
-                Command::Lab(LabCommand::Tree) => {
-                    send(Event::Lab(LabEvent::Tree(Tree {
-                        nodes: vec![],
-                        edges: vec![],
-                        sheets: vec![],
-                        allocated: HashSet::new(),
-                    })));
-                    Ok(Affected::default())
-                }
-                Command::Lab(LabCommand::NodePower { .. }) => {
-                    send(Event::Lab(LabEvent::Progress { done: 1, total: 2 }));
-                    send(Event::Lab(LabEvent::NodePower(vec![NodeScore {
-                        id: 1,
-                        name: "Node".into(),
-                        kind: "Notable".into(),
-                        distance: 2,
-                        gain: 1.0,
-                        path_gain: 2.0,
-                        per_point: 1.0,
-                    }])));
-                    Ok(Affected::default())
                 }
                 _ => Ok(Affected::default()),
             }
@@ -847,6 +883,99 @@ mod tests {
                 custom_mods: vec![],
                 sections: vec![],
             })
+        }
+
+        fn tree_layout_view(&mut self) -> anyhow::Result<crate::engine::TreeLayout> {
+            let node = |id, x| crate::engine::TreeNode {
+                id,
+                pos: [x, 0.0],
+                kind: "Normal".into(),
+                name: format!("Node {id}"),
+                stats: vec![],
+                orbit: None,
+                group_center: None,
+                art: crate::engine::NodeArt::default(),
+                ascendancy: None,
+            };
+            Ok(crate::engine::TreeLayout {
+                version: "3_28".into(),
+                nodes: vec![node(1, 0.0), node(2, 600.0)],
+                edges: vec![(0, 1)],
+                sheets: vec![],
+                key: "fake".into(),
+            })
+        }
+
+        fn tree_state_view(&mut self) -> anyhow::Result<crate::engine::TreeState> {
+            let specs = if self.single_spec {
+                serde_json::json!([{ "title": "Main", "version": "3_28", "points": 1 }])
+            } else {
+                serde_json::json!([
+                    { "title": "Main", "version": "3_28", "points": 1 },
+                    { "title": "Other", "version": "3_28", "points": 0 },
+                ])
+            };
+            Ok(serde_json::from_value(serde_json::json!({
+                "version": "3_28", "version_label": "3.28", "class_id": 0, "ascendancy_id": 0,
+                "classes": [
+                    { "id": 0, "name": "Witch", "needs_confirm": false, "ascendancies": [
+                        { "id": 0, "name": "None", "ascend_id": "None" },
+                        { "id": 1, "name": "Necromancer", "ascend_id": "Necromancer" } ] },
+                    { "id": 1, "name": "Marauder", "needs_confirm": true },
+                    { "id": 2, "name": "Ranger", "needs_confirm": false },
+                ],
+                "points": { "used": 1, "available": 122, "ascendancy_used": 0,
+                            "ascendancy_available": 8 },
+                "allocated": [1],
+                "specs": specs, "active_spec": 0,
+                "power_stats": ["Life", "Full DPS"], "heatmap": self.heatmap,
+                "can_undo": true, "can_redo": false,
+            }))?)
+        }
+
+        fn has_background_work(&self) -> bool {
+            self.power_work
+        }
+
+        fn background_step(&mut self, send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
+            self.power_work = false;
+            if self.fail_power {
+                anyhow::bail!("power calculation failed");
+            }
+            send(Event::Progress {
+                task: crate::engine::BackgroundTask::NodePower,
+                percent: 50,
+            });
+            Ok(Affected {
+                power: true,
+                ..Affected::default()
+            })
+        }
+
+        fn node_power_view(&mut self) -> anyhow::Result<crate::engine::NodePower> {
+            Ok(crate::engine::NodePower {
+                stat: self.heatmap.clone(),
+                nodes: vec![],
+                max_single: 0.0,
+                max_offence: 0.0,
+                max_defence: 0.0,
+                finished: !self.power_work,
+            })
+        }
+
+        fn power_report_view(&mut self) -> anyhow::Result<crate::engine::PowerReport> {
+            anyhow::bail!("unused")
+        }
+
+        fn node_tooltip_view(
+            &mut self,
+            _id: u32,
+        ) -> anyhow::Result<Option<crate::engine::NodeTooltip>> {
+            Ok(None)
+        }
+
+        fn tree_link_view(&mut self) -> anyhow::Result<String> {
+            Ok("https://example.test/tree".into())
         }
     }
 
@@ -959,17 +1088,8 @@ mod tests {
             a.screen == Screen::Build && a.entering.is_none() && a.stats.is_some()
         });
         assert!(!app.behind());
-        app.tab = BuildTab::Lab;
-        pump_until(&mut app, &ctx, "lab tree", |a| a.lab_has_tree());
-        // ranking streams progress then results, and never leaves the sidebar spinning
-        app.engine.send(Command::Lab(LabCommand::NodePower {
-            metric: "Life",
-            max_distance: 3,
-        }));
-        for _ in 0..50 {
-            frame(&mut app, &ctx, vec![]);
-            std::thread::sleep(Duration::from_millis(2));
-        }
+        app.tab = BuildTab::Tree;
+        frame(&mut app, &ctx, vec![]);
         assert!(!app.behind());
         app.tab = BuildTab::Config;
         frame(&mut app, &ctx, vec![]);
@@ -1331,6 +1451,7 @@ mod tests {
         *app.config_ui
             .rects
             .get(key)
+            .or_else(|| app.tree.rects.map.get(key))
             .unwrap_or_else(|| panic!("no widget {key}"))
     }
 
@@ -1524,9 +1645,395 @@ mod tests {
         assert_eq!(sent_since(&app, before), ["SelectConfigSet { id: 2 }"]);
     }
 
-    impl AutoPobApp {
-        fn lab_has_tree(&self) -> bool {
-            self.lab.has_tree()
+    // ---- the Tree tab -------------------------------------------------------------------
+
+    fn tree_app_with(
+        fake: impl Fn() -> Fake + Send + Sync + 'static,
+    ) -> (AutoPobApp, egui::Context) {
+        let (mut app, ctx) = app_with(move || Ok(Box::new(fake()) as Box<dyn Backend>));
+        pump_until(&mut app, &ctx, "list", |a| a.ready && a.list.is_some());
+        app.request(Pending::New);
+        pump_until(&mut app, &ctx, "tree tab", |a| {
+            a.screen == Screen::Build
+                && a.entering.is_none()
+                && a.tree.rects.map.contains_key("reset")
+        });
+        frame(&mut app, &ctx, vec![]);
+        (app, ctx)
+    }
+
+    fn tree_app() -> (AutoPobApp, egui::Context) {
+        tree_app_with(Fake::default)
+    }
+
+    /// Runs frames and collects the text egui was asked to copy.
+    fn copied_within(app: &mut AutoPobApp, ctx: &egui::Context, frames: usize) -> Vec<String> {
+        let mut copied = Vec::new();
+        for _ in 0..frames {
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| app.show(ui));
+            copied.extend(
+                output
+                    .platform_output
+                    .commands
+                    .iter()
+                    .filter_map(|c| match c {
+                        egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                        _ => None,
+                    }),
+            );
+            std::thread::sleep(Duration::from_millis(2));
         }
+        copied
+    }
+
+    #[test]
+    fn tree_is_the_default_tab_and_draws() {
+        let (app, _ctx) = tree_app();
+        assert_eq!(app.tab, BuildTab::Tree);
+        for key in [
+            "spec_combo",
+            "class_combo",
+            "reset",
+            "search",
+            "heat_stat",
+            "link_menu",
+        ] {
+            assert!(app.tree.rects.map.contains_key(key), "missing {key}");
+        }
+        assert!(app.tree.rect.is_some(), "the canvas was drawn");
+    }
+
+    #[test]
+    fn ctrl_z_on_tree_tab_sends_tree_undo() {
+        let (mut app, ctx) = tree_app();
+        let before = app.sent_full.len();
+        frame(&mut app, &ctx, ctrl(egui::Key::Z));
+        frame(
+            &mut app,
+            &ctx,
+            key_with(
+                egui::Key::Z,
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            ),
+        );
+        assert_eq!(sent_since(&app, before), ["Undo(Tree)", "Redo(Tree)"]);
+    }
+
+    #[test]
+    fn class_change_with_nodes_asks_and_connect_sends_connect_true() {
+        let (mut app, ctx) = tree_app();
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "class_combo");
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "class:1");
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new(), "asks first");
+        click(&mut app, &ctx, "class_connect");
+        assert_eq!(
+            sent_since(&app, before),
+            ["SelectClass { id: 1, connect: true }"]
+        );
+
+        // "Reset tree" keeps nothing
+        click(&mut app, &ctx, "class_combo");
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "class:1");
+        click(&mut app, &ctx, "class_reset");
+        assert_eq!(
+            sent_since(&app, before)[1],
+            "SelectClass { id: 1, connect: false }"
+        );
+
+        // a class that needs no confirmation is chosen at once
+        click(&mut app, &ctx, "class_combo");
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "class:2");
+        assert_eq!(
+            sent_since(&app, before)[2],
+            "SelectClass { id: 2, connect: false }"
+        );
+    }
+
+    #[test]
+    fn reset_asks_first() {
+        let (mut app, ctx) = tree_app();
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "reset");
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        click(&mut app, &ctx, "reset_yes");
+        assert_eq!(sent_since(&app, before), ["ResetTree"]);
+    }
+
+    #[test]
+    fn delete_spec_asks_and_last_spec_cannot_be_deleted() {
+        let (mut app, ctx) = tree_app();
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "spec_delete");
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        click(&mut app, &ctx, "spec_delete_yes");
+        assert_eq!(sent_since(&app, before), ["DeleteSpec { index: 0 }"]);
+
+        let (mut app, ctx) = tree_app_with(|| Fake {
+            single_spec: true,
+            ..Fake::default()
+        });
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "spec_delete");
+        assert!(!app.tree.rects.map.contains_key("spec_delete_yes"));
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn search_is_debounced() {
+        let (mut app, ctx) = tree_app();
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "search");
+        for text in ["a", "b", "c"] {
+            type_text(&mut app, &ctx, text);
+        }
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new(), "still typing");
+        // egui's clock advances 1/60 s a frame
+        for _ in 0..12 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        assert_eq!(
+            sent_since(&app, before),
+            ["SetTreeSearch { text: \"abc\" }"]
+        );
+    }
+
+    #[test]
+    fn queries_do_not_mark_the_app_behind() {
+        let (mut app, ctx) = tree_app();
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "link_menu");
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "link_copy");
+        // the query is out, yet the app waits for nothing
+        assert!(!app.behind());
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        pump_until(&mut app, &ctx, "link", |a| a.tree.link.is_some());
+    }
+
+    #[test]
+    fn heatmap_failure_shows_retry() {
+        let (mut app, ctx) = tree_app_with(|| Fake {
+            fail_power: true,
+            ..Fake::default()
+        });
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "heat_stat");
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "heat:Life");
+        assert_eq!(
+            sent_since(&app, before),
+            ["SetHeatmap { stat: Some(\"Life\"), max_depth: None }"]
+        );
+        pump_until(&mut app, &ctx, "retry", |a| {
+            a.tree.rects.map.contains_key("heat_retry")
+        });
+        click(&mut app, &ctx, "heat_retry");
+        assert_eq!(
+            sent_since(&app, before),
+            [
+                "SetHeatmap { stat: Some(\"Life\"), max_depth: None }",
+                "SetHeatmap { stat: Some(\"Life\"), max_depth: None }"
+            ]
+        );
+    }
+
+    #[test]
+    fn power_report_row_click_centres_node() {
+        let (mut app, ctx) = tree_app();
+        click(&mut app, &ctx, "report_toggle");
+        let row = |id, name: &str| crate::engine::PowerReportRow {
+            id,
+            name: name.into(),
+            kind: "Notable".into(),
+            power: 1.0,
+            power_text: "1".into(),
+            path_power: 2.0,
+            path_power_text: "2".into(),
+            allocated: false,
+            path_dist: 1,
+        };
+        app.on_event(Event::Snapshot {
+            seq: 0,
+            snapshot: Snapshot::PowerReport(Arc::new(crate::engine::PowerReport {
+                stat: "Life".into(),
+                rows: vec![row(1, "First"), row(2, "Second")],
+            })),
+        });
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "report_row:1");
+        assert_eq!(app.tree.camera.center, egui::Vec2::new(600.0, 0.0));
+        assert!(matches!(app.tree.pulse, Some((2, _))));
+    }
+
+    #[test]
+    fn copy_link_puts_link_on_clipboard() {
+        let (mut app, ctx) = tree_app();
+        click(&mut app, &ctx, "link_menu");
+        frame(&mut app, &ctx, vec![]);
+        let pos = rect_of(&app, "link_copy").center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut copied = Vec::new();
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![button(true)],
+            vec![button(false)],
+        ] {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.show(ui),
+            );
+            copied.extend(output.platform_output.commands);
+        }
+        let copied_later = copied_within(&mut app, &ctx, 100);
+        let all: Vec<String> = copied
+            .iter()
+            .filter_map(|c| match c {
+                egui::OutputCommand::CopyText(t) => Some(t.clone()),
+                _ => None,
+            })
+            .chain(copied_later)
+            .collect();
+        assert_eq!(all, ["https://example.test/tree"]);
+    }
+
+    #[test]
+    fn second_build_still_draws_the_tree_when_the_layout_is_not_resent() {
+        let (mut app, ctx) = tree_app();
+        app.tree.rects.map.clear();
+        app.request(Pending::New);
+        pump_until(&mut app, &ctx, "second build", |a| {
+            a.screen == Screen::Build
+                && a.entering.is_none()
+                && a.tree.rects.map.contains_key("reset")
+        });
+    }
+
+    #[test]
+    fn background_failure_after_a_restart_shows_retry() {
+        let (mut app, ctx) = tree_app_with(|| Fake {
+            fail_power: true,
+            ..Fake::default()
+        });
+        click(&mut app, &ctx, "heat_stat");
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "heat:Life");
+        pump_until(&mut app, &ctx, "first failure", |a| {
+            a.tree.rects.map.contains_key("heat_retry")
+        });
+        // the tree changes, the calculation restarts, and fails again
+        app.tree.rects.map.clear();
+        app.send(Command::ResetTree);
+        pump_until(&mut app, &ctx, "second failure", |a| {
+            a.tree.rects.map.contains_key("heat_retry")
+        });
+        assert!(!app.notices.is_empty());
+    }
+
+    #[test]
+    fn power_events_of_the_previous_build_are_dropped_when_another_opens() {
+        let (mut app, ctx) = tree_app();
+        app.request(Pending::New);
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.entering.is_some());
+        // events the old build's calculation left in the queue, ahead of the new build's
+        app.on_event(Event::Progress {
+            task: crate::engine::BackgroundTask::NodePower,
+            percent: 37,
+        });
+        app.on_event(Event::Snapshot {
+            seq: 0,
+            snapshot: Snapshot::PowerReport(Arc::new(crate::engine::PowerReport {
+                stat: "Life".into(),
+                rows: vec![],
+            })),
+        });
+        app.on_event(Event::BackgroundFailed {
+            task: crate::engine::BackgroundTask::NodePower,
+            message: "power calculation failed".into(),
+        });
+        pump_until(&mut app, &ctx, "new build", |a| {
+            a.screen == Screen::Build
+                && a.entering.is_none()
+                && a.tree.rects.map.contains_key("reset")
+        });
+        assert_eq!(app.tree.progress, None, "no progress bar");
+        assert!(app.tree.report.is_none(), "no report");
+        assert!(!app.tree.rects.map.contains_key("heat_retry"), "no failure");
+        assert!(app.notices.is_empty(), "{:?}", app.notices);
+    }
+
+    #[test]
+    fn going_back_to_the_list_stops_the_heatmap() {
+        let (mut app, ctx) = tree_app();
+        let before = app.sent_full.len();
+        // nothing to stop yet
+        app.request(Pending::BackToList);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(sent_since(&app, before), ["ListBuilds { folder: \"\" }"]);
+
+        let (mut app, ctx) = tree_app();
+        click(&mut app, &ctx, "heat_stat");
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "heat:Life");
+        pump_until(&mut app, &ctx, "heat map on", |a| a.tree.heatmap_on());
+        let before = app.sent_full.len();
+        app.request(Pending::BackToList);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(
+            sent_since(&app, before),
+            [
+                "SetHeatmap { stat: None, max_depth: None }",
+                "ListBuilds { folder: \"\" }"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_command_error_while_the_heatmap_runs_is_not_a_power_failure() {
+        let (mut app, ctx) = tree_app();
+        click(&mut app, &ctx, "heat_stat");
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "heat:Life");
+        app.send(Command::SetTreeSearch {
+            text: "boom".into(),
+        });
+        pump_until(&mut app, &ctx, "notice", |a| !a.notices.is_empty());
+        assert_eq!(app.notices, ["search broke"]);
+        assert!(!app.tree.rects.map.contains_key("heat_retry"));
+    }
+
+    #[test]
+    fn leaving_the_tree_tab_closes_its_dialog_and_frees_the_shortcuts() {
+        let (mut app, ctx) = tree_app();
+        click(&mut app, &ctx, "reset");
+        assert!(app.tree.has_dialog());
+        app.tab = BuildTab::Config;
+        frame(&mut app, &ctx, vec![]);
+        assert!(!app.tree.has_dialog());
+        frame(&mut app, &ctx, ctrl(egui::Key::S));
+        assert!(app.save_as.is_some(), "Ctrl+S reached the save command");
+    }
+
+    #[test]
+    fn shortcuts_wait_while_a_tree_dialog_is_open() {
+        let (mut app, ctx) = tree_app();
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "reset");
+        frame(&mut app, &ctx, ctrl(egui::Key::Z));
+        frame(&mut app, &ctx, ctrl(egui::Key::S));
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
     }
 }

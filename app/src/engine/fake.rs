@@ -1,20 +1,37 @@
 //! Recording fake backend for engine tests.
 
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use super::commands::Command;
 use super::run::{Affected, Backend, Event};
-use super::views::{BuildListView, BuildView, ConfigView, StatsView};
+use super::views::{
+    BuildListView, BuildView, ConfigView, NodePower, NodeTooltip, Points, PowerReport, StatsView,
+    TooltipLine, TreeLayout, TreeState,
+};
 
 #[derive(Default, Debug)]
 pub struct Log {
     pub set_configs: usize,
     pub recalculations: usize,
+    pub steps: usize,
+    pub previews: Vec<u32>,
 }
+
+/// One scripted background step: what it affects, or the error it fails with.
+pub type Step = Result<Affected, String>;
 
 pub struct Fake {
     pub log: Arc<Mutex<Log>>,
     pub fail_set_config: Option<String>,
+    /// Steps still to run; the loop works through them while no command is waiting.
+    pub background: Arc<Mutex<VecDeque<Step>>>,
+    /// Replaces the queue when a command returns `build` or `recalc`.
+    pub restart_on_build: Vec<Step>,
+    /// Called after each step with the number of steps run so far.
+    pub on_step: Option<Box<dyn FnMut(usize) + Send>>,
+    /// `node_tooltip_view` answers `None`, as for a node that no longer exists.
+    pub tooltip_vanished: bool,
 }
 
 impl Fake {
@@ -24,14 +41,18 @@ impl Fake {
             Fake {
                 log: log.clone(),
                 fail_set_config: None,
+                background: Arc::default(),
+                restart_on_build: Vec::new(),
+                on_step: None,
+                tooltip_vanished: false,
             },
             log,
         )
     }
 }
 
-impl Backend for Fake {
-    fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
+impl Fake {
+    fn apply_command(&mut self, command: Command) -> anyhow::Result<Affected> {
         match command {
             Command::SetConfig { .. } => {
                 self.log.lock().unwrap().set_configs += 1;
@@ -43,8 +64,30 @@ impl Backend for Fake {
                     ..Affected::default()
                 })
             }
+            Command::NewBuild => Ok(Affected {
+                tree_layout: true,
+                ..Affected::ALL_VIEWS
+            }),
+            Command::PreviewNode { id } => Ok(Affected {
+                preview: Some(id),
+                ..Affected::default()
+            }),
+            Command::ExportTreeLink => Ok(Affected {
+                link: true,
+                ..Affected::default()
+            }),
             _ => Ok(Affected::default()),
         }
+    }
+}
+
+impl Backend for Fake {
+    fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
+        let affected = self.apply_command(command)?;
+        if (affected.build || affected.recalc) && !self.restart_on_build.is_empty() {
+            *self.background.lock().unwrap() = self.restart_on_build.iter().cloned().collect();
+        }
+        Ok(affected)
     }
 
     fn recalculate(&mut self) -> anyhow::Result<()> {
@@ -86,5 +129,120 @@ impl Backend for Fake {
             custom_mods: Vec::new(),
             sections: vec![],
         })
+    }
+
+    fn tree_layout_view(&mut self) -> anyhow::Result<TreeLayout> {
+        Ok(empty_layout())
+    }
+
+    fn tree_state_view(&mut self) -> anyhow::Result<TreeState> {
+        Ok(empty_tree_state())
+    }
+
+    fn has_background_work(&self) -> bool {
+        !self.background.lock().unwrap().is_empty()
+    }
+
+    fn background_step(&mut self, _send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
+        let step = self.background.lock().unwrap().pop_front();
+        let steps = {
+            let mut log = self.log.lock().unwrap();
+            log.steps += 1;
+            log.steps
+        };
+        if let Some(on_step) = &mut self.on_step {
+            on_step(steps);
+        }
+        match step {
+            Some(Ok(affected)) => Ok(affected),
+            Some(Err(message)) => {
+                // a failed calculation has no more work
+                self.background.lock().unwrap().clear();
+                anyhow::bail!("{message}")
+            }
+            None => Ok(Affected::default()),
+        }
+    }
+
+    fn node_power_view(&mut self) -> anyhow::Result<NodePower> {
+        Ok(NodePower {
+            stat: None,
+            nodes: vec![],
+            max_single: 0.0,
+            max_offence: 0.0,
+            max_defence: 0.0,
+            finished: false,
+        })
+    }
+
+    fn power_report_view(&mut self) -> anyhow::Result<PowerReport> {
+        Ok(PowerReport {
+            stat: String::new(),
+            rows: vec![],
+        })
+    }
+
+    fn node_tooltip_view(&mut self, id: u32) -> anyhow::Result<Option<NodeTooltip>> {
+        self.log.lock().unwrap().previews.push(id);
+        if self.tooltip_vanished {
+            return Ok(None);
+        }
+        Ok(Some(NodeTooltip {
+            id,
+            lines: vec![TooltipLine::Line {
+                size: 14,
+                text: format!("node {id}"),
+            }],
+        }))
+    }
+
+    fn tree_link_view(&mut self) -> anyhow::Result<String> {
+        Ok("https://example.test/tree".into())
+    }
+}
+
+/// A tree with no nodes, for backends that don't care about the tree.
+pub fn empty_layout() -> TreeLayout {
+    TreeLayout {
+        version: "3_28".into(),
+        nodes: vec![],
+        edges: vec![],
+        sheets: vec![],
+        key: "3_28:0:0".into(),
+    }
+}
+
+/// A build with nothing allocated.
+pub fn empty_tree_state() -> TreeState {
+    TreeState {
+        version: "3_28".into(),
+        version_label: "3.28".into(),
+        convertible_to: None,
+        class_id: 0,
+        ascendancy_id: 0,
+        classes: vec![],
+        points: Points {
+            used: 0,
+            available: 122,
+            ascendancy_used: 0,
+            ascendancy_available: 8,
+        },
+        allocated: vec![],
+        masteries: vec![],
+        mastery_options: vec![],
+        paths: vec![],
+        depends: vec![],
+        search: String::new(),
+        search_matches: vec![],
+        compare: vec![],
+        jewels: vec![],
+        specs: vec![],
+        active_spec: 0,
+        compare_spec: None,
+        power_stats: vec![],
+        heatmap: None,
+        max_depth: None,
+        can_undo: false,
+        can_redo: false,
     }
 }

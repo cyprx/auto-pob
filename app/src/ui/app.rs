@@ -150,8 +150,12 @@ impl AutoPobApp {
                 .unwrap_or_default()
                 .to_owned(),
         );
+        let is_notes = matches!(command, Command::SetNotes { .. });
         let seq = self.engine.send(command);
         self.last_sent = seq;
+        if is_notes {
+            self.notes.sent(seq);
+        }
         seq
     }
 
@@ -163,7 +167,7 @@ impl AutoPobApp {
     fn current_unsaved(&self) -> bool {
         self.screen == Screen::Build
             && self.entering.is_none()
-            && self.build.as_ref().is_some_and(|b| b.unsaved)
+            && (self.notes.has_pending() || self.build.as_ref().is_some_and(|b| b.unsaved))
     }
 
     fn list_folder(&self) -> String {
@@ -218,7 +222,7 @@ impl AutoPobApp {
                         }
                         self.calcs.on_snapshot(&snapshot);
                     }
-                    Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot),
+                    Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
                     Snapshot::NodePower(_) | Snapshot::PowerReport(_)
                         if self.entering.is_some() => {}
@@ -609,7 +613,8 @@ impl AutoPobApp {
             self.show_node(id, now);
         }
 
-        if action.is_some() {
+        // Back goes through the unsaved prompt, which knows about the pending edit
+        if matches!(action, Some(BuildAction::Save | BuildAction::SaveAs)) {
             self.flush_notes();
         }
         match action {
@@ -663,7 +668,11 @@ impl AutoPobApp {
         match resolve(choice, has_path) {
             Resolution::SaveThen => self.save(Some(pending)),
             Resolution::SaveAsThen => self.open_save_as(Some(pending)),
-            Resolution::Proceed => self.ready_actions.push(pending),
+            Resolution::Proceed => {
+                // "Don't save" drops the edit still waiting to be sent
+                self.notes.discard();
+                self.ready_actions.push(pending);
+            }
             Resolution::Stay => {}
         }
     }
@@ -2262,5 +2271,57 @@ mod tests {
             ),
         );
         assert!(sent_since(&app, before).is_empty());
+    }
+
+    #[test]
+    fn back_or_close_with_a_pending_note_asks_first() {
+        let (mut app, ctx) = notes_app();
+        app.notes.type_for_test("my notes", 0.0);
+        app.request(Pending::BackToList);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.prompt, Some(Pending::BackToList));
+        assert_eq!(app.screen, Screen::Build);
+
+        app.prompt = None;
+        ctx.run_ui(
+            egui::RawInput {
+                viewports: std::iter::once((
+                    egui::ViewportId::ROOT,
+                    egui::ViewportInfo {
+                        events: vec![egui::ViewportEvent::Close],
+                        ..Default::default()
+                    },
+                ))
+                .collect(),
+                ..Default::default()
+            },
+            |ui| app.show(ui),
+        )
+        .drop_without_applying_deltas();
+        assert_eq!(app.prompt, Some(Pending::Close));
+        assert!(!app.allow_close);
+    }
+
+    #[test]
+    fn dont_save_drops_the_pending_note_and_save_sends_it() {
+        let (mut app, ctx) = notes_app();
+        let before = app.sent_log.len();
+        app.notes.type_for_test("my notes", 0.0);
+        app.prompt = Some(Pending::BackToList);
+        // "Don't save"
+        app.notes.discard();
+        app.ready_actions.push(Pending::BackToList);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(sent_since(&app, before), ["ListBuilds { folder: \"\" }"]);
+
+        // "Save" flushes first, then saves
+        let (mut app, _ctx) = notes_app();
+        let before = app.sent_log.len();
+        app.notes.type_for_test("my notes", 0.0);
+        app.save(Some(Pending::BackToList));
+        assert_eq!(
+            sent_since(&app, before),
+            ["SetNotes { text: \"my notes\" }", "Save"]
+        );
     }
 }

@@ -72,6 +72,11 @@ pub struct NotesUi {
     dirty_since: Option<f64>,
     preview: bool,
     edit_id: egui::Id,
+    /// The seq of the latest `SetNotes` sent. A Notes snapshot with a lower seq was taken
+    /// before that command ran and would put older text back.
+    sent_seq: u64,
+    #[cfg(test)]
+    button_rects: Vec<egui::Rect>,
 }
 
 impl Default for NotesUi {
@@ -82,6 +87,9 @@ impl Default for NotesUi {
             dirty_since: None,
             preview: false,
             edit_id: egui::Id::unique("notes_edit"),
+            sent_seq: 0,
+            #[cfg(test)]
+            button_rects: Vec::new(),
         }
     }
 }
@@ -92,16 +100,34 @@ impl NotesUi {
         *self = Self::default();
     }
 
-    pub fn on_snapshot(&mut self, snapshot: &Snapshot) {
+    pub fn on_snapshot(&mut self, snapshot: &Snapshot, seq: u64) {
         if let Snapshot::Notes(view) = snapshot {
-            self.on_view(view);
+            self.on_view(view, seq);
         }
     }
 
-    fn on_view(&mut self, view: &NotesView) {
+    /// An edit is waiting for its debounce time, so the build has unsaved changes the engine
+    /// doesn't know about yet.
+    pub fn has_pending(&self) -> bool {
+        self.dirty_since.is_some()
+    }
+
+    /// Drops the pending edit (the user chose not to save).
+    pub fn discard(&mut self) {
+        self.dirty_since = None;
+    }
+
+    /// `SetNotes` went out as command `seq`.
+    pub fn sent(&mut self, seq: u64) {
+        self.sent_seq = seq;
+    }
+
+    fn on_view(&mut self, view: &NotesView, seq: u64) {
         self.colours.clone_from(&view.colours);
-        // the user's newer typing wins over what the engine says
-        if self.dirty_since.is_none() {
+        // The user's newer typing wins, and so does text sent after the view was taken. Comparing
+        // seqs, unlike comparing the text, needs no copy of the engine's filtering and cannot
+        // stall if a SetNotes fails and is never echoed.
+        if self.dirty_since.is_none() && seq >= self.sent_seq {
             self.text.clone_from(&view.text);
         }
     }
@@ -135,6 +161,13 @@ impl NotesUi {
                     let label =
                         pob_text(&format!("{}{}", colour.code, colour.label), size, default);
                     let button = ui.add_sized([100.0, 18.0], egui::Button::new(label));
+                    #[cfg(test)]
+                    {
+                        if i == 0 {
+                            self.button_rects.clear();
+                        }
+                        self.button_rects.push(button.rect);
+                    }
                     if button.clicked() {
                         clicked = Some(colour.code.clone());
                     }
@@ -270,13 +303,109 @@ mod tests {
             text: text.to_owned(),
             colours: Vec::new(),
         };
-        ui.on_view(&view("from engine"));
+        ui.on_view(&view("from engine"), 1);
         assert_eq!(ui.text, "from engine");
         ui.type_for_test("typed", 1.0);
-        ui.on_view(&view("stale"));
+        ui.on_view(&view("stale"), 1);
         assert_eq!(ui.text, "typed");
         assert!(ui.flush().is_some());
-        ui.on_view(&view("fresh"));
+        ui.on_view(&view("fresh"), 1);
         assert_eq!(ui.text, "fresh");
+    }
+
+    #[test]
+    fn stale_echo_does_not_overwrite_newer_sent_text() {
+        let view = |text: &str| NotesView {
+            text: text.to_owned(),
+            colours: Vec::new(),
+        };
+        let mut ui = NotesUi::default();
+        ui.type_for_test("a", 1.0);
+        assert!(ui.flush().is_some());
+        ui.sent(5);
+        ui.type_for_test("ab", 2.0);
+        assert!(ui.flush().is_some());
+        ui.sent(6);
+        ui.on_view(&view("a"), 5);
+        assert_eq!(ui.text, "ab");
+        ui.on_view(&view("ab"), 6);
+        assert_eq!(ui.text, "ab");
+        // a later view (open, import) still loads
+        ui.on_view(&view("other"), 7);
+        assert_eq!(ui.text, "other");
+    }
+
+    fn run_events(
+        ui: &mut NotesUi,
+        ctx: &egui::Context,
+        now: f64,
+        events: Vec<egui::Event>,
+    ) -> Option<Command> {
+        let mut out = None;
+        ctx.run_ui(
+            egui::RawInput {
+                time: Some(now),
+                events,
+                ..Default::default()
+            },
+            |ui_| out = ui.show(ui_, now),
+        )
+        .drop_without_applying_deltas();
+        out
+    }
+
+    #[test]
+    fn typing_into_the_editor_sends_after_500ms() {
+        let ctx = egui::Context::default();
+        let mut ui = NotesUi::default();
+        run_events(&mut ui, &ctx, 0.0, vec![]);
+        ctx.memory_mut(|m| m.request_focus(ui.edit_id));
+        run_events(&mut ui, &ctx, 0.1, vec![]);
+        assert!(run_events(&mut ui, &ctx, 1.0, vec![egui::Event::Text("hi".into())]).is_none());
+        assert_eq!(ui.text, "hi");
+        assert!(run_events(&mut ui, &ctx, 1.3, vec![]).is_none());
+        let sent = run_events(&mut ui, &ctx, 1.5, vec![]);
+        assert!(matches!(sent, Some(Command::SetNotes { ref text }) if text == "hi"));
+    }
+
+    #[test]
+    fn clicking_a_colour_button_wraps_the_selection() {
+        let ctx = egui::Context::default();
+        let mut ui = NotesUi::default();
+        ui.on_view(
+            &NotesView {
+                text: "é a^x00FF00bc d".to_owned(),
+                colours: vec![NoteColour {
+                    label: "FIRE".into(),
+                    code: "^xB97123".into(),
+                }],
+            },
+            1,
+        );
+        run_events(&mut ui, &ctx, 0.0, vec![]);
+        ctx.memory_mut(|m| m.request_focus(ui.edit_id));
+        run_events(&mut ui, &ctx, 0.05, vec![]);
+        // select "a^x00FF00bc" (chars 2..13)
+        let mut state = egui::TextEdit::load_state(&ctx, ui.edit_id).unwrap_or_default();
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(2),
+                egui::text::CCursor::new(13),
+            )));
+        state.store(&ctx, ui.edit_id);
+        run_events(&mut ui, &ctx, 0.1, vec![]);
+        let at = ui.button_rects[0].center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        run_events(&mut ui, &ctx, 0.2, vec![egui::Event::PointerMoved(at)]);
+        run_events(&mut ui, &ctx, 0.3, vec![button(true)]);
+        run_events(&mut ui, &ctx, 0.4, vec![button(false)]);
+        assert_eq!(ui.text, "é ^xB97123abc^x00FF00 d");
+        assert!(ui.has_pending());
     }
 }

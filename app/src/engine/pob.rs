@@ -143,6 +143,16 @@ fn config_changed() -> Affected {
     }
 }
 
+/// A tree edit changes the build and the tree state, and needs a recalculation.
+fn tree_edited() -> Affected {
+    Affected {
+        build: true,
+        tree: true,
+        recalc: true,
+        ..Affected::default()
+    }
+}
+
 impl Backend for PobBackend {
     fn apply(&mut self, command: Command, send: &dyn Fn(Event)) -> Result<Affected> {
         match command {
@@ -250,6 +260,38 @@ impl Backend for PobBackend {
             Command::RemoveCustomModGroup { group } => {
                 self.call::<_, ()>("remove_custom_mod_group", group + 1)?;
                 Ok(config_changed())
+            }
+            Command::AllocNode { id } => {
+                self.call::<_, ()>("alloc_node", id)?;
+                Ok(tree_edited())
+            }
+            Command::DeallocNode { id } => {
+                self.call::<_, ()>("dealloc_node", id)?;
+                Ok(tree_edited())
+            }
+            Command::SelectClass { id, connect } => {
+                self.call::<_, ()>("select_class", (id, connect))?;
+                Ok(tree_edited())
+            }
+            Command::SelectAscendancy { id } => {
+                self.call::<_, ()>("select_ascendancy", id)?;
+                Ok(tree_edited())
+            }
+            Command::ResetTree => {
+                self.call::<_, ()>("reset_tree", ())?;
+                Ok(tree_edited())
+            }
+            Command::SetMastery { node, effect } => {
+                self.call::<_, ()>("set_mastery", (node, effect))?;
+                Ok(tree_edited())
+            }
+            Command::Undo(Tab::Tree) => {
+                self.call::<_, ()>("tree_undo", ())?;
+                Ok(tree_edited())
+            }
+            Command::Redo(Tab::Tree) => {
+                self.call::<_, ()>("tree_redo", ())?;
+                Ok(tree_edited())
             }
             Command::Undo(Tab::Config) => {
                 self.call::<_, ()>("undo", "config")?;

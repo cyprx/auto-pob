@@ -63,6 +63,30 @@ pub enum Command {
     /// Ask for the active tree's link.
     ExportTreeLink,
 
+    /// Allocates the node and the path to it (an ascendancy node switches ascendancy first).
+    AllocNode {
+        id: u32,
+    },
+    /// Deallocates the node and what depends on it.
+    DeallocNode {
+        id: u32,
+    },
+    /// With unconnected points, `connect` keeps the tree by connecting it to the class;
+    /// otherwise the tree is reset.
+    SelectClass {
+        id: u32,
+        connect: bool,
+    },
+    SelectAscendancy {
+        id: u32,
+    },
+    ResetTree,
+    /// Chooses a mastery's effect, allocating the mastery when it isn't yet.
+    SetMastery {
+        node: u32,
+        effect: u32,
+    },
+
     Undo(Tab),
     Redo(Tab),
     Lab(LabCommand),
@@ -81,6 +105,7 @@ pub enum ConfigValue {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Config,
+    Tree,
 }
 
 /// Lab commands. Answers arrive as `Event::Lab`.

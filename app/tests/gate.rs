@@ -10,6 +10,7 @@ use auto_pob::engine::{
     Tab,
 };
 use auto_pob::game::Game;
+use mlua::LuaSerdeExt;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -1553,6 +1554,295 @@ fn layout_resent_on_version_change() {
     assert_eq!(s.backend.tree_layout_view().unwrap().key, layout.key);
     let affected = s.run(Command::OpenBuild { path: dest }).unwrap();
     assert!(!affected.tree_layout);
+}
+
+// ---- tree editing ----
+
+/// One recorded step of a tree recipe, as upstream's `act.*` helpers log it in the global
+/// `actions`; each maps onto one of our commands.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(untagged)]
+enum TreeAction {
+    Alloc { alloc: u32 },
+    Dealloc { dealloc: u32 },
+    Class { class: u32, connect: bool },
+    Ascend { ascend: u32 },
+    Reset { reset: bool },
+    Mastery { mastery: u32, effect: u32 },
+    Undo { undo: bool },
+    Redo { redo: bool },
+}
+
+impl TreeAction {
+    fn command(&self) -> Command {
+        match *self {
+            TreeAction::Alloc { alloc } => Command::AllocNode { id: alloc },
+            TreeAction::Dealloc { dealloc } => Command::DeallocNode { id: dealloc },
+            TreeAction::Class { class, connect } => Command::SelectClass { id: class, connect },
+            TreeAction::Ascend { ascend } => Command::SelectAscendancy { id: ascend },
+            TreeAction::Reset { reset } => {
+                assert!(reset);
+                Command::ResetTree
+            }
+            TreeAction::Mastery { mastery, effect } => Command::SetMastery {
+                node: mastery,
+                effect,
+            },
+            TreeAction::Undo { undo } => {
+                assert!(undo);
+                Command::Undo(Tab::Tree)
+            }
+            TreeAction::Redo { redo } => {
+                assert!(redo);
+                Command::Redo(Tab::Tree)
+            }
+        }
+    }
+}
+
+/// What upstream PoB shows for the tree after a recipe.
+#[derive(Debug, PartialEq)]
+struct TreeResult {
+    /// Sorted
+    allocated: Vec<u32>,
+    class_id: u32,
+    ascendancy_id: u32,
+    /// (node, effect), sorted
+    masteries: Vec<(u32, u32)>,
+    spec_titles: Vec<String>,
+    /// 0-based
+    active_spec: usize,
+    sidebar: Vec<auto_pob::engine::upstream::SidebarLine>,
+}
+
+/// A recipe run in upstream PoB: the steps it took and where they ended.
+struct TreeRecipe {
+    base: String,
+    actions: Vec<TreeAction>,
+    result: TreeResult,
+}
+
+/// Loads a fixture into fresh upstream PoB and defines the recipe helpers from `tree_lib.lua`.
+fn upstream_with_tree_lib(base: &str) -> mlua::Lua {
+    let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
+    let xml = fixtures_dir().join(format!("{base}.xml"));
+    load_xml(&lua, &fs::read_to_string(xml).unwrap(), base).unwrap();
+    lua.load(fs::read_to_string(fixtures_dir().join("tree_lib.lua")).unwrap())
+        .set_name("=tree_lib")
+        .exec()
+        .expect("tree_lib.lua");
+    lua
+}
+
+/// The id of the node a `tree_lib.lua` expression picks in the base fixture,
+/// e.g. `pick.notable(2)`.
+fn upstream_node(base: &str, expr: &str) -> u32 {
+    let lua = upstream_with_tree_lib(base);
+    lua.load(format!("return ({expr}).id"))
+        .eval()
+        .unwrap_or_else(|e| panic!("{expr}: {e}"))
+}
+
+/// Runs `tree/<name>.lua` in upstream PoB on its base fixture.
+fn upstream_tree_recipe(name: &str) -> TreeRecipe {
+    #[derive(serde::Deserialize)]
+    struct Mastery {
+        node: u32,
+        effect: u32,
+    }
+    #[derive(serde::Deserialize)]
+    struct Raw {
+        allocated: Vec<u32>,
+        class_id: u32,
+        ascendancy_id: u32,
+        #[serde(default)]
+        masteries: Vec<Mastery>,
+        spec_titles: Vec<String>,
+        active_spec: usize,
+    }
+    let source = fs::read_to_string(fixtures_dir().join(format!("tree/{name}.lua"))).unwrap();
+    // the recipe names its base fixture, which has to be loaded before its helpers run
+    let base = source
+        .lines()
+        .find_map(|l| l.strip_prefix("base = \"")?.strip_suffix('"'))
+        .unwrap_or_else(|| panic!("{name}: no base"))
+        .to_string();
+    let lua = upstream_with_tree_lib(&base);
+    lua.load(source)
+        .set_name(format!("={name}"))
+        .exec()
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+    lua.load("recipe()")
+        .exec()
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+    let read = |code: &str| -> mlua::Value { lua.load(code).eval().unwrap() };
+    let actions: Vec<TreeAction> = lua.from_value(read("return actions")).unwrap();
+    let raw: Raw = lua
+        .from_value(read(
+            r#"
+            local allocated, masteries, titles = {}, {}, {}
+            for id in pairs(build.spec.allocNodes) do allocated[#allocated + 1] = id end
+            table.sort(allocated)
+            for node, effect in pairs(build.spec.masterySelections) do
+                if build.spec.allocNodes[node] then masteries[#masteries + 1] = { node = node, effect = effect } end
+            end
+            table.sort(masteries, function(a, b) return a.node < b.node end)
+            for i, spec in ipairs(build.treeTab.specList) do titles[i] = spec.title or "Default" end
+            return {
+                allocated = allocated, class_id = build.spec.curClassId,
+                ascendancy_id = build.spec.curAscendClassId, masteries = masteries,
+                spec_titles = titles, active_spec = build.treeTab.activeSpec - 1,
+            }
+            "#,
+        ))
+        .unwrap();
+    let sidebar = golden_of(&lua, Game::Poe1.pob_version()).unwrap().sidebar;
+    TreeRecipe {
+        base,
+        actions,
+        result: TreeResult {
+            allocated: raw.allocated,
+            class_id: raw.class_id,
+            ascendancy_id: raw.ascendancy_id,
+            masteries: raw.masteries.iter().map(|m| (m.node, m.effect)).collect(),
+            spec_titles: raw.spec_titles,
+            active_spec: raw.active_spec,
+            sidebar,
+        },
+    }
+}
+
+/// Our tree state and sidebar in the shape of `TreeResult`.
+fn our_tree_result(s: &mut Session) -> TreeResult {
+    let state = s.backend.tree_state_view().expect("tree state");
+    let mut allocated = state.allocated.clone();
+    allocated.sort_unstable();
+    let mut masteries: Vec<(u32, u32)> =
+        state.masteries.iter().map(|m| (m.node, m.effect)).collect();
+    masteries.sort_unstable();
+    let sidebar = s
+        .stats()
+        .stats
+        .iter()
+        .map(|r| auto_pob::engine::upstream::SidebarLine {
+            label: r.label.clone(),
+            text: r.text.clone(),
+        })
+        .collect();
+    TreeResult {
+        allocated,
+        class_id: state.class_id,
+        ascendancy_id: state.ascendancy_id,
+        masteries,
+        spec_titles: state.specs.iter().map(|e| e.title.clone()).collect(),
+        active_spec: state.active_spec,
+        sidebar,
+    }
+}
+
+fn attack_session(test: &str) -> Session {
+    let mut s = Session::start(test);
+    s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+    s
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tree_recipes_match_pob() {
+    let _guard = lock();
+    for name in ["alloc_path", "class_change", "mastery"] {
+        let recipe = upstream_tree_recipe(name);
+        assert!(!recipe.actions.is_empty(), "{name}: no actions recorded");
+        let mut s = Session::start(&format!("tree-recipe-{name}"));
+        s.open_fixture(
+            &recipe.base,
+            &fixtures_dir().join(format!("{}.xml", recipe.base)),
+        );
+        let before = our_tree_result(&mut s);
+        for action in &recipe.actions {
+            s.run(action.command())
+                .unwrap_or_else(|e| panic!("{name}: {action:?}: {e}"));
+        }
+        let ours = our_tree_result(&mut s);
+        assert_ne!(
+            ours.allocated, before.allocated,
+            "{name}: the recipe changes the tree"
+        );
+        assert_eq!(ours, recipe.result, "{name}");
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn edits_mark_unsaved_and_undo() {
+    let _guard = lock();
+    let mut s = attack_session("tree-unsaved");
+    let original = s.backend.tree_state_view().unwrap().allocated;
+    assert!(
+        !s.backend.build_view().unwrap().unsaved,
+        "a loaded build is saved"
+    );
+    assert!(!s.backend.tree_state_view().unwrap().can_undo);
+
+    let id = upstream_node("attack", "pick.notable(2)");
+    let affected = s.run(Command::AllocNode { id }).unwrap();
+    assert!(affected.build && affected.tree && affected.recalc);
+    let state = s.backend.tree_state_view().unwrap();
+    assert!(state.allocated.contains(&id));
+    assert!(state.can_undo && !state.can_redo);
+    assert!(
+        s.backend.build_view().unwrap().unsaved,
+        "an edit leaves unsaved changes"
+    );
+
+    s.run(Command::Undo(Tab::Tree)).unwrap();
+    let state = s.backend.tree_state_view().unwrap();
+    assert_eq!(state.allocated, original);
+    assert!(state.can_redo);
+
+    s.run(Command::Redo(Tab::Tree)).unwrap();
+    assert!(s.backend.tree_state_view().unwrap().allocated.contains(&id));
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tree_command_errors() {
+    let _guard = lock();
+    let mut s = attack_session("tree-errors");
+    let before = s.backend.tree_state_view().unwrap().allocated;
+    let mastery = upstream_node("attack", "pick.mastery()");
+    let unreachable = upstream_node("attack", "pick.unreachable()");
+    let cases = [
+        (
+            Command::AllocNode { id: 987_654_321 },
+            "unknown passive node 987654321",
+        ),
+        (
+            Command::DeallocNode { id: 987_654_321 },
+            "unknown passive node 987654321",
+        ),
+        (
+            Command::AllocNode { id: unreachable },
+            "that passive isn't connected to your tree",
+        ),
+        (
+            Command::SetMastery {
+                node: mastery,
+                effect: 987_654_321,
+            },
+            "that mastery effect isn't available here",
+        ),
+        (Command::AllocNode { id: mastery }, "pick a mastery effect"),
+    ];
+    for (command, message) in cases {
+        let error = s.run(command.clone()).expect_err(&format!("{command:?}"));
+        assert_eq!(error.to_string(), message, "{command:?}");
+        assert_eq!(
+            s.backend.tree_state_view().unwrap().allocated,
+            before,
+            "{command:?} changed the tree"
+        );
+    }
 }
 
 #[test]

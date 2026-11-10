@@ -260,3 +260,209 @@ function glue.tree_state()
 		can_redo = spec.redo[1] ~= nil,
 	}
 end
+
+-- ---- Editing ----
+-- Each command repeats the steps of the PoB callback that a click would run, citing it.
+-- Errors use level 0.
+
+local function main_module()
+	return pob.main.main
+end
+
+local function node_by_id(id)
+	local node = pob.build.spec.nodes[id]
+	if not node then
+		error("unknown passive node " .. tostring(id), 0)
+	end
+	return node
+end
+
+-- The steps every edit ends with (Build.lua:260, PassiveTreeView.lua:388).
+local function finish_edit(withTitle)
+	local build = pob.build
+	build.spec:AddUndoState()
+	if withTitle then
+		build.spec:SetWindowTitleWithBuildClass()
+	end
+	build.buildFlag = true
+end
+
+-- The ascendancy part of a left click on an unallocated node (PassiveTreeView.lua:397-495):
+-- clicking a node of another ascendancy switches to it first. Bloodlines aren't supported, and
+-- the cross-class confirmation is replaced by an error: the UI asks through `SelectClass`.
+local function switch_to_clicked_ascendancy(node)
+	local spec = pob.build.spec
+	if node.isBloodline then
+		error("secondary ascendancies aren't supported yet", 0)
+	end
+	if not (spec.curAscendClassId == 0 or node.ascendancyName ~= spec.curAscendClassBaseName) then
+		return
+	end
+	if spec.curSecondaryAscendClass and node.ascendancyName == spec.curSecondaryAscendClass.id then
+		return
+	end
+	-- same class: always allowed (PassiveTreeView.lua:421)
+	for ascendClassId, ascendClass in pairs(spec.curClass.classes) do
+		if ascendClass.id == node.ascendancyName then
+			spec:SelectAscendClass(ascendClassId)
+			finish_edit(true)
+			return
+		end
+	end
+	-- another class (PassiveTreeView.lua:437)
+	for classId, classData in pairs(spec.tree.classes) do
+		for ascendClassId, ascendClass in pairs(classData.classes) do
+			if ascendClass.id == node.ascendancyName then
+				if spec:CountAllocNodes() ~= 0 and not spec:IsClassConnected(classId) then
+					error("that ascendancy belongs to another class: change class first", 0)
+				end
+				spec:SelectClass(classId)
+				spec:SelectAscendClass(ascendClassId)
+				local target = spec.nodes[node.id]
+				if target and not target.alloc then
+					spec:AllocNode(target)
+				end
+				finish_edit(true)
+				return
+			end
+		end
+	end
+end
+
+-- Left click on an unallocated node (PassiveTreeView.lua:391-513). Masteries with effects go
+-- through `glue.set_mastery`, which is the popup's save.
+function glue.alloc_node(id)
+	local spec = pob.build.spec
+	local node = node_by_id(id)
+	if node.alloc then
+		return
+	end
+	if node.type == "Mastery" and node.masteryEffects then
+		error("pick a mastery effect", 0)
+	end
+	if node.ascendancyName then
+		switch_to_clicked_ascendancy(node)
+	end
+	if node.alloc then
+		return
+	end
+	if not node.path then
+		error("that passive isn't connected to your tree", 0)
+	end
+	spec:AllocNode(node)
+	finish_edit(false)
+end
+
+-- Left click on an allocated node (PassiveTreeView.lua:384).
+function glue.dealloc_node(id)
+	local spec = pob.build.spec
+	local node = node_by_id(id)
+	if not node.alloc then
+		return
+	end
+	spec:DeallocNode(node)
+	finish_edit(false)
+end
+
+-- Presses the popup's button with this label (or its `confirm` control).
+local function press(popup, label)
+	for key, control in pairs(popup.controls) do
+		if control.onClick and (control.label == label or (label == nil and key == "confirm")) then
+			control.onClick()
+			return true
+		end
+	end
+	return false
+end
+
+-- The class dropdown's callback (Build.lua:255). With unconnected points it opens a popup;
+-- "Connect Path" or "Continue" is pressed for `connect`.
+function glue.select_class(id, connect)
+	local build = pob.build
+	local drop = build.controls.classDrop
+	local entry
+	for _, candidate in ipairs(drop.list) do
+		if candidate.classId == id then
+			entry = candidate
+		end
+	end
+	if not entry then
+		error("unknown class " .. tostring(id), 0)
+	end
+	local main = main_module()
+	local popups = #main.popups
+	drop.selFunc(nil, entry)
+	if #main.popups > popups then
+		local popup = main.popups[1]
+		local pressed = press(popup, connect and "Connect Path" or nil)
+		if not pressed then
+			main:ClosePopup()
+		end
+		if build.spec.curClassId ~= id then
+			error("couldn't connect your tree to that class", 0)
+		end
+	end
+end
+
+-- The ascendancy dropdown's callback (Build.lua:279).
+function glue.select_ascendancy(id)
+	local build = pob.build
+	local classes = build.spec.curClass.classes
+	if id ~= 0 and not classes[id] then
+		error("unknown ascendancy " .. tostring(id), 0)
+	end
+	build.controls.ascendDrop.selFunc(nil, { ascendClassId = id })
+end
+
+-- The Reset Tree button and its popup (TreeTab.lua:133-138).
+function glue.reset_tree()
+	local build = pob.build
+	local main = main_module()
+	local popups = #main.popups
+	build.treeTab.controls.reset.onClick()
+	if #main.popups <= popups then
+		error("couldn't reset the tree", 0)
+	end
+	local popup = main.popups[1]
+	if not (popup.controls.reset and popup.controls.reset.onClick) then
+		main:ClosePopup()
+		error("couldn't reset the tree", 0)
+	end
+	popup.controls.reset.onClick()
+end
+
+-- SaveMasteryPopup (TreeTab.lua:992): the effect must be one OpenMasteryPopup offers
+-- (TreeTab.lua:1009).
+function glue.set_mastery(id, effectId)
+	local build = pob.build
+	local spec = build.spec
+	local node = node_by_id(id)
+	local offered = false
+	if node.type == "Mastery" then
+		for _, effect in ipairs(node.masteryEffects or {}) do
+			local assigned = isValueInTable(spec.masterySelections, effect.effect)
+			if effect.effect == effectId and (not assigned or assigned == node.id) then
+				offered = true
+			end
+		end
+	end
+	if not offered then
+		error("that mastery effect isn't available here", 0)
+	end
+	if not node.alloc and not node.path then
+		error("that passive isn't connected to your tree", 0)
+	end
+	-- no popup is open, so the ClosePopup at its end has nothing to close
+	build.treeTab:SaveMasteryPopup(node, { selValue = { id = effectId } })
+end
+
+-- Ctrl+Z and Ctrl+Y on the tree tab (TreeTab.lua:358-366).
+function glue.tree_undo()
+	pob.build.spec:Undo()
+	pob.build.buildFlag = true
+end
+
+function glue.tree_redo()
+	pob.build.spec:Redo()
+	pob.build.buildFlag = true
+end

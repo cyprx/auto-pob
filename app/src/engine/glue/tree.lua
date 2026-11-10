@@ -162,8 +162,15 @@ local function class_choices(spec)
 	local classes = {}
 	for _, entry in ipairs(pob.build.controls.classDrop.list) do
 		local ascendancies = {}
+		local classData = pob.build.spec.tree.classes[entry.classId]
 		for i, ascendancy in ipairs(entry.ascendancies) do
-			ascendancies[i] = { id = ascendancy.ascendClassId, name = ascendancy.label }
+			-- `ascend_id` is the ascendancyName nodes carry (e.g. "Raider"); the label is
+			-- ascendClass.name (e.g. "Warden") and can differ from it
+			ascendancies[i] = {
+				id = ascendancy.ascendClassId,
+				name = ascendancy.label,
+				ascend_id = (classData.classes[ascendancy.ascendClassId] or {}).id or "",
+			}
 		end
 		classes[#classes + 1] = {
 			id = entry.classId,

@@ -919,7 +919,8 @@ mod tests {
                 "version": "3_28", "version_label": "3.28", "class_id": 0, "ascendancy_id": 0,
                 "classes": [
                     { "id": 0, "name": "Witch", "needs_confirm": false, "ascendancies": [
-                        { "id": 0, "name": "None" }, { "id": 1, "name": "Necromancer" } ] },
+                        { "id": 0, "name": "None", "ascend_id": "None" },
+                        { "id": 1, "name": "Necromancer", "ascend_id": "Necromancer" } ] },
                     { "id": 1, "name": "Marauder", "needs_confirm": true },
                     { "id": 2, "name": "Ranger", "needs_confirm": false },
                 ],

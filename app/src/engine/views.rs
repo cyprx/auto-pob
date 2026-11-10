@@ -326,7 +326,10 @@ pub struct ClassChoice {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct AscendancyChoice {
     pub id: u32,
+    /// The label the dropdown shows
     pub name: String,
+    /// What `TreeNode::ascendancy` holds (PoB's `ascendancyName`); not always the label
+    pub ascend_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -489,7 +492,7 @@ mod tests {
               version = "3_28", version_label = "3.28", convertible_to = "3_29",
               class_id = 3, ascendancy_id = 1,
               classes = { { id = 3, name = "Witch", needs_confirm = true,
-                            ascendancies = { { id = 0, name = "None" }, { id = 1, name = "Necromancer" } } } },
+                            ascendancies = { { id = 0, name = "None", ascend_id = "None" }, { id = 1, name = "Necromancer", ascend_id = "Necromancer" } } } },
               points = { used = 10, available = 122, ascendancy_used = 2, ascendancy_available = 8 },
               allocated = { 5, 6 },
               masteries = { { node = 7, effect = 70 } },

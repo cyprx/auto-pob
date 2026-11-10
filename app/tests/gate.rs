@@ -1434,6 +1434,8 @@ fn layout_includes_spec_only_nodes() {
     let mut s = Session::start("layout-nodes");
     let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "attack").unwrap();
     s.open_fixture("attack", &xml);
+    // the fixture has no ascendancy yet; take the first one of its class
+    s.run(Command::SelectAscendancy { id: 1 }).unwrap();
     let layout = s.backend.tree_layout_view().expect("layout");
     let state = s.backend.tree_state_view().expect("state");
     assert!(layout.nodes.len() > 2000, "{}", layout.nodes.len());
@@ -1444,6 +1446,22 @@ fn layout_includes_spec_only_nodes() {
         "every sprite sheet loads"
     );
     let ids: std::collections::HashSet<u32> = layout.nodes.iter().map(|n| n.id).collect();
+    // the current ascendancy's id is what its nodes carry in `ascendancy`
+    let current = state
+        .classes
+        .iter()
+        .find(|c| c.id == state.class_id)
+        .and_then(|c| c.ascendancies.iter().find(|a| a.id == state.ascendancy_id))
+        .filter(|a| a.id != 0)
+        .expect("the attack fixture has an ascendancy");
+    assert!(
+        layout
+            .nodes
+            .iter()
+            .any(|n| n.ascendancy.as_deref() == Some(current.ascend_id.as_str())),
+        "no node carries the ascendancy id {:?}",
+        current.ascend_id
+    );
     assert!(!state.allocated.is_empty());
     for id in &state.allocated {
         assert!(ids.contains(id), "allocated node {id} is not in the layout");
@@ -2816,6 +2834,24 @@ fn no_power_work_without_heatmap() {
         off.finished,
         "nothing is calculated while the heat map is off"
     );
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn leaving_for_the_list_stops_power_work() {
+    let _guard = lock();
+    let mut s = attack_session("tree-list-stops-power");
+    s.run(Command::SetHeatmap {
+        stat: Some("Life".into()),
+        max_depth: Some(5),
+    })
+    .unwrap();
+    assert!(s.backend.has_background_work());
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .unwrap();
+    assert!(!s.backend.has_background_work());
 }
 
 #[test]

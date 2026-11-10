@@ -61,7 +61,7 @@ pub(super) struct Derived {
     pub depends: HashMap<u32, Vec<u32>>,
     pub matches: HashSet<u32>,
     pub compare: HashMap<u32, [f32; 3]>,
-    /// The name nodes of the build's ascendancy carry
+    /// The id (not the label) nodes of the build's ascendancy carry
     pub current_ascendancy: Option<String>,
 }
 
@@ -73,7 +73,7 @@ impl Derived {
             .find(|c| c.id == state.class_id)
             .and_then(|c| c.ascendancies.iter().find(|a| a.id == state.ascendancy_id))
             .filter(|a| a.id != 0)
-            .map(|a| a.name.clone());
+            .map(|a| a.ascend_id.clone());
         Self {
             allocated: state.allocated.iter().copied().collect(),
             paths: state
@@ -575,7 +575,7 @@ mod tests {
         // the build is a Berserker
         state.classes = serde_json::from_value(serde_json::json!([
             { "id": 0, "name": "Marauder", "needs_confirm": false,
-              "ascendancies": [ { "id": 1, "name": "Berserker" } ] }
+              "ascendancies": [ { "id": 1, "name": "Berserker", "ascend_id": "Berserker" } ] }
         ]))
         .unwrap();
         state.ascendancy_id = 1;
@@ -591,15 +591,18 @@ mod tests {
     fn own_ascendancy_node_without_a_path_does_nothing() {
         let (l, s) = sample();
         let mut layout = (*l).clone();
-        layout.nodes[3].ascendancy = Some("Berserker".into());
+        // nodes carry the id; the dropdown label differs from it (TreeData 3_29)
+        layout.nodes[3].ascendancy = Some("Raider".into());
         let mut state = (*s).clone();
         state.classes = serde_json::from_value(serde_json::json!([
             { "id": 0, "name": "Marauder", "needs_confirm": false,
-              "ascendancies": [ { "id": 1, "name": "Berserker" } ] }
+              "ascendancies": [ { "id": 1, "name": "Warden", "ascend_id": "Raider" } ] }
         ]))
         .unwrap();
         state.ascendancy_id = 1;
         let mut h = Harness::new(Arc::new(layout), Arc::new(state));
+        // the nodes count as the build's own, so they aren't faded either
+        assert_eq!(h.tab.derived.current_ascendancy.as_deref(), Some("Raider"));
         let out = h.click_at(h.screen_of(4));
         assert!(out.commands.is_empty(), "{:?}", out.commands);
     }

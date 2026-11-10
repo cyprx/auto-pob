@@ -189,6 +189,12 @@ impl Backend for PobBackend {
     fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> Result<Affected> {
         match command {
             Command::ListBuilds { folder } => {
+                // leaving a build stops the power work, as `SetHeatmap { stat: None }` does
+                if self.heatmap_on {
+                    self.call::<_, ()>("set_heatmap", (None::<String>, None::<u32>))?;
+                    self.heatmap_on = false;
+                    self.power_failed = false;
+                }
                 if folder.contains("..") || folder.starts_with('/') {
                     anyhow::bail!("that isn't a valid folder");
                 }

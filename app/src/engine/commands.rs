@@ -196,6 +196,44 @@ pub enum Command {
         group: usize,
         on: bool,
     },
+    /// Gem slots are 0-based within the group. Only `SetGem` may use `slot == len`, which
+    /// appends; the other gem commands address existing gems.
+    SetGem {
+        group: usize,
+        slot: usize,
+        gem_id: String,
+    },
+    /// The level, quality and count take the text typed into PoB's edit box.
+    SetGemLevel {
+        group: usize,
+        slot: usize,
+        text: String,
+    },
+    SetGemQuality {
+        group: usize,
+        slot: usize,
+        text: String,
+    },
+    SetGemEnabled {
+        group: usize,
+        slot: usize,
+        on: bool,
+    },
+    SetGemCount {
+        group: usize,
+        slot: usize,
+        text: String,
+    },
+    SetGemToggle {
+        group: usize,
+        slot: usize,
+        which: GemToggle,
+        on: bool,
+    },
+    DeleteGem {
+        group: usize,
+        slot: usize,
+    },
     /// A query: the text PoB copies for the group, answered as a `SocketGroupText`; the latest
     /// one in a batch is answered. The engine never touches the system clipboard.
     CopySocketGroup {
@@ -217,6 +255,13 @@ pub enum ConfigValue {
     Text(String),
     Choice(String),
     Clear,
+}
+
+/// A Vaal gem's two "Enable <skill>" toggles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GemToggle {
+    First,
+    Second,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

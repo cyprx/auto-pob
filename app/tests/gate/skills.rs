@@ -6,7 +6,9 @@ use super::{
     upstream_lua,
 };
 use auto_pob::engine::upstream::{SidebarLine, golden_of};
-use auto_pob::engine::{Backend, Command, SkillSetEntry, SkillsView, SocketGroupView, Tab};
+use auto_pob::engine::{
+    Backend, Command, GemToggle, SkillSetEntry, SkillsView, SocketGroupView, Tab,
+};
 use auto_pob::game::Game;
 use mlua::LuaSerdeExt;
 use std::fs;
@@ -143,6 +145,13 @@ fn skills_view_is_cheap() {
 
 // ---- Recorded recipes ----
 
+/// `GemToggle` as the recipe library names it
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+enum RecordedToggle {
+    First,
+    Second,
+}
+
 /// One step of a recipe as `skills_lib.lua`'s `act.*` recorded it, with 0-based indices.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(tag = "cmd")]
@@ -175,6 +184,41 @@ enum SkillsAction {
         group: usize,
         on: bool,
     },
+    SetGem {
+        group: usize,
+        slot: usize,
+        gem_id: String,
+    },
+    SetGemLevel {
+        group: usize,
+        slot: usize,
+        text: String,
+    },
+    SetGemQuality {
+        group: usize,
+        slot: usize,
+        text: String,
+    },
+    SetGemCount {
+        group: usize,
+        slot: usize,
+        text: String,
+    },
+    SetGemEnabled {
+        group: usize,
+        slot: usize,
+        on: bool,
+    },
+    SetGemToggle {
+        group: usize,
+        slot: usize,
+        which: RecordedToggle,
+        on: bool,
+    },
+    DeleteGem {
+        group: usize,
+        slot: usize,
+    },
     Undo,
     Redo,
     /// Built from the recorded checkpoint table, which can hold empty lists
@@ -197,6 +241,42 @@ impl SkillsAction {
             SkillsAction::SetGroupSlot { group, slot } => Command::SetGroupSlot { group, slot },
             SkillsAction::SetGroupEnabled { group, on } => Command::SetGroupEnabled { group, on },
             SkillsAction::SetGroupFullDps { group, on } => Command::SetGroupFullDps { group, on },
+            SkillsAction::SetGem {
+                group,
+                slot,
+                gem_id,
+            } => Command::SetGem {
+                group,
+                slot,
+                gem_id,
+            },
+            SkillsAction::SetGemLevel { group, slot, text } => {
+                Command::SetGemLevel { group, slot, text }
+            }
+            SkillsAction::SetGemQuality { group, slot, text } => {
+                Command::SetGemQuality { group, slot, text }
+            }
+            SkillsAction::SetGemCount { group, slot, text } => {
+                Command::SetGemCount { group, slot, text }
+            }
+            SkillsAction::SetGemEnabled { group, slot, on } => {
+                Command::SetGemEnabled { group, slot, on }
+            }
+            SkillsAction::SetGemToggle {
+                group,
+                slot,
+                which,
+                on,
+            } => Command::SetGemToggle {
+                group,
+                slot,
+                which: match which {
+                    RecordedToggle::First => GemToggle::First,
+                    RecordedToggle::Second => GemToggle::Second,
+                },
+                on,
+            },
+            SkillsAction::DeleteGem { group, slot } => Command::DeleteGem { group, slot },
             SkillsAction::Undo => Command::Undo(Tab::Skills),
             SkillsAction::Redo => Command::Redo(Tab::Skills),
             SkillsAction::Check { .. } => return None,
@@ -594,5 +674,181 @@ fn out_of_range_group_is_an_error() {
     }
     let err = s.backend.socket_group_text(missing).unwrap_err();
     assert!(err.to_string().contains(no_group), "{err}");
+    assert_eq!(s.backend.skills_view().unwrap(), before);
+}
+
+/// The recorded checkpoints of a recipe
+fn checkpoints(recipe: &SkillsRecipe) -> Vec<&SkillsCheckpoint> {
+    recipe
+        .actions
+        .iter()
+        .filter_map(|a| match a {
+            SkillsAction::Check { check } => Some(check),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn gem_recipes_match_pob() {
+    let _guard = lock();
+    let gems = check_skills_recipe("gems");
+    let checks = checkpoints(&gems);
+    let all_gems = || {
+        checks
+            .iter()
+            .flat_map(|c| c.groups.iter().flat_map(|g| &g.gems))
+    };
+    // coverage the first review asked for: a disabled gem, a gem with an error, quality
+    // other than 0, a count above 1
+    assert!(all_gems().any(|g| !g.enabled), "a disabled gem");
+    assert!(all_gems().any(|g| g.error.is_some()), "a gem with an error");
+    assert!(all_gems().any(|g| g.quality == 20), "quality other than 0");
+    assert!(
+        all_gems().any(|g| g.count.is_some_and(|c| c > 1)),
+        "a count above 1"
+    );
+    let vaal = check_skills_recipe("vaal");
+    let checks = checkpoints(&vaal);
+    let toggled = &checks[0].groups.last().unwrap().gems[0];
+    let (t1, t2) = (toggled.toggle1.as_ref(), toggled.toggle2.as_ref());
+    assert!(t1.is_some_and(|t| !t.on), "{toggled:?}");
+    assert!(t2.is_some_and(|t| !t.on), "{toggled:?}");
+}
+
+/// The attack fixture with the `Fireblal` group (a gem PoB doesn't know) pasted as the last group.
+fn session_with_unknown_gem(test: &str) -> (Session, usize) {
+    let (mut s, _) = session_on("attack", test);
+    s.run(Command::PasteSocketGroup {
+        text: "Fireblal 20/0  1\r\n".into(),
+    })
+    .unwrap();
+    let group = s.backend.skills_view().unwrap().groups.len() - 1;
+    (s, group)
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn set_gem_hidden_by_options_is_refused() {
+    let _guard = lock();
+    let (mut s, _) = session_on("attack", "hidden-gem");
+    s.backend
+        .lua
+        .load("pob.build.skillsTab.showLegacyGems = false")
+        .exec()
+        .unwrap();
+    let legacy: String = lua_value(
+        &s.backend.lua,
+        r#"for id, gem in pairs(pob.build.data.gems) do
+            if gem.grantedEffect.legacy and not gem.grantedEffect.hideFromGemList
+                and not (gem.grantedEffect.plusVersionOf) and not gem.tagString:match("Exceptional") then
+                return (id:gsub("^Default:", ""))
+            end
+        end"#,
+    );
+    let before = s.backend.skills_view().unwrap();
+    let err = s
+        .run(Command::SetGem {
+            group: 0,
+            slot: 0,
+            gem_id: legacy,
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("isn't offered"), "{err}");
+    assert_eq!(s.backend.skills_view().unwrap(), before);
+    assert!(!before.groups[0].gems.is_empty());
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn gem_edit_on_empty_row_is_refused() {
+    let _guard = lock();
+    let (mut s, _) = session_on("attack", "empty-row");
+    let before = s.backend.skills_view().unwrap();
+    let slot = before.groups[0].gems.len();
+    let text = || "5".to_string();
+    let commands = [
+        Command::SetGemLevel {
+            group: 0,
+            slot,
+            text: text(),
+        },
+        Command::SetGemQuality {
+            group: 0,
+            slot,
+            text: text(),
+        },
+        Command::SetGemCount {
+            group: 0,
+            slot,
+            text: text(),
+        },
+        Command::SetGemEnabled {
+            group: 0,
+            slot,
+            on: false,
+        },
+        Command::SetGemToggle {
+            group: 0,
+            slot,
+            which: GemToggle::First,
+            on: false,
+        },
+        Command::DeleteGem { group: 0, slot },
+    ];
+    for command in commands {
+        let shown = format!("{command:?}");
+        let err = s.run(command).expect_err(&shown);
+        assert!(err.to_string().contains("no such gem"), "{shown}: {err}");
+    }
+    assert_eq!(s.backend.skills_view().unwrap(), before);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn enabled_on_unknown_gem_is_refused() {
+    let _guard = lock();
+    let (mut s, group) = session_with_unknown_gem("unknown-gem");
+    let before = s.backend.skills_view().unwrap();
+    assert!(before.groups[group].gems[0].error.is_some());
+    let err = s
+        .run(Command::SetGemEnabled {
+            group,
+            slot: 0,
+            on: false,
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("unknown"), "{err}");
+    assert_eq!(s.backend.skills_view().unwrap(), before);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn overlong_level_is_refused() {
+    let _guard = lock();
+    let (mut s, _) = session_on("attack", "long-level");
+    let before = s.backend.skills_view().unwrap();
+    for command in [
+        Command::SetGemLevel {
+            group: 0,
+            slot: 0,
+            text: "123".into(),
+        },
+        Command::SetGemQuality {
+            group: 0,
+            slot: 0,
+            text: "123".into(),
+        },
+        Command::SetGemCount {
+            group: 0,
+            slot: 0,
+            text: "123".into(),
+        },
+    ] {
+        let shown = format!("{command:?}");
+        let err = s.run(command).expect_err(&shown);
+        assert!(err.to_string().contains("too long"), "{shown}: {err}");
+    }
     assert_eq!(s.backend.skills_view().unwrap(), before);
 }

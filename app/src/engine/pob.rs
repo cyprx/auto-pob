@@ -1,6 +1,6 @@
 //! Starts Path of Building's Lua with our own bootstrap.
 
-use super::commands::{Command, ConfigValue, Tab};
+use super::commands::{Command, ConfigValue, GemToggle, Tab};
 use super::run::{Affected, Backend, BackgroundTask, Engine, Event};
 use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
@@ -504,6 +504,44 @@ impl Backend for PobBackend {
                 group_text: Some(group),
                 ..Affected::default()
             }),
+            Command::SetGem {
+                group,
+                slot,
+                gem_id,
+            } => {
+                self.call::<_, ()>("skills_set_gem", (group + 1, slot + 1, gem_id))?;
+                Ok(skills_changed())
+            }
+            Command::SetGemLevel { group, slot, text } => {
+                self.call::<_, ()>("skills_set_gem_level", (group + 1, slot + 1, text))?;
+                Ok(skills_changed())
+            }
+            Command::SetGemQuality { group, slot, text } => {
+                self.call::<_, ()>("skills_set_gem_quality", (group + 1, slot + 1, text))?;
+                Ok(skills_changed())
+            }
+            Command::SetGemCount { group, slot, text } => {
+                self.call::<_, ()>("skills_set_gem_count", (group + 1, slot + 1, text))?;
+                Ok(skills_changed())
+            }
+            Command::SetGemEnabled { group, slot, on } => {
+                self.call::<_, ()>("skills_set_gem_enabled", (group + 1, slot + 1, on))?;
+                Ok(skills_changed())
+            }
+            Command::SetGemToggle {
+                group,
+                slot,
+                which,
+                on,
+            } => {
+                let which = if which == GemToggle::First { 1 } else { 2 };
+                self.call::<_, ()>("skills_set_gem_toggle", (group + 1, slot + 1, which, on))?;
+                Ok(skills_changed())
+            }
+            Command::DeleteGem { group, slot } => {
+                self.call::<_, ()>("skills_delete_gem", (group + 1, slot + 1))?;
+                Ok(skills_changed())
+            }
             Command::Undo(Tab::Skills) => {
                 self.call::<_, ()>("skills_undo", ())?;
                 Ok(skills_changed())

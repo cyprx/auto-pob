@@ -331,3 +331,82 @@ function glue.skills_redo()
 	skills_tab():Redo()
 	pob.build.buildFlag = true
 end
+
+-- ---- Gem slots ----
+
+-- The gem slot control set for an existing gem (R4); `append` also allows the empty row
+local function gem_slot(group_index, slot_index, append)
+	local group, c = show_group(group_index)
+	local tab = skills_tab()
+	local count = #group.gemList
+	if slot_index < 1 or slot_index > count + (append and 1 or 0) then
+		error("no such gem", 0)
+	end
+	if group.source ~= nil then
+		error("an item's socket group can't be edited", 0)
+	end
+	return group, tab.gemSlots[slot_index], c
+end
+
+-- Enter in the gem's name box with `gem_id` highlighted (GemSelectControl.lua:763-773, R5).
+-- The control must offer the gem, so a hidden one can't make PoB delete the slot's gem.
+local function pick(control, gem_id)
+	control:PopulateGemList()
+	local key = "Default:" .. gem_id
+	local data = control.gems[key]
+	if not data or not control:FilterSupport(key, data) then
+		error("that gem isn't offered here", 0)
+	end
+	control.initialBuf = control.buf
+	control.list = { key }
+	control.selIndex = 1
+	control:SetText(data.name)
+	control:UpdateGem(true, true, true)
+	control.dropped = false
+end
+
+function glue.skills_set_gem(group_index, slot_index, gem_id)
+	local _, slot = gem_slot(group_index, slot_index, true)
+	pick(slot.nameSpec, gem_id)
+end
+
+function glue.skills_set_gem_level(group_index, slot_index, text)
+	local _, slot = gem_slot(group_index, slot_index)
+	type_into(slot.level, text)
+end
+
+function glue.skills_set_gem_quality(group_index, slot_index, text)
+	local _, slot = gem_slot(group_index, slot_index)
+	type_into(slot.quality, text)
+end
+
+function glue.skills_set_gem_count(group_index, slot_index, text)
+	local _, slot = gem_slot(group_index, slot_index)
+	if not slot.count:IsShown() then
+		error("this gem has no count", 0)
+	end
+	type_into(slot.count, text)
+end
+
+function glue.skills_set_gem_enabled(group_index, slot_index, on)
+	local group, slot = gem_slot(group_index, slot_index)
+	-- PoB's callback reads `gemData.vaalGem` first and would raise on a gem it doesn't know
+	if not group.gemList[slot_index].gemData then
+		error("the gem is unknown", 0)
+	end
+	press_check(slot.enabled, on)
+end
+
+function glue.skills_set_gem_toggle(group_index, slot_index, which, on)
+	local _, slot = gem_slot(group_index, slot_index)
+	local control = which == 1 and slot.enableGlobal1 or slot.enableGlobal2
+	if not control:IsShown() then
+		error("this gem has no such toggle", 0)
+	end
+	press_check(control, on)
+end
+
+function glue.skills_delete_gem(group_index, slot_index)
+	local _, slot = gem_slot(group_index, slot_index)
+	slot.delete.onClick()
+end

@@ -231,6 +231,66 @@ function act.full_dps(index, on)
 	record({ cmd = "SetGroupFullDps", group = index, on = on })
 end
 
+-- The gem slot controls of an existing gem (or the empty row when `empty`), after a click on
+-- the group's row has shown the group
+local function gemSlot(g, s, empty)
+	local group, c = clickRow(g)
+	assert(s + 1 <= #group.gemList + (empty and 1 or 0), "no gem " .. s)
+	return group, skillsTab().gemSlots[s + 1], c
+end
+
+-- Typing a gem's name into its box and pressing Enter (GemSelectControl.lua:699-706, 722-773):
+-- focus, an empty box, the name typed (whose changeFunc builds the list and previews the
+-- gem), then the RETURN key. `text` is the gem's name as the list shows it.
+function act.gem(g, s, name)
+	local group, slot = gemSlot(g, s, true)
+	local control = slot.nameSpec
+	control:OnFocusGained()
+	control:SetText("")
+	control:Insert(name)
+	control:OnKeyDown("RETURN")
+	control.dropped = false
+	local gem = group.gemList[s + 1]
+	assert(gem and gem.gemId, "no gem was picked for " .. name)
+	record({ cmd = "SetGem", group = g, slot = s, gem_id = gem.gemId })
+end
+
+-- The level, quality and count boxes (SkillsTab.lua:812-1000)
+local function typeInto(field, cmd)
+	return function(g, s, text)
+		local _, slot = gemSlot(g, s)
+		slot[field]:SetText(text, true)
+		record({ cmd = cmd, group = g, slot = s, text = text })
+	end
+end
+act.level = typeInto("level", "SetGemLevel")
+act.quality = typeInto("quality", "SetGemQuality")
+act.count = typeInto("count", "SetGemCount")
+
+-- The gem's enabled checkbox
+function act.gem_enabled(g, s, on)
+	local _, slot = gemSlot(g, s)
+	slot.enabled.state = on
+	slot.enabled.changeFunc(on)
+	record({ cmd = "SetGemEnabled", group = g, slot = s, on = on })
+end
+
+-- A Vaal gem's "Enable <skill>" checkboxes; `which` is 1 or 2
+function act.toggle(g, s, which, on)
+	local _, slot = gemSlot(g, s)
+	local box = slot["enableGlobal" .. which]
+	box.state = on
+	box.changeFunc(on)
+	record({ cmd = "SetGemToggle", group = g, slot = s, which = which == 1 and "First" or "Second", on = on })
+end
+
+-- The x button beside the gem
+function act.delete_gem(g, s)
+	local _, slot = gemSlot(g, s)
+	slot.delete.onClick()
+	record({ cmd = "DeleteGem", group = g, slot = s })
+end
+
 -- Ctrl+Z and Ctrl+Y on the tab (SkillsTab.lua:622-627)
 function act.undo()
 	skillsTab():Undo()

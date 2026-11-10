@@ -4,7 +4,8 @@ use super::commands::{Command, ConfigValue, Tab};
 use super::run::{Affected, Backend, BackgroundTask, Engine, Event};
 use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
-    NodeTooltip, NotesView, PowerReport, SkillsView, StatsView, TreeLayout, TreeState,
+    NodeTooltip, NotesView, PowerReport, SkillsView, SocketGroupText, StatsView, TreeLayout,
+    TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -183,6 +184,17 @@ fn config_changed() -> Affected {
     Affected {
         build: true,
         config: true,
+        recalc: true,
+        ..Affected::default()
+    }
+}
+
+/// A change to the socket groups (or their undo): the build is edited and everything is
+/// recalculated.
+fn skills_changed() -> Affected {
+    Affected {
+        build: true,
+        skills: true,
         recalc: true,
         ..Affected::default()
     }
@@ -452,6 +464,54 @@ impl Backend for PobBackend {
                 self.call::<_, ()>("calcs_redo", ())?;
                 Ok(calcs_changed(true))
             }
+            Command::AddSocketGroup => {
+                self.call::<_, ()>("skills_add_group", ())?;
+                Ok(skills_changed())
+            }
+            Command::DeleteSocketGroup { group } => {
+                self.call::<_, ()>("skills_delete_group", group + 1)?;
+                Ok(skills_changed())
+            }
+            Command::DeleteAllSocketGroups => {
+                self.call::<_, ()>("skills_delete_all", ())?;
+                Ok(skills_changed())
+            }
+            Command::MoveSocketGroup { from, to } => {
+                self.call::<_, ()>("skills_move_group", (from + 1, to + 1))?;
+                Ok(skills_changed())
+            }
+            Command::PasteSocketGroup { text } => {
+                self.call::<_, ()>("skills_paste", text)?;
+                Ok(skills_changed())
+            }
+            Command::SetGroupLabel { group, text } => {
+                self.call::<_, ()>("skills_set_label", (group + 1, text))?;
+                Ok(skills_changed())
+            }
+            Command::SetGroupSlot { group, slot } => {
+                self.call::<_, ()>("skills_set_slot", (group + 1, slot))?;
+                Ok(skills_changed())
+            }
+            Command::SetGroupEnabled { group, on } => {
+                self.call::<_, ()>("skills_set_enabled", (group + 1, on))?;
+                Ok(skills_changed())
+            }
+            Command::SetGroupFullDps { group, on } => {
+                self.call::<_, ()>("skills_set_full_dps", (group + 1, on))?;
+                Ok(skills_changed())
+            }
+            Command::CopySocketGroup { group } => Ok(Affected {
+                group_text: Some(group),
+                ..Affected::default()
+            }),
+            Command::Undo(Tab::Skills) => {
+                self.call::<_, ()>("skills_undo", ())?;
+                Ok(skills_changed())
+            }
+            Command::Redo(Tab::Skills) => {
+                self.call::<_, ()>("skills_redo", ())?;
+                Ok(skills_changed())
+            }
             Command::Undo(Tab::Config) => {
                 self.call::<_, ()>("undo", "config")?;
                 Ok(config_changed())
@@ -499,6 +559,11 @@ impl Backend for PobBackend {
 
     fn skills_view(&mut self) -> Result<SkillsView> {
         self.view("skills_view", ())
+    }
+
+    fn socket_group_text(&mut self, group: usize) -> Result<SocketGroupText> {
+        let text: String = self.call("skills_copy", group + 1)?;
+        Ok(SocketGroupText { group, text })
     }
 
     fn notes_view(&mut self) -> Result<NotesView> {

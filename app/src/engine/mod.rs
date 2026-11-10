@@ -19,6 +19,6 @@ pub use views::{
     ImbuedView, JewelSocket, MasteryChoice, MasteryOption, MasteryOptions, NodeArt, NodePath,
     NodePower, NodePowerEntry, NodeTooltip, NoteColour, NotesView, Points, PowerReport,
     PowerReportRow, SheetImage, SkillOptionsView, SkillSetEntry, SkillsView, SlotChoice,
-    SocketGroupView, SpecEntry, Sprite, StatRow, StatsView, TooltipLine, TreeLayout, TreeNode,
-    TreeState,
+    SocketGroupText, SocketGroupView, SpecEntry, Sprite, StatRow, StatsView, TooltipLine,
+    TreeLayout, TreeNode, TreeState,
 };

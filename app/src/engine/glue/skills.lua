@@ -144,3 +144,190 @@ function glue.skills_view()
 	if not ok then error(err, 0) end
 	return view
 end
+
+-- ---- Commands ----
+-- Each one presses the control PoB's own tab would, after showing the group as a click on its
+-- row does (`SetDisplayGroup`, which the controls' closures need). Indices are 1-based here.
+-- Errors use level 0.
+
+local function skills_tab()
+	return pob.build.skillsTab
+end
+
+local function group_at(index)
+	local group = skills_tab().socketGroupList[index]
+	if not group then
+		error("no such socket group", 0)
+	end
+	return group
+end
+
+-- A click on the group's row (SkillListControl:OnSelect)
+local function show_group(index)
+	local tab = skills_tab()
+	local group = group_at(index)
+	local list = tab.controls.groupList
+	list.selIndex, list.selValue = index, group
+	tab:SetDisplayGroup(group)
+	return group, tab.controls
+end
+
+-- Runs `fn`, then closes every popup it left open, also when it fails.
+local function in_popups(fn)
+	local popups = pob.main.main.popups
+	local depth = #popups
+	local ok, err = pcall(fn)
+	while #popups > depth do
+		pob.main.main:ClosePopup()
+	end
+	if not ok then
+		error(err, 0)
+	end
+end
+
+-- Presses the confirm button of the newest popup
+local function confirm_popup(what)
+	local popup = pob.main.main.popups[1]
+	local button = popup and popup.controls.confirm
+	if not (button and button.onClick) then
+		error("couldn't " .. what, 0)
+	end
+	button.onClick()
+end
+
+-- SkillListControl's New button (SkillListControl.lua:38-52)
+function glue.skills_add_group()
+	skills_tab().controls.groupList.controls.new.onClick()
+end
+
+-- OnSelDelete and its confirmation (SkillListControl.lua:150-186)
+function glue.skills_delete_group(index)
+	local group = group_at(index)
+	if group.source then
+		error("this socket group is created by an equipped item and can't be deleted", 0)
+	end
+	local list = skills_tab().controls.groupList
+	list.selIndex, list.selValue = index, group
+	in_popups(function()
+		local popups = #pob.main.main.popups
+		list:OnSelDelete(index, group)
+		-- a group with no gems goes without asking
+		if #pob.main.main.popups > popups then
+			confirm_popup("delete the socket group")
+		end
+	end)
+end
+
+-- The Delete All button and its confirmation (SkillListControl.lua:38-52)
+function glue.skills_delete_all()
+	local list = skills_tab().controls.groupList
+	if #list.list == 0 then
+		return
+	end
+	in_popups(function()
+		list.controls.deleteAll.onClick()
+		confirm_popup("delete the socket groups")
+	end)
+end
+
+-- ListControl's drop (ListControl.lua:426-436); `to` is the group's final position
+function glue.skills_move_group(from, to)
+	local list = skills_tab().controls.groupList
+	local group = group_at(from)
+	group_at(to)
+	if from == to then
+		return
+	end
+	list.selIndex, list.selValue = from, group
+	-- the drop's own index is adjusted for the removal, which leaves `to`
+	table.remove(list.list, from)
+	table.insert(list.list, to, group)
+	list:OnOrderChange(from, to)
+	list.selValue = nil
+end
+
+-- Ctrl+V on the tab (SkillsTab.lua:667). Paste() is empty headless, so `testInput` is the text
+function glue.skills_paste(text)
+	local tab = skills_tab()
+	local before = #tab.socketGroupList
+	tab:PasteSocketGroup(text)
+	if #tab.socketGroupList == before then
+		error("the text has no gems", 0)
+	end
+end
+
+-- Types into an edit control as PoB's EditControl would (R3)
+local function type_into(control, text)
+	text = text:gsub("\r", "")
+	text = text:gsub(control.filterPattern, "")
+	if control.limit and #text > control.limit then
+		error("the text is too long", 0)
+	end
+	control:SetText(text, true)
+end
+
+function glue.skills_set_label(index, text)
+	local _, c = show_group(index)
+	type_into(c.groupLabel, text)
+end
+
+-- The slot dropdown (SkillsTab.lua:168); `slot` is nil for "None"
+function glue.skills_set_slot(index, slot)
+	local group, c = show_group(index)
+	if group.source then
+		error("the slot of an item's socket group can't be changed", 0)
+	end
+	for i, choice in ipairs(c.groupSlot.list) do
+		if choice.slotName == slot then
+			c.groupSlot:SetSel(i)
+			return
+		end
+	end
+	error("unknown slot " .. tostring(slot), 0)
+end
+
+local function press_check(control, on)
+	control.state = on
+	control.changeFunc(on)
+end
+
+function glue.skills_set_enabled(index, on)
+	local _, c = show_group(index)
+	press_check(c.groupEnabled, on)
+end
+
+function glue.skills_set_full_dps(index, on)
+	local _, c = show_group(index)
+	press_check(c.includeInFullDPS, on)
+end
+
+-- SkillListControl:OnSelCopy -> SkillsTab:CopySocketGroup (SkillsTab.lua:667-678). The global
+-- `Copy` is swapped for a capture during the call and always put back; nothing reaches the
+-- system clipboard.
+function glue.skills_copy(index)
+	local group = group_at(index)
+	if group.source then
+		error("an item's socket group can't be copied", 0)
+	end
+	local saved, text = Copy, nil
+	Copy = function(copied)
+		text = copied
+	end
+	local ok, err = pcall(skills_tab().CopySocketGroup, skills_tab(), group)
+	Copy = saved
+	if not ok then
+		error(err, 0)
+	end
+	return text or ""
+end
+
+-- Ctrl+Z and Ctrl+Y on the tab (SkillsTab.lua:622-627)
+function glue.skills_undo()
+	skills_tab():Undo()
+	pob.build.buildFlag = true
+end
+
+function glue.skills_redo()
+	skills_tab():Redo()
+	pob.build.buildFlag = true
+end

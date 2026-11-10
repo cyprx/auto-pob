@@ -619,6 +619,13 @@ pub struct CellRef {
     pub cell: usize,
 }
 
+/// What PoB's Copy button writes for a socket group.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SocketGroupText {
+    pub group: usize,
+    pub text: String,
+}
+
 /// What PoB's breakdown control shows for a [`CellRef`]; no sections when the cell has none
 /// (or is gone, or its flags no longer hold).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

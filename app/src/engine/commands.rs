@@ -163,6 +163,45 @@ pub enum Command {
         text: String,
     },
 
+    /// Socket groups are 0-based, in the order of `SkillsView.groups`.
+    AddSocketGroup,
+    DeleteSocketGroup {
+        group: usize,
+    },
+    DeleteAllSocketGroups,
+    /// `to` is the group's final position.
+    MoveSocketGroup {
+        from: usize,
+        to: usize,
+    },
+    /// Adds a group from the text PoB's copy writes; text with no gems is an error.
+    PasteSocketGroup {
+        text: String,
+    },
+    /// Types into the group's label box; PoB's filter and limit apply.
+    SetGroupLabel {
+        group: usize,
+        text: String,
+    },
+    /// The group's slot, by PoB's slot name; `None` is "None".
+    SetGroupSlot {
+        group: usize,
+        slot: Option<String>,
+    },
+    SetGroupEnabled {
+        group: usize,
+        on: bool,
+    },
+    SetGroupFullDps {
+        group: usize,
+        on: bool,
+    },
+    /// A query: the text PoB copies for the group, answered as a `SocketGroupText`; the latest
+    /// one in a batch is answered. The engine never touches the system clipboard.
+    CopySocketGroup {
+        group: usize,
+    },
+
     /// A query: the breakdown of a Calcs cell; the latest one in a batch is answered.
     Breakdown(CellRef),
 
@@ -185,6 +224,7 @@ pub enum Tab {
     Config,
     Tree,
     Calcs,
+    Skills,
 }
 
 /// The dropdowns of the Calcs selector.

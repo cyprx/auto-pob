@@ -7,8 +7,8 @@ use super::commands::Command;
 use super::run::{Affected, Backend, Event};
 use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
-    NodeTooltip, NotesView, Points, PowerReport, SkillsView, StatsView, TooltipLine, TreeLayout,
-    TreeState,
+    NodeTooltip, NotesView, Points, PowerReport, SkillsView, SocketGroupText, StatsView,
+    TooltipLine, TreeLayout, TreeState,
 };
 
 #[derive(Default, Debug)]
@@ -18,6 +18,7 @@ pub struct Log {
     pub steps: usize,
     pub previews: Vec<u32>,
     pub breakdowns: Vec<CellRef>,
+    pub copies: Vec<usize>,
 }
 
 /// One scripted background step: what it affects, or the error it fails with.
@@ -79,6 +80,10 @@ impl Fake {
             }),
             Command::Breakdown(cell) => Ok(Affected {
                 breakdown: Some(cell),
+                ..Affected::default()
+            }),
+            Command::CopySocketGroup { group } => Ok(Affected {
+                group_text: Some(group),
                 ..Affected::default()
             }),
             Command::ExportTreeLink => Ok(Affected {
@@ -154,6 +159,14 @@ impl Backend for Fake {
 
     fn skills_view(&mut self) -> anyhow::Result<SkillsView> {
         Ok(SkillsView::default())
+    }
+
+    fn socket_group_text(&mut self, group: usize) -> anyhow::Result<SocketGroupText> {
+        self.log.lock().unwrap().copies.push(group);
+        Ok(SocketGroupText {
+            group,
+            text: format!("group {group}"),
+        })
     }
 
     fn notes_view(&mut self) -> anyhow::Result<NotesView> {

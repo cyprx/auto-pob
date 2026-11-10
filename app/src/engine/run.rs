@@ -10,7 +10,8 @@ use crate::pob_files::DownloadProgress;
 use super::commands::Command;
 use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, NodePower,
-    NodeTooltip, NotesView, PowerReport, SkillsView, StatsView, TreeLayout, TreeState,
+    NodeTooltip, NotesView, PowerReport, SkillsView, SocketGroupText, StatsView, TreeLayout,
+    TreeState,
 };
 
 #[derive(Debug, Clone)]
@@ -28,6 +29,7 @@ pub enum Snapshot {
     TreeLink(Arc<String>),
     Calcs(Arc<CalcsView>),
     Skills(Arc<SkillsView>),
+    SocketGroupText(Arc<SocketGroupText>),
     Notes(Arc<NotesView>),
 }
 
@@ -89,6 +91,8 @@ pub struct Affected {
     pub preview: Option<u32>,
     /// The breakdown of this Calcs cell was requested; the latest request wins
     pub breakdown: Option<CellRef>,
+    /// The text PoB copies for this socket group was requested; the latest request wins
+    pub group_text: Option<usize>,
     /// The tree link was requested
     pub link: bool,
 }
@@ -109,6 +113,7 @@ impl Affected {
         report: false,
         preview: None,
         breakdown: None,
+        group_text: None,
         link: false,
     };
 
@@ -129,6 +134,7 @@ impl Affected {
         if other.breakdown.is_some() {
             self.breakdown = other.breakdown;
         }
+        self.group_text = other.group_text.or(self.group_text);
         self.link |= other.link;
     }
 }
@@ -145,6 +151,8 @@ pub trait Backend {
     fn calcs_view(&mut self) -> anyhow::Result<CalcsView>;
     fn skills_view(&mut self) -> anyhow::Result<SkillsView>;
     fn notes_view(&mut self) -> anyhow::Result<NotesView>;
+    /// What copying this socket group writes; an error for a group that doesn't exist or can't be copied.
+    fn socket_group_text(&mut self, group: usize) -> anyhow::Result<SocketGroupText>;
     /// True while a background calculation has steps left. After a failed step it must be false.
     fn has_background_work(&self) -> bool;
     /// Runs one slice; may `send` Progress. Returns what to snapshot (power/report).
@@ -242,6 +250,14 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
             seq,
             snapshot: Snapshot::Breakdown(Arc::new(view)),
         });
+    }
+    if let Some(group) = flags.group_text {
+        emit(
+            seq,
+            send,
+            backend.socket_group_text(group),
+            Snapshot::SocketGroupText,
+        );
     }
     if flags.link {
         emit(seq, send, backend.tree_link_view(), Snapshot::TreeLink);
@@ -784,6 +800,30 @@ mod tests {
             .collect();
         assert_eq!(tooltips, [3]);
         assert_eq!(log.lock().unwrap().previews, [3]);
+    }
+
+    #[test]
+    fn only_latest_copy_runs() {
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(
+            &mut fake,
+            vec![
+                Command::CopySocketGroup { group: 1 },
+                Command::CopySocketGroup { group: 4 },
+            ],
+        );
+        let copies: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Snapshot {
+                    snapshot: Snapshot::SocketGroupText(t),
+                    ..
+                } => Some(t.group),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(copies, [4]);
+        assert_eq!(log.lock().unwrap().copies, [4]);
     }
 
     #[test]

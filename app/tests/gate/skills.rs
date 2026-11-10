@@ -1,8 +1,14 @@
 //! Gate tests for the Skills tab: our snapshot against unmodified upstream PoB.
 //! Included from `gate.rs`, whose helpers it reaches through `super::`.
 
-use super::{Session, fixtures, fixtures_dir, load_xml, lock, lua_value, pob_dir, upstream_lua};
-use auto_pob::engine::{Backend, SkillsView};
+use super::{
+    Session, assert_sidebar, fixtures, fixtures_dir, load_xml, lock, lua_value, pob_dir,
+    recipe_setting, upstream_lua,
+};
+use auto_pob::engine::upstream::{SidebarLine, golden_of};
+use auto_pob::engine::{Backend, Command, SkillSetEntry, SkillsView, SocketGroupView, Tab};
+use auto_pob::game::Game;
+use mlua::LuaSerdeExt;
 use std::fs;
 
 /// Upstream PoB with a fixture loaded and `skills_lib.lua` defined.
@@ -16,13 +22,10 @@ fn upstream_with_skills_lib(xml: &std::path::Path, name: &str) -> mlua::Lua {
     lua
 }
 
-/// The view as JSON, without the undo flags upstream's dump leaves out.
-fn comparable(view: &SkillsView) -> serde_json::Value {
-    let mut value = serde_json::to_value(view).unwrap();
-    let map = value.as_object_mut().unwrap();
-    map.remove("can_undo");
-    map.remove("can_redo");
-    value
+/// What upstream's Skills tab shows now (`skillsDump()`).
+fn upstream_dump(lua: &mlua::Lua) -> SkillsView {
+    let value: mlua::Value = lua.load("return skillsDump()").eval().unwrap();
+    lua.from_value(value).unwrap()
 }
 
 #[test]
@@ -35,15 +38,8 @@ fn skills_view_matches_pob() {
         let lua = upstream_with_skills_lib(&xml, &name);
         let ours = s.backend.skills_view().unwrap();
         // the dump runs PoB's full SetDisplayGroup, which may rewrite gems, so ours is read before it
-        let value: mlua::Value = lua.load("return skillsDump()").eval().unwrap();
-        let theirs: serde_json::Value =
-            serde_json::to_value(mlua::LuaSerdeExt::from_value::<SkillsView>(&lua, value).unwrap())
-                .unwrap();
-        let mut theirs = theirs;
-        let map = theirs.as_object_mut().unwrap();
-        map.remove("can_undo");
-        map.remove("can_redo");
-        assert_eq!(comparable(&ours), theirs, "{name}");
+        let theirs = upstream_dump(&lua);
+        assert_eq!(ours, theirs, "{name}");
         if name != "new" {
             assert!(!ours.groups.is_empty(), "{name}: no socket groups");
             assert!(
@@ -143,4 +139,427 @@ fn skills_view_is_cheap() {
     eprintln!("skills_view median {:?}, {} bytes", times[10], json.len());
     eprintln!("{json}");
     assert!(times[10] < std::time::Duration::from_millis(100));
+}
+
+// ---- Recorded recipes ----
+
+/// One step of a recipe as `skills_lib.lua`'s `act.*` recorded it, with 0-based indices.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(tag = "cmd")]
+enum SkillsAction {
+    AddSocketGroup,
+    DeleteSocketGroup {
+        group: usize,
+    },
+    DeleteAllSocketGroups,
+    MoveSocketGroup {
+        from: usize,
+        to: usize,
+    },
+    PasteSocketGroup {
+        text: String,
+    },
+    SetGroupLabel {
+        group: usize,
+        text: String,
+    },
+    SetGroupSlot {
+        group: usize,
+        slot: Option<String>,
+    },
+    SetGroupEnabled {
+        group: usize,
+        on: bool,
+    },
+    SetGroupFullDps {
+        group: usize,
+        on: bool,
+    },
+    Undo,
+    Redo,
+    /// Built from the recorded checkpoint table, which can hold empty lists
+    #[serde(skip_deserializing)]
+    Check {
+        check: SkillsCheckpoint,
+    },
+}
+
+impl SkillsAction {
+    /// The command that replays this action; none for a checkpoint.
+    fn command(&self) -> Option<Command> {
+        Some(match self.clone() {
+            SkillsAction::AddSocketGroup => Command::AddSocketGroup,
+            SkillsAction::DeleteSocketGroup { group } => Command::DeleteSocketGroup { group },
+            SkillsAction::DeleteAllSocketGroups => Command::DeleteAllSocketGroups,
+            SkillsAction::MoveSocketGroup { from, to } => Command::MoveSocketGroup { from, to },
+            SkillsAction::PasteSocketGroup { text } => Command::PasteSocketGroup { text },
+            SkillsAction::SetGroupLabel { group, text } => Command::SetGroupLabel { group, text },
+            SkillsAction::SetGroupSlot { group, slot } => Command::SetGroupSlot { group, slot },
+            SkillsAction::SetGroupEnabled { group, on } => Command::SetGroupEnabled { group, on },
+            SkillsAction::SetGroupFullDps { group, on } => Command::SetGroupFullDps { group, on },
+            SkillsAction::Undo => Command::Undo(Tab::Skills),
+            SkillsAction::Redo => Command::Redo(Tab::Skills),
+            SkillsAction::Check { .. } => return None,
+        })
+    }
+}
+
+/// The Skills tab at one point of a recipe: the model's part of `skillsDump()` (not the
+/// options and the slot choices, which no command here changes) and the sidebar.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+struct SkillsCheckpoint {
+    sets: Vec<SkillSetEntry>,
+    active_set: u32,
+    groups: Vec<SocketGroupView>,
+    can_undo: bool,
+    can_redo: bool,
+    sidebar: Vec<SidebarLine>,
+}
+
+/// A recipe run in upstream PoB: the steps it took and where they ended.
+struct SkillsRecipe {
+    base: String,
+    /// The build to start from when the recipe prepared one
+    setup_xml: Option<String>,
+    actions: Vec<SkillsAction>,
+    result: SkillsView,
+}
+
+/// Runs `skills/<name>.lua` in upstream PoB on its base fixture.
+fn upstream_skills_recipe(name: &str) -> SkillsRecipe {
+    let source = fs::read_to_string(fixtures_dir().join(format!("skills/{name}.lua"))).unwrap();
+    let base = recipe_setting(&source, "base").unwrap_or_else(|| panic!("{name}: no base"));
+    let lua = upstream_with_skills_lib(&fixtures_dir().join(format!("{base}.xml")), &base);
+    // a checkpoint records PoB's sidebar lines, which the golden extraction reads
+    let version = Game::Poe1.pob_version().to_string();
+    lua.globals()
+        .set(
+            "sidebar_lines",
+            lua.create_function(move |lua, ()| {
+                let golden = golden_of(lua, &version).map_err(mlua::Error::external)?;
+                lua.to_value(&golden.sidebar)
+            })
+            .unwrap(),
+        )
+        .unwrap();
+    lua.load(source)
+        .set_name(format!("={name}"))
+        .exec()
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+    lua.load("recipe()")
+        .exec()
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+    let recorded: mlua::Table = lua.globals().get("actions").unwrap();
+    let actions = recorded
+        .sequence_values::<mlua::Table>()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            if let Ok(check) = entry.get::<mlua::Table>("check") {
+                let check: SkillsCheckpoint = lua
+                    .from_value(mlua::Value::Table(check))
+                    .unwrap_or_else(|e| panic!("{name}: checkpoint: {e}"));
+                return SkillsAction::Check { check };
+            }
+            let json: serde_json::Value = lua.from_value(mlua::Value::Table(entry)).unwrap();
+            serde_json::from_value(json.clone()).unwrap_or_else(|e| panic!("{name}: {json}: {e}"))
+        })
+        .collect();
+    SkillsRecipe {
+        base,
+        setup_xml: lua.globals().get("setup_xml").unwrap(),
+        actions,
+        result: upstream_dump(&lua),
+    }
+}
+
+/// Our Skills tab and sidebar in the shape of a recipe's `checkpoint()`.
+fn our_skills_checkpoint(s: &mut Session) -> SkillsCheckpoint {
+    let view = s.backend.skills_view().expect("skills view");
+    let sidebar = s
+        .stats()
+        .stats
+        .iter()
+        .map(|r| SidebarLine {
+            label: r.label.clone(),
+            text: r.text.clone(),
+        })
+        .collect();
+    SkillsCheckpoint {
+        sets: view.sets,
+        active_set: view.active_set,
+        groups: view.groups,
+        can_undo: view.can_undo,
+        can_redo: view.can_redo,
+        sidebar,
+    }
+}
+
+/// Replays a recipe as our commands and checks every checkpoint and the end state against
+/// upstream.
+fn check_skills_recipe(name: &str) -> SkillsRecipe {
+    let recipe = upstream_skills_recipe(name);
+    assert!(!recipe.actions.is_empty(), "{name}: no actions recorded");
+    let mut s = Session::start(&format!("skills-recipe-{name}"));
+    match &recipe.setup_xml {
+        Some(xml) => {
+            let path = s.user.join("setup.xml");
+            fs::create_dir_all(&s.user).unwrap();
+            fs::write(&path, xml).unwrap();
+            s.open_fixture(&recipe.base, &path);
+        }
+        None => {
+            s.open_fixture(
+                &recipe.base,
+                &fixtures_dir().join(format!("{}.xml", recipe.base)),
+            );
+        }
+    }
+    let before = s.backend.skills_view().unwrap();
+    let mut checked = 0;
+    for action in &recipe.actions {
+        match action.command() {
+            Some(command) => {
+                s.run(command)
+                    .unwrap_or_else(|e| panic!("{name}: {action:?}: {e}"));
+            }
+            None => {
+                let SkillsAction::Check { check } = action else {
+                    unreachable!()
+                };
+                let ours = our_skills_checkpoint(&mut s);
+                assert_sidebar(name, "checkpoint", &stats_rows(&mut s), &check.sidebar);
+                assert_eq!(&ours, check, "{name}: checkpoint {checked}");
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 0, "{name}: no checkpoint");
+    let ours = s.backend.skills_view().unwrap();
+    assert_ne!(ours, before, "{name}: the recipe changes the Skills tab");
+    assert_eq!(ours, recipe.result, "{name}");
+    recipe
+}
+
+fn stats_rows(s: &mut Session) -> Vec<auto_pob::engine::StatRow> {
+    s.stats().stats
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn group_recipes_match_pob() {
+    let _guard = lock();
+    let recipe = check_skills_recipe("groups");
+    // coverage the first review asked for: a group that isn't main, and a disabled one
+    let mid = recipe
+        .actions
+        .iter()
+        .filter_map(|a| match a {
+            SkillsAction::Check { check } => Some(check),
+            _ => None,
+        })
+        .nth(1)
+        .unwrap();
+    assert!(mid.groups.iter().any(|g| !g.is_main));
+    assert!(mid.groups.iter().any(|g| !g.enabled));
+}
+
+fn session_on(fixture: &str, test: &str) -> (Session, mlua::Lua) {
+    let xml = fixtures_dir().join(format!("{fixture}.xml"));
+    let mut s = Session::start(&format!("skills-{test}-{fixture}"));
+    s.open_fixture(fixture, &xml);
+    let lua = upstream_with_skills_lib(&xml, fixture);
+    (s, lua)
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn copy_matches_pob() {
+    let _guard = lock();
+    for fixture in ["attack", "minion"] {
+        let (mut s, lua) = session_on(fixture, "copy");
+        let ours = s.backend.socket_group_text(0).unwrap();
+        assert_eq!(ours.group, 0);
+        let theirs: String = lua.load("return copyText(0)").eval().unwrap();
+        assert!(theirs.contains("\r\n"), "{fixture}: {theirs:?}");
+        assert_eq!(ours.text, theirs, "{fixture}");
+        // pasting it back adds the same group on both sides
+        s.run(Command::PasteSocketGroup {
+            text: ours.text.clone(),
+        })
+        .unwrap();
+        lua.globals().set("pasted", theirs).unwrap();
+        lua.load("act.paste(pasted)").exec().unwrap();
+        assert_eq!(
+            s.backend.skills_view().unwrap(),
+            upstream_dump(&lua),
+            "{fixture}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn copy_restores_copy_global() {
+    let _guard = lock();
+    let (mut s, _lua) = session_on("attack", "copy-global");
+    let lua = &s.backend.lua;
+    lua.load("saved_copy = Copy").exec().unwrap();
+    let is_function: bool = lua_value(lua, "return type(saved_copy) == 'function'");
+    assert!(is_function, "the bootstrap defines Copy");
+    let same =
+        |s: &Session| -> bool { lua_value(&s.backend.lua, "return rawequal(Copy, saved_copy)") };
+    s.backend.socket_group_text(0).unwrap();
+    assert!(same(&s), "after a copy");
+    // a group PoB can't copy makes the call fail; PoB's own error path restores Copy too
+    assert!(s.backend.socket_group_text(99).is_err());
+    assert!(same(&s), "after a failing copy");
+    s.backend
+        .lua
+        .load(
+            r#"
+            local tab = pob.build.skillsTab
+            function tab:CopySocketGroup() error("boom") end
+            "#,
+        )
+        .exec()
+        .unwrap();
+    assert!(s.backend.socket_group_text(0).is_err());
+    assert!(same(&s), "after PoB's copy raised");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn delete_before_main_shifts_main() {
+    let _guard = lock();
+    let (mut s, lua) = session_on("attack", "main-shift");
+    let pasted = "Hatred 20/0  1\r\n";
+    for _ in 0..2 {
+        s.run(Command::PasteSocketGroup {
+            text: pasted.into(),
+        })
+        .unwrap();
+        lua.globals().set("pasted", pasted).unwrap();
+        lua.load("act.paste(pasted)").exec().unwrap();
+    }
+    // Task 6 replaces this with SetMainSocketGroup; the Calcs selector follows the same group
+    let set_main = "local b = pob and pob.build or build; b.mainSocketGroup = 3; b.calcsTab.input.skill_number = 3";
+    s.backend.lua.load(set_main).exec().unwrap();
+    lua.load(set_main).exec().unwrap();
+    s.run(Command::DeleteSocketGroup { group: 0 }).unwrap();
+    lua.load("act.delete_group(0)").exec().unwrap();
+    s.run(Command::MoveSocketGroup { from: 1, to: 0 }).unwrap();
+    lua.load("act.move_group(1, 0)").exec().unwrap();
+    let ours = s.backend.skills_view().unwrap();
+    let theirs = upstream_dump(&lua);
+    let mains = |v: &SkillsView| v.groups.iter().map(|g| g.is_main).collect::<Vec<_>>();
+    assert_eq!(mains(&ours), mains(&theirs));
+    assert!(mains(&ours).iter().any(|m| *m), "a group is main");
+    let skill_number = |lua: &mlua::Lua| -> u32 {
+        lua_value(
+            lua,
+            "return (pob and pob.build or build).calcsTab.input.skill_number",
+        )
+    };
+    assert_eq!(skill_number(&s.backend.lua), skill_number(&lua));
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn paste_without_gems_is_an_error() {
+    let _guard = lock();
+    let (mut s, _) = session_on("attack", "paste-error");
+    let before = s.backend.skills_view().unwrap();
+    let err = s
+        .run(Command::PasteSocketGroup {
+            text: "hello".into(),
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("no gems"), "{err}");
+    assert_eq!(s.backend.skills_view().unwrap(), before);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn undo_redo_skills() {
+    let _guard = lock();
+    let (mut s, _) = session_on("attack", "undo");
+    let original = s.backend.skills_view().unwrap();
+    assert!(!original.can_undo && !original.can_redo);
+    s.run(Command::AddSocketGroup).unwrap();
+    s.run(Command::PasteSocketGroup {
+        text: "Hatred 20/0  1\r\n".into(),
+    })
+    .unwrap();
+    s.run(Command::SetGroupLabel {
+        group: 0,
+        text: "Edited".into(),
+    })
+    .unwrap();
+    let edited = s.backend.skills_view().unwrap();
+    assert_eq!(edited.groups.len(), original.groups.len() + 2);
+    assert_eq!(edited.groups[0].label, "Edited");
+    assert!(edited.can_undo && !edited.can_redo);
+    for _ in 0..3 {
+        s.run(Command::Undo(Tab::Skills)).unwrap();
+    }
+    let undone = s.backend.skills_view().unwrap();
+    assert_eq!(undone.groups, original.groups);
+    assert!(!undone.can_undo && undone.can_redo);
+    for _ in 0..3 {
+        s.run(Command::Redo(Tab::Skills)).unwrap();
+    }
+    let redone = s.backend.skills_view().unwrap();
+    assert_eq!(redone.groups, edited.groups);
+    assert!(redone.can_undo && !redone.can_redo);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn out_of_range_group_is_an_error() {
+    let _guard = lock();
+    let (mut s, _) = session_on("attack", "range");
+    let before = s.backend.skills_view().unwrap();
+    let missing = before.groups.len() + 5;
+    let commands = [
+        Command::DeleteSocketGroup { group: missing },
+        Command::MoveSocketGroup {
+            from: missing,
+            to: 0,
+        },
+        Command::MoveSocketGroup {
+            from: 0,
+            to: missing,
+        },
+        Command::SetGroupLabel {
+            group: missing,
+            text: "x".into(),
+        },
+        Command::SetGroupSlot {
+            group: missing,
+            slot: None,
+        },
+        Command::SetGroupEnabled {
+            group: missing,
+            on: false,
+        },
+        Command::SetGroupFullDps {
+            group: missing,
+            on: true,
+        },
+        // a slot PoB doesn't offer, and a label its box would refuse
+        Command::SetGroupSlot {
+            group: 0,
+            slot: Some("Left Pocket".into()),
+        },
+        Command::SetGroupLabel {
+            group: 0,
+            text: "x".repeat(51),
+        },
+    ];
+    for command in commands {
+        let shown = format!("{command:?}");
+        assert!(s.run(command).is_err(), "{shown}");
+    }
+    assert!(s.backend.socket_group_text(missing).is_err());
+    assert_eq!(s.backend.skills_view().unwrap(), before);
 }

@@ -2144,6 +2144,29 @@ mod tests {
     }
 
     #[test]
+    fn gem_dps_events_leave_the_tree_alone() {
+        let (mut app, ctx) = tree_app();
+        app.on_event(Event::Progress {
+            task: BackgroundTask::NodePower,
+            percent: 40,
+        });
+        app.on_event(Event::Progress {
+            task: BackgroundTask::GemDps,
+            percent: 90,
+        });
+        assert_eq!(app.tree.progress, Some(40), "gem progress reached the tree");
+        app.on_event(Event::BackgroundFailed {
+            task: BackgroundTask::GemDps,
+            message: "dps broke".into(),
+        });
+        assert_eq!(app.notices, ["dps broke"]);
+        // power_failed would have cleared the progress and offered a retry
+        assert_eq!(app.tree.progress, Some(40));
+        frame(&mut app, &ctx, vec![]);
+        assert!(!app.tree.rects.map.contains_key("heat_retry"));
+    }
+
+    #[test]
     fn power_events_of_the_previous_build_are_dropped_when_another_opens() {
         let (mut app, ctx) = tree_app();
         app.request(Pending::New);

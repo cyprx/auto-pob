@@ -86,6 +86,21 @@ with_search = function(fn)
 	return result, false
 end
 
+-- Whether the search's DPS sort has work: PoB's own cache check (UpdateSortCache, which
+-- notices a new output revision, changed options, group or gem) starts it again when needed,
+-- then a pending start or a live coroutine is work (GemSelectControl.lua:492-509). A search
+-- whose group is gone has one step left, which reports the end.
+function glue.gem_dps_pending()
+	if not search or search.ended then
+		return false
+	end
+	local pending, ended = with_search(function(control)
+		control:UpdateSortCache()
+		return control.dpsBuildFlag or control.dpsBuilder ~= nil
+	end)
+	return (ended or pending) and true or false
+end
+
 -- One slice of the DPS sort: GemSelectControl:Draw's coroutine block (:492-509), after PoB's
 -- own cache check (UpdateSortCache) restarts the sort when the build, the options, the group
 -- or the gem changed. A failed resume is an error, where PoB swallows it outside dev mode.
@@ -121,6 +136,7 @@ function glue.gem_dps_step()
 		return { finished = false }
 	end)
 	if ended then
+		search.ended = true
 		return { finished = true, ended = true }
 	end
 	if reported then

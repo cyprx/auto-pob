@@ -27,11 +27,9 @@ pub struct PobBackend {
     /// A power step failed. Until the next `SetHeatmap` there is no background work, or the
     /// loop would run the failing step again and again.
     power_failed: bool,
-    /// The open gem search (R9); `None` when the picker is closed.
+    /// The open gem search (R9); `None` when the picker is closed. Whether its DPS sort has
+    /// work is asked of PoB's control (`gem_dps_pending`), so it can't drift.
     gem_search: Option<GemSearchQuery>,
-    /// The search's DPS sort has steps to run: set by `SearchGems`, `SetSkillOption` and a
-    /// recalculation while a search is open; cleared when a step finds it finished.
-    gem_pending: bool,
     /// A DPS step failed; the job stays stopped until the next `SearchGems`.
     gem_failed: bool,
 }
@@ -118,7 +116,6 @@ impl PobBackend {
             heatmap_on: false,
             power_failed: false,
             gem_search: None,
-            gem_pending: false,
             gem_failed: false,
         })
     }
@@ -183,7 +180,6 @@ impl PobBackend {
 
     /// Closes the gem search, as the structural commands do (R13).
     fn end_gem_search(&mut self) -> Result<()> {
-        self.gem_pending = false;
         self.gem_failed = false;
         if self.gem_search.take().is_some() {
             self.call::<_, ()>("gem_search_close", ())?;
@@ -269,11 +265,8 @@ fn ends_gem_search(command: &Command) -> bool {
     )
 }
 
-impl Backend for PobBackend {
-    fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> Result<Affected> {
-        if ends_gem_search(&command) {
-            self.end_gem_search()?;
-        }
+impl PobBackend {
+    fn apply_command(&mut self, command: Command, _send: &dyn Fn(Event)) -> Result<Affected> {
         match command {
             Command::SearchGems(query) => {
                 let target = lua_target(&self.lua, query.target)?;
@@ -287,7 +280,6 @@ impl Backend for PobBackend {
                     ),
                 )?;
                 self.gem_search = Some(query);
-                self.gem_pending = true;
                 self.gem_failed = false;
                 Ok(Affected {
                     gem_search: true,
@@ -703,10 +695,7 @@ impl Backend for PobBackend {
                         self.call::<_, ()>("skills_option_quality", text)?
                     }
                 }
-                // PoB's sort cache checks the options, so the DPS sort may have to start again
-                if self.gem_search.is_some() {
-                    self.gem_pending = true;
-                }
+                // PoB's sort cache checks the options, so the DPS sort may start again
                 // not unsaved, no recalculation (R18)
                 Ok(Affected {
                     skills: true,
@@ -732,12 +721,22 @@ impl Backend for PobBackend {
             }
         }
     }
+}
+
+impl Backend for PobBackend {
+    fn apply(&mut self, command: Command, send: &dyn Fn(Event)) -> Result<Affected> {
+        // a structural command ends the search only when it went through (R13); one that
+        // failed changed nothing, and a changed group table ends the search on its own
+        let ends = ends_gem_search(&command);
+        let affected = self.apply_command(command, send)?;
+        if ends {
+            self.end_gem_search()?;
+        }
+        Ok(affected)
+    }
 
     fn recalculate(&mut self) -> Result<()> {
         // a new output revision makes PoB's sort cache start the DPS sort again
-        if self.gem_search.is_some() {
-            self.gem_pending = true;
-        }
         self.call::<_, ()>("recalculate", ())
     }
 
@@ -789,7 +788,10 @@ impl Backend for PobBackend {
     }
 
     fn next_background(&self) -> Option<BackgroundTask> {
-        if self.gem_search.is_some() && self.gem_pending && !self.gem_failed {
+        if self.gem_search.is_some()
+            && !self.gem_failed
+            && self.call::<_, bool>("gem_dps_pending", ()).unwrap_or(false)
+        {
             return Some(BackgroundTask::GemDps);
         }
         let power = self.heatmap_on
@@ -839,10 +841,7 @@ impl Backend for PobBackend {
                         percent,
                     });
                 }
-                // an ended search is finished too; its view says so
-                if step.finished {
-                    self.gem_pending = false;
-                }
+                // an ended search has no more work; its view says so
                 Ok(Affected {
                     gem_search: true,
                     ..Affected::default()

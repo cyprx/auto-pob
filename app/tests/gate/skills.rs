@@ -2161,11 +2161,13 @@ fn gem_dps_survives_interleaved_commands() {
     };
     // uninterrupted, on the same build with the same label
     let (mut plain, _) = session_on("attack", "interleaved-plain");
+    warm_stat_maps(&plain.backend.lua);
     plain.run(second()).unwrap();
     plain.run(label()).unwrap();
     let expected = our_search(&mut plain, query.clone());
 
     let (mut s, _) = session_on("attack", "interleaved");
+    warm_stat_maps(&s.backend.lua);
     s.run(second()).unwrap();
     s.run(Command::SearchGems(query.clone())).unwrap();
     for _ in 0..2 {
@@ -2263,11 +2265,18 @@ fn gem_search_ends_and_refuses() {
     s.run(Command::SearchGems(query.clone())).unwrap();
     s.run(Command::CloseGemSearch).unwrap();
     assert!(s.backend.gem_search_view().unwrap().is_none());
-    // an option restarts the sort
+    // an option PoB's sort cache checks restarts the sort; it is asked of PoB's control, so
+    // choosing the field already chosen starts nothing
     our_search(&mut s, query.clone());
     assert_eq!(s.backend.next_background(), None);
-    s.run(Command::SetSkillOption(SkillOption::SortField(1)))
+    let field = s.backend.skills_view().unwrap().options.sort_field.selected;
+    s.run(Command::SetSkillOption(SkillOption::SortField(field)))
         .unwrap();
+    assert_eq!(s.backend.next_background(), None);
+    s.run(Command::SetSkillOption(SkillOption::SortField(
+        if field == 0 { 1 } else { 0 },
+    )))
+    .unwrap();
     assert_eq!(s.backend.next_background(), Some(BackgroundTask::GemDps));
     finish_gem_dps(&mut s);
     // a group table that is no longer at its index (as when a recalculation adds an item's
@@ -2374,4 +2383,145 @@ fn commands_answered_during_gem_dps() {
     while engine.events.recv_timeout(Duration::from_secs(30)).is_ok() {}
     assert!(!engine.is_alive());
     let _ = fs::remove_dir_all(&user);
+}
+
+/// attack.xml as PoB saves it with another tab open (`viewMode`), opened in our engine.
+fn attack_in_view_mode(test: &str, mode: &str) -> Session {
+    let xml = fs::read_to_string(fixtures_dir().join("attack.xml")).unwrap();
+    assert!(xml.contains("viewMode=\"TREE\""));
+    let xml = xml.replace("viewMode=\"TREE\"", &format!("viewMode=\"{mode}\""));
+    let mut s = Session::start(&format!("skills-{test}"));
+    fs::create_dir_all(&s.user).unwrap();
+    let path = s.user.join("source.xml");
+    fs::write(&path, xml).unwrap();
+    s.open_fixture("attack", &path);
+    s
+}
+
+/// PoB draws the tab a build was saved on every frame (Build.lua:1276-1294). A frame on the
+/// Skills tab would draw the gem boxes, and `GemSelectControl:Draw` resumes the DPS sort
+/// against whatever group is shown (R13).
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn frames_on_skills_view_mode_leave_dps_alone() {
+    let _guard = lock();
+    let mut s = attack_in_view_mode("view-mode", "SKILLS");
+    let query = gem_query(0, GemTarget::Slot(3), "", GemFilter::All);
+    s.run(Command::SearchGems(query.clone())).unwrap();
+    for _ in 0..2 {
+        s.backend
+            .background_step(BackgroundTask::GemDps, &|_| {})
+            .unwrap();
+    }
+    let done = |s: &Session| -> usize {
+        lua_value(
+            &s.backend.lua,
+            r#"local n = 0
+            for _, colour in pairs(pob.build.skillsTab.gemSlots[4].nameSpec.sortCache.dpsColor) do
+                if colour ~= "" then n = n + 1 end
+            end
+            return n"#,
+        )
+    };
+    let before = done(&s);
+    assert!(before > 0);
+    for _ in 0..5 {
+        s.backend.lua.load("glue.frame()").exec().unwrap();
+    }
+    assert_eq!(done(&s), before, "a frame ran the DPS sort");
+    assert_eq!(s.backend.next_background(), Some(BackgroundTask::GemDps));
+    // the build still says which tab it was saved on
+    let view_mode: String = lua_value(&s.backend.lua, "return pob.build.viewMode");
+    assert_eq!(view_mode, "SKILLS");
+    s.run(Command::SaveAs {
+        folder: String::new(),
+        name: "saved".into(),
+        overwrite: false,
+    })
+    .unwrap();
+    let saved = fs::read_to_string(s.builds_dir().join("saved.xml")).unwrap();
+    assert!(saved.contains("viewMode=\"SKILLS\""), "viewMode not kept");
+}
+
+/// PoB processes a skill's stat map lazily, the first time a calculation looks a stat up
+/// (Data.lua:1003-1013), and that is where `hasGlobalEffect` gets set. So which gems a DPS sort
+/// calculates depends on which calculations ran before it, in PoB as here. Tests that compare
+/// a restarted sort with a single one look up every stat a calculation can reach first
+/// (CalcTools.lua:183-241: stats, qualityStats, constantStats), on every side.
+fn warm_stat_maps(lua: &mlua::Lua) {
+    lua.load(
+        r#"for _, effect in pairs(data.skills) do
+            local map = effect.statMap
+            if map then
+                for _, stat in ipairs(effect.stats or {}) do local _ = map[stat] end
+                for _, stat in ipairs(effect.qualityStats or {}) do local _ = map[stat[1]] end
+                for _, stat in ipairs(effect.constantStats or {}) do local _ = map[stat[1]] end
+            end
+        end"#,
+    )
+    .exec()
+    .unwrap();
+}
+
+/// A DPS-relevant config change between slices restarts the sort; the finished values are
+/// upstream's under the same config.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn gem_dps_restarts_on_config_change() {
+    let _guard = lock();
+    let (mut s, lua) = session_on("attack", "config-restart");
+    warm_stat_maps(&s.backend.lua);
+    warm_stat_maps(&lua);
+    let query = gem_query(0, GemTarget::Slot(3), "", GemFilter::All);
+    s.run(Command::SearchGems(query.clone())).unwrap();
+    for _ in 0..2 {
+        s.backend
+            .background_step(BackgroundTask::GemDps, &|_| {})
+            .unwrap();
+    }
+    let unbuffed = s.backend.gem_search_view().unwrap().unwrap().base_dps;
+    s.run(Command::SetConfig {
+        var: "buffAdrenaline".into(),
+        value: auto_pob::engine::ConfigValue::Bool(true),
+    })
+    .unwrap();
+    assert_eq!(s.backend.next_background(), Some(BackgroundTask::GemDps));
+    finish_gem_dps(&mut s);
+    let ours = s.backend.gem_search_view().unwrap().unwrap();
+    assert!(!ours.sorting);
+    lua.load(
+        r#"local check = build.configTab.varControls.buffAdrenaline
+        check.state = true
+        check.changeFunc(true)
+        build.buildFlag = true
+        runCallback("OnFrame")"#,
+    )
+    .exec()
+    .unwrap();
+    let theirs = upstream_search(&lua, &query);
+    assert!(ours.base_dps > unbuffed, "{} <= {unbuffed}", ours.base_dps);
+    assert_eq!(ours.base_dps, theirs.base_dps);
+    assert_eq!(our_dps(&ours), theirs.dps);
+    assert_eq!(ids(&ours), theirs.ids);
+}
+
+/// A structural command that fails changes nothing, so the search stays open.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn failed_structural_command_keeps_the_search() {
+    let _guard = lock();
+    let (mut s, _) = session_on("attack", "failed-structural");
+    let query = gem_query(0, GemTarget::Slot(3), "fire", GemFilter::All);
+    s.run(Command::SearchGems(query.clone())).unwrap();
+    for failing in [
+        Command::DeleteSocketGroup { group: 42 },
+        Command::MoveSocketGroup { from: 0, to: 42 },
+        Command::DeleteGem { group: 0, slot: 42 },
+        Command::SelectSkillSet { id: 42 },
+    ] {
+        let shown = format!("{failing:?}");
+        assert!(s.run(failing).is_err(), "{shown}");
+        let view = s.backend.gem_search_view().unwrap();
+        assert_eq!(view.map(|v| v.query), Some(query.clone()), "{shown}");
+    }
 }

@@ -763,3 +763,35 @@ fn calcs_and_notes_never_write_files() {
         "a temporary file was left"
     );
 }
+
+/// A build saved on the Calcs tab (`viewMode="CALCS"`) shows the same sections and
+/// breakdowns as the fixture saved on the tree tab: our frames never draw the Calcs tab.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn calcs_view_mode_build_matches_pob() {
+    let _guard = lock();
+    let xml = fs::read_to_string(fixture_xml("attack")).unwrap();
+    assert!(xml.contains("viewMode=\"TREE\""));
+    let mut s = Session::start("calcs-view-mode");
+    fs::create_dir_all(&s.user).unwrap();
+    let path = s.user.join("source.xml");
+    fs::write(
+        &path,
+        xml.replace("viewMode=\"TREE\"", "viewMode=\"CALCS\""),
+    )
+    .unwrap();
+    s.open_fixture("attack", &path);
+    let view_mode: String = lua_value(&s.backend.lua, "return pob.build.viewMode");
+    assert_eq!(view_mode, "CALCS");
+    let lua = upstream_with_calcs_lib(&fixture_xml("attack"), "attack");
+    assert_matches_pob(&mut s, &lua, "CALCS viewMode");
+    for stat in ["FireResist", "TotalDPS"] {
+        let cell = find_cell(&lua, stat);
+        let n = assert_breakdown_matches(&mut s, &lua, &cell, stat);
+        assert!(n > 0, "{stat}");
+        // a recalculation's frame leaves the breakdown alone too
+        s.backend.recalculate().unwrap();
+        assert_eq!(assert_breakdown_matches(&mut s, &lua, &cell, stat), n);
+    }
+    assert_matches_pob(&mut s, &lua, "CALCS viewMode after frames");
+}

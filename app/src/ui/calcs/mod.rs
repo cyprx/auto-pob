@@ -1,6 +1,7 @@
 //! The Calcs tab: PoB's skill and mode selector above its grid of calculation sections. It
 //! takes engine snapshots and returns commands; it knows nothing else about PoB.
 
+pub mod breakdown;
 pub mod grid;
 
 use crate::engine::views::{CalcsSection, CalcsSelector, CalcsView, DropList, TooltipLine};
@@ -25,6 +26,8 @@ pub struct CalcsOutput {
     pub commands: Vec<Command>,
     /// Questions about the hovered cell; the app may send only the latest of them.
     pub queries: Vec<Command>,
+    /// A passive node the user clicked in a breakdown; the app shows it on the tree.
+    pub focus_node: Option<u32>,
 }
 
 pub struct CalcsUi {
@@ -36,6 +39,9 @@ pub struct CalcsUi {
     /// What each count field last sent
     sent: HashMap<&'static str, String>,
     focus_search: bool,
+    bd: breakdown::State,
+    /// A cell clicked this frame, with its row's label
+    clicked: Option<(CellRef, String)>,
     /// The text fields' ids, which focus is looked up by
     stages_id: egui::Id,
     mines_id: egui::Id,
@@ -51,6 +57,8 @@ impl Default for CalcsUi {
             edits: HashMap::new(),
             sent: HashMap::new(),
             focus_search: false,
+            bd: breakdown::State::default(),
+            clicked: None,
             stages_id: egui::Id::unique("calcs_stages"),
             mines_id: egui::Id::unique("calcs_mines"),
             search_id: egui::Id::unique("calcs_search"),
@@ -73,9 +81,19 @@ impl CalcsUi {
     }
 
     pub fn on_snapshot(&mut self, snapshot: &Snapshot) {
-        if let Snapshot::Calcs(view) = snapshot {
-            self.view = Some(view.clone());
+        match snapshot {
+            Snapshot::Calcs(view) => {
+                self.view = Some(view.clone());
+                self.bd.calcs_changed();
+            }
+            Snapshot::Breakdown(view) => self.bd.on_view(view),
+            _ => {}
         }
+    }
+
+    /// The engine failed the breakdown query that was pending.
+    pub fn breakdown_failed(&mut self) {
+        self.bd.query_failed();
     }
 
     /// `busy`: the engine hasn't caught up with what was sent, so typed text stays.
@@ -91,9 +109,28 @@ impl CalcsUi {
         self.selector(ui, &view, busy, &mut out.commands);
         ui.separator();
         self.hovered = None;
+        self.clicked = None;
+        let now = ui.input(|i| i.time);
+        if self.bd.visible() {
+            egui::Panel::right("calcs_breakdown")
+                .resizable(true)
+                .default_size(380.0)
+                .show(ui, |ui| {
+                    let (focus, unpin) = self.bd.show(ui, &mut self.rects);
+                    out.focus_node = focus;
+                    if unpin {
+                        self.bd.pinned = None;
+                    }
+                });
+        }
         egui::ScrollArea::both()
             .auto_shrink(false)
             .show(ui, |ui| self.sections(ui, &view, &mut out.commands));
+        if let Some((cell, label)) = self.clicked.take() {
+            self.bd.click(cell, label);
+        }
+        self.bd
+            .drive(ui.ctx(), now, self.hovered.as_ref(), &mut out.queries);
         out
     }
 
@@ -424,7 +461,15 @@ impl CalcsUi {
                     let id =
                         ui.scope_id()
                             .with(("calcs_cell", &section.id, si, row.index, cell.index));
-                    let response = ui.interact(cell_rect, id, Sense::hover());
+                    let sense = if cell.breakdown {
+                        Sense::click()
+                    } else {
+                        Sense::hover()
+                    };
+                    let response = ui.interact(cell_rect, id, sense);
+                    self.rects.note(&response, || {
+                        format!("cell_{}_{si}_{}_{}", section.id, row.index, cell.index)
+                    });
                     if cell.breakdown && response.hovered() {
                         painter.rect_stroke(
                             cell_rect.shrink2(Vec2::new(2.0, 0.0)),
@@ -432,12 +477,17 @@ impl CalcsUi {
                             Stroke::new(1.0, Color32::from_rgb(64, 255, 64)),
                             StrokeKind::Inside,
                         );
-                        self.hovered = Some(CellRef {
+                        let at = CellRef {
                             section: section.id.clone(),
                             sub: si,
                             row: row.index,
                             cell: cell.index,
-                        });
+                        };
+                        if response.clicked() {
+                            self.clicked =
+                                Some((at.clone(), row.label.clone().unwrap_or_default()));
+                        }
+                        self.hovered = Some(at);
                     }
                     let clipped = painter.with_clip_rect(cell_rect.intersect(painter.clip_rect()));
                     let galley =
@@ -468,7 +518,7 @@ fn parse_colour(code: &str) -> Option<Color32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::views::{CalcsCell, CalcsRow, CalcsSub};
+    use crate::engine::views::{BreakdownView, CalcsCell, CalcsRow, CalcsSub};
     use eframe::egui::{Event, PointerButton, RawInput};
 
     fn list(labels: &[&str]) -> DropList {
@@ -537,19 +587,46 @@ mod tests {
 
         fn frame(&mut self, events: Vec<Event>) -> Vec<Command> {
             self.time += 0.1;
+            self.frame_out(self.time, events).commands
+        }
+
+        /// One frame at the given time, with everything the tab asked for.
+        fn frame_out(&mut self, time: f64, events: Vec<Event>) -> CalcsOutput {
+            self.time = time;
             let input = RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 700.0))),
-                time: Some(self.time),
+                time: Some(time),
                 events,
                 ..Default::default()
             };
-            let mut commands = Vec::new();
+            let mut out = CalcsOutput::default();
             self.ctx
                 .run_ui(input, |ui| {
-                    commands.extend(self.ui.show(ui, false).commands);
+                    out = self.ui.show(ui, false);
                 })
                 .drop_without_applying_deltas();
-            commands
+            out
+        }
+
+        /// A click on the widget under `key`, in frames from now; returns all their output.
+        fn click_out(&mut self, key: &str) -> Vec<CalcsOutput> {
+            let pos = self.ui.rects.map[key].center();
+            let button = |pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let mut all = Vec::new();
+            for events in [
+                vec![Event::PointerMoved(pos)],
+                vec![button(true)],
+                vec![button(false)],
+                vec![],
+            ] {
+                all.push(self.frame_out(self.time + 0.001, events));
+            }
+            all
         }
 
         /// Presses and releases the middle of the widget drawn under `key`.
@@ -655,5 +732,209 @@ mod tests {
         h.click("search");
         let sent = h.frame(vec![Event::Text("x".into())]);
         assert_eq!(debug(&sent), ["SetCalcsSearch { text: \"x\" }"]);
+    }
+
+    const CELL: &str = "cell_sec_0_2_0";
+
+    fn target() -> CellRef {
+        CellRef {
+            section: "sec".into(),
+            sub: 0,
+            row: 2,
+            cell: 0,
+        }
+    }
+
+    fn table(rows: &[(&str, Option<u32>, bool)]) -> BreakdownView {
+        use crate::engine::views::{BreakdownColumn, BreakdownRow, BreakdownSection};
+        BreakdownView {
+            cell: target(),
+            sections: vec![BreakdownSection::Table {
+                label: None,
+                footer: None,
+                columns: vec![BreakdownColumn {
+                    label: "Name".into(),
+                    key: "name".into(),
+                    right: false,
+                }],
+                rows: rows
+                    .iter()
+                    .map(|(text, node, tip)| BreakdownRow {
+                        cells: [("name".to_owned(), text.to_string())].into(),
+                        tooltips: if *tip {
+                            [(
+                                "name".to_owned(),
+                                vec![TooltipLine::Line {
+                                    size: 14,
+                                    text: "tip".into(),
+                                }],
+                            )]
+                            .into()
+                        } else {
+                            Default::default()
+                        },
+                        nodes: node.map(|n| ("name".to_owned(), n)).into_iter().collect(),
+                    })
+                    .collect(),
+            }],
+        }
+    }
+
+    fn answer(h: &mut Harness, view: BreakdownView) {
+        h.ui.on_snapshot(&Snapshot::Breakdown(Arc::new(view)));
+        h.frame(vec![]);
+    }
+
+    fn breakdowns(out: &[CalcsOutput]) -> usize {
+        out.iter().map(|o| o.queries.len()).sum()
+    }
+
+    #[test]
+    fn hover_waits_100ms_before_querying() {
+        let mut h = Harness::new(sample(None));
+        let t0 = h.time;
+        let pos = h.ui.rects.map[CELL].center();
+        let at = |h: &mut Harness, dt: f64, events| h.frame_out(t0 + dt, events);
+        let a = at(&mut h, 0.0, vec![Event::PointerMoved(pos)]);
+        let b = at(&mut h, 0.05, vec![]);
+        assert_eq!(breakdowns(&[a, b]), 0, "50 ms is too soon");
+        let c = at(&mut h, 0.12, vec![]);
+        assert_eq!(c.queries.len(), 1);
+        assert_eq!(
+            debug(&c.queries),
+            [format!("{:?}", Command::Breakdown(target()))]
+        );
+        let d = at(&mut h, 0.2, vec![]);
+        assert!(d.queries.is_empty(), "asked once");
+    }
+
+    #[test]
+    fn click_pins_and_second_click_unpins() {
+        let mut h = Harness::new(sample(None));
+        let out = h.click_out(CELL);
+        assert_eq!(breakdowns(&out), 1, "pinning asks at once");
+        assert_eq!(h.ui.bd.pinned.as_ref().map(|p| p.0.clone()), Some(target()));
+        assert_eq!(h.ui.bd.pinned.as_ref().unwrap().1, "Label");
+        answer(&mut h, table(&[("a", None, false)]));
+        // hovering another cell while pinned asks nothing
+        let t = h.time;
+        let out = h.frame_out(t + 0.5, vec![]);
+        assert!(out.queries.is_empty());
+        h.click_out(CELL);
+        assert_eq!(h.ui.bd.pinned, None);
+    }
+
+    #[test]
+    fn pinned_breakdown_requeried_on_new_calcs_view() {
+        let mut h = Harness::new(sample(None));
+        h.click_out(CELL);
+        answer(&mut h, table(&[("a", None, false)]));
+        h.ui.on_snapshot(&Snapshot::Calcs(Arc::new(sample(None))));
+        let out = h.frame_out(h.time + 0.01, vec![]);
+        assert_eq!(
+            debug(&out.queries),
+            [format!("{:?}", Command::Breakdown(target()))]
+        );
+        let out = h.frame_out(h.time + 0.01, vec![]);
+        assert!(out.queries.is_empty());
+    }
+
+    #[test]
+    fn pinned_breakdown_unpins_when_empty() {
+        let mut h = Harness::new(sample(None));
+        h.click_out(CELL);
+        answer(&mut h, table(&[("a", None, false)]));
+        answer(
+            &mut h,
+            BreakdownView {
+                cell: target(),
+                sections: vec![],
+            },
+        );
+        assert_eq!(h.ui.bd.pinned, None);
+        assert!(h.ui.bd.shown.is_none());
+    }
+
+    #[test]
+    fn breakdowns_for_other_cells_are_ignored() {
+        let mut h = Harness::new(sample(None));
+        h.click_out(CELL);
+        let mut other = table(&[("a", None, false)]);
+        other.cell.row = 9;
+        answer(&mut h, other);
+        assert!(h.ui.bd.shown.is_none());
+    }
+
+    #[test]
+    fn table_sort_cycles_and_sorts_numbers_numerically() {
+        use super::breakdown::{Dir, Sort, next_sort, row_order};
+        let view = table(&[
+            ("1,200", None, false),
+            ("300", None, false),
+            ("^x00FF0010", None, false),
+        ]);
+        let crate::engine::views::BreakdownSection::Table { rows, .. } = &view.sections[0] else {
+            unreachable!()
+        };
+        let asc = next_sort(None, "name");
+        assert_eq!(
+            asc,
+            Some(Sort {
+                key: "name".into(),
+                dir: Dir::Asc
+            })
+        );
+        assert_eq!(row_order(rows, asc.as_ref()), [2, 1, 0]);
+        let desc = next_sort(asc.as_ref(), "name");
+        assert_eq!(desc.as_ref().map(|s| s.dir), Some(Dir::Desc));
+        assert_eq!(row_order(rows, desc.as_ref()), [0, 1, 2]);
+        assert_eq!(next_sort(desc.as_ref(), "name"), None);
+        assert_eq!(row_order(rows, None), [0, 1, 2]);
+    }
+
+    #[test]
+    fn header_click_sorts_the_drawn_table() {
+        let mut h = Harness::new(sample(None));
+        h.click_out(CELL);
+        answer(
+            &mut h,
+            table(&[("1,200", None, false), ("300", None, false)]),
+        );
+        h.frame(vec![]);
+        h.click_out("bd_head_0_name");
+        h.frame(vec![]);
+        let first = h.ui.rects.map["bd_cell_0_1_name"].min.y;
+        let second = h.ui.rects.map["bd_cell_0_0_name"].min.y;
+        assert!(first < second, "300 is drawn above 1,200");
+    }
+
+    #[test]
+    fn node_cell_click_focuses_tree() {
+        let mut h = Harness::new(sample(None));
+        h.click_out(CELL);
+        answer(
+            &mut h,
+            table(&[("a", Some(42), false), ("b", Some(7), true)]),
+        );
+        h.frame(vec![]);
+        let out = h.click_out("bd_cell_0_0_name");
+        assert_eq!(
+            out.iter().filter_map(|o| o.focus_node).collect::<Vec<_>>(),
+            [42]
+        );
+        let out = h.click_out("bd_cell_0_1_name");
+        assert!(
+            out.iter().all(|o| o.focus_node.is_none()),
+            "a cell with a tooltip is not a node link"
+        );
+    }
+
+    #[test]
+    fn failed_query_says_so() {
+        let mut h = Harness::new(sample(None));
+        h.click_out(CELL);
+        h.ui.breakdown_failed();
+        assert!(h.ui.bd.visible());
+        h.frame(vec![]);
     }
 }

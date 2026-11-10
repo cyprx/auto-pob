@@ -250,6 +250,11 @@ impl TreeTab {
         self.failed = true;
     }
 
+    /// Shows a node from outside the tab (the Calcs tab's node links).
+    pub fn focus(&mut self, id: u32, now: f64) {
+        self.focus_node(id, now);
+    }
+
     /// Centres the view on a node and makes it pulse.
     pub(super) fn focus_node(&mut self, id: u32, now: f64) {
         let (Some(layout), Some(&i)) = (&self.layout, self.index.get(&id)) else {

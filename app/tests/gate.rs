@@ -120,29 +120,21 @@ const RECIPE_SHAPES: [(&str, &str, u32, u32, &[&str]); 4] = [
         "Marauder",
         90,
         20,
-        &[
-            "Boneshatter",
-            "Melee Physical Damage Support",
-            "Brutality Support",
-        ],
+        &["Boneshatter", "Melee Physical Damage", "Brutality"],
     ),
     (
         "dot",
         "Witch",
         90,
         20,
-        &["Essence Drain", "Contagion", "Void Manipulation Support"],
+        &["Essence Drain", "Contagion", "Void Manipulation"],
     ),
     (
         "minion",
         "Witch",
         90,
         20,
-        &[
-            "Raise Zombie",
-            "Minion Damage Support",
-            "Melee Splash Support",
-        ],
+        &["Raise Zombie", "Minion Damage", "Melee Splash"],
     ),
 ];
 

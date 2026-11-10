@@ -172,21 +172,23 @@ fn calcs_collapse_and_search_match_pob() {
 #[ignore = "needs the pinned PoB install"]
 fn calcs_view_cost() {
     let _guard = lock();
-    let mut s = Session::start("calcs-cost");
-    s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
-    let mut times = Vec::new();
-    let mut size = 0;
-    for _ in 0..20 {
-        let start = std::time::Instant::now();
-        let view = s.backend.calcs_view().unwrap();
-        times.push(start.elapsed());
-        size = serde_json::to_string(&view).unwrap().len();
+    for fixture in ["attack", "minion"] {
+        let mut s = Session::start("calcs-cost");
+        s.open_fixture(fixture, &fixtures_dir().join(format!("{fixture}.xml")));
+        let mut times = Vec::new();
+        let mut size = 0;
+        for _ in 0..20 {
+            let start = std::time::Instant::now();
+            let view = s.backend.calcs_view().unwrap();
+            times.push(start.elapsed());
+            size = serde_json::to_string(&view).unwrap().len();
+        }
+        times.sort();
+        println!(
+            "CALCS {fixture}: median {:?} of 20 calcs_view calls, {size} bytes of JSON",
+            times[10]
+        );
     }
-    times.sort();
-    println!(
-        "CALCS attack: median {:?} of 20 calcs_view calls, {size} bytes of JSON",
-        times[10]
-    );
 }
 
 #[test]

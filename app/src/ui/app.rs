@@ -179,6 +179,13 @@ impl AutoPobApp {
             Event::StartupFailed { message } => self.startup_error = Some(message),
             Event::Snapshot { seq, snapshot } => {
                 self.last_snapshot = self.last_snapshot.max(seq);
+                // The events are in order, so everything from the previous build has arrived
+                // by the new build's first snapshot. Only now is the tree tab's state for the
+                // old build (and any late power events) dropped.
+                if self.entering.is_some_and(|e| seq >= e) {
+                    self.entering = None;
+                    self.tree.reset();
+                }
                 match snapshot {
                     Snapshot::Build(view) => {
                         self.last_unsaved = view.unsaved;
@@ -192,13 +199,15 @@ impl AutoPobApp {
                         self.stats = Some(view);
                     }
                     Snapshot::Config(view) => self.config = Some(view),
+                    // power results of the build being left
+                    Snapshot::NodePower(_) | Snapshot::PowerReport(_)
+                        if self.entering.is_some() => {}
                     snapshot => self.tree.on_snapshot(&snapshot),
-                }
-                if self.entering.is_some_and(|e| seq >= e) {
-                    self.entering = None;
                 }
             }
             Event::Error { seq, message } => self.on_error(seq, message),
+            // power events of the build being left arrive before the new build's snapshots
+            Event::Progress { .. } | Event::BackgroundFailed { .. } if self.entering.is_some() => {}
             Event::Progress { percent, .. } => self.tree.on_progress(percent),
             Event::BackgroundFailed { message, .. } => {
                 self.tree.power_failed();
@@ -255,6 +264,10 @@ impl AutoPobApp {
             }
             Pending::BackToList => {
                 self.screen = Screen::List;
+                // the heat map would go on calculating for a build nobody is looking at
+                if let Some(stop) = self.tree.stop_heatmap() {
+                    self.send(stop);
+                }
                 let folder = self.list_folder();
                 self.send(Command::ListBuilds { folder });
             }
@@ -269,7 +282,7 @@ impl AutoPobApp {
         self.entering = Some(seq);
         self.screen = Screen::Build;
         self.tab = BuildTab::default();
-        self.tree.reset();
+        // the tree tab resets when the build's first snapshot arrives (see `on_event`)
     }
 
     fn save(&mut self, then: Option<Pending>) {
@@ -1926,6 +1939,65 @@ mod tests {
             a.tree.rects.map.contains_key("heat_retry")
         });
         assert!(!app.notices.is_empty());
+    }
+
+    #[test]
+    fn power_events_of_the_previous_build_are_dropped_when_another_opens() {
+        let (mut app, ctx) = tree_app();
+        app.request(Pending::New);
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.entering.is_some());
+        // events the old build's calculation left in the queue, ahead of the new build's
+        app.on_event(Event::Progress {
+            task: crate::engine::BackgroundTask::NodePower,
+            percent: 37,
+        });
+        app.on_event(Event::Snapshot {
+            seq: 0,
+            snapshot: Snapshot::PowerReport(Arc::new(crate::engine::PowerReport {
+                stat: "Life".into(),
+                rows: vec![],
+            })),
+        });
+        app.on_event(Event::BackgroundFailed {
+            task: crate::engine::BackgroundTask::NodePower,
+            message: "power calculation failed".into(),
+        });
+        pump_until(&mut app, &ctx, "new build", |a| {
+            a.screen == Screen::Build
+                && a.entering.is_none()
+                && a.tree.rects.map.contains_key("reset")
+        });
+        assert_eq!(app.tree.progress, None, "no progress bar");
+        assert!(app.tree.report.is_none(), "no report");
+        assert!(!app.tree.rects.map.contains_key("heat_retry"), "no failure");
+        assert!(app.notices.is_empty(), "{:?}", app.notices);
+    }
+
+    #[test]
+    fn going_back_to_the_list_stops_the_heatmap() {
+        let (mut app, ctx) = tree_app();
+        let before = app.sent_full.len();
+        // nothing to stop yet
+        app.request(Pending::BackToList);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(sent_since(&app, before), ["ListBuilds { folder: \"\" }"]);
+
+        let (mut app, ctx) = tree_app();
+        click(&mut app, &ctx, "heat_stat");
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "heat:Life");
+        pump_until(&mut app, &ctx, "heat map on", |a| a.tree.heatmap_on());
+        let before = app.sent_full.len();
+        app.request(Pending::BackToList);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(
+            sent_since(&app, before),
+            [
+                "SetHeatmap { stat: None, max_depth: None }",
+                "ListBuilds { folder: \"\" }"
+            ]
+        );
     }
 
     #[test]

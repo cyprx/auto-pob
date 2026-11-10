@@ -224,17 +224,28 @@ pub fn show(
         .iter()
         .any(|m| m.node == node.id && !m.options.is_empty());
     let is_mastery = node.kind == "Mastery";
+    let allocated = tab.derived.allocated.contains(&node.id);
+    // as PoB's right click does (PassiveTreeView.lua:520)
     if response.secondary_clicked() && is_mastery && has_options {
         actions.push(CanvasAction::PickMastery(node.id));
     }
     if response.clicked() {
-        if is_mastery {
+        // a left click on an allocated node removes it, a mastery included
+        // (PassiveTreeView.lua:383); an unallocated mastery asks for its effect
+        if allocated {
+            actions.push(CanvasAction::Dealloc(node.id));
+        } else if is_mastery {
             if has_options {
                 actions.push(CanvasAction::PickMastery(node.id));
             }
-        } else if tab.derived.allocated.contains(&node.id) {
-            actions.push(CanvasAction::Dealloc(node.id));
-        } else if tab.derived.paths.contains_key(&node.id) {
+        } else if tab.derived.paths.contains_key(&node.id)
+            // a node of another ascendancy has no path, but the click switches to it
+            // (PassiveTreeView.lua:416); the engine says if that isn't possible
+            || node
+                .ascendancy
+                .as_ref()
+                .is_some_and(|a| tab.derived.current_ascendancy.as_ref() != Some(a))
+        {
             actions.push(CanvasAction::Alloc(node.id));
         }
     }

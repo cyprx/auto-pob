@@ -137,8 +137,8 @@ pub struct TreeTab {
 impl TreeTab {
     /// Forgets the build's state, as for another build. Uploaded textures stay.
     ///
-    /// The layout stays: the engine resends it only when its key changes, and a new snapshot
-    /// with another key replaces it.
+    /// The layout stays: the engine resends it only when its content changes, and a new
+    /// snapshot replaces it.
     pub fn reset(&mut self) {
         let kept = Self {
             textures: std::mem::take(&mut self.textures),
@@ -161,6 +161,21 @@ impl TreeTab {
         self.toolbar.has_dialog()
     }
 
+    /// The heat map is on in the latest tree state.
+    pub fn heatmap_on(&self) -> bool {
+        self.state.as_ref().is_some_and(|s| s.heatmap.is_some())
+    }
+
+    /// The command that turns the heat map off, when it is on.
+    pub fn stop_heatmap(&self) -> Option<Command> {
+        let state = self.state.as_ref()?;
+        state.heatmap.as_ref()?;
+        Some(Command::SetHeatmap {
+            stat: None,
+            max_depth: state.max_depth,
+        })
+    }
+
     /// The undo and redo buttons' enablement.
     pub fn history(&self) -> (bool, bool) {
         self.state
@@ -171,18 +186,25 @@ impl TreeTab {
     pub fn on_snapshot(&mut self, snapshot: &Snapshot) {
         match snapshot {
             Snapshot::TreeLayout(layout) => {
-                if self.layout.as_ref().is_none_or(|l| l.key != layout.key) {
-                    self.grid = HitGrid::new(layout);
-                    self.index = layout
-                        .nodes
-                        .iter()
-                        .enumerate()
-                        .map(|(i, n)| (n.id, i))
-                        .collect();
+                // Always rebuilt: a layout with another key can order its nodes differently,
+                // and the grid and index hold positions in that order.
+                self.grid = HitGrid::new(layout);
+                self.index = layout
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, n)| (n.id, i))
+                    .collect();
+                // the view is only refitted for another tree; a change in node text keeps it
+                if self
+                    .layout
+                    .as_ref()
+                    .is_none_or(|l| l.version != layout.version)
+                {
                     self.needs_fit = true;
-                    self.hover = None;
-                    self.previewed = None;
                 }
+                self.hover = None;
+                self.previewed = None;
                 self.layout = Some(layout.clone());
             }
             Snapshot::Tree(state) => {
@@ -446,9 +468,13 @@ mod tests {
 
         /// Moves to `pos`, presses and releases; returns everything the frames sent.
         fn click_at(&mut self, pos: Pos2) -> TreeOutput {
+            self.click_with(pos, PointerButton::Primary)
+        }
+
+        fn click_with(&mut self, pos: Pos2, which: PointerButton) -> TreeOutput {
             let button = |pressed| Event::PointerButton {
                 pos,
-                button: PointerButton::Primary,
+                button: which,
                 pressed,
                 modifiers: egui::Modifiers::NONE,
             };
@@ -508,6 +534,93 @@ mod tests {
         let out = h.click_at(pos);
         assert_eq!(debug(&out.commands), ["SetMastery { node: 3, effect: 31 }"]);
         assert_eq!(h.tab.picker, None);
+    }
+
+    /// The sample with the mastery 3 allocated with the first effect.
+    fn allocated_mastery() -> Harness {
+        let (l, s) = sample();
+        let mut state = (*s).clone();
+        state.allocated.push(3);
+        Harness::new(l, Arc::new(state))
+    }
+
+    #[test]
+    fn left_click_on_an_allocated_mastery_deallocates_it() {
+        let mut h = allocated_mastery();
+        let out = h.click_at(h.screen_of(3));
+        assert_eq!(debug(&out.commands), ["DeallocNode { id: 3 }"]);
+        assert_eq!(h.tab.picker, None);
+    }
+
+    #[test]
+    fn right_click_on_a_mastery_opens_the_picker() {
+        for mut h in [allocated_mastery(), {
+            let (l, s) = sample();
+            Harness::new(l, s)
+        }] {
+            let out = h.click_with(h.screen_of(3), PointerButton::Secondary);
+            assert!(out.commands.is_empty(), "{:?}", out.commands);
+            assert_eq!(h.tab.picker, Some(3));
+        }
+    }
+
+    #[test]
+    fn clicking_another_ascendancy_sends_alloc() {
+        let (mut l, s) = sample();
+        let mut layout = (*l).clone();
+        layout.nodes[3].ascendancy = Some("Juggernaut".into());
+        layout.nodes[1].ascendancy = Some("Berserker".into());
+        l = Arc::new(layout);
+        let mut state = (*s).clone();
+        // the build is a Berserker
+        state.classes = serde_json::from_value(serde_json::json!([
+            { "id": 0, "name": "Marauder", "needs_confirm": false,
+              "ascendancies": [ { "id": 1, "name": "Berserker" } ] }
+        ]))
+        .unwrap();
+        state.ascendancy_id = 1;
+        let mut h = Harness::new(l, Arc::new(state));
+        // node 4 is Juggernaut and has no path; node 2 is the build's own and has one
+        let out = h.click_at(h.screen_of(4));
+        assert_eq!(debug(&out.commands), ["AllocNode { id: 4 }"]);
+        let out = h.click_at(h.screen_of(2));
+        assert_eq!(debug(&out.commands), ["AllocNode { id: 2 }"]);
+    }
+
+    #[test]
+    fn own_ascendancy_node_without_a_path_does_nothing() {
+        let (l, s) = sample();
+        let mut layout = (*l).clone();
+        layout.nodes[3].ascendancy = Some("Berserker".into());
+        let mut state = (*s).clone();
+        state.classes = serde_json::from_value(serde_json::json!([
+            { "id": 0, "name": "Marauder", "needs_confirm": false,
+              "ascendancies": [ { "id": 1, "name": "Berserker" } ] }
+        ]))
+        .unwrap();
+        state.ascendancy_id = 1;
+        let mut h = Harness::new(Arc::new(layout), Arc::new(state));
+        let out = h.click_at(h.screen_of(4));
+        assert!(out.commands.is_empty(), "{:?}", out.commands);
+    }
+
+    #[test]
+    fn a_resent_layout_rebuilds_the_grid_and_keeps_the_camera() {
+        let (l, s) = sample();
+        let mut h = Harness::new(l.clone(), s);
+        let camera = h.tab.camera;
+        h.tab.needs_fit = false;
+        // same key, nodes in another order
+        let mut reordered = (*l).clone();
+        reordered.nodes.reverse();
+        reordered.edges.clear();
+        h.tab
+            .on_snapshot(&Snapshot::TreeLayout(Arc::new(reordered)));
+        assert_eq!(h.tab.index[&1], 3);
+        assert!(!h.tab.needs_fit, "same version, no refit");
+        assert_eq!(h.tab.camera, camera);
+        let out = h.click_at(h.screen_of(2));
+        assert_eq!(debug(&out.commands), ["AllocNode { id: 2 }"]);
     }
 
     #[test]

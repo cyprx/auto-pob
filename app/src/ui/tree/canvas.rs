@@ -17,6 +17,10 @@ pub enum CanvasAction {
     Dealloc(u32),
     /// Open the effect picker of a mastery
     PickMastery(u32),
+    /// Open the node replacement window of a node (R18)
+    ReplaceNode(u32),
+    /// Show the Items tab with the slot of an allocated jewel socket (R19)
+    JumpToSocket(u32),
     /// The node under the pointer changed
     Hover(Option<u32>),
 }
@@ -225,9 +229,22 @@ pub fn show(
         .any(|m| m.node == node.id && !m.options.is_empty());
     let is_mastery = node.kind == "Mastery";
     let allocated = tab.derived.allocated.contains(&node.id);
-    // as PoB's right click does (PassiveTreeView.lua:520)
-    if response.secondary_clicked() && is_mastery && has_options {
-        actions.push(CanvasAction::PickMastery(node.id));
+    // as PoB's right click, in its order (PassiveTreeView.lua:510-533, R19)
+    if response.secondary_clicked() {
+        if allocated && node.kind == "Socket" {
+            // only a slot PoB lets the user use
+            if tab.sockets.contains(&node.id) {
+                actions.push(CanvasAction::JumpToSocket(node.id));
+            }
+        } else if node.replaceable {
+            actions.push(CanvasAction::ReplaceNode(node.id));
+        } else if is_mastery && node.mastery_effects {
+            actions.push(if allocated {
+                CanvasAction::PickMastery(node.id)
+            } else {
+                CanvasAction::ReplaceNode(node.id)
+            });
+        }
     }
     if response.clicked() {
         // a left click on an allocated node removes it, a mastery included

@@ -2,13 +2,14 @@
 //! and returns commands; it knows nothing else about PoB.
 
 pub mod crafting;
+pub mod db;
 pub mod display;
 pub mod list;
 pub mod sets;
 pub mod slots;
 pub mod text_window;
 
-use crate::engine::views::{DisplayItemView, ItemTooltipView, ItemsView};
+use crate::engine::views::{DisplayItemView, ItemDbView, ItemTooltipView, ItemsView};
 use crate::engine::{Command, ItemTooltipQuery, Snapshot};
 use crate::ui::tree::Rects;
 use crate::widgets::item_tooltip_ui;
@@ -53,6 +54,11 @@ pub struct ItemsUi {
     /// What the pointer is over this frame
     hovered_now: Option<ItemTooltipQuery>,
     sets: sets::State,
+    db: db::DbState,
+    /// The open database's latest view
+    db_view: Option<Arc<ItemDbView>>,
+    /// The jewel slot the tree's right click asked for, until its row is drawn
+    focus_slot: Option<String>,
     /// The id of the item on the display panel, if it is one of the build's
     display_id: Option<u32>,
     /// What the display panel shows, if anything
@@ -112,7 +118,58 @@ impl ItemsUi {
         if let Some(id) = self.cancel_display.take() {
             commands.push(Command::CancelDisplayItem { if_id: Some(id) });
         }
+        // the database search still waiting out its pause (R4)
+        commands.extend(self.db.flush());
         commands
+    }
+
+    /// Leaving the tab closes the engine's database; the panel is as it was on the return.
+    pub fn leave(&mut self) -> Option<Command> {
+        self.focus_slot = None;
+        self.db_view = None;
+        self.db.leave()
+    }
+
+    /// The tree's right click on a jewel socket: shows the slot of the socket `node` and
+    /// opens its dropdown, as PoB does (`slot.dropped`, `SelectControl`).
+    pub fn focus_slot(&mut self, node: u32) {
+        self.focus_slot = self
+            .view
+            .as_ref()
+            .and_then(|v| v.slots.iter().find(|s| s.node == Some(node)))
+            .map(|s| s.name.clone());
+    }
+
+    /// The jewel sockets whose slot PoB lets the user use: the tree's right click jumps to
+    /// these only.
+    pub fn enabled_sockets(&self) -> Vec<u32> {
+        self.view.as_ref().map_or_else(Vec::new, |v| {
+            v.slots
+                .iter()
+                .filter(|s| s.enabled)
+                .filter_map(|s| s.node)
+                .collect()
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn quality_text(&self) -> &str {
+        &self.display.quality.text
+    }
+
+    #[cfg(test)]
+    pub fn focused_slot(&self) -> Option<&str> {
+        self.focus_slot.as_deref()
+    }
+
+    /// The database sort's progress.
+    pub fn on_db_progress(&mut self, percent: u32) {
+        self.db.on_progress(percent);
+    }
+
+    /// The database load or sort failed.
+    pub fn on_db_failed(&mut self, message: String) {
+        self.db.on_failed(message);
     }
 
     #[cfg(test)]
@@ -178,7 +235,14 @@ impl ItemsUi {
                 }
                 self.check_orphan();
             }
-            Snapshot::ControlTooltip(_) => self.display.crafting.on_snapshot(snapshot),
+            Snapshot::ControlTooltip(view) => {
+                self.display.crafting.on_snapshot(snapshot);
+                self.db.on_tooltip(view);
+            }
+            Snapshot::ItemDb(view) => {
+                self.db.on_view(view.as_deref());
+                self.db_view = view.clone();
+            }
             Snapshot::ItemTooltip(t) => {
                 // only the latest question is answered for; an earlier one is stale
                 if self.tooltip_asked.as_ref() == Some(&t.query) {
@@ -258,7 +322,18 @@ impl ItemsUi {
                     .extend(display::show_empty(ui, &mut self.display)),
             });
         out.queries.extend(self.display.crafting.take_queries());
-        egui::CentralPanel::default().show(ui, |ui| self.item_list(ui, &view, &mut out));
+        egui::CentralPanel::default().show(ui, |ui| {
+            // PoB's databases sit below the item list
+            egui::Panel::bottom("items_db")
+                .resizable(self.db.expanded)
+                .default_size(300.0)
+                .show(ui, |ui| {
+                    let o = db::show(ui, self.db_view.as_deref(), &mut self.db, now);
+                    out.commands.extend(o.commands);
+                    out.queries.extend(o.queries);
+                });
+            egui::CentralPanel::default().show(ui, |ui| self.item_list(ui, &view, &mut out));
+        });
 
         let ctx = ui.ctx().clone();
         self.dialogs(&ctx, &mut out);
@@ -322,6 +397,7 @@ impl ItemsUi {
             .get(key)
             .or_else(|| self.display.rects.map.get(key))
             .or_else(|| self.display.crafting.rects.map.get(key))
+            .or_else(|| self.db.rects.map.get(key))
             .unwrap_or_else(|| panic!("no rect {key}; have {:?}", self.rects.map.keys()))
     }
 }

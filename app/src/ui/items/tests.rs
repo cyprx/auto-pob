@@ -2,11 +2,13 @@ use super::list::delete_prompt;
 use super::slots::{SlotRow, SlotSection, rows};
 use super::*;
 use crate::engine::PopupKind;
+use crate::engine::views::ItemDbView;
 use crate::engine::views::{
     DisplayItemView, DropList, EquippedIn, ItemEntry, ItemSetEntry, ItemText, ItemTooltip,
     ItemTooltipLine, ModLineList, ModLineRef, RangeLineView, SlotKind, SlotView,
 };
 use crate::engine::views::{SocketView, VariantView};
+use crate::engine::{ItemDb, ItemDbQuery};
 use eframe::egui::{Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 
 fn item(id: u32, name: &str) -> ItemEntry {
@@ -101,6 +103,8 @@ struct Harness {
     field: Option<String>,
     /// The engine is behind
     busy: bool,
+    /// The keys held down
+    modifiers: Modifiers,
 }
 
 fn debug(commands: &[Command]) -> Vec<String> {
@@ -119,13 +123,15 @@ impl Harness {
             copied: Vec::new(),
             field: None,
             busy: false,
+            modifiers: Modifiers::NONE,
         };
         h.frame(vec![]);
         h
     }
 
-    fn frame(&mut self, events: Vec<Event>) -> ItemsOutput {
+    fn frame(&mut self, mut events: Vec<Event>) -> ItemsOutput {
         self.time += self.step;
+        events.insert(0, Event::ModifiersChanged(self.modifiers));
         let input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 700.0))),
             time: Some(self.time),
@@ -1809,4 +1815,396 @@ fn hovering_an_affix_entry_asks_for_its_tooltip_after_100ms() {
         debug(&queries),
         ["ControlTooltip(Affix { slot: 0, index: Some(1) })"]
     );
+}
+
+// ---- the item databases panel -------------------------------------------------------------
+
+fn drop_list(labels: &[&str]) -> DropList {
+    DropList {
+        labels: labels.iter().map(|s| (*s).to_owned()).collect(),
+        selected: 0,
+        enabled: true,
+    }
+}
+
+fn db_row(name: &str) -> crate::engine::views::DbRow {
+    crate::engine::views::DbRow {
+        name: name.into(),
+        label: format!("^xAF6025{name}"),
+        base: "Base".into(),
+        sort_value: Some(12.5),
+    }
+}
+
+fn db_view(db: ItemDb) -> ItemDbView {
+    let uniques = db == ItemDb::Uniques;
+    ItemDbView {
+        db,
+        loading: false,
+        sorting: false,
+        percent: None,
+        slot: drop_list(&["Any slot", "Helmet", "Ring"]),
+        kind: drop_list(&["Any type", "Iron Hat", "Gold Ring"]),
+        league: uniques.then(|| drop_list(&["Any league", "Heist", "Sanctum"])),
+        requirement: uniques.then(|| drop_list(&["Any requirements", "Level 60"])),
+        obtainable: uniques.then(|| drop_list(&["Any obtainability", "Obtainable"])),
+        sort: uniques.then(|| drop_list(&["Sort by Name", "Sort by Life", "Sort by DPS"])),
+        search: String::new(),
+        search_mode: drop_list(&["Anywhere", "Names", "Modifiers"]),
+        rows: vec![
+            db_row("Goldrim"),
+            db_row("Tabula Rasa"),
+            db_row("Kaom's Heart"),
+        ],
+        note: String::new(),
+    }
+}
+
+impl Harness {
+    fn show_db(&mut self, view: ItemDbView) {
+        self.ui.on_snapshot(&Snapshot::ItemDb(Some(Arc::new(view))));
+        self.frame(vec![]);
+    }
+
+    /// Opens the panel; returns what the click sent.
+    fn open_db(&mut self) -> Vec<String> {
+        // the resizable panels reach their place over a few frames
+        self.settle();
+        let out = self.click("db_header");
+        self.show_db(db_view(ItemDb::Uniques));
+        // the body opens over a few frames
+        self.settle();
+        debug(&out.commands)
+    }
+
+    fn pick(&mut self, key: &str, index: usize) -> Vec<Command> {
+        self.click(key);
+        self.frame(vec![]);
+        let sent = self.click(&format!("{key}_{index}")).commands;
+        self.settle();
+        sent
+    }
+
+    /// Whether a frame draws the widget.
+    fn drawn(&mut self, key: &str) -> bool {
+        self.ui.db.rects.map.clear();
+        self.frame(vec![]);
+        self.ui.db.rects.map.contains_key(key)
+    }
+
+    fn type_in(&mut self, key: &str, text: &str) {
+        self.click(key);
+        self.frame(vec![Event::Text(text.into())]);
+    }
+}
+
+fn unique_query() -> ItemDbQuery {
+    ItemDbQuery {
+        db: ItemDb::Uniques,
+        slot: 0,
+        kind: 0,
+        league: 0,
+        requirement: 0,
+        obtainable: 0,
+        sort: 0,
+        search: String::new(),
+        search_mode: 0,
+    }
+}
+
+#[test]
+fn opening_the_panel_sends_the_default_query_and_collapsing_closes_it() {
+    let mut h = Harness::new(sample());
+    assert!(h.drawn("db_header"));
+    assert!(!h.drawn("db_uniques"), "collapsed");
+    assert_eq!(h.open_db(), [format!("SetItemDb({:?})", unique_query())]);
+    assert!(h.drawn("db_uniques") && h.drawn("db_row_0"));
+    assert_eq!(debug(&h.click("db_header").commands), ["CloseItemDb"]);
+}
+
+#[test]
+fn db_toggle_to_rares_zeroes_unique_fields() {
+    let mut h = Harness::new(sample());
+    h.open_db();
+    // the uniques' own filters and the sort are set...
+    assert_eq!(debug(&h.pick("db_league", 2)).len(), 1);
+    assert_eq!(debug(&h.pick("db_requirement", 1)).len(), 1);
+    assert_eq!(debug(&h.pick("db_obtainable", 1)).len(), 1);
+    assert_eq!(debug(&h.pick("db_sort", 2)).len(), 1);
+    h.pick("db_slot", 1);
+    h.pick("db_search_mode", 2);
+    assert_eq!(
+        h.ui.db.query(),
+        &ItemDbQuery {
+            slot: 1,
+            league: 2,
+            requirement: 1,
+            obtainable: 1,
+            sort: 2,
+            search_mode: 2,
+            ..unique_query()
+        }
+    );
+    // ...and the rares have none of them (R13)
+    let sent = h.click("db_rares").commands;
+    assert_eq!(
+        debug(&sent),
+        [format!(
+            "SetItemDb({:?})",
+            ItemDbQuery {
+                db: ItemDb::Rares,
+                search_mode: 2,
+                ..unique_query()
+            }
+        )]
+    );
+    // until the rares' lists arrive, the uniques' controls are gone, and the unique-only
+    // ones stay hidden for the rares
+    h.show_db(db_view(ItemDb::Rares));
+    for key in ["db_league", "db_requirement", "db_obtainable", "db_sort"] {
+        assert!(!has_rect(&h, key), "{key}");
+    }
+    assert!(h.drawn("db_slot") && h.drawn("db_search_mode"));
+    // back to the uniques: nothing of the earlier choices is kept
+    let sent = h.click("db_uniques").commands;
+    assert_eq!(
+        debug(&sent),
+        [format!(
+            "SetItemDb({:?})",
+            ItemDbQuery {
+                search_mode: 2,
+                ..unique_query()
+            }
+        )]
+    );
+}
+
+#[test]
+fn db_search_sends_after_300ms_of_no_typing() {
+    let mut h = Harness::new(sample());
+    h.open_db();
+    h.step = 0.05;
+    h.type_in("db_search", "gold");
+    let mut sent = Vec::new();
+    // 0.2 s on: still waiting
+    for _ in 0..4 {
+        sent.extend(h.frame(vec![]).commands);
+    }
+    assert!(sent.is_empty(), "{sent:?}");
+    // more typing restarts the wait
+    sent.extend(h.frame(vec![Event::Text("r".into())]).commands);
+    for _ in 0..4 {
+        sent.extend(h.frame(vec![]).commands);
+    }
+    assert!(sent.is_empty(), "{sent:?}");
+    for _ in 0..4 {
+        sent.extend(h.frame(vec![]).commands);
+    }
+    assert_eq!(
+        debug(&sent),
+        [format!(
+            "SetItemDb({:?})",
+            ItemDbQuery {
+                search: "goldr".into(),
+                ..unique_query()
+            }
+        )]
+    );
+    // once: Enter after it, or leaving the box, sends nothing more
+    let after = h.key(Key::Enter, Modifiers::NONE);
+    assert!(after.commands.is_empty(), "{:?}", after.commands);
+}
+
+#[test]
+fn db_search_sends_at_once_on_enter() {
+    let mut h = Harness::new(sample());
+    h.open_db();
+    h.type_in("db_search", "ring");
+    let out = h.key(Key::Enter, Modifiers::NONE);
+    assert_eq!(
+        debug(&out.commands),
+        [format!(
+            "SetItemDb({:?})",
+            ItemDbQuery {
+                search: "ring".into(),
+                ..unique_query()
+            }
+        )]
+    );
+}
+
+#[test]
+fn db_search_still_pending_is_flushed_once() {
+    let mut h = Harness::new(sample());
+    h.open_db();
+    h.type_in("db_search", "ring");
+    let flushed = h.ui.flush();
+    assert_eq!(
+        debug(&flushed),
+        [format!(
+            "SetItemDb({:?})",
+            ItemDbQuery {
+                search: "ring".into(),
+                ..unique_query()
+            }
+        )]
+    );
+    assert!(h.ui.flush().is_empty(), "once");
+    // the blur that follows sends nothing
+    let out = h.click("db_header");
+    assert_eq!(debug(&out.commands), ["CloseItemDb"]);
+}
+
+#[test]
+fn db_progress_shown_while_sorting() {
+    let mut h = Harness::new(sample());
+    h.open_db();
+    assert!(!h.drawn("db_progress"));
+    let mut sorting = db_view(ItemDb::Uniques);
+    sorting.sorting = true;
+    sorting.rows.clear();
+    h.show_db(sorting);
+    // sorting, no progress yet: no bar
+    assert!(!h.drawn("db_progress"));
+    h.ui.on_db_progress(40);
+    h.frame(vec![]);
+    assert!(h.drawn("db_progress"));
+    // the rows come with the end of the sort and the bar goes
+    h.show_db(db_view(ItemDb::Uniques));
+    assert!(!h.drawn("db_progress"));
+    assert!(h.drawn("db_row_0"));
+}
+
+#[test]
+fn db_failure_shows_retry_and_retry_resends_query() {
+    let mut h = Harness::new(sample());
+    h.open_db();
+    h.pick("db_sort", 1);
+    h.ui.on_db_failed("boom".into());
+    h.frame(vec![]);
+    assert!(h.drawn("db_retry"));
+    let sent = h.click("db_retry").commands;
+    assert_eq!(
+        debug(&sent),
+        [format!(
+            "SetItemDb({:?})",
+            ItemDbQuery {
+                sort: 1,
+                ..unique_query()
+            }
+        )]
+    );
+    assert!(!h.drawn("db_retry"), "the error is gone");
+}
+
+#[test]
+fn db_double_click_views_and_ctrl_click_adds() {
+    let mut h = Harness::new(sample());
+    h.open_db();
+    // a single click only selects
+    assert!(h.click("db_row_1").commands.is_empty());
+    h.step = 0.05;
+    let pos = h.ui.rect("db_row_1").center();
+    let button = |pressed| Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    let mut sent = Vec::new();
+    for events in [
+        vec![Event::PointerMoved(pos)],
+        vec![button(true)],
+        vec![button(false)],
+        vec![button(true)],
+        vec![button(false)],
+        vec![],
+    ] {
+        sent.extend(h.frame(events).commands);
+    }
+    assert_eq!(
+        debug(&sent),
+        ["ViewDbItem { db: Uniques, name: \"Tabula Rasa\" }"]
+    );
+    // Ctrl+click adds and equips
+    h.step = 0.2;
+    h.modifiers = Modifiers::CTRL;
+    let sent = h.click("db_row_2").commands;
+    assert_eq!(
+        debug(&sent),
+        ["AddDbItem { db: Uniques, name: \"Kaom's Heart\" }"]
+    );
+    h.modifiers = Modifiers::NONE;
+    // so does the button, for the selected row
+    let sent = h.click("db_add").commands;
+    assert_eq!(
+        debug(&sent),
+        ["AddDbItem { db: Uniques, name: \"Kaom's Heart\" }"]
+    );
+}
+
+#[test]
+fn db_rows_ask_for_their_tooltip_after_100ms() {
+    let mut h = Harness::new(sample());
+    h.open_db();
+    h.step = 0.06;
+    let pos = h.ui.rect("db_row_1").center();
+    let mut queries = h.frame(vec![Event::PointerMoved(pos)]).queries;
+    assert!(queries.is_empty(), "too early");
+    for _ in 0..3 {
+        queries.extend(h.frame(vec![]).queries);
+    }
+    assert_eq!(
+        debug(&queries),
+        ["ControlTooltip(DbItem { db: Uniques, name: \"Tabula Rasa\" })"]
+    );
+}
+
+#[test]
+fn db_closed_on_tab_leave() {
+    let mut h = Harness::new(sample());
+    h.open_db();
+    assert_eq!(
+        debug(&h.ui.leave().into_iter().collect::<Vec<_>>()),
+        ["CloseItemDb"]
+    );
+    assert!(h.ui.leave().is_none(), "once");
+    // back on the tab the panel is still open and asks again
+    let out = h.frame(vec![]);
+    assert_eq!(
+        debug(&out.commands),
+        [format!("SetItemDb({:?})", unique_query())]
+    );
+}
+
+#[test]
+fn a_view_of_the_other_database_is_not_drawn() {
+    let mut h = Harness::new(sample());
+    h.open_db();
+    h.click("db_rares");
+    // the uniques' late view must not show under the rares toggle
+    h.show_db(db_view(ItemDb::Uniques));
+    assert!(!h.drawn("db_row_0"));
+    assert!(!h.drawn("db_league"));
+}
+
+#[test]
+fn focus_slot_finds_the_slot_of_a_socket_and_drops_it_down() {
+    let mut view = sample();
+    view.slots[9].node = Some(26725);
+    let mut h = Harness::new(view);
+    assert_eq!(h.ui.enabled_sockets(), [26725]);
+    h.ui.focus_slot(99);
+    assert_eq!(h.ui.focused_slot(), None, "no such socket");
+    h.ui.focus_slot(26725);
+    assert_eq!(h.ui.focused_slot(), Some("Jewel 5"));
+    h.frame(vec![]);
+    h.frame(vec![]);
+    assert_eq!(h.ui.focused_slot(), None, "taken when drawn");
+    assert!(egui::Popup::is_any_open(&h.ctx), "the dropdown is open");
+}
+
+/// A database view for the app's tests.
+pub(crate) fn db_view_for_app() -> ItemDbView {
+    db_view(ItemDb::Uniques)
 }

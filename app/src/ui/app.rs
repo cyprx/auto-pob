@@ -259,16 +259,16 @@ impl AutoPobApp {
                     Snapshot::Items(_)
                     | Snapshot::DisplayItem(_)
                     | Snapshot::ItemTooltip(_)
-                    | Snapshot::ItemText(_) => self.items.on_snapshot_at(&snapshot, seq),
+                    | Snapshot::ItemText(_)
+                    | Snapshot::ItemDb(_) => self.items.on_snapshot_at(&snapshot, seq),
                     Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
                     Snapshot::Popup(_) => self.popup.on_snapshot_at(&snapshot, seq),
-                    // the popup window and the display panel each keep the answers to their own
-                    // questions; the database panel comes with Task 9
+                    // the popup window, the display panel and the database panel each keep the
+                    // answers to their own questions
                     Snapshot::ControlTooltip(_) => {
                         self.popup.on_snapshot_at(&snapshot, seq);
                         self.items.on_snapshot_at(&snapshot, seq);
                     }
-                    Snapshot::ItemDb(_) => {}
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
                     Snapshot::NodePower(_) | Snapshot::PowerReport(_)
@@ -296,15 +296,14 @@ impl AutoPobApp {
                 task: BackgroundTask::AnointSort,
                 message,
             } => self.popup.on_failed(message),
-            // the item database panel shows its own progress (Task 9)
             Event::Progress {
                 task: BackgroundTask::ItemDb,
-                ..
-            }
-            | Event::BackgroundFailed {
+                percent,
+            } => self.items.on_db_progress(percent),
+            Event::BackgroundFailed {
                 task: BackgroundTask::ItemDb,
-                ..
-            } => {}
+                message,
+            } => self.items.on_db_failed(message),
             Event::Progress { percent, .. } => self.tree.on_progress(percent),
             Event::BackgroundFailed { message, .. } => {
                 self.tree.power_failed();
@@ -682,7 +681,10 @@ impl AutoPobApp {
             build::tab_strip(ui, &mut self.tab);
             ui.separator();
             match self.tab {
-                BuildTab::Tree => tree_out = self.tree.show(ui, behind),
+                BuildTab::Tree => {
+                    self.tree.set_enabled_sockets(self.items.enabled_sockets());
+                    tree_out = self.tree.show(ui, behind);
+                }
                 BuildTab::Skills => {
                     let now = ui.input(|i| i.time);
                     skills_out = self.skills.show(ui, now, behind);
@@ -733,6 +735,9 @@ impl AutoPobApp {
                 self.send(command);
             }
             self.items.close_dialogs();
+            if let Some(command) = self.items.leave() {
+                self.send(command);
+            }
         }
         // leaving the tab that opened the window ends its session
         if self.popup.is_open() && self.popup_tab != Some(self.tab) {
@@ -774,6 +779,11 @@ impl AutoPobApp {
         }
         for command in tree_out.commands {
             self.send(command);
+        }
+        // PoB's right click on a jewel socket: the Items tab with that slot focused
+        if let Some(node) = tree_out.jump_to_socket {
+            self.tab = BuildTab::Items;
+            self.items.focus_slot(node);
         }
         // questions are answered with snapshots but never leave the app waiting
         for query in tree_out.queries {
@@ -3450,6 +3460,207 @@ mod tests {
         frame(&mut app, &ctx, vec![]);
         assert_eq!(app.notices, ["the list changed; pick again"]);
         assert!(app.popup.is_open());
+    }
+
+    // ---- the database panel and the tree's right click ----------------------------------------
+
+    /// The tree tab with an allocated jewel socket (node 26725), and the items view whose
+    /// "Jewel 5" slot belongs to it. `enabled`: PoB lets the slot be used.
+    fn socket_app(enabled: bool) -> (AutoPobApp, egui::Context) {
+        use crate::engine::{NodeArt, TreeLayout, TreeNode, TreeState};
+        let (mut app, ctx) = tree_app();
+        let layout = TreeLayout {
+            version: "3_28".into(),
+            nodes: vec![TreeNode {
+                id: 26725,
+                pos: [0.0, 0.0],
+                kind: "Socket".into(),
+                name: "Jewel Socket".into(),
+                stats: vec![],
+                orbit: None,
+                group_center: None,
+                art: NodeArt::default(),
+                ascendancy: None,
+                replaceable: false,
+                mastery_effects: false,
+            }],
+            edges: vec![],
+            sheets: vec![],
+            key: "socket".into(),
+        };
+        let state: TreeState = serde_json::from_value(serde_json::json!({
+            "version": "3_28", "version_label": "3.28", "class_id": 0, "ascendancy_id": 0,
+            "points": { "used": 1, "available": 122, "ascendancy_used": 0,
+                        "ascendancy_available": 8 },
+            "allocated": [26725],
+            "active_spec": 0, "can_undo": false, "can_redo": false,
+        }))
+        .unwrap();
+        app.tree
+            .on_snapshot(&Snapshot::TreeLayout(Arc::new(layout)));
+        app.tree.on_snapshot(&Snapshot::Tree(Arc::new(state)));
+        let mut items = crate::ui::items::tests::sample();
+        items.slots[9].node = Some(26725);
+        items.slots[9].enabled = enabled;
+        app.on_event(Event::Snapshot {
+            seq: 90,
+            snapshot: Snapshot::Items(Arc::new(items)),
+        });
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        (app, ctx)
+    }
+
+    fn right_click_socket(app: &mut AutoPobApp, ctx: &egui::Context) {
+        let rect = app.tree.rect.expect("drawn");
+        let pos = app.tree.camera.to_screen(rect, [0.0, 0.0]);
+        let secondary = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![secondary(true)],
+            vec![secondary(false)],
+        ] {
+            frame(app, ctx, events);
+        }
+    }
+
+    #[test]
+    fn jump_to_socket_switches_to_items_and_focuses_slot() {
+        let (mut app, ctx) = socket_app(true);
+        assert_eq!(app.tab, BuildTab::Tree);
+        let before = app.sent_full.len();
+        right_click_socket(&mut app, &ctx);
+        assert_eq!(app.tab, BuildTab::Items);
+        assert_eq!(app.items.focused_slot(), Some("Jewel 5"));
+        // the slot's dropdown is drawn open on the Items tab; the jump sends nothing
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.items.focused_slot(), None);
+        assert!(
+            egui::Popup::is_any_open(&ctx),
+            "the slot's dropdown is open"
+        );
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn a_socket_whose_slot_is_not_enabled_does_not_jump() {
+        let (mut app, ctx) = socket_app(false);
+        right_click_socket(&mut app, &ctx);
+        assert_eq!(app.tab, BuildTab::Tree);
+        assert_eq!(app.items.focused_slot(), None);
+    }
+
+    /// The items tab with the database panel open.
+    fn db_app() -> (AutoPobApp, egui::Context) {
+        let (mut app, ctx) = items_app();
+        for _ in 0..4 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        click_item_key(&mut app, &ctx, "db_header");
+        assert_eq!(app.sent_log.last().map(String::as_str), Some("SetItemDb"));
+        for _ in 0..4 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        (app, ctx)
+    }
+
+    #[test]
+    fn db_closed_on_tab_leave() {
+        let (mut app, ctx) = db_app();
+        let before = app.sent_full.len();
+        app.tab = BuildTab::Config;
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(sent_since(&app, before), ["CloseItemDb"]);
+        // back on the tab, the open panel asks for its database again
+        app.tab = BuildTab::Items;
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(sent_since(&app, before)[1..].len(), 1);
+        assert!(sent_since(&app, before)[1].starts_with("SetItemDb("));
+    }
+
+    #[test]
+    fn db_progress_and_failure_events_reach_the_panel() {
+        let (mut app, ctx) = db_app();
+        let mut sorting = crate::ui::items::tests::db_view_for_app();
+        sorting.sorting = true;
+        sorting.rows.clear();
+        app.on_event(Event::Snapshot {
+            seq: 95,
+            snapshot: Snapshot::ItemDb(Some(Arc::new(sorting))),
+        });
+        app.on_event(Event::Progress {
+            task: BackgroundTask::ItemDb,
+            percent: 40,
+        });
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.items.rect("db_progress").width() > 0.0);
+        app.on_event(Event::BackgroundFailed {
+            task: BackgroundTask::ItemDb,
+            message: "boom".into(),
+        });
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.items.rect("db_retry").width() > 0.0);
+        assert!(app.notices.is_empty(), "the panel shows its own error");
+    }
+
+    /// A pending DB search goes out before `OpenPopup` (M10, R4).
+    #[test]
+    fn open_popup_flushes_the_db_search_first() {
+        let (mut app, ctx) = db_app();
+        click_item_key(&mut app, &ctx, "db_search");
+        frame(&mut app, &ctx, vec![egui::Event::Text("ring".into())]);
+        let before = app.sent_full.len();
+        app.send(Command::OpenPopup(crate::engine::PopupKind::Corrupt));
+        let sent = sent_since(&app, before);
+        assert_eq!(sent.len(), 2, "{sent:?}");
+        assert!(sent[0].starts_with("SetItemDb(") && sent[0].contains("\"ring\""));
+        assert_eq!(sent[1], "OpenPopup(Corrupt)");
+        // once: the box has nothing left to send
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(sent_since(&app, before).len(), 2);
+    }
+
+    /// Keyboard focus a widget under the popup's modal held must not let typing through (M5).
+    #[test]
+    fn typing_while_the_popup_opens_does_not_reach_the_boxes_behind() {
+        let (mut app, ctx) = items_app_typing();
+        assert!(ctx.text_edit_focused(), "the quality box holds the focus");
+        assert_eq!(app.items.quality_text(), "25");
+        let before = app.sent_full.len();
+        app.send(Command::OpenPopup(crate::engine::PopupKind::Corrupt));
+        // the edit that was being typed went out first
+        assert_eq!(sent_since(&app, before), [QUALITY, "OpenPopup(Corrupt)"]);
+        frame(&mut app, &ctx, vec![]);
+        app.on_event(Event::Snapshot {
+            seq: 99,
+            snapshot: Snapshot::Popup(Some(Arc::new(popup_view(
+                crate::engine::PopupKind::Corrupt,
+            )))),
+        });
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.popup.is_open());
+        // egui's modal takes the focus the box behind it held, so keys can't reach it
+        assert!(!ctx.text_edit_focused(), "the focus is gone");
+        frame(&mut app, &ctx, vec![egui::Event::Text("7".into())]);
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Enter, egui::Modifiers::NONE),
+        );
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(
+            sent_since(&app, before),
+            [QUALITY, "OpenPopup(Corrupt)"],
+            "typing under the window sent nothing"
+        );
     }
 
     #[test]

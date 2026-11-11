@@ -2,17 +2,27 @@
 //! Included from `gate.rs`, whose helpers it reaches through `super::`.
 
 use super::{
-    Session, fixtures, fixtures_dir, load_tree_lib, load_xml, lock, lua_value, pob_dir,
-    recipe_setting, upstream_lua,
+    Session, fixtures, fixtures_dir, load_tree_lib, load_xml, lock, lua_value, plain_notes,
+    pob_dir, recipe_setting, upstream_lua,
 };
-use auto_pob::engine::{Backend, ItemTooltipLine, ItemTooltipQuery, ItemsView, SlotKind};
+use auto_pob::engine::upstream::{SidebarLine, golden_of};
+use auto_pob::engine::{
+    Backend, Command, ItemTooltipLine, ItemTooltipQuery, ItemsView, SlotKind, Tab,
+};
+use auto_pob::game::Game;
 use mlua::LuaSerdeExt;
+use std::collections::BTreeMap;
 use std::fs;
 
 /// Upstream PoB with a build loaded and `tree_lib.lua` and `items_lib.lua` defined.
 fn upstream_with_items_lib(xml: &std::path::Path, name: &str) -> mlua::Lua {
+    upstream_with_items_lib_xml(&fs::read_to_string(xml).unwrap(), name)
+}
+
+/// `upstream_with_items_lib` for a build given as XML text.
+fn upstream_with_items_lib_xml(xml: &str, name: &str) -> mlua::Lua {
     let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
-    load_xml(&lua, &fs::read_to_string(xml).unwrap(), name).unwrap();
+    load_xml(&lua, xml, name).unwrap();
     load_tree_lib(&lua);
     lua.load(fs::read_to_string(fixtures_dir().join("items_lib.lua")).unwrap())
         .set_name("=items_lib")
@@ -616,4 +626,484 @@ fn copy_item_matches_pob() {
     assert!(copy_is_saved(&s), "Copy not restored after a failing copy");
     // and the item list is untouched by copying
     assert_eq!(s.backend.items_view().unwrap(), view);
+}
+
+// ---- The recorded-recipe harness ----
+
+/// One step of a recipe as `items_lib.lua`'s `act.*` recorded it, with 0-based positions.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(tag = "cmd")]
+enum ItemsAction {
+    SortItems,
+    DeleteItem {
+        id: u32,
+    },
+    DeleteUnusedItems,
+    DeleteAllItems,
+    MoveItem {
+        from: usize,
+        to: usize,
+    },
+    SetItemListFilter {
+        index: usize,
+    },
+    EquipItem {
+        slot: String,
+        id: Option<u32>,
+    },
+    SetFlaskActive {
+        slot: String,
+        on: bool,
+    },
+    SelectWeaponSet {
+        second: bool,
+    },
+    /// Recorded by tree_lib's `act.alloc` and `act.dealloc`
+    AllocNode {
+        id: u32,
+    },
+    DeallocNode {
+        id: u32,
+    },
+    Undo,
+    Redo,
+    /// Built from the recorded checkpoint table
+    #[serde(skip_deserializing)]
+    Check {
+        check: Box<ItemsCheckpoint>,
+    },
+}
+
+impl ItemsAction {
+    /// The command that replays this action; none for a checkpoint.
+    fn command(&self) -> Option<Command> {
+        Some(match self.clone() {
+            ItemsAction::SortItems => Command::SortItems,
+            ItemsAction::DeleteItem { id } => Command::DeleteItem { id },
+            ItemsAction::DeleteUnusedItems => Command::DeleteUnusedItems,
+            ItemsAction::DeleteAllItems => Command::DeleteAllItems,
+            ItemsAction::MoveItem { from, to } => Command::MoveItem { from, to },
+            ItemsAction::SetItemListFilter { index } => Command::SetItemListFilter { index },
+            ItemsAction::EquipItem { slot, id } => Command::EquipItem { slot, id },
+            ItemsAction::SetFlaskActive { slot, on } => Command::SetFlaskActive { slot, on },
+            ItemsAction::SelectWeaponSet { second } => Command::SelectWeaponSet { second },
+            ItemsAction::AllocNode { id } => Command::AllocNode { id },
+            ItemsAction::DeallocNode { id } => Command::DeallocNode { id },
+            ItemsAction::Undo => Command::Undo(Tab::Items),
+            ItemsAction::Redo => Command::Redo(Tab::Items),
+            ItemsAction::Check { .. } => return None,
+        })
+    }
+}
+
+/// The Items tab at one point of a recipe: `itemsDump()`, the jewels each socket holds and the
+/// sidebar.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+struct ItemsCheckpoint {
+    items: serde_json::Value,
+    /// The display item; always `None` until the display panel exists (Task 5)
+    #[serde(default)]
+    display: Option<serde_json::Value>,
+    /// `spec.jewels` without the empty sockets
+    #[serde(default)]
+    jewels: BTreeMap<u32, u32>,
+    sidebar: Vec<SidebarLine>,
+}
+
+/// A recipe run in upstream PoB: the steps it took and where they ended.
+struct ItemsRecipe {
+    base: String,
+    /// The build to start from when the recipe prepared one, or names a `setup`
+    setup_xml: Option<String>,
+    actions: Vec<ItemsAction>,
+    result: serde_json::Value,
+}
+
+/// Runs `items/<name>.lua` in upstream PoB on its base fixture, or on its `setup` build.
+fn upstream_items_recipe(name: &str) -> ItemsRecipe {
+    let source = fs::read_to_string(fixtures_dir().join(format!("items/{name}.lua"))).unwrap();
+    let base = recipe_setting(&source, "base").unwrap_or_else(|| panic!("{name}: no base"));
+    let setup = recipe_setting(&source, "setup").map(|setup| setup_xml(&setup));
+    let lua = match &setup {
+        Some(xml) => upstream_with_items_lib_xml(xml, &base),
+        None => upstream_with_items_lib(&fixtures_dir().join(format!("{base}.xml")), &base),
+    };
+    // a checkpoint records PoB's sidebar lines, which the golden extraction reads
+    let version = Game::Poe1.pob_version().to_string();
+    lua.globals()
+        .set(
+            "sidebar_lines",
+            lua.create_function(move |lua, ()| {
+                let golden = golden_of(lua, &version).map_err(mlua::Error::external)?;
+                lua.to_value(&golden.sidebar)
+            })
+            .unwrap(),
+        )
+        .unwrap();
+    lua.load(source)
+        .set_name(format!("={name}"))
+        .exec()
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+    lua.load("recipe()")
+        .exec()
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+    let recorded: mlua::Table = lua.globals().get("actions").unwrap();
+    let actions = recorded
+        .sequence_values::<mlua::Table>()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            if let Ok(check) = entry.get::<mlua::Table>("check") {
+                let mut check: ItemsCheckpoint = lua
+                    .from_value(mlua::Value::Table(check))
+                    .unwrap_or_else(|e| panic!("{name}: checkpoint: {e}"));
+                check.items = strip_nulls(check.items);
+                return ItemsAction::Check {
+                    check: Box::new(check),
+                };
+            }
+            let json: serde_json::Value = lua.from_value(mlua::Value::Table(entry)).unwrap();
+            serde_json::from_value(json.clone()).unwrap_or_else(|e| panic!("{name}: {json}: {e}"))
+        })
+        .collect();
+    ItemsRecipe {
+        base,
+        setup_xml: setup,
+        actions,
+        result: upstream_json(&lua),
+    }
+}
+
+/// Our Items tab and sidebar in the shape of a recipe's `checkpoint()`.
+fn our_items_checkpoint(s: &mut Session) -> ItemsCheckpoint {
+    let view = s.backend.items_view().expect("items view");
+    let stats = s.stats();
+    let sidebar: Vec<SidebarLine> = stats
+        .stats
+        .iter()
+        .map(|r| SidebarLine {
+            label: r.label.clone(),
+            text: r.text.clone(),
+            notes: plain_notes(&r.notes),
+        })
+        .collect();
+    let jewels: BTreeMap<u32, u32> = s
+        .backend
+        .lua
+        .from_value(
+            s.backend
+                .lua
+                .load("return pob.build.spec.jewels")
+                .eval()
+                .unwrap(),
+        )
+        .unwrap();
+    ItemsCheckpoint {
+        items: json(&view),
+        display: None,
+        jewels: jewels.into_iter().filter(|(_, id)| *id != 0).collect(),
+        sidebar,
+    }
+}
+
+/// Replays a recipe as our commands and checks every checkpoint and the end state against
+/// upstream.
+fn check_items_recipe(name: &str) -> ItemsRecipe {
+    let recipe = upstream_items_recipe(name);
+    assert!(!recipe.actions.is_empty(), "{name}: no actions recorded");
+    let mut s = Session::start(&format!("items-recipe-{name}"));
+    match &recipe.setup_xml {
+        Some(xml) => {
+            let path = s.user.join("setup.xml");
+            fs::create_dir_all(&s.user).unwrap();
+            fs::write(&path, xml).unwrap();
+            s.open_fixture(&recipe.base, &path);
+        }
+        None => {
+            s.open_fixture(
+                &recipe.base,
+                &fixtures_dir().join(format!("{}.xml", recipe.base)),
+            );
+        }
+    }
+    let before = json(&s.backend.items_view().unwrap());
+    let mut checked = 0;
+    for action in &recipe.actions {
+        match action.command() {
+            Some(command) => {
+                s.run(command)
+                    .unwrap_or_else(|e| panic!("{name}: {action:?}: {e}"));
+            }
+            None => {
+                let ItemsAction::Check { check } = action else {
+                    unreachable!()
+                };
+                let ours = our_items_checkpoint(&mut s);
+                assert_same(
+                    &ours.items,
+                    &check.items,
+                    &format!("{name}: checkpoint {checked}"),
+                );
+                assert_eq!(ours.display, check.display, "{name}: checkpoint {checked}");
+                assert_eq!(
+                    ours.jewels, check.jewels,
+                    "{name}: checkpoint {checked} jewels"
+                );
+                assert_eq!(
+                    ours.sidebar, check.sidebar,
+                    "{name}: checkpoint {checked} sidebar"
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 0, "{name}: no checkpoint");
+    let ours = json(&s.backend.items_view().unwrap());
+    assert_ne!(ours, before, "{name}: the recipe changes the Items tab");
+    assert_same(&ours, &recipe.result, name);
+    recipe
+}
+
+fn checkpoints(recipe: &ItemsRecipe) -> Vec<&ItemsCheckpoint> {
+    recipe
+        .actions
+        .iter()
+        .filter_map(|a| match a {
+            ItemsAction::Check { check } => Some(&**check),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn list_slot_recipes_match_pob() {
+    let _guard = lock();
+    for name in ["delete_sort", "flasks_jewels"] {
+        let recipe = check_items_recipe(name);
+        let checks = checkpoints(&recipe);
+        let slot = |c: &ItemsCheckpoint, name: &str| {
+            c.items["slots"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|s| s["name"] == name)
+                .cloned()
+                .unwrap_or_else(|| panic!("{name}: no slot {name}"))
+        };
+        if name == "delete_sort" {
+            // the filtered list is read-only
+            assert_eq!(checks[1].items["can_reorder"], false);
+            assert_eq!(checks[0].items["can_reorder"], true);
+        } else {
+            // the flask toggled off and undone: the checkpoint pins what PoB shows (R12)
+            assert!(slot(checks[0], "Flask 1").get("flask_active").is_some());
+            // a second jewel socket, then its node goes: the jewel stays, the slot hides
+            assert_eq!(checks[1].jewels.len(), 2, "{:?}", checks[1].jewels);
+            assert_eq!(checks[2].jewels.len(), 2, "{:?}", checks[2].jewels);
+            // the sockets are labelled in tree order, among the shown ones
+            let labels = |c: &ItemsCheckpoint| -> Vec<(String, bool)> {
+                c.items["slots"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|s| {
+                        s["kind"] == "Jewel"
+                            && c.jewels.contains_key(&(s["node"].as_u64().unwrap() as u32))
+                    })
+                    .map(|s| (s["label"].as_str().unwrap().to_string(), s["shown"] == true))
+                    .collect()
+            };
+            assert_eq!(
+                labels(checks[1]),
+                [
+                    ("Socket #1".to_string(), true),
+                    ("Socket #2".to_string(), true)
+                ]
+            );
+            assert_eq!(
+                labels(checks[2]),
+                [
+                    ("Socket #1".to_string(), false),
+                    ("Socket #1".to_string(), true)
+                ]
+            );
+            // the second weapon set: swap slots shown, Weapon 1 hidden
+            assert_eq!(checks[3].items["second_weapon_set"], true);
+            assert_eq!(slot(checks[3], "Weapon 1")["shown"], false);
+            assert_eq!(slot(checks[3], "Weapon 1 Swap")["shown"], true);
+        }
+    }
+}
+
+// ---- Undo and errors ----
+
+/// The raw text of the item named `name`, as ours copies it.
+fn our_raw(s: &mut Session, name: &str) -> String {
+    let view = s.backend.items_view().unwrap();
+    let id = view
+        .items
+        .iter()
+        .find(|i| i.name.starts_with(name))
+        .unwrap_or_else(|| panic!("no item {name}"))
+        .id;
+    s.backend.item_text(id).unwrap().text
+}
+
+/// The raw text of the item named `name` in upstream.
+fn upstream_raw(lua: &mlua::Lua, name: &str) -> String {
+    lua.globals().set("wanted", name).unwrap();
+    lua_value(
+        lua,
+        r#"
+        for id, item in pairs(build.itemsTab.items) do
+            if item.name:sub(1, #wanted) == wanted then return copyItem(id) end
+        end
+        error("no item " .. wanted)
+        "#,
+    )
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn items_undo_reverts_optimise() {
+    let _guard = lock();
+    let (_, xml) = fixtures()
+        .into_iter()
+        .find(|(name, _)| name == "attack")
+        .expect("attack fixture");
+    let mut s = Session::start("items-undo-optimise");
+    s.open_fixture("attack", &xml);
+    let lua = upstream_with_items_lib(&xml, "attack");
+    const MAUL: &str = "Driftwood Maul";
+    let original = our_raw(&mut s, MAUL);
+    assert_eq!(original, upstream_raw(&lua, MAUL));
+
+    // Optimise Sockets is the Skills tab's button, which adds the Items undo state first (R12)
+    s.run(Command::SetGroupSlot {
+        group: 0,
+        slot: Some("Weapon 1".into()),
+    })
+    .unwrap();
+    s.run(Command::OptimiseSockets { group: 0 }).unwrap();
+    lua.load(
+        r#"
+        local tab = build.skillsTab
+        tab:SetDisplayGroup(tab.socketGroupList[1])
+        local c = tab.controls
+        for i, choice in ipairs(c.groupSlot.list) do
+            if choice.slotName == "Weapon 1" then c.groupSlot:SetSel(i) end
+        end
+        runCallback("OnFrame")
+        c.optimiseSockets.onClick()
+        runCallback("OnFrame")
+        "#,
+    )
+    .exec()
+    .unwrap();
+    let optimised = our_raw(&mut s, MAUL);
+    assert_ne!(optimised, original, "Optimise Sockets edits the Maul");
+    assert_eq!(optimised, upstream_raw(&lua, MAUL));
+
+    // Ctrl+Z's body, and Ctrl+Y's
+    s.run(Command::Undo(Tab::Items)).unwrap();
+    lua.load("build.itemsTab:Undo() build.buildFlag = true runCallback('OnFrame')")
+        .exec()
+        .unwrap();
+    assert_eq!(our_raw(&mut s, MAUL), original, "one Undo reverts it");
+    assert_eq!(upstream_raw(&lua, MAUL), original);
+    s.run(Command::Redo(Tab::Items)).unwrap();
+    lua.load("build.itemsTab:Redo() build.buildFlag = true runCallback('OnFrame')")
+        .exec()
+        .unwrap();
+    assert_eq!(
+        our_raw(&mut s, MAUL),
+        original,
+        "Redo doesn't re-apply it (R12)"
+    );
+    assert_eq!(upstream_raw(&lua, MAUL), original);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn item_slot_errors() {
+    let _guard = lock();
+    let (mut s, _lua) = gear_sessions("items-slot-errors");
+    let view = s.backend.items_view().unwrap();
+    let id_of = |name: &str| {
+        view.items
+            .iter()
+            .find(|i| i.name.starts_with(name))
+            .unwrap_or_else(|| panic!("no item {name}"))
+            .id
+    };
+    let (ring, kaom, viridian, maul) = (
+        id_of("Gale Band"),
+        id_of("Kaom"),
+        id_of("Viridian"),
+        id_of("Driftwood"),
+    );
+    let hidden_socket = view
+        .slots
+        .iter()
+        .find(|slot| slot.kind == SlotKind::Jewel && !slot.shown)
+        .expect("an unallocated socket")
+        .name
+        .clone();
+    let state = |s: &mut Session| {
+        let jewels: serde_json::Value = lua_value(
+            &s.backend.lua,
+            "local out = {} for n, id in pairs(pob.build.spec.jewels) do out[#out + 1] = n .. '=' .. id end table.sort(out) return table.concat(out, ',')",
+        );
+        (s.backend.items_view().unwrap(), jewels)
+    };
+    let refuse = |s: &mut Session, command: Command, message: &str| {
+        let before = state(s);
+        let error = s.run(command.clone()).expect_err(&format!("{command:?}"));
+        assert!(
+            error.to_string().contains(message),
+            "{command:?}: {error} (wanted {message})"
+        );
+        assert_eq!(state(s), before, "{command:?} changed something");
+    };
+    let equip = |slot: &str, id: u32| Command::EquipItem {
+        slot: slot.into(),
+        id: Some(id),
+    };
+
+    refuse(
+        &mut s,
+        equip("Helmet", ring),
+        "that item can't go in that slot",
+    );
+    refuse(&mut s, equip(&hidden_socket, viridian), "no such slot");
+    refuse(&mut s, equip("Nowhere", ring), "no such slot");
+    refuse(&mut s, equip("Ring 1", 9999), "no such item");
+    refuse(
+        &mut s,
+        Command::SetFlaskActive {
+            slot: "Flask 2".into(),
+            on: true,
+        },
+        "empty",
+    );
+    refuse(&mut s, Command::DeleteItem { id: 9999 }, "no such item");
+    refuse(
+        &mut s,
+        Command::SetItemListFilter { index: 99 },
+        "no such filter",
+    );
+
+    // a filtered list is read-only, and hides what it doesn't list
+    s.run(Command::SetItemListFilter { index: 2 }).unwrap();
+    refuse(
+        &mut s,
+        Command::MoveItem { from: 0, to: 1 },
+        "can't be reordered",
+    );
+    refuse(&mut s, Command::DeleteItem { id: kaom }, "no such item");
+    s.run(Command::SetItemListFilter { index: 0 }).unwrap();
+
+    // the second weapon set hides "Weapon 1"
+    s.run(Command::SelectWeaponSet { second: true }).unwrap();
+    refuse(&mut s, equip("Weapon 1", maul), "no such slot");
 }

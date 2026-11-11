@@ -200,3 +200,159 @@ function glue.item_copy(id)
 	end
 	return text or ""
 end
+
+-- ---- The item list and the slots (R5, R6, R8, R12) ----
+
+-- The list as the tab shows it: the draw-only update first (R16)
+local function synced_list()
+	local list = items_tab().controls.itemList
+	list:UpdateList()
+	items_tab():UpdateSockets()
+	return list
+end
+
+-- The 1-based position of a value in a list
+local function position(list, value)
+	for i, v in ipairs(list) do
+		if v == value then
+			return i
+		end
+	end
+end
+
+-- The Sort button
+function glue.items_sort()
+	synced_list().controls.sort.onClick()
+	glue.frame()
+end
+
+-- The Delete button, which runs `OnSelDelete` on the selected row. A row the filter hides
+-- can't be selected (R8). PoB asks first when the item is in use.
+function glue.items_delete(id)
+	local tab = items_tab()
+	local list = synced_list()
+	local index = position(list.list, id)
+	if not (index and tab.items[id]) then
+		error("no such item", 0)
+	end
+	local popups = pob.main.main.popups
+	glue.in_popups(function()
+		local depth = #popups
+		list:OnSelDelete(index, id)
+		if #popups > depth then
+			glue.confirm_popup("delete the item")
+		end
+	end)
+end
+
+-- The Del Unused button, which has no confirmation; it is disabled with an empty list
+function glue.items_delete_unused()
+	local list = synced_list()
+	if #list.list > 0 then
+		list.controls.deleteUnused.onClick()
+	end
+end
+
+-- The Del All button and its confirmation; disabled with an empty list
+function glue.items_delete_all()
+	local list = synced_list()
+	if #list.list == 0 then
+		return
+	end
+	glue.in_popups(function()
+		list.controls.deleteAll.onClick()
+		glue.confirm_popup("delete the items")
+	end)
+end
+
+-- ListControl's drop (ListControl.lua:426-436); `to` is the item's final position. Only the
+-- unfiltered list is mutable.
+function glue.items_move(from, to)
+	local tab = items_tab()
+	local list = synced_list()
+	if not list.isMutable then
+		error("the list can't be reordered while it is filtered", 0)
+	end
+	local id = tab.itemOrderList[from]
+	if not (id and tab.itemOrderList[to]) then
+		error("no such item", 0)
+	end
+	if from == to then
+		return
+	end
+	list.selIndex, list.selValue = from, id
+	table.remove(list.list, from)
+	table.insert(list.list, to, id)
+	list:OnOrderChange(from, to)
+	list.selValue = nil
+	list.selIndex = nil
+	glue.frame()
+end
+
+-- The loadout filter dropdown
+function glue.items_set_filter(index)
+	local list = synced_list()
+	local filter = list.controls.loadoutFilter
+	if index < 1 or index > #filter.list then
+		error("no such filter", 0)
+	end
+	filter:SetSel(index)
+end
+
+-- The slot dropdown's `selFunc` (ItemSlotControl.lua:12-19); `id` nil is "None" (R5)
+function glue.items_equip(slot_name, id)
+	local tab = items_tab()
+	synced_list()
+	local slot = tab.slots[slot_name]
+	if not slot or not slot:IsShown() then
+		error("no such slot", 0)
+	end
+	local index = 1
+	if id ~= nil then
+		if not tab.items[id] then
+			error("no such item", 0)
+		end
+		index = position(slot.items, id)
+		if not index or id == 0 then
+			error("that item can't go in that slot", 0)
+		end
+	end
+	slot.selFunc(index, slot.list[index])
+end
+
+-- A flask's own checkbox
+function glue.items_set_flask(slot_name, on)
+	local tab = items_tab()
+	synced_list()
+	local slot = tab.slots[slot_name]
+	local activate = slot and slot.controls.activate
+	if not (slot and slot:IsShown() and activate) then
+		error("no such slot", 0)
+	end
+	if not activate:IsEnabled() then
+		error("that flask slot is empty", 0)
+	end
+	if on ~= (slot.active and true or false) then
+		glue.press_check(activate, on)
+	end
+end
+
+-- The "I" and "II" buttons; the one for the active set is locked (R6)
+function glue.items_select_weapon_set(second)
+	local tab = items_tab()
+	local button = second and tab.controls.weaponSwap2 or tab.controls.weaponSwap1
+	if not button.locked() then
+		button.onClick()
+	end
+end
+
+-- Ctrl+Z and Ctrl+Y on the tab (ItemsTab.lua:1458-1465); the display item isn't covered (R12)
+function glue.items_undo()
+	items_tab():Undo()
+	pob.build.buildFlag = true
+end
+
+function glue.items_redo()
+	items_tab():Redo()
+	pob.build.buildFlag = true
+end

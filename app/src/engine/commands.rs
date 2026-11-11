@@ -311,6 +311,42 @@ pub enum Command {
         id: u32,
     },
 
+    /// The item list's Sort button.
+    SortItems,
+    /// Deletes the item (PoB's Delete button, confirmed when the item is in use). An item the
+    /// list filter hides is `no such item`.
+    DeleteItem {
+        id: u32,
+    },
+    /// "Del Unused" has no confirmation in PoB.
+    DeleteUnusedItems,
+    /// "Del All", confirmed; a no-op with an empty list.
+    DeleteAllItems,
+    /// Positions are 0-based in `ItemsView.items`; `to` is the item's final position. Refused
+    /// while the list is filtered.
+    MoveItem {
+        from: usize,
+        to: usize,
+    },
+    /// The list's loadout filter; `index` is 0-based in `ItemsView.list_filter`.
+    SetItemListFilter {
+        index: usize,
+    },
+    /// The slot's dropdown, by PoB's slot name; `None` is "None".
+    EquipItem {
+        slot: String,
+        id: Option<u32>,
+    },
+    /// A flask's checkbox.
+    SetFlaskActive {
+        slot: String,
+        on: bool,
+    },
+    /// The weapon set buttons "I" (`false`) and "II" (`true`).
+    SelectWeaponSet {
+        second: bool,
+    },
+
     /// Opens or replaces the gem picker's search (R9); the latest one in a batch is answered
     /// as a `GemSearch`. While it is open PoB's DPS sort runs in the background.
     SearchGems(GemSearchQuery),
@@ -416,6 +452,7 @@ pub enum Tab {
     Tree,
     Calcs,
     Skills,
+    Items,
 }
 
 /// The dropdowns of the Calcs selector.

@@ -179,6 +179,18 @@ impl PobBackend {
         })
     }
 
+    /// A change to the items or the slots: a jewel change can rebuild cluster subgraphs, so the
+    /// tree layout is checked too (R17).
+    fn items_edited(&self) -> Result<Affected> {
+        Ok(Affected {
+            build: true,
+            items: true,
+            recalc: true,
+            tree_layout: self.layout_changed()?,
+            ..Affected::default()
+        })
+    }
+
     /// A build that is opened or replaced starts with the heat map off.
     fn reset_heatmap(&mut self) {
         self.heatmap_on = false;
@@ -222,6 +234,16 @@ fn skills_changed() -> Affected {
         build: true,
         skills: true,
         recalc: true,
+        ..Affected::default()
+    }
+}
+
+/// A change that sets no `buildFlag` (sort, move): the glue ran a frame, which refreshes
+/// `unsaved` (R17).
+fn items_listed() -> Affected {
+    Affected {
+        build: true,
+        items: true,
         ..Affected::default()
     }
 }
@@ -730,6 +752,53 @@ impl PobBackend {
             Command::Redo(Tab::Skills) => {
                 self.call::<_, ()>("skills_redo", ())?;
                 Ok(skills_changed())
+            }
+            Command::SortItems => {
+                self.call::<_, ()>("items_sort", ())?;
+                Ok(items_listed())
+            }
+            Command::DeleteItem { id } => {
+                self.call::<_, ()>("items_delete", id)?;
+                self.items_edited()
+            }
+            Command::DeleteUnusedItems => {
+                self.call::<_, ()>("items_delete_unused", ())?;
+                self.items_edited()
+            }
+            Command::DeleteAllItems => {
+                self.call::<_, ()>("items_delete_all", ())?;
+                self.items_edited()
+            }
+            Command::MoveItem { from, to } => {
+                self.call::<_, ()>("items_move", (from + 1, to + 1))?;
+                Ok(items_listed())
+            }
+            Command::SetItemListFilter { index } => {
+                self.call::<_, ()>("items_set_filter", index + 1)?;
+                Ok(Affected {
+                    items: true,
+                    ..Affected::default()
+                })
+            }
+            Command::EquipItem { slot, id } => {
+                self.call::<_, ()>("items_equip", (slot, id))?;
+                self.items_edited()
+            }
+            Command::SetFlaskActive { slot, on } => {
+                self.call::<_, ()>("items_set_flask", (slot, on))?;
+                self.items_edited()
+            }
+            Command::SelectWeaponSet { second } => {
+                self.call::<_, ()>("items_select_weapon_set", second)?;
+                self.items_edited()
+            }
+            Command::Undo(Tab::Items) => {
+                self.call::<_, ()>("items_undo", ())?;
+                self.items_edited()
+            }
+            Command::Redo(Tab::Items) => {
+                self.call::<_, ()>("items_redo", ())?;
+                self.items_edited()
             }
             Command::Undo(Tab::Config) => {
                 self.call::<_, ()>("undo", "config")?;

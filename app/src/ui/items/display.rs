@@ -4,86 +4,26 @@ use super::text_window::{self, Outcome, TextWindow};
 use crate::engine::views::{DisplayItemView, DropList};
 use crate::engine::{Command, SocketColour};
 use crate::ui::tree::Rects;
-use crate::widgets::{item_tooltip_ui_with, pob_text};
+use crate::widgets::{EditBox, EditBoxOptions, item_tooltip_ui_with, pob_text};
 use eframe::egui;
 
 /// PoB's quality boxes hold two characters.
 const QUALITY_DIGITS: usize = 2;
 
-/// A text box that sends on Enter or blur; Esc reverts.
-#[derive(Default)]
-pub(super) struct TextBox {
-    pub(super) text: String,
-    /// What the engine last had from this box
-    sent: String,
-    /// Typed, still focused and not sent
-    pending: bool,
-}
-
-impl TextBox {
-    /// Draws the box; returns the text to send, if the edit is complete.
-    fn show(
-        &mut self,
-        ui: &mut egui::Ui,
-        key: &str,
-        current: &str,
-        rects: &mut Rects,
-    ) -> Option<String> {
-        let id = ui.scope_id().with(("items_box", key));
-        if !ui.memory(|m| m.has_focus(id)) {
-            self.text = current.to_owned();
-            self.sent = current.to_owned();
-        }
-        if ui.memory(|m| m.has_focus(id)) {
-            // PoB's box takes digits only (filter `%D`), so a letter is dropped as typed
-            ui.input_mut(|i| {
-                for event in &mut i.events {
-                    match event {
-                        egui::Event::Text(t) | egui::Event::Paste(t) => {
-                            t.retain(|c| c.is_ascii_digit());
-                        }
-                        _ => {}
-                    }
-                }
-            });
-        }
-        let response = ui.add(
-            egui::TextEdit::singleline(&mut self.text)
-                .id(id)
-                .char_limit(QUALITY_DIGITS)
-                .desired_width(40.0),
-        );
-        rects.note(&response, || key.to_owned());
-        let mut send = None;
-        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.text = self.sent.clone();
-        } else if response.lost_focus() && self.text != self.sent {
-            self.sent = self.text.clone();
-            send = Some(self.text.clone());
-        }
-        self.pending = response.has_focus() && self.text != self.sent;
-        send
-    }
-
-    /// Drops what is being typed, as when the item is cancelled.
-    fn discard(&mut self) {
-        self.pending = false;
-        self.sent = self.text.clone();
-    }
-
-    fn take_pending(&mut self) -> Option<String> {
-        if !std::mem::take(&mut self.pending) {
-            return None;
-        }
-        self.sent = self.text.clone();
-        Some(self.text.clone())
+/// PoB's quality boxes take digits only (filter `%D`).
+fn quality_options() -> EditBoxOptions {
+    EditBoxOptions {
+        width: 40.0,
+        char_limit: Some(QUALITY_DIGITS),
+        filter: Some(|c| c.is_ascii_digit()),
+        hint: None,
     }
 }
 
 #[derive(Default)]
 pub struct DisplayState {
-    pub(super) quality: TextBox,
-    pub(super) catalyst_quality: TextBox,
+    pub(super) quality: EditBox,
+    pub(super) catalyst_quality: EditBox,
     /// The range line the slider is for
     pub range_line: usize,
     /// A slider value shown until the engine's view catches up
@@ -120,8 +60,7 @@ impl DisplayState {
 
     /// There is no item (any more) to edit.
     pub(super) fn on_gone(&mut self) {
-        self.quality.pending = false;
-        self.catalyst_quality.pending = false;
+        self.discard_pending();
         self.slider = None;
         self.range_line = 0;
     }
@@ -351,11 +290,18 @@ fn panel(
             ui.end_row();
             if let Some(quality) = &view.quality {
                 ui.label("Quality:");
-                if let Some(text) = state.quality.show(ui, "quality", quality, &mut state.rects) {
+                let id = ui.scope_id().with("items_box_quality");
+                let (response, sent) =
+                    state
+                        .quality
+                        .show(ui, id, quality, busy, &quality_options());
+                state.rects.note(&response, || "quality".into());
+                if let Some(text) = sent {
                     out.push(Command::SetItemQuality { text });
                 }
             } else {
-                state.quality.pending = false;
+                // the item has no such box: an edit for another item must not follow
+                state.quality.discard();
             }
             ui.end_row();
             if let Some(catalyst) = &view.catalyst {
@@ -367,20 +313,21 @@ fn panel(
             ui.end_row();
             if let Some(quality) = &view.catalyst_quality {
                 ui.label("Catalyst quality:");
-                if let Some(text) =
+                let id = ui.scope_id().with("items_box_catalyst_quality");
+                let (response, sent) =
                     state
                         .catalyst_quality
-                        .show(ui, "catalyst_quality", quality, &mut state.rects)
-                {
+                        .show(ui, id, quality, busy, &quality_options());
+                state.rects.note(&response, || "catalyst_quality".into());
+                if let Some(text) = sent {
                     out.push(Command::SetItemCatalystQuality { text });
                 }
             } else {
-                state.catalyst_quality.pending = false;
+                state.catalyst_quality.discard();
             }
         });
     } else {
-        state.quality.pending = false;
-        state.catalyst_quality.pending = false;
+        state.discard_pending();
     }
 
     // range lines

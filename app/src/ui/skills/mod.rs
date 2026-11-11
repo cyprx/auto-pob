@@ -9,12 +9,16 @@ pub mod sets;
 use crate::engine::views::{GemTooltipView, GroupTooltipView, SkillsView};
 use crate::engine::{Command, GemTarget, GemTooltipQuery, Snapshot};
 use crate::ui::tree::Rects;
+use crate::widgets::{EditBoxOptions, EditBoxes};
 use eframe::egui;
 use picker::GemPicker;
 use std::{collections::HashMap, sync::Arc};
 
 /// A group row must be hovered this long before its tooltip is asked for.
 const HOVER_DELAY: f64 = 0.1;
+
+/// The field PoB doesn't count as an unsaved change
+const DEFAULT_QUALITY: &str = "default_quality";
 
 /// What the tab asks of the engine in one frame.
 #[derive(Debug, Default)]
@@ -24,13 +28,6 @@ pub struct SkillsOutput {
     pub queries: Vec<Command>,
 }
 
-/// An edit typed into a field that still has focus.
-struct PendingEdit {
-    key: String,
-    command: Command,
-    text: String,
-}
-
 #[derive(Default)]
 pub struct SkillsUi {
     view: Option<Arc<SkillsView>>,
@@ -38,13 +35,10 @@ pub struct SkillsUi {
     selected: usize,
     /// The next view with more groups selects the last one (New, Paste)
     select_new: bool,
-    /// Text being typed, by field key
-    edits: HashMap<String, String>,
-    /// What each field last sent (or showed)
-    sent: HashMap<String, String>,
-    pending: Option<PendingEdit>,
-    frame: u64,
-    pending_frame: u64,
+    /// The text fields, by key; they send on Enter or blur
+    boxes: EditBoxes<String>,
+    /// The command each field with a pending edit would send, made when the edit was last seen
+    pending_commands: HashMap<String, Command>,
     /// A group with gems the user asked to delete
     confirm_delete: Option<usize>,
     confirm_delete_all: bool,
@@ -89,14 +83,13 @@ impl SkillsUi {
     /// engine doesn't know about yet.
     pub fn has_pending(&self) -> bool {
         // the default quality option never marks the build unsaved in PoB
-        self.pending
-            .as_ref()
-            .is_some_and(|p| p.key != "default_quality")
+        self.boxes.pending_keys().any(|k| k != DEFAULT_QUALITY)
     }
 
     /// Drops the pending edit (the user chose not to save).
     pub fn discard(&mut self) {
-        self.pending = None;
+        self.boxes.discard();
+        self.pending_commands.clear();
     }
 
     pub fn set_modal(&mut self, modal: bool) {
@@ -125,9 +118,8 @@ impl SkillsUi {
     /// The edit typed into a field that hasn't lost focus yet, so a Save or a tab change
     /// doesn't leave it behind.
     pub fn flush(&mut self) -> Option<Command> {
-        let p = self.pending.take()?;
-        self.sent.insert(p.key, p.text);
-        Some(p.command)
+        let (key, _) = self.boxes.take_pending()?;
+        self.pending_commands.remove(&key)
     }
 
     pub fn on_snapshot(&mut self, snapshot: &Snapshot) {
@@ -202,7 +194,6 @@ impl SkillsUi {
     /// `busy`: the engine hasn't caught up with what was sent, so typed text stays.
     pub fn show(&mut self, ui: &mut egui::Ui, now: f64, busy: bool) -> SkillsOutput {
         let mut out = SkillsOutput::default();
-        self.frame += 1;
         self.now = now;
         let Some(view) = self.view.clone() else {
             ui.spinner();
@@ -257,8 +248,8 @@ impl SkillsUi {
         }
 
         // an edit whose field wasn't drawn this frame (another group was selected) is sent now
-        if self.pending.is_some() && self.pending_frame != self.frame {
-            out.commands.extend(self.flush());
+        for (key, _) in self.boxes.end_frame() {
+            out.commands.extend(self.pending_commands.remove(&key));
         }
         // a group row hovered long enough asks for its tooltip
         match self.hover {
@@ -289,48 +280,22 @@ impl SkillsUi {
         make: impl Fn(String) -> Command,
         out: &mut Vec<Command>,
     ) -> egui::Response {
-        let id = ui.scope_id().with(("skills_field", key));
-        let mut buf = self.edits.remove(key).unwrap_or_default();
-        let focused = ui.memory(|m| m.has_focus(id));
-        if !focused && !busy {
-            buf.clear();
-            buf.push_str(current);
-            self.sent.insert(key.to_owned(), current.to_owned());
-        }
-        let response = ui.add(
-            egui::TextEdit::singleline(&mut buf)
-                .id(id)
-                .desired_width(width),
-        );
+        let opts = EditBoxOptions {
+            width,
+            ..EditBoxOptions::default()
+        };
+        let (response, sent) = self.boxes.show(ui, key.to_owned(), current, busy, &opts);
         self.rects.note(&response, || key.to_owned());
-        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            // Esc reverts the field and sends nothing
-            buf.clear();
-            buf.push_str(self.sent.get(key).map_or(current, String::as_str));
-            if self.pending.as_ref().is_some_and(|p| p.key == key) {
-                self.pending = None;
+        match self.boxes.pending_text(&key.to_owned()) {
+            Some(text) => {
+                self.pending_commands
+                    .insert(key.to_owned(), make(text.to_owned()));
             }
-        } else if response.lost_focus() {
-            // an edit already noted for this field wins over what the buffer shows now
-            if self.pending.as_ref().is_some_and(|p| p.key == key) {
-                buf = self.pending.take().map(|p| p.text).unwrap_or_default();
+            None => {
+                self.pending_commands.remove(key);
             }
-            if self.sent.get(key).is_none_or(|s| *s != buf) {
-                self.sent.insert(key.to_owned(), buf.clone());
-                out.push(make(buf.clone()));
-            }
-        } else if response.has_focus() && self.sent.get(key).is_none_or(|s| *s != buf) {
-            self.pending = Some(PendingEdit {
-                key: key.to_owned(),
-                command: make(buf.clone()),
-                text: buf.clone(),
-            });
-            self.pending_frame = self.frame;
-        } else if self.pending.as_ref().is_some_and(|p| p.key == key) {
-            // typed back to what was sent
-            self.pending = None;
         }
-        self.edits.insert(key.to_owned(), buf);
+        out.extend(sent.map(make));
         response
     }
 

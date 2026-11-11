@@ -330,6 +330,9 @@ impl AutoPobApp {
         if let Some(command) = self.sidebar.flush() {
             self.send(command);
         }
+        if let Some(command) = self.calcs.flush() {
+            self.send(command);
+        }
         if let Some(command) = self.skills.flush() {
             self.send(command);
         }
@@ -773,6 +776,7 @@ impl AutoPobApp {
                 self.notes.discard();
                 self.skills.discard();
                 self.sidebar.discard();
+                self.calcs.discard();
                 self.ready_actions.push(pending);
             }
             Resolution::Stay => {}
@@ -2841,6 +2845,64 @@ mod tests {
         let sent = sent_since(&app, before);
         assert!(
             !sent.iter().any(|c| c.contains("SetMainSkillCount")),
+            "{sent:?}"
+        );
+    }
+
+    #[test]
+    fn calcs_count_typed_then_save_is_flushed() {
+        let (mut app, ctx) = notes_app();
+        let mut view = crate::engine::views::CalcsView::default();
+        view.selector.stages = Some("1".into());
+        app.calcs.on_snapshot(&Snapshot::Calcs(Arc::new(view)));
+        app.tab = BuildTab::Calcs;
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        let pos = app.calcs.rects.map["stages"].center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![egui::Event::Text("3".into())],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        let before = app.sent_full.len();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::S, egui::Modifiers::COMMAND),
+        );
+        assert_eq!(
+            sent_since(&app, before),
+            ["SetCalcsCount { control: Stages, text: \"13\" }", "Save"]
+        );
+        // leaving the box doesn't send it again
+        let before = app.sent_full.len();
+        let away = egui::Pos2::new(900.0, 600.0);
+        let press = |pressed| egui::Event::PointerButton {
+            pos: away,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(away)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        let sent = sent_since(&app, before);
+        assert!(
+            !sent.iter().any(|c| c.contains("SetCalcsCount")),
             "{sent:?}"
         );
     }

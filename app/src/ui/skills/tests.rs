@@ -355,7 +355,7 @@ fn focused_field_survives_incoming_view() {
     v.groups[0].label = "Later".into();
     h.ui.on_snapshot(&Snapshot::Skills(Arc::new(v)));
     h.frame(vec![]);
-    assert_eq!(h.ui.edits["g0_label"], "Later");
+    assert_eq!(h.ui.boxes.text(&"g0_label".to_owned()).unwrap(), "Later");
 }
 
 #[test]
@@ -458,7 +458,10 @@ fn escape_reverts_the_field_and_sends_nothing() {
     assert!(o.commands.is_empty(), "{:?}", o.commands);
     let o = h.frame(vec![]);
     assert!(o.commands.is_empty(), "nothing sent after the revert");
-    assert_eq!(h.ui.edits["g0_label"], "Boneshatter");
+    assert_eq!(
+        h.ui.boxes.text(&"g0_label".to_owned()).unwrap(),
+        "Boneshatter"
+    );
     assert!(!h.ui.has_pending());
 }
 

@@ -7,7 +7,7 @@ pub mod grid;
 use crate::engine::views::{CalcsSection, CalcsSelector, CalcsView, DropList, TooltipLine};
 use crate::engine::{CalcsControl, CalcsCount, CellRef, Command, Snapshot};
 use crate::ui::tree::Rects;
-use crate::widgets::{pob_text, tooltip_ui};
+use crate::widgets::{EditBoxOptions, EditBoxes, pob_text, tooltip_ui};
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use std::{collections::HashMap, sync::Arc};
 
@@ -36,15 +36,13 @@ pub struct CalcsUi {
     pub hovered: Option<CellRef>,
     /// Text being typed, by field, while the field has focus or the engine is behind
     edits: HashMap<&'static str, String>,
-    /// What each count field last sent
-    sent: HashMap<&'static str, String>,
+    /// The stage and mine counts, which send on Enter or blur
+    counts: EditBoxes<&'static str>,
     focus_search: bool,
     bd: breakdown::State,
     /// A cell clicked this frame, with its row's label
     clicked: Option<(CellRef, String)>,
     /// The text fields' ids, which focus is looked up by
-    stages_id: egui::Id,
-    mines_id: egui::Id,
     search_id: egui::Id,
     pub(crate) rects: Rects,
 }
@@ -55,12 +53,10 @@ impl Default for CalcsUi {
             view: None,
             hovered: None,
             edits: HashMap::new(),
-            sent: HashMap::new(),
+            counts: EditBoxes::default(),
             focus_search: false,
             bd: breakdown::State::default(),
             clicked: None,
-            stages_id: egui::Id::unique("calcs_stages"),
-            mines_id: egui::Id::unique("calcs_mines"),
             search_id: egui::Id::unique("calcs_search"),
             rects: Rects::default(),
         }
@@ -84,7 +80,36 @@ fn same_numbers(a: &CalcsView, b: &CalcsView) -> bool {
     plain(a) == plain(b)
 }
 
+const COUNT_OPTIONS: EditBoxOptions = EditBoxOptions {
+    width: 50.0,
+    char_limit: None,
+    filter: None,
+    hint: None,
+};
+
+fn count_command(key: &str, text: String) -> Command {
+    Command::SetCalcsCount {
+        control: if key == "stages" {
+            CalcsCount::Stages
+        } else {
+            CalcsCount::Mines
+        },
+        text,
+    }
+}
+
 impl CalcsUi {
+    /// A count typed and not sent yet, which goes out before whatever command comes next.
+    pub fn flush(&mut self) -> Option<Command> {
+        let (key, text) = self.counts.take_pending()?;
+        Some(count_command(key, text))
+    }
+
+    /// Drops the count being typed (the user chose not to save).
+    pub fn discard(&mut self) {
+        self.counts.discard();
+    }
+
     /// Forgets the build's state, as for another build.
     pub fn reset(&mut self) {
         *self = Self::default();
@@ -155,6 +180,13 @@ impl CalcsUi {
         }
         self.bd
             .drive(ui.ctx(), now, self.hovered.as_ref(), &mut out.queries);
+        // a count whose field wasn't drawn this frame is sent now
+        out.commands.extend(
+            self.counts
+                .end_frame()
+                .into_iter()
+                .map(|(key, text)| count_command(key, text)),
+        );
         out
     }
 
@@ -194,10 +226,10 @@ impl CalcsUi {
                 out,
             );
             if let Some(text) = &sel.stages {
-                self.count(ui, "stages", "Stages", CalcsCount::Stages, text, busy, out);
+                self.count(ui, "stages", "Stages", text, busy, out);
             }
             if let Some(text) = &sel.mines {
-                self.count(ui, "mines", "Mines", CalcsCount::Mines, text, busy, out);
+                self.count(ui, "mines", "Mines", text, busy, out);
             }
             if let Some(show) = sel.show_minion {
                 let mut on = show;
@@ -277,40 +309,21 @@ impl CalcsUi {
         response
     }
 
-    /// The stage or mine count: sent when the field loses focus, which Enter also does.
+    /// The stage or mine count: sent on Enter or when the field loses focus; Esc reverts.
     #[allow(clippy::too_many_arguments)]
     fn count(
         &mut self,
         ui: &mut egui::Ui,
         key: &'static str,
         label: &str,
-        control: CalcsCount,
         text: &str,
         busy: bool,
         out: &mut Vec<Command>,
     ) {
         ui.label(format!("{label}:"));
-        let buf = self.edits.entry(key).or_default();
-        let id = if key == "stages" {
-            self.stages_id
-        } else {
-            self.mines_id
-        };
-        let focused = ui.memory(|m| m.has_focus(id));
-        if !focused && !busy {
-            buf.clear();
-            buf.push_str(text);
-            self.sent.insert(key, text.to_owned());
-        }
-        let response = ui.add(egui::TextEdit::singleline(buf).id(id).desired_width(50.0));
+        let (response, sent) = self.counts.show(ui, key, text, busy, &COUNT_OPTIONS);
         self.rects.note(&response, || key.to_owned());
-        if response.lost_focus() && self.sent.get(key).is_none_or(|s| s != buf) {
-            self.sent.insert(key, buf.clone());
-            out.push(Command::SetCalcsCount {
-                control,
-                text: buf.clone(),
-            });
-        }
+        out.extend(sent.map(|text| count_command(key, text)));
     }
 
     /// The search box: sent on change; Ctrl+F focuses it.
@@ -756,6 +769,26 @@ mod tests {
         h.click("search");
         let sent = h.frame(vec![Event::Text("x".into())]);
         assert_eq!(debug(&sent), ["SetCalcsSearch { text: \"x\" }"]);
+    }
+
+    #[test]
+    fn escape_reverts_a_count_and_sends_nothing() {
+        let mut view = sample(None);
+        view.selector.stages = Some("1".into());
+        let mut h = Harness::new(view);
+        h.click("stages");
+        h.frame(vec![Event::Text("9".into())]);
+        let mut sent = h.frame(vec![Event::Key {
+            key: egui::Key::Escape,
+            physical_key: Some(egui::Key::Escape),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        sent.extend(h.frame(vec![]));
+        sent.extend(h.click("search"));
+        assert!(sent.is_empty(), "{sent:?}");
+        assert!(h.ui.flush().is_none());
     }
 
     const CELL: &str = "cell_sec_0_2_0";

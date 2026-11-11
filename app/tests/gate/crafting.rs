@@ -1150,7 +1150,38 @@ fn prefix_source_raising_matches_pob() {
             && ours.contains("attempt to index field 'type'"),
         "{ours} vs {theirs}"
     );
-    let view = check_popup(&mut s, &lua, "after the raise");
+    // PoB fills `modSelect` with `pairs` over the affixes and raises mid-loop on one with no
+    // `type` (ItemsTab.lua:3456-3457), so which mods are in the half-built list depends on
+    // each state's `pairs` order. Everything else is compared exactly; for that list only
+    // what any order gives: distinct entries of the shape PoB builds.
+    let view = ours_popup(&mut s);
+    let theirs = upstream_value(&lua, "return popupDump()").expect("upstream has no popup open");
+    let mut ours_json = json_of(&view);
+    let mut theirs = theirs;
+    let mut partial = Vec::new();
+    for popup in [&mut ours_json, &mut theirs] {
+        let controls = popup["controls"].as_array_mut().unwrap();
+        let list = controls
+            .iter_mut()
+            .find(|c| c["name"] == "modSelect")
+            .expect("a modSelect list");
+        let choices = list["choices"].as_array().cloned().unwrap_or_default();
+        list["choices"] = serde_json::Value::Null;
+        list["selected"] = serde_json::Value::Null;
+        partial.push(choices);
+    }
+    assert_same(&ours_json, &theirs, "after the raise");
+    for choices in &partial {
+        let names: BTreeSet<_> = choices.iter().map(|c| c.to_string()).collect();
+        assert_eq!(names.len(), choices.len(), "a mod listed twice");
+        assert!(
+            choices
+                .iter()
+                .all(|c| c.as_str().is_some_and(|c| c.contains("   ^8["))),
+            "{choices:?}"
+        );
+    }
+    assert_eq!(open_popups(&s), 0, "a popup is left in PoB's stack");
     let source = view.controls.iter().find(|c| c.name == "source").unwrap();
     assert_eq!(source.choices[source.selected], "Prefix");
     assert_eq!(open_popups(&s), 0);

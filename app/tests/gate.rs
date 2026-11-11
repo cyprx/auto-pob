@@ -655,7 +655,7 @@ fn engine_starting_on_the_build_list_raises_no_errors() {
     )
     .unwrap();
     let engine = Engine::spawn(Game::Poe1, std::env::temp_dir(), user.clone(), || {});
-    let (mut ready, mut list) = (false, false);
+    let (mut ready, mut list, mut settings) = (false, false, false);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     while !(ready && list) && std::time::Instant::now() < deadline {
         match engine
@@ -667,6 +667,10 @@ fn engine_starting_on_the_build_list_raises_no_errors() {
                 snapshot: Snapshot::BuildList(_),
                 ..
             }) => list = true,
+            Ok(Event::Snapshot {
+                snapshot: Snapshot::Settings(_),
+                ..
+            }) => settings = true,
             Ok(Event::Error { message, .. }) => panic!("startup error: {message}"),
             Ok(Event::StartupFailed { message }) => panic!("startup failed: {message}"),
             Ok(_) => {}
@@ -680,9 +684,17 @@ fn engine_starting_on_the_build_list_raises_no_errors() {
         match engine.events.recv_timeout(left) {
             Ok(Event::Error { message, .. }) => panic!("error on the list: {message}"),
             Ok(Event::Snapshot { snapshot, .. }) => {
-                // the list and the requests need no build (R10)
+                // the list and the requests need no build (R10); neither do the settings
+                // and the popup (Task 3, R12, R19: a main-owned session)
+                settings |= matches!(snapshot, Snapshot::Settings(_));
                 assert!(
-                    matches!(snapshot, Snapshot::BuildList(_) | Snapshot::Requests(_)),
+                    matches!(
+                        snapshot,
+                        Snapshot::BuildList(_)
+                            | Snapshot::Requests(_)
+                            | Snapshot::Settings(_)
+                            | Snapshot::Popup(_)
+                    ),
                     "a build view went out with no build open"
                 )
             }
@@ -690,6 +702,7 @@ fn engine_starting_on_the_build_list_raises_no_errors() {
             Err(_) => break,
         }
     }
+    assert!(settings, "the settings are sent at startup with no build");
     // opening a build brings the build views, as before
     engine.send(Command::OpenBuild { path: build });
     let (mut build_view, mut stats, mut tree) = (false, false, false);

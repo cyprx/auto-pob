@@ -1,6 +1,7 @@
 use mlua::{Lua, MultiValue, Result as LuaResult};
 
-use crate::pob::{Context, subscript::SubscriptManager};
+use crate::pob::Context;
+use pob_runtime::subscript::SubscriptManager;
 
 pub fn launch_subscript(
     l: &Lua,

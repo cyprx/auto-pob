@@ -1,0 +1,23 @@
+[package]
+name = "pob-runtime"
+description = "Subscript runtime and bundled Lua modules for Path of Building"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+curl = { version = "0.4.51", optional = true }
+flate2 = "1.1.2"
+log = "0.4"
+luautf8-rs = { git = "https://github.com/meehl/luautf8-rs.git", rev = "dc74b734e5285108068cf2ffb674c1dc840073c1", features = ["luajit"], optional = true }
+mlua = { version = "0.12.0", features = ["luajit", "anyhow"] }
+profiling = "1.0"
+
+[features]
+default = ["bundled-lua-modules"]
+bundled-lua-modules = ["dep:curl", "dep:luautf8-rs"]
+
+[dev-dependencies]
+zip = { version = "9.5.0", default-features = false, features = ["deflate"] }

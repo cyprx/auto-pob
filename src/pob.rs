@@ -2,6 +2,9 @@ use clap::Parser;
 use mlua::{
     AppDataRef, AppDataRefMut, Function, Lua, Result as LuaResult, Table, thread::ThreadStatus,
 };
+use pob_runtime::subscript::{
+    NativeMultiValue, SubscriptEvent, SubscriptManager, service_subscripts,
+};
 use winit::window::Window;
 
 use crate::{
@@ -10,7 +13,6 @@ use crate::{
     draw_commands::DrawCommandRecorder,
     fonts::Fonts,
     input::InputState,
-    pob::subscript::{NativeMultiValue, SubscriptEvent, SubscriptManager, service_subscripts},
     renderer::textures::TextureManager,
     stage::{StageEvent, StageFrameOutput, StageTransition},
     util::{append_lua_package_dir, change_working_directory, load_lua_file},
@@ -25,8 +27,6 @@ use std::{
 };
 
 mod api;
-mod modules;
-mod subscript;
 
 /// Maximum time per frame spent servicing subscript calls on the main thread.
 const SUBSCRIPT_BUDGET: Duration = Duration::from_millis(4);
@@ -129,7 +129,7 @@ impl PathOfBuilding {
         api::register_globals(&lua)?;
 
         // register modules
-        modules::register(&lua)?;
+        pob_runtime::modules::register(&lua)?;
 
         Ok(lua)
     }

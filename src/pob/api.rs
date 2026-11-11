@@ -1,38 +1,36 @@
 use crate::{
     input::{Key, MouseButton},
-    pob::{
-        api::{
-            callback::{call_callback, get_custom_callback, set_custom_callback, set_main_object},
-            clipboard::{copy, paste},
-            compression::{deflate, inflate},
-            console::{console_clear, console_execute, console_print_table, console_printf},
-            general::{exit, get_time, open_url, render_init, restart, take_screenshot},
-            image_handle::register_image_handle_api,
-            input::{
-                get_cursor_pos, is_key_down, key_as_str, mousebutton_as_str, set_cursor_pos,
-                show_cursor,
-            },
-            lua::{load_module, protected_call, protected_load_module},
-            paths::{
-                get_runtime_path, get_script_path, get_user_path, get_work_dir, make_dir,
-                remove_dir, set_work_dir,
-            },
-            rendering::{
-                draw_image, draw_image_quad, get_async_count, get_draw_color, get_draw_layer,
-                set_clear_color, set_draw_color, set_draw_layer, set_viewport,
-            },
-            search_handle::new_search_handle,
-            subscript::{abort_subscript, is_subscript_running, launch_subscript},
-            text::{draw_string, get_index_at_cur, get_string_width, strip_escapes},
-            window::{
-                get_dpi_scale_override, get_screen_scale, get_screen_size, set_dpi_scale_override,
-                set_foreground, set_window_title,
-            },
+    pob::api::{
+        callback::{call_callback, get_custom_callback, set_custom_callback, set_main_object},
+        clipboard::{copy, paste},
+        compression::{deflate, inflate},
+        console::{console_clear, console_execute, console_print_table, console_printf},
+        general::{exit, get_time, open_url, render_init, restart, take_screenshot},
+        image_handle::register_image_handle_api,
+        input::{
+            get_cursor_pos, is_key_down, key_as_str, mousebutton_as_str, set_cursor_pos,
+            show_cursor,
         },
-        subscript::NativeMultiValue,
+        lua::{load_module, protected_call, protected_load_module},
+        paths::{
+            get_runtime_path, get_script_path, get_user_path, get_work_dir, make_dir, remove_dir,
+            set_work_dir,
+        },
+        rendering::{
+            draw_image, draw_image_quad, get_async_count, get_draw_color, get_draw_layer,
+            set_clear_color, set_draw_color, set_draw_layer, set_viewport,
+        },
+        search_handle::new_search_handle,
+        subscript::{abort_subscript, is_subscript_running, launch_subscript},
+        text::{draw_string, get_index_at_cur, get_string_width, strip_escapes},
+        window::{
+            get_dpi_scale_override, get_screen_scale, get_screen_size, set_dpi_scale_override,
+            set_foreground, set_window_title,
+        },
     },
 };
 use mlua::{Lua, MultiValue, Result as LuaResult};
+use pob_runtime::subscript::NativeMultiValue;
 use winit::keyboard::SmolStr;
 
 mod callback;

@@ -4,7 +4,7 @@ use mlua::{
     UserDataMethods,
 };
 
-use crate::pob::modules::luacurl::constants;
+use crate::modules::luacurl::constants;
 
 /// Helper for constructing a `mlua::Error::BadArgument`
 fn bad_argument(to: impl Into<String>, pos: usize, cause: &'static str) -> LuaError {

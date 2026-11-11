@@ -1,5 +1,5 @@
 use crate::{
-    pob::modules,
+    modules,
     util::{append_lua_package_dir, fix_script_header},
 };
 use anyhow::{Result, anyhow};
@@ -277,7 +277,7 @@ impl Subscript {
     /// Joins the subscript's finished thread and returns the resulting `SubscriptEvent`.
     fn join(&mut self) -> SubscriptEvent {
         log::info!(
-            target: crate::stats::TARGET,
+            target: crate::STATS_TARGET,
             "subscript {} finished in {:.1}ms after {} main-thread calls",
             self.id,
             self.started.elapsed().as_secs_f64() * 1000.0,

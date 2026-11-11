@@ -14,7 +14,6 @@ anyhow = "1.0"
 arboard = { version = "3.6.1", default-features = false }
 bytemuck = "1.23.2"
 clap = { version = "4.5.46", features = ["derive"] }
-curl = { version = "0.4.51", optional = true }
 dds = "0.2.0"
 directories = "6.0.0"
 env_logger = "0.11"
@@ -24,7 +23,6 @@ flate2 = "1.1.2"
 glob = "0.3.3"
 image = { version = "0.25.8", default-features = false, features = ["rayon", "jpeg", "png", "webp"] }
 log = "0.4"
-luautf8-rs = { git = "https://github.com/meehl/luautf8-rs.git", rev = "dc74b734e5285108068cf2ffb674c1dc840073c1", features = ["luajit"], optional = true }
 mlua = { version = "0.12.0", features = ["luajit", "anyhow"] }
 nohash-hasher = "0.2.0"
 num-traits = "0.2.19"
@@ -32,6 +30,7 @@ open = "5.3.2"
 ordered-float = "5.0.0"
 parley = { version = "0.12.0", default-features = false, features = ["std"] }
 pollster = "1.0"
+pob-runtime = { path = "crates/pob-runtime", default-features = false }
 profiling = "1.0"
 puffin_http = { version = "0.17", optional = true }
 raw-window-handle = "0.6.2"
@@ -50,13 +49,13 @@ smithay-clipboard = "0.7.3"
 default = ["bundled-lua-modules"]
 # Register Rust implementations of the Lua modules required by PoB's Lua code.
 # Disable this to use the original C libraries.
-bundled-lua-modules = ["dep:curl", "dep:luautf8-rs"]
+bundled-lua-modules = ["pob-runtime/bundled-lua-modules"]
 # Build LuaJIT from source instead of linking against a system installation.
 vendored-lua = ["mlua/vendored"]
 profile-with-puffin = ["profiling/profile-with-puffin", "dep:puffin_http"]
 
 [workspace]
-members = [".", "app"]
+members = [".", "app", "crates/pob-runtime"]
 
 [dev-dependencies]
 zip = { version = "9.5.0", default-features = false, features = ["deflate"] }

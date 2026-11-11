@@ -5,7 +5,7 @@
 
 use std::time::{Duration, Instant};
 
-pub const TARGET: &str = "rpob::stats";
+pub use pob_runtime::STATS_TARGET as TARGET;
 const REPORT_INTERVAL: Duration = Duration::from_secs(5);
 
 pub struct FrameStats {

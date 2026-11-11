@@ -81,7 +81,18 @@ impl DbState {
                     self.percent = None;
                 }
             }
-            None => self.percent = None,
+            None => {
+                self.percent = None;
+                // a failure and then a closed database: the engine refused the query, so
+                // sending it again (Retry) would only be refused again. The filters go back
+                // to their defaults, the typed search stays.
+                if self.failed.is_some() {
+                    self.query = ItemDbQuery {
+                        search: self.query.search.clone(),
+                        ..default_query(self.query.db)
+                    };
+                }
+            }
         }
     }
 
@@ -123,6 +134,12 @@ impl DbState {
         self.failed = None;
         self.tip.reset();
         Some(Command::CloseItemDb)
+    }
+
+    /// The query the shown database tooltip answers.
+    #[cfg(test)]
+    pub(crate) fn tip_query(&self) -> Option<&ControlTooltipQuery> {
+        self.tip.held()
     }
 
     /// The panel's query as the controls would send it now.
@@ -423,7 +440,8 @@ fn rows(ui: &mut egui::Ui, view: &ItemDbView, state: &mut DbState, out: &mut Ite
                 } else if response.clicked() {
                     state.selected = Some(row.name.clone());
                     // PoB's Ctrl+click adds the item and equips it (R15)
-                    if ctrl {
+                    // (the second click of a double click is the same gesture: once)
+                    if ctrl && !response.double_clicked() {
                         out.commands.push(Command::AddDbItem {
                             db,
                             name: row.name.clone(),

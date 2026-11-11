@@ -118,6 +118,12 @@ impl HoverTip {
         }
     }
 
+    /// The question the kept tooltip answers.
+    #[cfg(test)]
+    pub(crate) fn held(&self) -> Option<&ControlTooltipQuery> {
+        self.tooltip.as_ref().map(|t| &t.query)
+    }
+
     pub(crate) fn reset(&mut self) {
         *self = Self::default();
     }
@@ -277,7 +283,11 @@ impl PopupWindow {
     /// Closes the window and returns the command that ends the session. The window goes at once;
     /// views of the session still on their way are ignored (`close_sent`).
     pub fn close(&mut self) -> Option<Command> {
-        self.view.take()?;
+        // an open still on its way is closed too: the close follows it, and its view is stale
+        let pending = self.opening.take().is_some();
+        if self.view.take().is_none() && !pending {
+            return None;
+        }
         self.forget();
         Some(Command::ClosePopup)
     }
@@ -325,13 +335,9 @@ impl PopupWindow {
                 });
         });
 
-        // a box not drawn this frame (its control was hidden) still sends what was typed
-        for (name, text) in self.boxes.end_frame() {
-            out.commands.push(Command::SetPopupControl {
-                name,
-                value: PopupInput::Text(text),
-            });
-        }
+        // a box not drawn this frame (its control was hidden) drops what was typed: the
+        // engine refuses a control PoB doesn't show (R25)
+        self.boxes.discard_undrawn();
         if let Some(query) = self.tip.end_frame(ctx, now) {
             out.queries.push(query);
         }

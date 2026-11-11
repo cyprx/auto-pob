@@ -363,6 +363,9 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::CopySocketGroup { .. }
             | Command::PreviewNode { .. }
             | Command::ExportTreeLink
+            // the tree search's debounce can land after a node-replacement open: it changes
+            // neither the item nor the build
+            | Command::SetTreeSearch { .. }
             | Command::Shutdown
     )
 }
@@ -370,7 +373,6 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
 /// What `glue.popup_press` reports.
 #[derive(serde::Deserialize)]
 struct Pressed {
-    ended: bool,
     build_flag: bool,
 }
 
@@ -1082,7 +1084,10 @@ impl PobBackend {
                 self.anoint_failed = false;
                 let (name, arg) = match kind {
                     PopupKind::Craft => ("craft", 0),
-                    PopupKind::EditText => ("edit_text", 0),
+                    // the item text editor only ever takes over a Craft session (R2)
+                    PopupKind::EditText => anyhow::bail!(
+                        "the item text editor opens from Craft's Create, not on its own"
+                    ),
                     PopupKind::Enchant { second } => ("enchant", i64::from(second)),
                     PopupKind::Anoint { slot } => ("anoint", slot as i64 + 1),
                     PopupKind::Corrupt => ("corrupt", 0),
@@ -1100,7 +1105,9 @@ impl PobBackend {
                 Ok(popup_changed())
             }
             Command::SetPopupControl { name, value } => {
-                self.anoint_failed = false;
+                // a failed sort's builder is gone and a same-value pick runs no PoB code, so
+                // the control that restarts it is the glue's (Retry)
+                let restart = std::mem::take(&mut self.anoint_failed);
                 match value {
                     PopupInput::Choice { index, label } => {
                         self.call::<_, ()>("popup_set", (name, "choice", index, label))?
@@ -1118,6 +1125,9 @@ impl PobBackend {
                         self.call::<_, ()>("popup_set", (name, "row", key, ()))?
                     }
                 }
+                if restart {
+                    self.call::<_, ()>("anoint_sort_restart", ())?;
+                }
                 Ok(popup_changed())
             }
             Command::PressPopupButton { name } => {
@@ -1131,7 +1141,6 @@ impl PobBackend {
                 affected.popup = true;
                 affected.display_item = true;
                 // a popup PoB closed ends the session; the view says so by being empty
-                let _ = pressed.ended;
                 Ok(affected)
             }
             Command::ClosePopup => {
@@ -1618,6 +1627,9 @@ mod tests {
                 name: "save".into(),
             },
             Command::ClosePopup,
+            Command::SetTreeSearch {
+                text: "life".into(),
+            },
             // the DB search's debounce can land after an OpenPopup (R4)
             Command::SetItemDb(ItemDbQuery {
                 db: ItemDb::Rares,

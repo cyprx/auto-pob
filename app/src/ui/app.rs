@@ -3173,7 +3173,7 @@ mod tests {
 
     /// The items tab with the display item offering "Corrupt...", and the popup open as the
     /// engine would report it after the button was pressed.
-    fn popup_app() -> (AutoPobApp, egui::Context) {
+    fn pending_popup_app() -> (AutoPobApp, egui::Context) {
         let (mut app, ctx) = items_app();
         app.on_event(Event::Snapshot {
             seq: 91,
@@ -3184,6 +3184,11 @@ mod tests {
         }
         click_item_key(&mut app, &ctx, "open_Corrupt...");
         assert_eq!(app.sent_log.last().map(String::as_str), Some("OpenPopup"));
+        (app, ctx)
+    }
+
+    fn popup_app() -> (AutoPobApp, egui::Context) {
+        let (mut app, ctx) = pending_popup_app();
         app.on_event(Event::Snapshot {
             seq: 92,
             snapshot: Snapshot::Popup(Some(Arc::new(popup_view(
@@ -3451,6 +3456,41 @@ mod tests {
     }
 
     #[test]
+    fn closing_the_window_while_the_open_is_pending_closes_the_popup_too() {
+        let (mut app, ctx) = pending_popup_app();
+        assert!(app.popup.is_blocking() && !app.popup.is_open());
+        app.notes.type_for_test("my notes", 0.0);
+        let open_seq = app.last_sent;
+        let before = app.sent_full.len();
+        ctx.run_ui(
+            egui::RawInput {
+                viewports: std::iter::once((
+                    egui::ViewportId::ROOT,
+                    egui::ViewportInfo {
+                        events: vec![egui::ViewportEvent::Close],
+                        ..Default::default()
+                    },
+                ))
+                .collect(),
+                ..Default::default()
+            },
+            |ui| app.show(ui),
+        )
+        .drop_without_applying_deltas();
+        assert_eq!(app.prompt, Some(Pending::Close));
+        assert!(sent_since(&app, before).contains(&"ClosePopup"));
+        // the window the engine opens before it hears of the close never shows
+        app.on_event(Event::Snapshot {
+            seq: open_seq,
+            snapshot: Snapshot::Popup(Some(Arc::new(popup_view(
+                crate::engine::PopupKind::Corrupt,
+            )))),
+        });
+        assert!(!app.popup.is_open());
+        assert!(!app.popup.is_blocking());
+    }
+
+    #[test]
     fn a_popup_error_is_a_notice_and_keeps_the_window() {
         let (mut app, ctx) = popup_app();
         app.on_event(Event::Error {
@@ -3649,6 +3689,11 @@ mod tests {
         assert!(app.popup.is_open());
         // egui's modal takes the focus the box behind it held, so keys can't reach it
         assert!(!ctx.text_edit_focused(), "the focus is gone");
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Backspace, egui::Modifiers::NONE),
+        );
         frame(&mut app, &ctx, vec![egui::Event::Text("7".into())]);
         frame(
             &mut app,
@@ -3660,6 +3705,42 @@ mod tests {
             sent_since(&app, before),
             [QUALITY, "OpenPopup(Corrupt)"],
             "typing under the window sent nothing"
+        );
+    }
+
+    /// The frames while `OpenPopup` is pending are typed into too (the spinner's modal).
+    #[test]
+    fn typing_while_the_popup_is_pending_does_not_reach_the_boxes_behind() {
+        let (mut app, ctx) = items_app_typing();
+        assert!(ctx.text_edit_focused(), "the quality box holds the focus");
+        let before = app.sent_full.len();
+        app.send(Command::OpenPopup(crate::engine::PopupKind::Corrupt));
+        assert!(app.popup.is_blocking() && !app.popup.is_open());
+        for _ in 0..2 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        // the box takes two characters, so a key must free one for the 7 to land
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Backspace, egui::Modifiers::NONE),
+        );
+        frame(&mut app, &ctx, vec![egui::Event::Text("7".into())]);
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Enter, egui::Modifiers::NONE),
+        );
+        frame(&mut app, &ctx, vec![]);
+        assert!(
+            !app.items.quality_text().contains('7'),
+            "the box behind took a key: {}",
+            app.items.quality_text()
+        );
+        assert_eq!(
+            sent_since(&app, before),
+            [QUALITY, "OpenPopup(Corrupt)"],
+            "typing while the open is pending sent nothing"
         );
     }
 

@@ -2098,6 +2098,34 @@ fn db_failure_shows_retry_and_retry_resends_query() {
 }
 
 #[test]
+fn a_refused_db_query_is_reset_so_retry_can_succeed() {
+    let mut h = Harness::new(sample());
+    h.open_db();
+    h.pick("db_sort", 1);
+    // the engine refused the query: it said why, and closed the database
+    h.ui.on_db_failed("that league isn't listed".into());
+    h.ui.on_snapshot(&Snapshot::ItemDb(None));
+    h.frame(vec![]);
+    assert!(h.drawn("db_retry"));
+    let sent = h.click("db_retry").commands;
+    assert_eq!(
+        debug(&sent),
+        [format!("SetItemDb({:?})", unique_query())],
+        "Retry sends the query the filters were reset to, not the refused one"
+    );
+}
+
+#[test]
+fn a_closed_db_without_a_failure_keeps_the_query() {
+    let mut h = Harness::new(sample());
+    h.open_db();
+    h.pick("db_sort", 1);
+    h.ui.on_snapshot(&Snapshot::ItemDb(None));
+    h.frame(vec![]);
+    assert_eq!(h.ui.db.query().sort, 1);
+}
+
+#[test]
 fn db_double_click_views_and_ctrl_click_adds() {
     let mut h = Harness::new(sample());
     h.open_db();
@@ -2141,6 +2169,75 @@ fn db_double_click_views_and_ctrl_click_adds() {
         debug(&sent),
         ["AddDbItem { db: Uniques, name: \"Kaom's Heart\" }"]
     );
+}
+
+#[test]
+fn ctrl_double_click_on_a_db_row_adds_once() {
+    let mut h = Harness::new(sample());
+    h.open_db();
+    h.step = 0.05;
+    h.modifiers = Modifiers::CTRL;
+    let pos = h.ui.rect("db_row_1").center();
+    let button = |pressed| Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::CTRL,
+    };
+    let mut sent = Vec::new();
+    for events in [
+        vec![Event::PointerMoved(pos)],
+        vec![button(true)],
+        vec![button(false)],
+        vec![button(true)],
+        vec![button(false)],
+        vec![],
+    ] {
+        sent.extend(h.frame(events).commands);
+    }
+    assert_eq!(
+        debug(&sent),
+        ["AddDbItem { db: Uniques, name: \"Tabula Rasa\" }"],
+        "one add for the gesture"
+    );
+}
+
+#[test]
+fn db_row_tooltip_replies_are_kept_only_for_the_latest_question() {
+    use crate::engine::ControlTooltipQuery;
+    use crate::engine::views::ControlTooltipView;
+    let mut h = Harness::new(sample());
+    h.open_db();
+    h.step = 0.06;
+    let pos = h.ui.rect("db_row_1").center();
+    let mut queries = h.frame(vec![Event::PointerMoved(pos)]).queries;
+    for _ in 0..3 {
+        queries.extend(h.frame(vec![]).queries);
+    }
+    assert_eq!(queries.len(), 1);
+    let reply = |name: &str| {
+        Snapshot::ControlTooltip(Arc::new(ControlTooltipView {
+            query: ControlTooltipQuery::DbItem {
+                db: ItemDb::Uniques,
+                name: name.into(),
+            },
+            tooltip: crate::engine::views::ItemTooltip::default(),
+        }))
+    };
+    // a reply to a row the pointer left is ignored
+    h.ui.on_snapshot(&reply("Goldrim"));
+    assert!(h.ui.db.tip_query().is_none());
+    h.ui.on_snapshot(&reply("Tabula Rasa"));
+    assert_eq!(
+        h.ui.db.tip_query(),
+        Some(&ControlTooltipQuery::DbItem {
+            db: ItemDb::Uniques,
+            name: "Tabula Rasa".into()
+        })
+    );
+    // moving off the row drops it
+    h.frame(vec![Event::PointerMoved(Pos2::new(-5.0, -5.0))]);
+    assert!(h.ui.db.tip_query().is_none());
 }
 
 #[test]
@@ -2202,6 +2299,23 @@ fn focus_slot_finds_the_slot_of_a_socket_and_drops_it_down() {
     h.frame(vec![]);
     assert_eq!(h.ui.focused_slot(), None, "taken when drawn");
     assert!(egui::Popup::is_any_open(&h.ctx), "the dropdown is open");
+}
+
+#[test]
+fn focus_slot_of_a_hidden_slot_does_not_linger() {
+    let mut view = sample();
+    view.slots[9].node = Some(26725);
+    view.slots[9].shown = false;
+    let mut h = Harness::new(view);
+    h.ui.focus_slot(26725);
+    assert_eq!(h.ui.focused_slot(), Some("Jewel 5"));
+    h.frame(vec![]);
+    assert_eq!(
+        h.ui.focused_slot(),
+        None,
+        "dropped after a pass that didn't draw it"
+    );
+    assert!(!egui::Popup::is_any_open(&h.ctx));
 }
 
 /// A database view for the app's tests.

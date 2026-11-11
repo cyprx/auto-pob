@@ -722,7 +722,8 @@ fn a_dead_session_closes_the_window() {
 }
 
 #[test]
-fn a_hidden_box_with_a_pending_edit_is_flushed_when_undrawn() {
+fn a_hidden_box_with_a_pending_edit_is_discarded_not_sent() {
+    // the engine refuses a control PoB doesn't show, so sending would only raise a notice
     let edit = control("custom", PopupControlKind::Edit, [0.0, 0.0], [200.0, 20.0]);
     let mut h = Harness::new(popup(vec![edit.clone(), button("save", 0.0, 60.0)]));
     h.click("edit_custom");
@@ -731,8 +732,6 @@ fn a_hidden_box_with_a_pending_edit_is_flushed_when_undrawn() {
     gone.shown = false;
     h.view(popup(vec![gone, button("save", 0.0, 60.0)]));
     let out = h.frame(vec![]);
-    assert_eq!(
-        debug(&out.commands),
-        [set("custom", PopupInput::Text("x".into()))]
-    );
+    assert!(out.commands.is_empty(), "{:?}", out.commands);
+    assert!(h.popup.flush().is_none(), "nothing stays pending");
 }

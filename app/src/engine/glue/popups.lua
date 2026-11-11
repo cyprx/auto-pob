@@ -95,7 +95,8 @@ end
 
 -- Ends the session; true when one was open (the engine then sends `Popup(None)`)
 function glue.popup_end()
-	local was = live()
+	-- not `live()`: the command that just ran may itself have replaced the item (R4)
+	local was = session ~= nil
 	session = nil
 	return was
 end
@@ -187,6 +188,10 @@ function glue.popup_open(kind, arg)
 	local top = popups[1]
 	close_above(depth)
 	if not ok then
+		if kind == "node_replacement" then
+			-- PoB builds the window from the tattoos that fit the node and raises when none do
+			error("PoB offers no modifier for that node (" .. tostring(err) .. ")", 0)
+		end
 		error(err, 0)
 	end
 	if count == 0 then
@@ -482,6 +487,15 @@ function glue.anoint_sort_pending()
 		return false
 	end
 	return glue.list_pending(control)
+end
+
+-- Starts a failed sort again, as `SetSortMode` does: a failed resume dropped the builder, and
+-- picking the sort that is already selected runs no PoB code (Retry)
+function glue.anoint_sort_restart()
+	local control = notable_list()
+	if control then
+		control.listBuildFlag = true
+	end
 end
 
 -- One slice of the stat sort. Returns `{ finished, percent }`; a failed resume is an error.

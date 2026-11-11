@@ -3,7 +3,7 @@
 //! no-silent-writes check for every command of the crafting work.
 //! Included from `gate.rs`, whose helpers it reaches through `super::`.
 
-use super::crafting::{craft_ours, display, ours_popup};
+use super::crafting::{craft_ours, display, ours_popup, refused};
 use super::items_harness::{open_popups, settle};
 use super::{
     Session, TattooState, attack_session, check_recipe_with, fixtures_dir, load_xml, lock,
@@ -254,6 +254,24 @@ fn node_replacement_errors_and_saves() {
         .expect("a Strength node");
     assert!(strength.replaceable);
 
+    // an eligible node PoB has no tattoo for: its window cannot be built, and the refusal
+    // leaves no session and no popup behind (R18)
+    s.backend
+        .lua
+        .load("saved_tattoos = pob.build.spec.tree.tattoo.nodes; pob.build.spec.tree.tattoo.nodes = {}")
+        .exec()
+        .unwrap();
+    refused(
+        &mut s,
+        Command::OpenPopup(PopupKind::NodeReplacement { node: strength.id }),
+        "PoB offers no modifier for that node",
+    );
+    s.backend
+        .lua
+        .load("pob.build.spec.tree.tattoo.nodes = saved_tattoos")
+        .exec()
+        .unwrap();
+
     // add a tattoo, save, and let upstream load the file
     s.run(Command::OpenPopup(PopupKind::NodeReplacement {
         node: strength.id,
@@ -314,6 +332,37 @@ fn node_replacement_errors_and_saves() {
     assert_eq!(open_popups(&s), 0);
     // and again with none left: PoB's button does nothing, and so do we
     s.run(Command::RemoveAllTattoos).unwrap();
+
+    // Reset Node takes a tattoo off one node and merges what Add does (M3)
+    let add = |s: &mut Session| {
+        s.run(Command::OpenPopup(PopupKind::NodeReplacement {
+            node: strength.id,
+        }))
+        .unwrap();
+        s.run(Command::PressPopupButton {
+            name: "save".into(),
+        })
+        .unwrap();
+    };
+    add(&mut s);
+    assert_eq!(our_overrides(&s).len(), 1);
+    s.backend.tree_layout_view().unwrap();
+    s.run(Command::OpenPopup(PopupKind::NodeReplacement {
+        node: strength.id,
+    }))
+    .unwrap();
+    let affected = s
+        .run(Command::PressPopupButton {
+            name: "reset".into(),
+        })
+        .unwrap();
+    assert!(
+        affected.tree && affected.build && affected.popup && affected.recalc,
+        "{affected:?}"
+    );
+    assert!(affected.tree_layout, "the layout didn't change");
+    assert!(our_overrides(&s).is_empty());
+    assert!(s.backend.popup_view().unwrap().is_none());
 }
 
 #[test]
@@ -497,6 +546,77 @@ fn no_silent_writes_crafting() {
         },
     );
     run(&mut s, Command::SaveDisplayItem);
+
+    // the windows left: a second enchant, a unique's roll ranges, implicits, crucible mods and
+    // the item text editor a Craft session hands over to
+    let two_enchants = "Rarity: RARE\nDoom Crown\nIron Hat\nCan have a second Enchantment Modifier\nImplicits: 0\n+60 to maximum Life";
+    let unique = "Rarity: UNIQUE\nKaom's Test\nGlorious Plate\nImplicits: 0\n+(400-500) to maximum Life\n+(10-20)% to Fire Resistance";
+    let sword = "Rarity: RARE\nDoom Edge\nRusted Sword\nImplicits: 0\n+10 to Strength";
+    let save = |s: &mut Session| {
+        run(
+            s,
+            Command::PressPopupButton {
+                name: "save".into(),
+            },
+        );
+    };
+    run(
+        &mut s,
+        Command::PasteItem {
+            text: two_enchants.into(),
+        },
+    );
+    for second in [false, true] {
+        run(&mut s, Command::OpenPopup(PopupKind::Enchant { second }));
+        choose(&mut s, "skill", "Boneshatter");
+        choose(&mut s, "enchantment", "");
+        save(&mut s);
+    }
+    run(&mut s, Command::SaveDisplayItem);
+    run(
+        &mut s,
+        Command::PasteItem {
+            text: unique.into(),
+        },
+    );
+    run(&mut s, Command::OpenPopup(PopupKind::Corrupt));
+    run(
+        &mut s,
+        Command::PressPopupButton {
+            name: "rolls".into(),
+        },
+    );
+    run(
+        &mut s,
+        Command::SetPopupControl {
+            name: "rollRangeSlider1".into(),
+            value: PopupInput::Number(0.75),
+        },
+    );
+    save(&mut s);
+    run(&mut s, Command::SaveDisplayItem);
+    run(
+        &mut s,
+        Command::PasteItem {
+            text: amulet.into(),
+        },
+    );
+    run(&mut s, Command::OpenPopup(PopupKind::AddImplicit));
+    choose(&mut s, "modSelect", "");
+    save(&mut s);
+    run(&mut s, Command::SaveDisplayItem);
+    run(&mut s, Command::PasteItem { text: sword.into() });
+    run(&mut s, Command::OpenPopup(PopupKind::AddCrucible));
+    choose(&mut s, "modSelectNode1", "");
+    save(&mut s);
+    run(&mut s, Command::SaveDisplayItem);
+    // Craft's Create hands the session to the item text editor, which is closed unsaved
+    run(&mut s, Command::OpenPopup(PopupKind::Craft));
+    choose(&mut s, "rarity", "Unique");
+    save(&mut s);
+    assert_eq!(ours_popup(&mut s).kind, PopupKind::EditText);
+    run(&mut s, Command::ClosePopup);
+    run(&mut s, Command::CancelDisplayItem { if_id: None });
 
     // the item databases
     for (db, search) in [(ItemDb::Uniques, "Kaom's Heart"), (ItemDb::Rares, "")] {

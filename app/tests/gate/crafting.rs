@@ -70,10 +70,40 @@ pub(crate) fn ours_popup(s: &mut Session) -> PopupView {
         .expect("a popup is open")
 }
 
-/// A popup with Corrupt's implicit dropdowns' choices in a fixed order and the selected
+/// The part of a dropdown entry PoB's implicit sort compares first (ItemsTab.lua:3037): the
+/// text without its numbers and signs. Entries that share it are ordered by level, which the
+/// label doesn't show, so a run of them may be ordered differently by two states.
+fn tie_key(label: &str) -> String {
+    let mut key = String::new();
+    let mut depth = 0;
+    for c in label.to_lowercase().chars() {
+        match c {
+            '(' => {
+                if depth == 0 {
+                    key.push('$');
+                }
+                depth += 1;
+            }
+            ')' if depth > 0 => depth -= 1,
+            _ if depth > 0 => {}
+            '+' | '-' | '%' => {}
+            c if c.is_ascii_digit() => {
+                if !key.ends_with('$') {
+                    key.push('$');
+                }
+            }
+            c => key.push(c),
+        }
+    }
+    key
+}
+
+/// A popup with Corrupt's implicit dropdowns' tied runs in a fixed order and the selected
 /// choice as its label. PoB builds those lists from `pairs` and sorts them with a comparison
-/// that has ties (scourge mods of one level), so two states can order the tied entries
-/// differently. Every other control is compared as it is.
+/// that has ties (scourge mods of one level), so two states can order the entries of a run
+/// differently. Only the order inside a run of entries with one `tie_key` is hidden: a
+/// different order of the runs themselves still differs. Every other control is compared as it
+/// is.
 fn canonical(mut popup: serde_json::Value) -> serde_json::Value {
     use serde_json::Value;
     if let Some(controls) = popup["controls"].as_array_mut() {
@@ -82,15 +112,67 @@ fn canonical(mut popup: serde_json::Value) -> serde_json::Value {
             if !["implicit1", "implicit2", "implicit3", "implicit4"].contains(&name) {
                 continue;
             }
-            if let Some(Value::Array(mut choices)) = control.get("choices").cloned() {
+            if let Some(Value::Array(choices)) = control.get("choices").cloned() {
                 let selected = control["selected"].as_u64().unwrap_or(0) as usize;
                 control["selected"] = choices.get(selected).cloned().unwrap_or(Value::Null);
-                choices.sort_by_key(|c| c.to_string());
-                control["choices"] = Value::Array(choices);
+                let mut out: Vec<Value> = Vec::new();
+                let mut run: Vec<Value> = Vec::new();
+                let mut run_key = String::new();
+                for choice in choices {
+                    let key = tie_key(choice.as_str().unwrap_or_default());
+                    if !run.is_empty() && key != run_key {
+                        run.sort_by_key(|c| c.to_string());
+                        out.append(&mut run);
+                    }
+                    run_key = key;
+                    run.push(choice);
+                }
+                run.sort_by_key(|c| c.to_string());
+                out.append(&mut run);
+                control["choices"] = Value::Array(out);
             }
         }
     }
     popup
+}
+
+#[cfg(test)]
+mod canonical_tests {
+    use super::canonical;
+    use serde_json::{Value, json};
+
+    fn popup(choices: &[&str]) -> Value {
+        // a last entry that never moves is the selected one, so only the order is under test
+        let mut all = choices.to_vec();
+        all.push("None");
+        let selected = choices.len();
+        json!({ "controls": [{ "name": "implicit1", "selected": selected, "choices": all }] })
+    }
+
+    #[test]
+    fn a_reorder_inside_a_tied_run_is_hidden() {
+        let base = ["+5 to Life", "+10 to Life", "+3 to Mana"];
+        let tied = ["+10 to Life", "+5 to Life", "+3 to Mana"];
+        assert_eq!(canonical(popup(&base)), canonical(popup(&tied)));
+    }
+
+    #[test]
+    fn a_reorder_across_runs_differs() {
+        let base = ["+5 to Life", "+10 to Life", "+3 to Mana"];
+        let moved = ["+3 to Mana", "+5 to Life", "+10 to Life"];
+        let swapped = ["+5 to Life", "+3 to Mana", "+10 to Life"];
+        assert_ne!(canonical(popup(&base)), canonical(popup(&moved)));
+        assert_ne!(canonical(popup(&base)), canonical(popup(&swapped)));
+    }
+
+    #[test]
+    fn a_missing_or_extra_entry_differs() {
+        let base = ["+5 to Life", "+10 to Life", "+3 to Mana"];
+        assert_ne!(
+            canonical(popup(&base)),
+            canonical(popup(&["+5 to Life", "+3 to Mana"]))
+        );
+    }
 }
 
 /// Equal views; where the order of tied entries differs, equal in `canonical` form. Returns
@@ -390,7 +472,7 @@ fn popup_views_match_pob() {
 
 /// Runs `command`, which must fail with a message containing `expected`, and checks that the
 /// popup and the display item are as they were.
-fn refused(s: &mut Session, command: Command, expected: &str) {
+pub(crate) fn refused(s: &mut Session, command: Command, expected: &str) {
     let popup = s.backend.popup_view().unwrap().map(|v| json_of(&v));
     let display = s.backend.display_item_view().unwrap().map(|v| json_of(&v));
     let what = format!("{command:?}");
@@ -512,6 +594,12 @@ fn popup_session_lifecycle() {
     assert_eq!(view.kind, PopupKind::EditText);
     assert!(view.controls.iter().any(|c| c.name == "edit"));
     assert_eq!(open_popups(&s), 0);
+    // it can't be opened on its own, and the refusal leaves the adopted session alone (M5)
+    refused(
+        &mut s,
+        Command::OpenPopup(PopupKind::EditText),
+        "Craft's Create",
+    );
     s.run(Command::ClosePopup).unwrap();
     assert!(s.backend.popup_view().unwrap().is_none());
     s.run(Command::CancelDisplayItem { if_id: None }).unwrap();
@@ -1178,7 +1266,9 @@ fn anoint_job_stops(s: &mut Session) {
         s.backend.next_background(),
         Some(BackgroundTask::AnointSort)
     );
-    s.run(Command::CancelDisplayItem { if_id: None }).unwrap();
+    // the command that replaces the item ends the session and tells the window (M2)
+    let ended = s.run(Command::CancelDisplayItem { if_id: None }).unwrap();
+    assert!(ended.popup, "the window must be told its session ended");
     assert_eq!(s.backend.next_background(), None);
     // a failed step stops the job until a control is set
     s.run(Command::PasteItem {
@@ -1216,6 +1306,58 @@ fn anoint_job_stops(s: &mut Session) {
         s.backend.next_background(),
         Some(BackgroundTask::AnointSort)
     );
+    // Retry: a real failed resume drops the builder, and picking the sort that is already
+    // selected runs no PoB code, so the job must be restarted by the command itself
+    s.backend
+        .lua
+        .load(
+            "real_list_step = glue.list_step
+             glue.list_step = function(c)
+                 boom_control = c
+                 c.ListBuilder = function() error('boom', 0) end
+                 return real_list_step(c)
+             end",
+        )
+        .exec()
+        .unwrap();
+    s.run(Command::SetPopupControl {
+        name: "notableDB.search".into(),
+        value: PopupInput::Text("Life".into()),
+    })
+    .unwrap();
+    assert_eq!(
+        s.backend.next_background(),
+        Some(BackgroundTask::AnointSort)
+    );
+    assert!(
+        s.backend
+            .background_step(BackgroundTask::AnointSort, &|_| {})
+            .is_err()
+    );
+    s.backend
+        .lua
+        .load("glue.list_step = real_list_step; boom_control.ListBuilder = nil")
+        .exec()
+        .unwrap();
+    assert_eq!(
+        s.backend.next_background(),
+        None,
+        "stopped after the failure"
+    );
+    sort(s); // the same sort again: what Retry sends
+    assert_eq!(
+        s.backend.next_background(),
+        Some(BackgroundTask::AnointSort),
+        "Retry must start the sort again"
+    );
+    let mut steps = 0;
+    while s.backend.next_background().is_some() {
+        s.backend
+            .background_step(BackgroundTask::AnointSort, &|_| {})
+            .unwrap();
+        steps += 1;
+        assert!(steps < 10_000, "the sort never ends");
+    }
     s.run(Command::ClosePopup).unwrap();
     assert_eq!(open_popups(s), 0);
 }

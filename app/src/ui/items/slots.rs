@@ -114,6 +114,8 @@ impl ItemsUi {
                     }
                     self.slot_row(ui, view, &view.slots[row.slot], row.indent, out);
                 }
+                // a slot that wasn't drawn (hidden) can't take the focus now, or later
+                self.focus_slot = None;
             });
     }
 

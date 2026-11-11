@@ -993,3 +993,62 @@ fn mods_recipe_matches_pob() {
     );
     assert_eq!(open_popups(&s), 0);
 }
+
+/// PoB 2.67.2 raises in the Source dropdown's selFunc when "Prefix" or "Suffix" is picked on a
+/// pasted item (ItemsTab.lua:3458: typeless affixes). A press that raises keeps the session in
+/// whatever state PoB left it (R4): the window stays open, Prefix selected, the list wiped.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn prefix_source_raising_matches_pob() {
+    let _guard = lock();
+    let (mut s, lua) = gear_sessions("prefix-raises");
+    paste_both(&mut s, &lua, WEAPON);
+    s.run(Command::OpenPopup(PopupKind::AddModifier)).unwrap();
+    upstream_run(&lua, "act.open_popup('displayItemAddCustom')");
+    let choose = |s: &mut Session, label: &str| -> Result<(), String> {
+        let view = ours_popup(s);
+        let control = view.controls.iter().find(|c| c.name == "source").unwrap();
+        let index = control.choices.iter().position(|c| c == label).unwrap();
+        s.run(Command::SetPopupControl {
+            name: "source".into(),
+            value: PopupInput::Choice {
+                index,
+                label: label.into(),
+            },
+        })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+    };
+    let upstream_choose = |label: &str| -> Option<String> {
+        lua.globals().set("LABEL", label).unwrap();
+        let error: Option<String> = lua
+            .load(
+                "local c = main.popups[1].controls.source
+                 local i, full = entryIndex(c, LABEL)
+                 local ok, err = pcall(act.popup_set, 'source', { Choice = { index = i, label = full } })
+                 return (not ok) and tostring(err) or nil",
+            )
+            .eval()
+            .unwrap();
+        error
+    };
+    let theirs = upstream_choose("Prefix").expect("upstream should raise");
+    let ours = choose(&mut s, "Prefix").expect_err("ours should raise");
+    assert!(
+        theirs.contains("attempt to index field 'type'")
+            && ours.contains("attempt to index field 'type'"),
+        "{ours} vs {theirs}"
+    );
+    let view = check_popup(&mut s, &lua, "after the raise");
+    let source = view.controls.iter().find(|c| c.name == "source").unwrap();
+    assert_eq!(source.choices[source.selected], "Prefix");
+    assert_eq!(open_popups(&s), 0);
+    // the window still works: another source, then close
+    assert!(upstream_choose("Custom").is_none());
+    choose(&mut s, "Custom").unwrap();
+    check_popup(&mut s, &lua, "another source after the raise");
+    upstream_run(&lua, "act.popup_close()");
+    s.run(Command::ClosePopup).unwrap();
+    assert!(s.backend.popup_view().unwrap().is_none());
+    assert_eq!(open_popups(&s), 0);
+}

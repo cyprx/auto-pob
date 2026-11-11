@@ -767,12 +767,23 @@ fn relabel_pick(s: &mut Session, command: Command) -> Command {
     else {
         return command;
     };
+    // only the lists PoB builds from `pairs`
+    if name != "modSelect" && name != "modGroupSelect" {
+        return Command::SetPopupControl {
+            name,
+            value: PopupInput::Choice { index, label },
+        };
+    }
     let view = s.backend.popup_view().ok().flatten();
     let index = view
         .and_then(|v| v.controls.into_iter().find(|c| c.name == name))
         .map(|c| match c.choices.get(index) {
             Some(here) if *here == label => index,
-            _ => c.choices.iter().position(|c| *c == label).unwrap_or(index),
+            _ => {
+                let found = c.choices.iter().position(|c| *c == label).unwrap_or(index);
+                eprintln!("{name}: pick {label:?} moved from entry {index} to {found}");
+                found
+            }
         })
         .unwrap_or(index);
     Command::SetPopupControl {
@@ -905,6 +916,15 @@ mod canonical_tests {
         assert_ne!(base, canon(missing), "a missing skill");
         assert_ne!(base, canon(extra), "an extra skill");
         assert_ne!(base, canon(moved), "a skill moved between groups");
+    }
+
+    #[test]
+    fn a_missing_blank_separator_differs() {
+        let mut short = tooltip(BASE);
+        let lines = short["lines"].as_array_mut().unwrap();
+        let blank = lines.iter().position(|l| l["text"] == "").unwrap();
+        lines.remove(blank);
+        assert_ne!(canonical_tooltip(tooltip(BASE)), canonical_tooltip(short));
     }
 
     #[test]

@@ -3,7 +3,8 @@
 use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
+use std::time::Duration;
 
 use crate::pob_files::DownloadProgress;
 
@@ -239,6 +240,9 @@ pub trait Backend {
     /// Empty sections when the cell is gone or has no breakdown.
     fn breakdown_view(&mut self, cell: &CellRef) -> anyhow::Result<BreakdownView>;
     fn tree_link_view(&mut self) -> anyhow::Result<String>;
+    /// Hands back the memory the last busy stretch left behind. The loop calls it once it has
+    /// been idle for a while after work, never between a background job's steps.
+    fn release_memory(&mut self);
 }
 
 fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &dyn Fn(Event)) {
@@ -440,17 +444,37 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
 /// While the backend has background work, the loop runs one step whenever no command is
 /// waiting, so commands always go first. Background snapshots carry the last command's `seq`
 /// (0 before any), so the UI's idea of "behind" never moves backwards.
+///
+/// Once work is done and no command has come for [`RELEASE_DELAY`], the backend releases
+/// memory, once; then the loop sleeps until the next command.
 pub fn run_loop(
     backend: &mut dyn Backend,
     commands: &Receiver<(u64, Command)>,
     send: &dyn Fn(Event),
 ) {
+    run_loop_with_delay(backend, commands, send, RELEASE_DELAY);
+}
+
+/// How long the loop waits, idle after work, before it releases memory. A release takes a
+/// full Lua collection (up to about half a second after node power), so it waits for a pause
+/// rather than landing on the command that follows a job or a burst of edits.
+pub const RELEASE_DELAY: Duration = Duration::from_secs(2);
+
+fn run_loop_with_delay(
+    backend: &mut dyn Backend,
+    commands: &Receiver<(u64, Command)>,
+    send: &dyn Fn(Event),
+    release_delay: Duration,
+) {
     let mut last_seq = 0;
+    // work has run since the last release; starting the backend counts
+    let mut worked = true;
     loop {
         let first = if let Some(task) = backend.next_background() {
             match commands.try_recv() {
                 Ok(first) => first,
                 Err(TryRecvError::Empty) => {
+                    worked = true;
                     match backend.background_step(task, send) {
                         Ok(affected) => send_snapshots(backend, last_seq, affected, send),
                         Err(e) => send(Event::BackgroundFailed {
@@ -462,12 +486,23 @@ pub fn run_loop(
                 }
                 Err(TryRecvError::Disconnected) => return,
             }
+        } else if worked {
+            match commands.recv_timeout(release_delay) {
+                Ok(first) => first,
+                Err(RecvTimeoutError::Timeout) => {
+                    worked = false;
+                    backend.release_memory();
+                    continue;
+                }
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
         } else {
             match commands.recv() {
                 Ok(first) => first,
                 Err(_) => return,
             }
         };
+        worked = true;
         let mut batch = vec![first];
         while let Ok(next) = commands.try_recv() {
             batch.push(next);
@@ -596,11 +631,11 @@ impl Engine {
 mod tests {
     use std::cell::RefCell;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, mpsc};
+    use std::sync::{Arc, Mutex, mpsc};
 
     use super::*;
     use crate::engine::commands::{Command, ConfigValue};
-    use crate::engine::fake::Fake;
+    use crate::engine::fake::{Fake, Log};
 
     fn set_config() -> Command {
         Command::SetConfig {
@@ -1415,5 +1450,63 @@ mod tests {
             })
             .collect();
         assert_eq!(power, [4, 4]);
+    }
+
+    /// Runs `steps` power steps, then sends `after_last` (if any) from the last step, and
+    /// ends the loop at its first memory release. Returns the releases seen while stepping.
+    fn run_to_release(steps: usize, after_last: Option<Command>) -> (Arc<Mutex<Log>>, usize) {
+        let (mut fake, log) = Fake::new();
+        fake.background
+            .lock()
+            .unwrap()
+            .extend((0..steps).map(|_| step_affecting_power()));
+        let (tx, rx) = mpsc::channel();
+        let mut command = Some(tx.clone());
+        let step_log = log.clone();
+        let during = Arc::new(AtomicUsize::new(0));
+        let seen = during.clone();
+        let expected_previews = usize::from(after_last.is_some());
+        let mut after_last = after_last;
+        fake.on_step = Some(Box::new(move |n| {
+            seen.fetch_add(step_log.lock().unwrap().releases, Ordering::SeqCst);
+            if n == steps
+                && let (Some(tx), Some(c)) = (command.take(), after_last.take())
+            {
+                tx.send((2, c)).unwrap();
+            }
+        }));
+        let mut stop = Some(tx.clone());
+        let release_log = log.clone();
+        fake.on_release = Some(Box::new(move |_| {
+            let previews = release_log.lock().unwrap().previews.len();
+            assert_eq!(
+                previews, expected_previews,
+                "released before the command ran"
+            );
+            stop.take();
+        }));
+        tx.send((1, set_config())).unwrap();
+        drop(tx);
+        run_loop_with_delay(&mut fake, &rx, &|_| {}, Duration::from_millis(20));
+        let during = during.load(Ordering::SeqCst);
+        (log, during)
+    }
+
+    #[test]
+    fn memory_is_released_once_after_background_work() {
+        let (log, during) = run_to_release(5, None);
+        let log = log.lock().unwrap();
+        assert_eq!(log.steps, 5);
+        assert_eq!(during, 0, "released between a job's steps");
+        assert_eq!(log.releases, 1);
+    }
+
+    #[test]
+    fn command_after_the_job_delays_the_release() {
+        let (log, during) = run_to_release(3, Some(Command::PreviewNode { id: 7 }));
+        let log = log.lock().unwrap();
+        assert_eq!(during, 0, "released between a job's steps");
+        assert_eq!(log.previews, vec![7]);
+        assert_eq!(log.releases, 1);
     }
 }

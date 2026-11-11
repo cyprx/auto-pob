@@ -877,6 +877,8 @@ mod tests {
     }
 
     impl Backend for Fake {
+        fn release_memory(&mut self) {}
+
         fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
             let all = Affected {
                 build: true,

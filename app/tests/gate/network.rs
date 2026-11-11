@@ -2298,6 +2298,17 @@ fn sign_in(s: &mut NetSession, rec: &Recorder, state: Option<&str>) -> (Finished
     (ended(s, rec), link)
 }
 
+/// PoB's three OAuth ports are machine-wide: when another process holds one, wait a moment
+/// and look once more before the steps that need them free.
+fn wait_for_oauth_ports() {
+    let free =
+        || (49082..=49084).all(|port| std::net::TcpListener::bind(("127.0.0.1", port)).is_ok());
+    if !free() {
+        std::thread::sleep(Duration::from_secs(1));
+        assert!(free(), "another process holds PoB's ports 49082-49084");
+    }
+}
+
 /// Settings.xml's `<Accounts>` element.
 fn accounts(s: &NetSession) -> String {
     let xml = s.settings_xml();
@@ -2391,6 +2402,12 @@ fn oauth_flow_matches_pob() {
     let started = Instant::now();
     let web = canned_web();
     route_oauth(&web);
+    // the sign-in's own list is slow, so a fetch can be sent while it is out
+    web.route(
+        "GET",
+        API,
+        Canned::ok(net_fixture("oauth_characters.json")).delayed(Duration::from_millis(300)),
+    );
     let new_xml = std::fs::read_to_string(super::fixture_xml("new")).unwrap();
     let mut s = net_session("oauth", canned(&web), None);
     s.open_fixture("new");
@@ -2416,6 +2433,7 @@ fn oauth_flow_matches_pob() {
     }
 
     // ---- 1. Sign in: the link, with 49082 taken so PoB falls back to the next port ----
+    wait_for_oauth_ports();
     let held = std::net::TcpListener::bind(("127.0.0.1", 49082)).ok();
     run(&mut s, &rec, Command::SignIn).expect("sign in");
     let pending = s.requests().pending;
@@ -2459,6 +2477,23 @@ fn oauth_flow_matches_pob() {
     // ---- 2-3. The redirect; PoB fetches the token, then the characters ----
     let page = redirect(port, &format!("code=gatecode&state={state}"));
     assert!(page.contains("Authentication Successful"), "{page}");
+    // a fetch while the sign-in's own list is out is refused: PoB's limiter, knowing no
+    // limits yet, would hold it until 2032 and keep that time for the tab's life
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while requests_to(&web, "GET", API) == 0 {
+        net_step(&mut s, &rec);
+        assert!(
+            Instant::now() < deadline,
+            "the sign-in's list never went out"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    for realm in [Realm::Pc, Realm::Xbox] {
+        assert_eq!(
+            run(&mut s, &rec, Command::ListCharacters { realm }),
+            Err("PoB is still loading your characters".into())
+        );
+    }
     let entry = ended(&mut s, &rec);
     assert_eq!(
         (
@@ -2610,6 +2645,38 @@ fn oauth_flow_matches_pob() {
     );
     s.assert_clean("refresh");
 
+    // ---- A 401 that every good refresh meets again: PoB would refresh forever; the request
+    // ends after 2 refreshes, the tokens left as PoB has them (deviation, to spare GGG) ----
+    let gate_one = format!("{API}/GateOne");
+    web.route("GET", &gate_one, Canned::status(401, ""));
+    let refreshes = || {
+        web.requests()
+            .iter()
+            .filter(|r| r.url == TOKEN_URL && r.body.starts_with(REFRESH_GRANT.as_bytes()))
+            .count()
+    };
+    let before = refreshes();
+    run(
+        &mut s,
+        &rec,
+        import_oauth(Realm::Pc, None, "GateOne", items_part()),
+    )
+    .unwrap();
+    let entry = ended(&mut s, &rec);
+    let expired = "Your Path of Exile session expired. Please sign in again.";
+    assert_eq!(entry.error.as_deref(), Some(expired));
+    assert_eq!(refreshes() - before, 2, "refreshes in the request");
+    let view = oauth(&mut s, &rec);
+    assert_eq!(view.error.as_deref(), Some(expired));
+    assert!(view.signed_in && !view.busy, "{view:?}");
+    assert!(accounts(&s).contains(r#"lastToken="FAKE-ACCESS-2""#));
+    s.assert_clean("refresh limit");
+    web.route(
+        "GET",
+        &gate_one,
+        Canned::ok(net_fixture("oauth_character.json")),
+    );
+
     // ---- Review Focus 2: the list and the character failing, then a good retry ----
     let sony = format!("{API}/sony");
     for (reply, wanted) in [
@@ -2648,7 +2715,6 @@ fn oauth_flow_matches_pob() {
     assert_eq!(s.requests().pending.len(), 0);
     assert_eq!(web.requests().len(), before);
     assert_eq!(oauth(&mut s, &rec).realm, Realm::Pc);
-    let gate_one = format!("{API}/GateOne");
     for (reply, wanted) in [
         (
             Canned::status(500, "oops"),
@@ -2759,6 +2825,7 @@ fn oauth_flow_matches_pob() {
     );
 
     // ---- 9. Sign in, cancel, sign in again at once: the listener's port is free again ----
+    wait_for_oauth_ports();
     run(&mut s, &rec, Command::SignIn).unwrap();
     let first = link_parts(&wait_for_link(&mut s, &rec)).1;
     let id = s.requests().pending[0].id;
@@ -2784,8 +2851,9 @@ fn oauth_flow_matches_pob() {
     assert!(oauth(&mut s, &rec).signed_in);
     assert!(accounts(&s).contains(r#"lastToken="FAKE-ACCESS-1""#));
     // the cancelled listener let its port go, as the finished one did
+    // (one more second if another process took it meanwhile)
     for port in [first, link_parts(&link).1] {
-        let freed = Instant::now() + Duration::from_secs(1);
+        let freed = Instant::now() + Duration::from_secs(2);
         while std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
             assert!(Instant::now() < freed, "port {port} is still held");
             std::thread::sleep(Duration::from_millis(10));
@@ -2837,8 +2905,25 @@ fn oauth_flow_matches_pob() {
     assert!(!lines.is_empty(), "the test logger saw nothing");
     let leaked: Vec<&String> = lines.iter().filter(|l| l.contains("FAKE-")).collect();
     assert!(leaked.is_empty(), "a token reached the log: {leaked:?}");
-    let named = lines.iter().filter(|l| l.contains("GateOne")).count();
-    eprintln!("log lines naming a character: {named} of {}", lines.len());
+    // nor a character's or an account's name: PoB logs the endpoints it fails on
+    let names = [
+        "GateOne",
+        "GateTwo",
+        "gateThree",
+        "alphaGate",
+        "XboxOne",
+        "aSonyOne",
+        "GateTester",
+    ];
+    let named: Vec<&String> = lines
+        .iter()
+        .filter(|l| names.iter().any(|name| l.contains(name)))
+        .collect();
+    assert!(named.is_empty(), "a name reached the log: {named:?}");
+    assert!(
+        lines.iter().any(|l| l.contains("/character/<redacted>")),
+        "PoB's failed downloads weren't logged"
+    );
     let shown = rec.shown.borrow();
     assert!(shown.len() > 50, "only {} events", shown.len());
     assert!(

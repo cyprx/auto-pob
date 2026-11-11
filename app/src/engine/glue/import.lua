@@ -551,6 +551,13 @@ local NO_PORT = "couldn't listen on localhost ports 49082-49084 for the sign-in"
 -- error when the request changed it. `before` is `oauthErrCode` when the press began.
 local function oauth_after(tab, before, sign_in)
 	return function(req)
+		if req.expired then
+			-- the refresh limit ended the chain inside PoB's download (net.lua)
+			tab.oauthLoading = false
+			tab.oauthErrCode = glue.SESSION_EXPIRED
+			req.error = glue.SESSION_EXPIRED
+			return
+		end
 		local stuck
 		if sign_in and not req.auth_url and not tab.isAuthorized() then
 			-- the listener never started
@@ -629,6 +636,11 @@ end
 -- limiter answered at once (the view says so).
 function glue.list_characters(realm_id)
 	local tab = authorized_tab()
+	-- the sign-in's own list fetch is out: PoB's limiter, knowing no limits yet, would hold a
+	-- second one until 2032 and keep that time for the tab's life
+	if glue.net_sign_in() then
+		error("PoB is still loading your characters", 0)
+	end
 	local controls = tab.controls
 	select_realm(controls, realm_id)
 	local fetch = controls.accountRealmFetchButton

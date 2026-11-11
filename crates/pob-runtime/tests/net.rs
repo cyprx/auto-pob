@@ -669,14 +669,19 @@ fn default_config_keeps_the_classic_behaviour() {
     manager.abort(id);
 }
 
-/// PoB's `LaunchServer.lua` up to its listener (lines 1-21, verbatim), returning the port it
-/// got. Its `bind(49082) or bind(49083) or bind(49084)` needs luasocket's `nil, err` contract.
-const LAUNCH_SERVER_BIND: &str = r#"
+/// PoB's `LaunchServer.lua` up to its listener (lines 1-21), returning the port it got, with
+/// PoB's ports 49082-49084 swapped for `ports`: those are machine-wide, so the test takes free
+/// ephemeral ones instead. Its `bind(a) or bind(b) or bind(c)` needs luasocket's `nil, err`
+/// contract.
+fn launch_server_bind(ports: [u16; 3]) -> String {
+    let [a, b, c] = ports;
+    format!(
+        r#"
 local luaSocket = require("socket")
 local server = luaSocket.tcp4()
 local function bindSocket()
 	local res, err
-	res, err = server:bind("localhost", 49082) or server:bind("localhost", 49083) or server:bind("localhost", 49084)
+	res, err = server:bind("localhost", {a}) or server:bind("localhost", {b}) or server:bind("localhost", {c})
 	if not res then
 		server:close()
 	else
@@ -693,38 +698,45 @@ assert(bindSocket())
 local host, port = server:getsockname()
 server:close()
 return port
-"#;
-
-/// Holds `port` on 127.0.0.1; `None` when something else already holds it (it is held either
-/// way).
-fn hold(port: u16) -> Option<TcpListener> {
-    TcpListener::bind(("127.0.0.1", port)).ok()
+"#
+    )
 }
 
-/// PoB's three OAuth ports are machine-wide, so both cases run in one test, holding them only
-/// as long as each case needs.
+/// Three ports the system just had free.
+fn free_ports() -> [u16; 3] {
+    let listeners: Vec<TcpListener> = (0..3)
+        .map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
+        .collect();
+    let port = |i: usize| listeners[i].local_addr().unwrap().port();
+    [port(0), port(1), port(2)]
+}
+
 #[test]
 fn launch_server_falls_back_to_the_next_port() {
-    // 49082 held: PoB takes the next free one
-    let first = hold(49082);
+    // the first port held: PoB takes the next free one
+    let ports = free_ports();
+    let first = TcpListener::bind(("127.0.0.1", ports[0])).unwrap();
     let mut manager = SubscriptManager::default();
-    launch(&mut manager, LAUNCH_SERVER_BIND, &[]);
+    launch(&mut manager, &launch_server_bind(ports), &[]);
     let out = wait_outcome(&mut manager, Duration::from_secs(3)).expect("no outcome");
     drop(first);
-    let values = out.result.expect("bind failed with 49082 held");
+    let values = out.result.expect("bind failed with the first port held");
     let port = match values[0] {
         NativeValue::Integer(p) => p,
         NativeValue::Number(p) => p as i64,
         ref other => panic!("port: {other:?}"),
     };
-    assert!(port == 49083 || port == 49084, "port {port}");
+    assert_eq!(port, i64::from(ports[1]));
 
     // all three held: a clean script error, no panic and no hang. The `or` chain keeps one
     // value, so `err` is nil and LuaJIT's `assert(nil, nil)` raises nil itself
-
-    let held: Vec<_> = (49082..=49084).map(hold).collect();
+    let ports = free_ports();
+    let held: Vec<TcpListener> = ports
+        .iter()
+        .map(|port| TcpListener::bind(("127.0.0.1", *port)).unwrap())
+        .collect();
     let mut manager = SubscriptManager::default();
-    launch(&mut manager, LAUNCH_SERVER_BIND, &[]);
+    launch(&mut manager, &launch_server_bind(ports), &[]);
     let out = wait_outcome(&mut manager, Duration::from_secs(3)).expect("no outcome");
     drop(held);
     let error = out.result.expect_err("bound with every port held");

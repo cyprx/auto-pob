@@ -177,11 +177,27 @@ local function attach(req, id)
 	by_sub[id] = req
 end
 
+-- PoB refreshes the token again after every 401 that follows a good refresh (PoEAPI.lua:54
+-- against :164), so a 401 the refresh can't cure would loop forever. A request makes at most
+-- this many refreshes; the next ends it with SESSION_EXPIRED, the tokens left as PoB has them.
+-- A deviation from PoB, to spare GGG's API.
+local REFRESH_LIMIT = 2
+local TOKEN_URL = "https://www.pathofexile.com/oauth/token"
+glue.SESSION_EXPIRED = "Your Path of Exile session expired. Please sign in again."
+
 -- Runs `fn` with launches recorded into `req`, the native gate open when `open`.
 local function in_scope(req, open, fn)
 	local saved = LaunchSubScript
-	LaunchSubScript = function(...)
-		local id = native_launch(...)
+	LaunchSubScript = function(script, blocking, nonblocking, url, header, body, ...)
+		if url == TOKEN_URL and type(body) == "string" and body:match("^client_id=pob&grant_type=refresh_token") then
+			req.refreshes = (req.refreshes or 0) + 1
+			if req.refreshes > REFRESH_LIMIT then
+				req.expired = true
+				req.error = glue.SESSION_EXPIRED
+				return nil
+			end
+		end
+		local id = native_launch(script, blocking, nonblocking, url, header, body, ...)
 		if id then
 			attach(req, id)
 		end

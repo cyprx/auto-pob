@@ -1,6 +1,7 @@
 use super::list::delete_prompt;
 use super::slots::{SlotRow, SlotSection, rows};
 use super::*;
+use crate::engine::PopupKind;
 use crate::engine::views::{
     DisplayItemView, DropList, EquippedIn, ItemEntry, ItemSetEntry, ItemText, ItemTooltip,
     ItemTooltipLine, ModLineList, ModLineRef, RangeLineView, SlotKind, SlotView,
@@ -1529,5 +1530,283 @@ fn delete_all_and_unused_follow_the_shown_list() {
     assert!(
         !h.ui.has_dialog(),
         "Delete all is disabled for an empty list"
+    );
+}
+
+// ---- crafting sections (Task 8) ----
+
+fn labels(names: &[&str]) -> Vec<String> {
+    names.iter().map(|n| (*n).to_owned()).collect()
+}
+
+fn crafted_view() -> DisplayItemView {
+    use crate::engine::views::{AffixView, ClusterView, CustomModView};
+    DisplayItemView {
+        popups: vec![
+            PopupKind::Craft,
+            PopupKind::Enchant { second: false },
+            PopupKind::Anoint { slot: 1 },
+            PopupKind::AddModifier,
+            PopupKind::EditText,
+        ],
+        affixes: vec![
+            AffixView {
+                slot: 0,
+                label: "Prefix:".into(),
+                list: DropList {
+                    labels: labels(&["None", "^7+# to Life", "^xFF0000+# to Mana"]),
+                    selected: 0,
+                    enabled: true,
+                },
+                range: Some(0.25),
+                tiers: Some(4),
+            },
+            AffixView {
+                slot: 1,
+                label: "Suffix:".into(),
+                list: DropList {
+                    labels: labels(&["None", "Of Haste"]),
+                    selected: 1,
+                    enabled: true,
+                },
+                range: None,
+                tiers: None,
+            },
+        ],
+        crafting_sort: Some(DropList {
+            labels: labels(&["By tier", "By level", "Alphabetical"]),
+            selected: 0,
+            enabled: true,
+        }),
+        cluster: Some(ClusterView {
+            skill: DropList {
+                labels: labels(&["Fire Damage", "Cold Damage"]),
+                selected: 0,
+                enabled: true,
+            },
+            count: 8,
+            min: 8,
+            max: 12,
+        }),
+        custom_mods: vec![
+            CustomModView {
+                kind: "Crafted".into(),
+                line: "+10 to Life".into(),
+            },
+            CustomModView {
+                kind: "Custom".into(),
+                line: "+1 to Strength".into(),
+            },
+        ],
+        ..display_view()
+    }
+}
+
+fn has_rect(h: &Harness, key: &str) -> bool {
+    h.ui.display.rects.map.contains_key(key) || h.ui.display.crafting.rects.map.contains_key(key)
+}
+
+impl Harness {
+    /// Forgets where widgets were, so only what the next frame draws has a rect.
+    fn redraw(&mut self) {
+        self.ui.display.rects.map.clear();
+        self.ui.display.crafting.rects.map.clear();
+        self.frame(vec![]);
+    }
+
+    /// The resizable panels reach their width over a few frames.
+    fn settle(&mut self) {
+        for _ in 0..4 {
+            self.frame(vec![]);
+        }
+    }
+
+    /// Presses the slider's middle, drags to `fraction` of its width and lets go.
+    fn drag_slider(&mut self, key: &str, fraction: f32) -> Vec<Command> {
+        let rect = self.ui.rect(key);
+        let y = rect.center().y;
+        let at = |t: f32| Pos2::new(rect.min.x + rect.width() * t, y);
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let mut sent = Vec::new();
+        sent.extend(self.frame(vec![Event::PointerMoved(at(0.02))]).commands);
+        sent.extend(self.frame(vec![button(at(0.02), true)]).commands);
+        sent.extend(self.frame(vec![Event::PointerMoved(at(fraction))]).commands);
+        sent.extend(self.frame(vec![Event::PointerMoved(at(fraction))]).commands);
+        assert!(sent.is_empty(), "nothing is sent while dragging: {sent:?}");
+        sent.extend(self.frame(vec![button(at(fraction), false)]).commands);
+        sent.extend(self.frame(vec![]).commands);
+        sent
+    }
+}
+
+#[test]
+fn openers_follow_view_popups() {
+    let mut h = Harness::new(sample());
+    h.show_display(crafted_view());
+    h.settle();
+    assert!(has_rect(&h, "open_Change Enchantment..."));
+    assert!(has_rect(&h, "open_Anoint 2..."));
+    assert!(has_rect(&h, "open_Add modifier..."));
+    assert!(!has_rect(&h, "open_Corrupt..."), "PoB doesn't offer it");
+    assert!(!has_rect(&h, "open_Anoint..."), "slot 0 isn't offered");
+    assert_eq!(
+        debug(&h.click("open_Anoint 2...").commands),
+        ["OpenPopup(Anoint { slot: 1 })"]
+    );
+    assert_eq!(
+        debug(&h.click("open_Add modifier...").commands),
+        ["OpenPopup(AddModifier)"]
+    );
+    // the offer changes with the view
+    let mut view = crafted_view();
+    view.popups = vec![
+        PopupKind::Corrupt,
+        PopupKind::AddImplicit,
+        PopupKind::AddCrucible,
+    ];
+    h.show_display(view);
+    h.redraw();
+    assert!(!has_rect(&h, "open_Anoint 2..."));
+    for label in ["Corrupt...", "Add Implicit...", "Add Crucible mod..."] {
+        assert!(has_rect(&h, &format!("open_{label}")), "{label}");
+    }
+    assert_eq!(
+        debug(&h.click("open_Corrupt...").commands),
+        ["OpenPopup(Corrupt)"]
+    );
+}
+
+#[test]
+fn craft_button_only_without_display_item() {
+    let mut h = Harness::new(sample());
+    h.settle();
+    assert!(has_rect(&h, "craft"), "nothing is displayed");
+    assert_eq!(debug(&h.click("craft").commands), ["OpenPopup(Craft)"]);
+    // Craft is in the view's list, but the item panel doesn't draw it
+    h.show_display(crafted_view());
+    h.settle();
+    h.redraw();
+    assert!(!has_rect(&h, "craft"));
+    assert!(!has_rect(&h, "open_Craft item..."));
+}
+
+#[test]
+fn affix_pick_sends_set_affix_with_label() {
+    let mut h = Harness::new(sample());
+    h.show_display(crafted_view());
+    h.settle();
+    h.click("affix_0");
+    h.frame(vec![]);
+    let sent = h.click("affix_0_2").commands;
+    assert_eq!(
+        debug(&sent),
+        ["SetAffix { slot: 0, index: 2, label: \"^xFF0000+# to Mana\" }"]
+    );
+    // the other affix row is its own slot
+    h.click("affix_1");
+    h.frame(vec![]);
+    let sent = h.click("affix_1_0").commands;
+    assert_eq!(
+        debug(&sent),
+        ["SetAffix { slot: 1, index: 0, label: \"None\" }"]
+    );
+}
+
+#[test]
+fn modifier_sorting_sends_its_index() {
+    let mut h = Harness::new(sample());
+    h.show_display(crafted_view());
+    h.settle();
+    h.click("crafting_sort");
+    h.frame(vec![]);
+    assert_eq!(
+        debug(&h.click("crafting_sort_2").commands),
+        ["SetCraftingSort { index: 2 }"]
+    );
+}
+
+#[test]
+fn affix_slider_sends_on_release() {
+    let mut h = Harness::new(sample());
+    h.show_display(crafted_view());
+    h.settle();
+    let sent = h.drag_slider("affix_range_0", 0.9);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    let Command::SetAffixRange { slot, value } = &sent[0] else {
+        panic!("{sent:?}");
+    };
+    assert_eq!(*slot, 0);
+    assert!(*value > 0.7, "{value}");
+    assert!(!has_rect(&h, "affix_range_1"), "slot 1 has no slider");
+}
+
+#[test]
+fn cluster_count_slider_sends_whole_count() {
+    let mut h = Harness::new(sample());
+    h.show_display(crafted_view());
+    h.settle();
+    let sent = h.drag_slider("cluster_count", 0.5);
+    assert_eq!(debug(&sent), ["SetClusterNodeCount { count: 10 }"]);
+    // the skill dropdown is its own command
+    h.click("cluster_skill");
+    h.frame(vec![]);
+    assert_eq!(
+        debug(&h.click("cluster_skill_1").commands),
+        ["SetClusterSkill { index: 1 }"]
+    );
+}
+
+#[test]
+fn remove_custom_mod_sends_index() {
+    let mut h = Harness::new(sample());
+    h.show_display(crafted_view());
+    h.settle();
+    assert_eq!(
+        debug(&h.click("remove_1").commands),
+        ["RemoveCustomMod { index: 1 }"]
+    );
+    assert_eq!(
+        debug(&h.click("remove_0").commands),
+        ["RemoveCustomMod { index: 0 }"]
+    );
+}
+
+#[test]
+fn crafting_sections_show_only_what_the_view_has() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    for key in [
+        "affix_0",
+        "crafting_sort",
+        "cluster_skill",
+        "cluster_count",
+        "remove_0",
+    ] {
+        assert!(!has_rect(&h, key), "{key}");
+    }
+}
+
+#[test]
+fn hovering_an_affix_entry_asks_for_its_tooltip_after_100ms() {
+    let mut h = Harness::new(sample());
+    h.show_display(crafted_view());
+    h.settle();
+    h.step = 0.06;
+    h.click("affix_0");
+    h.frame(vec![]);
+    let pos = h.ui.rect("affix_0_1").center();
+    let mut queries = h.frame(vec![Event::PointerMoved(pos)]).queries;
+    assert!(queries.is_empty(), "too early");
+    for _ in 0..3 {
+        queries.extend(h.frame(vec![]).queries);
+    }
+    assert_eq!(
+        debug(&queries),
+        ["ControlTooltip(Affix { slot: 0, index: Some(1) })"]
     );
 }

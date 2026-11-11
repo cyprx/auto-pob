@@ -1,6 +1,7 @@
 //! The Items tab: PoB's equipment slots, item list and item sets. It takes engine snapshots
 //! and returns commands; it knows nothing else about PoB.
 
+pub mod crafting;
 pub mod display;
 pub mod list;
 pub mod sets;
@@ -177,6 +178,7 @@ impl ItemsUi {
                 }
                 self.check_orphan();
             }
+            Snapshot::ControlTooltip(_) => self.display.crafting.on_snapshot(snapshot),
             Snapshot::ItemTooltip(t) => {
                 // only the latest question is answered for; an earlier one is stale
                 if self.tooltip_asked.as_ref() == Some(&t.query) {
@@ -251,8 +253,11 @@ impl ItemsUi {
                 Some(d) => out
                     .commands
                     .extend(display::show(ui, &d, &mut self.display, busy)),
-                None => display::show_empty(ui, &mut self.display),
+                None => out
+                    .commands
+                    .extend(display::show_empty(ui, &mut self.display)),
             });
+        out.queries.extend(self.display.crafting.take_queries());
         egui::CentralPanel::default().show(ui, |ui| self.item_list(ui, &view, &mut out));
 
         let ctx = ui.ctx().clone();
@@ -316,6 +321,7 @@ impl ItemsUi {
             .map
             .get(key)
             .or_else(|| self.display.rects.map.get(key))
+            .or_else(|| self.display.crafting.rects.map.get(key))
             .unwrap_or_else(|| panic!("no rect {key}; have {:?}", self.rects.map.keys()))
     }
 }

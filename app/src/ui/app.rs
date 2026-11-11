@@ -13,6 +13,7 @@ use crate::ui::calcs::{CalcsOutput, CalcsUi};
 use crate::ui::config::ConfigUi;
 use crate::ui::items::{ItemsOutput, ItemsUi};
 use crate::ui::notes::NotesUi;
+use crate::ui::popup::{self, PopupWindow};
 use crate::ui::skills::{SkillsOutput, SkillsUi};
 use crate::ui::tree::{TreeOutput, TreeTab};
 use crate::ui::unsaved::{Pending, PromptChoice, Resolution, needs_prompt, resolve};
@@ -74,6 +75,10 @@ pub struct AutoPobApp {
     calcs: CalcsUi,
     skills: SkillsUi,
     items: ItemsUi,
+    /// The crafting popup window, whichever tab opened it
+    popup: PopupWindow,
+    /// The tab that opened the popup: leaving it closes the window
+    popup_tab: Option<BuildTab>,
     /// The seq of the raw item text last sent, to keep its window open on an error
     text_seq: Option<u64>,
     sidebar: sidebar::SidebarState,
@@ -122,6 +127,8 @@ impl AutoPobApp {
             calcs: CalcsUi::default(),
             skills: SkillsUi::default(),
             items: ItemsUi::default(),
+            popup: PopupWindow::default(),
+            popup_tab: None,
             text_seq: None,
             sidebar: sidebar::SidebarState::default(),
             notes: NotesUi::default(),
@@ -148,6 +155,11 @@ impl AutoPobApp {
 
     /// Sends a command whose snapshots the UI waits for.
     fn send(&mut self, command: Command) -> u64 {
+        if matches!(command, Command::OpenPopup(_)) {
+            // a late edit would end the new session (R4), so every pending one goes first
+            self.flush_edits();
+            self.popup_tab = Some(self.tab);
+        }
         #[cfg(test)]
         self.sent_full.push(format!("{command:?}"));
         #[cfg(test)]
@@ -159,7 +171,11 @@ impl AutoPobApp {
                 .to_owned(),
         );
         let is_notes = matches!(command, Command::SetNotes { .. });
+        let is_close = matches!(command, Command::ClosePopup);
         let seq = self.engine.send(command);
+        if is_close {
+            self.popup.close_sent(seq);
+        }
         self.last_sent = seq;
         if is_notes {
             self.notes.sent(seq);
@@ -212,6 +228,8 @@ impl AutoPobApp {
                     self.calcs.reset();
                     self.skills.reset();
                     self.items.reset();
+                    self.popup.reset();
+                    self.popup_tab = None;
                     self.sidebar = sidebar::SidebarState::default();
                     self.notes.reset();
                 }
@@ -239,9 +257,14 @@ impl AutoPobApp {
                     | Snapshot::ItemTooltip(_)
                     | Snapshot::ItemText(_) => self.items.on_snapshot_at(&snapshot, seq),
                     Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
-                    // the popup window arrives with the crafting UI, the database panel with
-                    // Task 9
-                    Snapshot::Popup(_) | Snapshot::ControlTooltip(_) | Snapshot::ItemDb(_) => {}
+                    Snapshot::Popup(_) => self.popup.on_snapshot_at(&snapshot, seq),
+                    // the popup window and the display panel each keep the answers to their own
+                    // questions; the database panel comes with Task 9
+                    Snapshot::ControlTooltip(_) => {
+                        self.popup.on_snapshot_at(&snapshot, seq);
+                        self.items.on_snapshot_at(&snapshot, seq);
+                    }
+                    Snapshot::ItemDb(_) => {}
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
                     Snapshot::NodePower(_) | Snapshot::PowerReport(_)
@@ -261,13 +284,21 @@ impl AutoPobApp {
                 task: BackgroundTask::GemDps,
                 ..
             } => self.skills.on_gem_failed(),
-            // the Anoint window and the item database panel show their own progress (Tasks 8, 9)
             Event::Progress {
-                task: BackgroundTask::AnointSort | BackgroundTask::ItemDb,
+                task: BackgroundTask::AnointSort,
+                percent,
+            } => self.popup.on_progress(percent),
+            Event::BackgroundFailed {
+                task: BackgroundTask::AnointSort,
+                message,
+            } => self.popup.on_failed(message),
+            // the item database panel shows its own progress (Task 9)
+            Event::Progress {
+                task: BackgroundTask::ItemDb,
                 ..
             }
             | Event::BackgroundFailed {
-                task: BackgroundTask::AnointSort | BackgroundTask::ItemDb,
+                task: BackgroundTask::ItemDb,
                 ..
             } => {}
             Event::Progress { percent, .. } => self.tree.on_progress(percent),
@@ -285,6 +316,8 @@ impl AutoPobApp {
     }
 
     fn on_error(&mut self, seq: u64, message: String) {
+        // the window stays open for another try (R4)
+        self.popup.on_error();
         if self.text_seq == Some(seq) {
             self.text_seq = None;
             // the raw-text window stays open for another try
@@ -349,6 +382,9 @@ impl AutoPobApp {
             self.send(command);
         }
         for command in self.items.flush() {
+            self.send(command);
+        }
+        if let Some(command) = self.popup.flush() {
             self.send(command);
         }
     }
@@ -579,7 +615,8 @@ impl AutoPobApp {
             || self.import.is_some()
             || self.tree.has_dialog()
             || self.skills.has_dialog()
-            || self.items.has_dialog();
+            || self.items.has_dialog()
+            || self.popup.is_open();
         // a focused button or row doesn't take Ctrl+Z from the tab
         let typing = ui.ctx().text_edit_focused();
         let mut action = None;
@@ -688,6 +725,25 @@ impl AutoPobApp {
                 self.send(command);
             }
             self.items.close_dialogs();
+        }
+        // leaving the tab that opened the window ends its session
+        if self.popup.is_open() && self.popup_tab != Some(self.tab) {
+            for command in self.popup.flush().into_iter().chain(self.popup.close()) {
+                self.send(command);
+            }
+        }
+        let popup_out = if self.popup.is_open() {
+            let now = ui.input(|i| i.time);
+            self.popup.show(ui.ctx(), now, behind)
+        } else {
+            popup::PopupOutput::default()
+        };
+        for command in popup_out.commands {
+            self.send(command);
+        }
+        // questions never leave the app waiting
+        for query in popup_out.queries {
+            self.engine.send(query);
         }
         for command in items_out.commands {
             let is_text = matches!(command, Command::SetDisplayItemText { .. });
@@ -3077,6 +3133,203 @@ mod tests {
         assert_eq!(
             sent_since(&app, before),
             ["SetNotes { text: \"my notes\" }", "Save"]
+        );
+    }
+
+    // ---- the crafting popup window ------------------------------------------------------
+
+    fn corrupt_display() -> crate::engine::DisplayItemView {
+        crate::engine::DisplayItemView {
+            popups: vec![crate::engine::PopupKind::Corrupt],
+            ..display_with_quality()
+        }
+    }
+
+    fn popup_view(kind: crate::engine::PopupKind) -> crate::engine::PopupView {
+        crate::engine::PopupView {
+            kind,
+            title: "Corrupt Item".into(),
+            controls: vec![],
+        }
+    }
+
+    /// The items tab with the display item offering "Corrupt...", and the popup open as the
+    /// engine would report it after the button was pressed.
+    fn popup_app() -> (AutoPobApp, egui::Context) {
+        let (mut app, ctx) = items_app();
+        app.on_event(Event::Snapshot {
+            seq: 91,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(corrupt_display()))),
+        });
+        for _ in 0..4 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        click_item_key(&mut app, &ctx, "open_Corrupt...");
+        assert_eq!(app.sent_log.last().map(String::as_str), Some("OpenPopup"));
+        app.on_event(Event::Snapshot {
+            seq: 92,
+            snapshot: Snapshot::Popup(Some(Arc::new(popup_view(
+                crate::engine::PopupKind::Corrupt,
+            )))),
+        });
+        frame(&mut app, &ctx, vec![]);
+        (app, ctx)
+    }
+
+    #[test]
+    fn popup_window_closes_on_tab_leave() {
+        let (mut app, ctx) = popup_app();
+        assert!(app.popup.is_open());
+        assert_eq!(app.popup_tab, Some(BuildTab::Items));
+        let before = app.sent_full.len();
+        app.tab = BuildTab::Config;
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(sent_since(&app, before), ["ClosePopup"]);
+        assert!(!app.popup.is_open());
+        // a view still on its way from before the close doesn't bring it back
+        app.on_event(Event::Snapshot {
+            seq: app.last_sent,
+            snapshot: Snapshot::Popup(Some(Arc::new(popup_view(
+                crate::engine::PopupKind::Corrupt,
+            )))),
+        });
+        assert!(!app.popup.is_open());
+    }
+
+    #[test]
+    fn popup_window_closes_on_engine_restart() {
+        let (mut app, _ctx) = popup_app();
+        assert!(app.popup.is_open());
+        app.restart();
+        assert!(!app.popup.is_open());
+        assert_eq!(app.popup_tab, None);
+    }
+
+    #[test]
+    fn popup_window_resets_for_another_build() {
+        let (mut app, ctx) = popup_app();
+        app.entering = Some(100);
+        app.on_event(Event::Snapshot {
+            seq: 100,
+            snapshot: Snapshot::Items(Arc::new(crate::ui::items::tests::sample())),
+        });
+        assert!(!app.popup.is_open());
+        frame(&mut app, &ctx, vec![]);
+    }
+
+    #[test]
+    fn open_popup_flushes_pending_edits_first() {
+        let (mut app, ctx) = items_app();
+        app.stats = Some(Arc::new(crate::engine::views::StatsView {
+            main_skill: crate::engine::views::MainSkillSelector {
+                stages: Some("1".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
+        app.on_event(Event::Snapshot {
+            seq: 91,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(corrupt_display()))),
+        });
+        for _ in 0..4 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        let stages: egui::Rect = ctx
+            .data(|d| d.get_temp(egui::Id::NULL.with(("sidebar_rect", "stages".to_owned()))))
+            .expect("the stages box is drawn");
+        let press = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(stages.center())],
+            vec![press(stages.center(), true)],
+            vec![press(stages.center(), false)],
+            vec![egui::Event::Text("2".into())],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        assert!(app.sidebar.has_pending());
+        // whatever opens the window (the button, the tree's right click), the box still holds
+        // its focus and its text when the command goes out
+        let before = app.sent_full.len();
+        app.send(Command::OpenPopup(crate::engine::PopupKind::Corrupt));
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(
+            sent_since(&app, before),
+            [
+                "SetMainSkillCount { control: Stages, text: \"12\" }",
+                "OpenPopup(Corrupt)"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_open_popup_blocks_shortcuts_and_the_tab_behind() {
+        let (mut app, ctx) = popup_app();
+        let before = app.sent_full.len();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::S, egui::Modifiers::COMMAND),
+        );
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Z, egui::Modifiers::COMMAND),
+        );
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        // a click on the panel behind the window would end the session
+        let pos = app.items.rect("cancel").center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        assert!(app.popup.is_open());
+    }
+
+    #[test]
+    fn a_popup_error_is_a_notice_and_keeps_the_window() {
+        let (mut app, ctx) = popup_app();
+        app.on_event(Event::Error {
+            seq: 93,
+            message: "the list changed; pick again".into(),
+        });
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.notices, ["the list changed; pick again"]);
+        assert!(app.popup.is_open());
+    }
+
+    #[test]
+    fn anoint_sort_events_reach_the_popup() {
+        let (mut app, _ctx) = popup_app();
+        app.on_event(Event::Progress {
+            task: BackgroundTask::AnointSort,
+            percent: 55,
+        });
+        assert_eq!(app.popup.sort_line(), (Some(55), None));
+        app.on_event(Event::BackgroundFailed {
+            task: BackgroundTask::AnointSort,
+            message: "boom".into(),
+        });
+        assert_eq!(app.popup.sort_line(), (None, Some("boom")));
+        assert!(
+            app.notices.is_empty(),
+            "the window shows it: {:?}",
+            app.notices
         );
     }
 }

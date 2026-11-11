@@ -1,5 +1,6 @@
 //! The display panel: PoB's editors for the item being edited, and its tooltip.
 
+use super::crafting::{self, CraftingState};
 use super::text_window::{self, Outcome, TextWindow};
 use crate::engine::views::{DisplayItemView, DropList};
 use crate::engine::{Command, SocketColour};
@@ -32,6 +33,7 @@ pub struct DisplayState {
     /// The window's text went to the engine; the next view closes it
     pub(super) submitted: Option<u64>,
     pub(super) rects: Rects,
+    pub(super) crafting: CraftingState,
 }
 
 impl DisplayState {
@@ -56,6 +58,7 @@ impl DisplayState {
     /// A new view of the display item arrived.
     pub(super) fn on_view(&mut self) {
         self.slider = None;
+        self.crafting.on_view();
     }
 
     /// There is no item (any more) to edit.
@@ -63,6 +66,7 @@ impl DisplayState {
         self.discard_pending();
         self.slider = None;
         self.range_line = 0;
+        self.crafting.on_gone();
     }
 
     /// The raw-text window, drawn whether or not an item is displayed.
@@ -119,13 +123,15 @@ fn colour(name: &str) -> Option<SocketColour> {
 }
 
 /// The buttons when nothing is displayed.
-pub fn show_empty(ui: &mut egui::Ui, state: &mut DisplayState) {
+pub fn show_empty(ui: &mut egui::Ui, state: &mut DisplayState) -> Vec<Command> {
     // PoB's popup is modal: nothing else on the panel works while the window is open
     let enabled = state.text_window.is_none();
-    ui.add_enabled_ui(enabled, |ui| show_empty_inner(ui, state));
+    ui.add_enabled_ui(enabled, |ui| show_empty_inner(ui, state))
+        .inner
 }
 
-fn show_empty_inner(ui: &mut egui::Ui, state: &mut DisplayState) {
+fn show_empty_inner(ui: &mut egui::Ui, state: &mut DisplayState) -> Vec<Command> {
+    let mut out = Vec::new();
     ui.horizontal(|ui| {
         let create = ui.button("Create custom\u{2026}");
         state.rects.note(&create, || "create".into());
@@ -133,8 +139,10 @@ fn show_empty_inner(ui: &mut egui::Ui, state: &mut DisplayState) {
             state.text_window = Some(TextWindow::create());
             state.submitted = None;
         }
+        out.extend(crafting::craft_button(ui, &mut state.crafting));
     });
     ui.weak("Paste an item (Ctrl+V) or double-click one in the list.");
+    out
 }
 
 /// Draws the panel for the item; returns the commands.
@@ -385,6 +393,8 @@ fn panel(
             }
         });
     }
+
+    out.extend(crafting::show(ui, view, &mut state.crafting, busy));
 
     ui.separator();
     egui::ScrollArea::vertical()

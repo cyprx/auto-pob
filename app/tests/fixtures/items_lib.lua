@@ -914,3 +914,163 @@ function checkpoint(layout)
 	table.insert(actions, { check = { items = itemsDump(), jewels = jewels, sidebar = sidebar_lines(), display = displayDump(), main_group = build.mainSocketGroup, popup = popupDump and popupDump() or nil,
 		affix_tooltips = affixTooltips(), layout = layout and layoutDigest() or nil } })
 end
+
+-- ---- The item databases ----
+-- Written against PoB's own ItemDBControl: its dropdowns are set with SetSel and its search box
+-- with SetText, then the control's real Draw runs until its list builder has ended. Nothing
+-- here may call our glue.
+
+local dbFields = { "slot", "kind", "league", "requirement", "obtainable", "sort", "search_mode" }
+local dbControlNames = { slot = "slot", kind = "type", league = "league", requirement = "requirement",
+	obtainable = "obtainable", sort = "sort", search_mode = "searchMode" }
+local viewPort = { x = 0, y = 0, width = 1920, height = 1080 }
+
+local function dbControl(db)
+	local c = tab().controls[db == "Uniques" and "uniqueDB" or "rareDB"]
+	assert(c, "no database " .. tostring(db))
+	return c
+end
+
+-- PoB's first frame loads both databases here: GetTime is 0, so its coroutine never yields
+local function dbLoaded()
+	for _ = 1, 50 do
+		if not main.uniqueDB.loading and not main.rareDB.loading then return end
+		frame()
+	end
+	error("the databases did not load")
+end
+
+local function plain(text)
+	return (tostring(text or ""):gsub("%^x%x%x%x%x%x%x", ""):gsub("%^%d", ""))
+end
+
+-- Draw's own step once a database has loaded: the leagues and types the filters list
+local function dbPrepared(db)
+	dbLoaded()
+	local c = dbControl(db)
+	if not c.leaguesAndTypesLoaded then c:LoadLeaguesAndTypes() end
+	return c
+end
+
+-- The 0-based index of the entry of a database dropdown with this label (colour codes removed)
+function dbIndex(db, field, label)
+	local drop = dbPrepared(db).controls[dbControlNames[field]]
+	for i, entry in ipairs(drop.list) do
+		if plain(type(entry) == "table" and entry.label or entry) == label then return i - 1 end
+	end
+	error("no " .. field .. " entry " .. label)
+end
+
+-- Sets every control of the panel: a field the query leaves out is reset
+local function dbSet(db, query)
+	local c = dbPrepared(db)
+	for _, field in ipairs(dbFields) do
+		local drop = c.controls[dbControlNames[field]]
+		if drop then
+			local want = query[field] or 0
+			if type(want) == "string" then want = dbIndex(db, field, want) end
+			assert(want >= 0 and want < #drop.list, field .. " is out of range")
+			drop:SetSel(want + 1)
+		else
+			assert((query[field] or 0) == 0, db .. " has no " .. field)
+		end
+	end
+	c.controls.search:SetText(query.search or "", true)
+end
+
+-- Draws the list control until PoB's list builder has ended. A stat sort finishes in one Draw
+-- here: the builder yields only after 50 ms of GetTime, which is 0.
+local function dbDrain(db)
+	local c = dbControl(db)
+	-- the control's height reads the tab's `maxY`, which the tab's own Draw sets (ItemsTab.lua:1447)
+	-- to the bottom of its view port; the tab is never drawn here
+	tab().maxY = tab().maxY or viewPort.y + viewPort.height
+	local draws = 0
+	repeat
+		c:Draw(viewPort)
+		draws = draws + 1
+		assert(draws < 100000, "the list builder did not end")
+	until c.listBuilder == nil
+	return c, draws
+end
+
+-- The panel as plain tables, in the shape of `ItemDbView`, after the query's list is built
+function dbDump(db, query)
+	if query then dbSet(db, query) end
+	local c, draws = dbDrain(db)
+	local function drop(d)
+		local labels = {}
+		for i, entry in ipairs(d.list) do labels[i] = type(entry) == "table" and entry.label or entry end
+		return { labels = labels, selected = d.selIndex - 1, enabled = d:IsEnabled() and true or false }
+	end
+	local stat = c.sortDetail ~= nil and c.sortDetail.stat ~= nil
+	local rows = {}
+	for i, item in ipairs(c.list) do
+		local power = stat and item.measuredPower or nil
+		if power and (power == math.huge or power == -math.huge or power ~= power) then power = nil end
+		rows[i] = { name = item.name, label = c:GetRowValue(1, i, item), base = item.baseName or "", sort_value = power }
+	end
+	local k = c.controls
+	return {
+		db = db, loading = false, sorting = false,
+		slot = drop(k.slot), kind = drop(k.type),
+		league = k.league and drop(k.league) or nil, requirement = k.requirement and drop(k.requirement) or nil,
+		obtainable = k.obtainable and drop(k.obtainable) or nil, sort = k.sort and drop(k.sort) or nil,
+		search = k.search.buf, search_mode = drop(k.searchMode),
+		rows = rows, note = plain(c.defaultText), draws = draws,
+	}
+end
+
+-- Hovering a row: the control's own tooltip hook on a fresh Tooltip
+function dbTooltip(db, name)
+	dbLoaded()
+	local c = dbControl(db)
+	local item = c.db.list[name]
+	if not item then return nil end
+	local tt = new("Tooltip")
+	c:AddValueTooltip(tt, 1, item)
+	return tooltipDump(tt)
+end
+
+-- Sets the panel's filters, as typing into it does, and records the command
+function act.db_open(db, query)
+	dbSet(db, query)
+	local cmd = { cmd = "SetItemDb", db = db, search = query.search or "" }
+	for _, field in ipairs(dbFields) do
+		local want = query[field] or 0
+		if type(want) == "string" then want = dbIndex(db, field, want) end
+		cmd[field] = want
+	end
+	record(cmd)
+	dbDrain(db)
+end
+
+-- The row's position in the shown list, or 1
+local function dbRow(db, name)
+	dbDrain(db)
+	local c = dbControl(db)
+	local item = c.db.list[name]
+	assert(item, "no database item " .. name)
+	for i, listed in ipairs(c.list) do
+		if listed == item then return c, item, i end
+	end
+	return c, item, 1
+end
+
+-- The double click (ItemDBControl.lua:359-366)
+function act.db_view(db, name)
+	local c, item, index = dbRow(db, name)
+	c:OnSelClick(index, item, true)
+	record({ cmd = "ViewDbItem", db = db, name = name })
+end
+
+-- Ctrl+click: the key state is swapped for the call, as the Ctrl+V and Copy hooks are
+function act.db_add(db, name)
+	local c, item, index = dbRow(db, name)
+	local saved = IsKeyDown
+	IsKeyDown = function(key) return key == "CTRL" end
+	local ok, err = pcall(c.OnSelClick, c, index, item, false)
+	IsKeyDown = saved
+	assert(ok, err)
+	record({ cmd = "AddDbItem", db = db, name = name })
+end

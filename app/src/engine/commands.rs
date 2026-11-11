@@ -530,6 +530,22 @@ pub enum Command {
     /// latest one in a batch is answered, as a `ControlTooltip`.
     ControlTooltip(ControlTooltipQuery),
 
+    /// Opens or replaces the item database search (R13); the latest one in a batch is answered
+    /// as an `ItemDb`. While it is open PoB's DB load and stat sort run in the background.
+    SetItemDb(ItemDbQuery),
+    /// Closes the item database search.
+    CloseItemDb,
+    /// The double click on a database row: shows the item on the display panel (R15).
+    ViewDbItem {
+        db: ItemDb,
+        name: String,
+    },
+    /// Ctrl+click on a database row: adds the item and equips it (R15).
+    AddDbItem {
+        db: ItemDb,
+        name: String,
+    },
+
     Undo(Tab),
     Redo(Tab),
     Shutdown,
@@ -653,6 +669,21 @@ pub enum PopupInput {
 pub enum ItemDb {
     Uniques,
     Rares,
+}
+
+/// What an item database panel searches: PoB's controls, each as a 0-based index into its list.
+/// The rares database has only slot, type, search and search mode (R13): the rest must be 0.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ItemDbQuery {
+    pub db: ItemDb,
+    pub slot: usize,
+    pub kind: usize,
+    pub league: usize,
+    pub requirement: usize,
+    pub obtainable: usize,
+    pub sort: usize,
+    pub search: String,
+    pub search_mode: usize,
 }
 
 /// A tooltip behind a control (R6): `index` is the dropdown entry, or none for the control

@@ -7,8 +7,8 @@ use super::{
 };
 use auto_pob::engine::upstream::{SidebarLine, golden_of};
 use auto_pob::engine::{
-    Backend, Command, ControlTooltipQuery, ItemsView, ModLineRef, PopupInput, PopupKind,
-    SocketColour, Tab,
+    Backend, Command, ControlTooltipQuery, ItemDb, ItemDbQuery, ItemsView, ModLineRef, PopupInput,
+    PopupKind, SocketColour, Tab,
 };
 use auto_pob::game::Game;
 use mlua::LuaSerdeExt;
@@ -268,6 +268,26 @@ pub(crate) enum ItemsAction {
     RemoveCustomMod {
         index: usize,
     },
+    /// Recorded by items_lib's `act.db_open`, `act.db_view` and `act.db_add`
+    SetItemDb {
+        db: ItemDb,
+        slot: usize,
+        kind: usize,
+        league: usize,
+        requirement: usize,
+        obtainable: usize,
+        sort: usize,
+        search: String,
+        search_mode: usize,
+    },
+    ViewDbItem {
+        db: ItemDb,
+        name: String,
+    },
+    AddDbItem {
+        db: ItemDb,
+        name: String,
+    },
     Undo,
     Redo,
     /// Recorded by popup_lib's `act.open_popup`, `act.popup_set`, `act.popup_press` and
@@ -357,6 +377,29 @@ impl ItemsAction {
             ItemsAction::SetClusterSkill { index } => Command::SetClusterSkill { index },
             ItemsAction::SetClusterNodeCount { count } => Command::SetClusterNodeCount { count },
             ItemsAction::RemoveCustomMod { index } => Command::RemoveCustomMod { index },
+            ItemsAction::SetItemDb {
+                db,
+                slot,
+                kind,
+                league,
+                requirement,
+                obtainable,
+                sort,
+                search,
+                search_mode,
+            } => Command::SetItemDb(ItemDbQuery {
+                db,
+                slot,
+                kind,
+                league,
+                requirement,
+                obtainable,
+                sort,
+                search,
+                search_mode,
+            }),
+            ItemsAction::ViewDbItem { db, name } => Command::ViewDbItem { db, name },
+            ItemsAction::AddDbItem { db, name } => Command::AddDbItem { db, name },
             ItemsAction::OpenPopup { kind } => Command::OpenPopup(kind),
             ItemsAction::SetPopupControl { name, value } => {
                 Command::SetPopupControl { name, value }
@@ -586,6 +629,13 @@ pub(crate) fn run_items_recipe(name: &str) -> (ItemsRecipe, Session) {
     for action in &recipe.actions {
         match action.command() {
             Some(command) => {
+                // the panel's rows can't be clicked while PoB still loads or sorts them
+                if matches!(
+                    action,
+                    ItemsAction::ViewDbItem { .. } | ItemsAction::AddDbItem { .. }
+                ) {
+                    settle(&mut s);
+                }
                 let command = relabel_pick(&mut s, command);
                 let started = std::time::Instant::now();
                 let affected = s
@@ -656,6 +706,20 @@ pub(crate) fn run_items_recipe(name: &str) -> (ItemsRecipe, Session) {
                             "{name}: {action:?} doesn't flag the build view"
                         );
                     }
+                }
+                match action {
+                    ItemsAction::SetItemDb { .. } => {
+                        assert!(affected.item_db, "{name}: {action:?} doesn't flag the DB")
+                    }
+                    ItemsAction::AddDbItem { .. } => assert!(
+                        affected.items && affected.build && affected.recalc,
+                        "{name}: {action:?} isn't an item edit"
+                    ),
+                    ItemsAction::ViewDbItem { .. } => assert!(
+                        affected.display_item,
+                        "{name}: {action:?} doesn't flag the display item"
+                    ),
+                    _ => {}
                 }
                 assert_eq!(open_popups(&s), 0, "{name}: {action:?} left a popup open");
                 if matches!(

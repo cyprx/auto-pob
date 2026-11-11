@@ -6,13 +6,14 @@ use std::sync::{Arc, Mutex};
 use super::commands::{
     Command, ControlTooltipQuery, GemSearchQuery, GemTooltipQuery, ItemTooltipQuery, PopupKind,
 };
-use super::pob::ends_popup_session;
-use super::run::{Affected, Backend, BackgroundTask, Event};
+use super::pob::{ends_item_db, ends_popup_session};
+use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Event};
 use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, ControlTooltipView,
-    DisplayItemView, GemSearchView, GemTooltipView, GroupTooltipView, ItemText, ItemTooltip,
-    ItemTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, Points, PopupView, PowerReport,
-    SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
+    DisplayItemView, DropList, GemSearchView, GemTooltipView, GroupTooltipView, ItemDbView,
+    ItemText, ItemTooltip, ItemTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, Points,
+    PopupView, PowerReport, SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout,
+    TreeState,
 };
 
 #[derive(Default, Debug)]
@@ -24,6 +25,8 @@ pub struct Log {
     pub step_tasks: Vec<BackgroundTask>,
     /// The text of each gem search view sent
     pub gem_searches: Vec<String>,
+    /// The query of each item database view sent
+    pub item_dbs: Vec<crate::engine::ItemDbQuery>,
     /// Recalculations that found a search open, and so marked its DPS job pending
     pub gem_restarts: usize,
     pub previews: Vec<u32>,
@@ -47,8 +50,14 @@ pub struct Fake {
     pub gem_background: Arc<Mutex<VecDeque<Step>>>,
     /// Anoint sort steps still to run; they go after the gem steps and before the power steps.
     pub anoint_background: Arc<Mutex<VecDeque<Step>>>,
+    /// Item database steps still to run; they go after the Anoint steps, before the power steps.
+    pub item_db_background: Arc<Mutex<VecDeque<Step>>>,
     /// The open gem search
     pub gem_search: Option<GemSearchQuery>,
+    /// The open item database
+    pub item_db: Option<crate::engine::ItemDbQuery>,
+    /// The database closed; `ItemDb(None)` is still to be sent
+    item_db_ended: bool,
     /// Replaces the queue when a command returns `build` or `recalc`.
     pub restart_on_build: Vec<Step>,
     /// Called after each step with the number of steps run so far.
@@ -79,6 +88,9 @@ impl Fake {
                 background: Arc::default(),
                 gem_background: Arc::default(),
                 anoint_background: Arc::default(),
+                item_db_background: Arc::default(),
+                item_db: None,
+                item_db_ended: false,
                 gem_search: None,
                 restart_on_build: Vec::new(),
                 on_step: None,
@@ -139,6 +151,14 @@ impl Fake {
                 self.gem_search = None;
                 Ok(Affected::default())
             }
+            Command::SetItemDb(query) => {
+                self.item_db = Some(query);
+                self.item_db_ended = false;
+                Ok(Affected {
+                    item_db: true,
+                    ..Affected::default()
+                })
+            }
             Command::GemTooltip(query) => Ok(Affected {
                 gem_tooltip: Some(query),
                 ..Affected::default()
@@ -178,7 +198,12 @@ impl Fake {
 impl Backend for Fake {
     fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
         let ends = ends_popup_session(&command);
+        let ends_db = ends_item_db(&command);
         let mut affected = self.apply_command(command)?;
+        if ends_db && self.item_db.take().is_some() {
+            self.item_db_ended = true;
+            affected.item_db = true;
+        }
         // a command that failed changed nothing, so it leaves the session open
         if ends && self.popup.take().is_some() {
             affected.popup = true;
@@ -288,6 +313,8 @@ impl Backend for Fake {
             Some(BackgroundTask::GemDps)
         } else if !self.anoint_background.lock().unwrap().is_empty() {
             Some(BackgroundTask::AnointSort)
+        } else if self.item_db.is_some() && !self.item_db_background.lock().unwrap().is_empty() {
+            Some(BackgroundTask::ItemDb)
         } else if !self.background.lock().unwrap().is_empty() {
             Some(BackgroundTask::NodePower)
         } else {
@@ -298,11 +325,15 @@ impl Backend for Fake {
     fn background_step(
         &mut self,
         task: BackgroundTask,
-        _send: &dyn Fn(Event),
+        send: &dyn Fn(Event),
     ) -> anyhow::Result<Affected> {
+        if task == BackgroundTask::ItemDb {
+            send(Event::Progress { task, percent: 50 });
+        }
         let queue = match task {
             BackgroundTask::GemDps => self.gem_background.clone(),
             BackgroundTask::AnointSort => self.anoint_background.clone(),
+            BackgroundTask::ItemDb => self.item_db_background.clone(),
             BackgroundTask::NodePower => self.background.clone(),
         };
         let step = queue.lock().unwrap().pop_front();
@@ -343,6 +374,32 @@ impl Backend for Fake {
             sorting,
             percent: None,
             ended: false,
+        }))
+    }
+
+    fn item_db_view(&mut self) -> anyhow::Result<DbSnapshot> {
+        if std::mem::take(&mut self.item_db_ended) {
+            return Ok(DbSnapshot::Ended);
+        }
+        let Some(query) = self.item_db.clone() else {
+            return Ok(DbSnapshot::Quiet);
+        };
+        self.log.lock().unwrap().item_dbs.push(query.clone());
+        Ok(DbSnapshot::View(ItemDbView {
+            db: query.db,
+            loading: false,
+            sorting: !self.item_db_background.lock().unwrap().is_empty(),
+            percent: None,
+            slot: DropList::default(),
+            kind: DropList::default(),
+            league: None,
+            requirement: None,
+            obtainable: None,
+            sort: None,
+            search: query.search,
+            search_mode: DropList::default(),
+            rows: vec![],
+            note: String::new(),
         }))
     }
 

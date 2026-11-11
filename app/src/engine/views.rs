@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::commands::{
-    ControlTooltipQuery, GemSearchQuery, GemTooltipQuery, ItemTooltipQuery, PopupKind,
+    ControlTooltipQuery, GemSearchQuery, GemTooltipQuery, ItemDb, ItemTooltipQuery, PopupKind,
 };
 
 use serde::{Deserialize, Serialize};
@@ -460,6 +460,46 @@ pub struct GemSearchView {
     /// The search's group is gone (a recalculation added or dropped an item group); this is
     /// the last view of the search.
     pub ended: bool,
+}
+
+/// An item database panel: PoB's controls and, once its list builder ends, the rows (R13-R16).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ItemDbView {
+    pub db: ItemDb,
+    /// PoB is still loading the databases
+    pub loading: bool,
+    /// The list builder hasn't ended; no rows are sent until it has
+    pub sorting: bool,
+    pub percent: Option<u32>,
+    pub slot: DropList,
+    pub kind: DropList,
+    /// The uniques database only
+    #[serde(default)]
+    pub league: Option<DropList>,
+    #[serde(default)]
+    pub requirement: Option<DropList>,
+    #[serde(default)]
+    pub obtainable: Option<DropList>,
+    #[serde(default)]
+    pub sort: Option<DropList>,
+    pub search: String,
+    pub search_mode: DropList,
+    #[serde(default)]
+    pub rows: Vec<DbRow>,
+    /// The list's own text ("No items found that match those filters.", "Loading...")
+    pub note: String,
+}
+
+/// One database item the list shows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DbRow {
+    pub name: String,
+    /// `GetRowValue`: the name in its rarity colour
+    pub label: String,
+    pub base: String,
+    /// The measured power of a stat sort; none when the item fits no slot
+    #[serde(default)]
+    pub sort_value: Option<f64>,
 }
 
 /// One gem the picker lists, in PoB's order.

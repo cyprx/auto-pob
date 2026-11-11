@@ -239,8 +239,9 @@ impl AutoPobApp {
                     | Snapshot::ItemTooltip(_)
                     | Snapshot::ItemText(_) => self.items.on_snapshot_at(&snapshot, seq),
                     Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
-                    // the popup window arrives with the crafting UI
-                    Snapshot::Popup(_) | Snapshot::ControlTooltip(_) => {}
+                    // the popup window arrives with the crafting UI, the database panel with
+                    // Task 9
+                    Snapshot::Popup(_) | Snapshot::ControlTooltip(_) | Snapshot::ItemDb(_) => {}
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
                     Snapshot::NodePower(_) | Snapshot::PowerReport(_)
@@ -260,13 +261,13 @@ impl AutoPobApp {
                 task: BackgroundTask::GemDps,
                 ..
             } => self.skills.on_gem_failed(),
-            // the Anoint window shows its own progress (Task 8)
+            // the Anoint window and the item database panel show their own progress (Tasks 8, 9)
             Event::Progress {
-                task: BackgroundTask::AnointSort,
+                task: BackgroundTask::AnointSort | BackgroundTask::ItemDb,
                 ..
             }
             | Event::BackgroundFailed {
-                task: BackgroundTask::AnointSort,
+                task: BackgroundTask::AnointSort | BackgroundTask::ItemDb,
                 ..
             } => {}
             Event::Progress { percent, .. } => self.tree.on_progress(percent),
@@ -1207,6 +1208,10 @@ mod tests {
 
         fn gem_search_view(&mut self) -> anyhow::Result<Option<crate::engine::GemSearchView>> {
             Ok(None)
+        }
+
+        fn item_db_view(&mut self) -> anyhow::Result<crate::engine::DbSnapshot> {
+            Ok(crate::engine::DbSnapshot::Quiet)
         }
 
         fn gem_tooltip_view(

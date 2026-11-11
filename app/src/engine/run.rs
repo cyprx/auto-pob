@@ -11,9 +11,9 @@ use crate::pob_files::DownloadProgress;
 use super::commands::{Command, ControlTooltipQuery, GemTooltipQuery, ItemTooltipQuery};
 use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, ControlTooltipView,
-    DisplayItemView, GemSearchView, GemTooltipView, GroupTooltipView, ItemText, ItemTooltipView,
-    ItemsView, NodePower, NodeTooltip, NotesView, PopupView, PowerReport, SkillsView,
-    SocketGroupText, StatsView, TreeLayout, TreeState,
+    DisplayItemView, GemSearchView, GemTooltipView, GroupTooltipView, ItemDbView, ItemText,
+    ItemTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, PopupView, PowerReport,
+    SkillsView, SocketGroupText, StatsView, TreeLayout, TreeState,
 };
 
 #[derive(Debug, Clone)]
@@ -40,6 +40,8 @@ pub enum Snapshot {
     SocketGroupText(Arc<SocketGroupText>),
     GroupTooltip(Arc<GroupTooltipView>),
     GemSearch(Arc<GemSearchView>),
+    /// The open item database; `None` once it closed or the build changed (R21)
+    ItemDb(Option<Arc<ItemDbView>>),
     GemTooltip(Arc<GemTooltipView>),
     ItemTooltip(Arc<ItemTooltipView>),
     ItemText(Arc<ItemText>),
@@ -53,6 +55,8 @@ pub enum BackgroundTask {
     GemDps,
     /// The Anoint window's stat sort; it goes after the gem picker's, before node power (R20)
     AnointSort,
+    /// The item databases' load and stat sort; after the Anoint sort, before node power (R20)
+    ItemDb,
     NodePower,
 }
 
@@ -110,6 +114,8 @@ pub struct Affected {
     pub power: bool,
     /// The gem search changed: it opened, its text changed or a DPS step ran
     pub gem_search: bool,
+    /// The open item database changed, or a recalculation restarted its list (R21)
+    pub item_db: bool,
     /// The power report is ready
     pub report: bool,
     /// A tooltip was requested for this node; the latest request wins
@@ -149,6 +155,7 @@ impl Affected {
         notes: true,
         power: false,
         gem_search: false,
+        item_db: false,
         report: false,
         preview: None,
         breakdown: None,
@@ -186,6 +193,7 @@ impl Affected {
         self.notes |= other.notes;
         self.power |= other.power;
         self.gem_search |= other.gem_search;
+        self.item_db |= other.item_db;
         self.report |= other.report;
         self.preview = other.preview.or(self.preview);
         if other.breakdown.is_some() {
@@ -205,6 +213,18 @@ impl Affected {
         self.item_text = other.item_text.or(self.item_text);
         self.link |= other.link;
     }
+}
+
+/// What `Backend::item_db_view` answers (R21).
+// the view is sent at once, wrapped in an `Arc`; boxing it here would only add a copy
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum DbSnapshot {
+    View(ItemDbView),
+    /// The database closed or the build changed: `ItemDb(None)` is sent, once
+    Ended,
+    /// No database is open: nothing is sent
+    Quiet,
 }
 
 pub trait Backend {
@@ -240,6 +260,8 @@ pub trait Backend {
     ) -> anyhow::Result<Affected>;
     /// The open gem search as it stands; `None` when no search is open.
     fn gem_search_view(&mut self) -> anyhow::Result<Option<GemSearchView>>;
+    /// The open item database as it stands (R21)
+    fn item_db_view(&mut self) -> anyhow::Result<DbSnapshot>;
     /// A gem tooltip. A failure is answered with empty lines (R15).
     fn gem_tooltip_view(&mut self, query: &GemTooltipQuery) -> anyhow::Result<GemTooltipView>;
     /// `None`: the item or slot is gone
@@ -437,6 +459,23 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
             }),
         }
     }
+    if flags.item_db {
+        match backend.item_db_view() {
+            Ok(DbSnapshot::View(view)) => send(Event::Snapshot {
+                seq,
+                snapshot: Snapshot::ItemDb(Some(Arc::new(view))),
+            }),
+            Ok(DbSnapshot::Ended) => send(Event::Snapshot {
+                seq,
+                snapshot: Snapshot::ItemDb(None),
+            }),
+            Ok(DbSnapshot::Quiet) => {}
+            Err(e) => send(Event::Error {
+                seq,
+                message: format!("{e:#}"),
+            }),
+        }
+    }
     if let Some(query) = &flags.gem_tooltip {
         let view = backend
             .gem_tooltip_view(query)
@@ -591,6 +630,8 @@ fn run_loop_with_delay(
             affected.skills = true;
             affected.items = true;
             affected.display_item = true;
+            // Draw restarts an open list on a new output revision (R14)
+            affected.item_db = true;
         }
         send_snapshots(backend, last_seq, affected, send);
         if shutdown {
@@ -1504,15 +1545,39 @@ mod tests {
         run_live(fake, &rx)
     }
 
+    fn db_query() -> crate::engine::ItemDbQuery {
+        crate::engine::ItemDbQuery {
+            db: crate::engine::ItemDb::Uniques,
+            slot: 0,
+            kind: 0,
+            league: 0,
+            requirement: 0,
+            obtainable: 0,
+            sort: 0,
+            search: String::new(),
+            search_mode: 0,
+        }
+    }
+
+    fn step_affecting_item_db() -> Result<Affected, String> {
+        Ok(Affected {
+            item_db: true,
+            ..Affected::default()
+        })
+    }
+
     #[test]
-    fn anoint_sort_runs_before_item_db() {
-        // ItemDb arrives with Task 6; the order it joins is GemDps, AnointSort, ItemDb,
-        // NodePower (R20), so the sort goes before node power and after the gem picker
+    fn jobs_run_in_order_gem_anoint_item_db_power() {
+        // R20: the gem picker's sort, the Anoint sort, the item database, then node power
         let (mut fake, log) = Fake::new();
         fake.background
             .lock()
             .unwrap()
             .extend((0..2).map(|_| step_affecting_power()));
+        fake.item_db_background
+            .lock()
+            .unwrap()
+            .extend((0..2).map(|_| step_affecting_item_db()));
         fake.anoint_background
             .lock()
             .unwrap()
@@ -1521,12 +1586,102 @@ mod tests {
             .lock()
             .unwrap()
             .extend((0..2).map(|_| step_affecting_gems()));
-        run_until_idle(&mut fake, vec![Command::SearchGems(gem_query(""))], 6);
-        use BackgroundTask::{AnointSort, GemDps, NodePower};
+        run_until_idle(
+            &mut fake,
+            vec![
+                Command::SearchGems(gem_query("")),
+                Command::SetItemDb(db_query()),
+            ],
+            8,
+        );
+        use BackgroundTask::{AnointSort, GemDps, ItemDb, NodePower};
         assert_eq!(
             log.lock().unwrap().step_tasks,
-            [GemDps, GemDps, AnointSort, AnointSort, NodePower, NodePower]
+            [
+                GemDps, GemDps, AnointSort, AnointSort, ItemDb, ItemDb, NodePower, NodePower
+            ]
         );
+    }
+
+    fn item_db_snapshots(events: &[Event]) -> Vec<Option<Arc<crate::engine::ItemDbView>>> {
+        snapshots(events)
+            .into_iter()
+            .filter_map(|(_, s)| match s {
+                Snapshot::ItemDb(view) => Some(view.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn item_db_closed_sends_none_once() {
+        let (mut fake, _log) = Fake::new();
+        let opened =
+            item_db_snapshots(&run_queued(&mut fake, vec![Command::SetItemDb(db_query())]));
+        assert!(matches!(opened.as_slice(), [Some(_)]));
+        let closed = item_db_snapshots(&run_queued(&mut fake, vec![Command::CloseItemDb]));
+        assert!(matches!(closed.as_slice(), [None]), "{closed:?}");
+        // later batches (a recalculation asks for the view too) say nothing more
+        let later = item_db_snapshots(&run_queued(&mut fake, vec![set_config()]));
+        assert!(later.is_empty(), "{later:?}");
+    }
+
+    #[test]
+    fn leaving_the_build_closes_the_item_db() {
+        let (mut fake, _log) = Fake::new();
+        run_queued(&mut fake, vec![Command::SetItemDb(db_query())]);
+        let events = run_queued(&mut fake, vec![Command::NewBuild]);
+        assert!(matches!(item_db_snapshots(&events).as_slice(), [None]));
+    }
+
+    #[test]
+    fn recalc_resends_open_item_db() {
+        let (mut fake, log) = Fake::new();
+        run_queued(&mut fake, vec![Command::SetItemDb(db_query())]);
+        assert_eq!(log.lock().unwrap().item_dbs.len(), 1, "the open alone");
+        let events = run_queued(&mut fake, vec![set_config()]);
+        assert!(matches!(item_db_snapshots(&events).as_slice(), [Some(_)]));
+        assert_eq!(log.lock().unwrap().item_dbs.len(), 2);
+    }
+
+    #[test]
+    fn item_db_masked_without_a_build() {
+        // with a build the open is answered; with none, nothing reaches the backend
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(&mut fake, vec![Command::SetItemDb(db_query())]);
+        assert_eq!(item_db_snapshots(&events).len(), 1);
+        let (mut fake, log2) = Fake::new();
+        fake.build_loaded = false;
+        let events = run_queued(&mut fake, vec![Command::SetItemDb(db_query())]);
+        assert!(item_db_snapshots(&events).is_empty());
+        assert!(log2.lock().unwrap().item_dbs.is_empty());
+        assert_eq!(log.lock().unwrap().item_dbs.len(), 1);
+    }
+
+    #[test]
+    fn item_db_rows_only_when_finished() {
+        let (mut fake, _log) = Fake::new();
+        fake.item_db_background.lock().unwrap().extend([
+            Ok(Affected::default()),
+            Ok(Affected::default()),
+            step_affecting_item_db(),
+        ]);
+        let events = run_until_idle(&mut fake, vec![Command::SetItemDb(db_query())], 3);
+        let progress = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    Event::Progress {
+                        task: BackgroundTask::ItemDb,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(progress, 3);
+        // the open, and the step that finished; the two before it sent none
+        assert_eq!(item_db_snapshots(&events).len(), 2);
     }
 
     #[test]

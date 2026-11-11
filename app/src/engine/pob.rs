@@ -2,12 +2,13 @@
 
 use super::commands::{
     Command, ConfigValue, ControlTooltipQuery, GemSearchQuery, GemTarget, GemToggle,
-    GemTooltipQuery, ItemTooltipQuery, PopupInput, PopupKind, SkillOption, SocketColour, Tab,
+    GemTooltipQuery, ItemDb, ItemDbQuery, ItemTooltipQuery, PopupInput, PopupKind, SkillOption,
+    SocketColour, Tab,
 };
-use super::run::{Affected, Backend, BackgroundTask, Engine, Event};
+use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Engine, Event};
 use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, ControlTooltipView,
-    DisplayItemView, GemRow, GemSearchView, GemTooltipView, GroupTooltipView, ItemText,
+    DisplayItemView, GemRow, GemSearchView, GemTooltipView, GroupTooltipView, ItemDbView, ItemText,
     ItemTooltip, ItemTooltipView, ItemsView, ModLineList, NodePower, NodeTooltip, NotesView,
     PopupView, PowerReport, SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout,
     TreeState,
@@ -40,6 +41,12 @@ pub struct PobBackend {
     anoint_failed: bool,
     /// A command ended the open search; its last view (`ended: true`) is still to be sent.
     gem_ended: Option<GemSearchQuery>,
+    /// The open item database search (R13); `None` when no panel is open
+    item_db: Option<ItemDbQuery>,
+    /// An ItemDb step failed; the job stays stopped until the next `SetItemDb`.
+    item_db_failed: bool,
+    /// The database closed or the build changed; `ItemDb(None)` is still to be sent (R21)
+    item_db_ended: bool,
     /// Lua's heap after the last memory release, in bytes
     released_lua_bytes: usize,
 }
@@ -134,6 +141,9 @@ impl PobBackend {
             gem_failed: false,
             anoint_failed: false,
             gem_ended: None,
+            item_db: None,
+            item_db_failed: false,
+            item_db_ended: false,
             released_lua_bytes: 0,
         })
     }
@@ -288,6 +298,26 @@ fn lua_target(lua: &Lua, target: GemTarget) -> Result<mlua::Value> {
     })
 }
 
+/// Commands that close the item database panel: its own Close, or leaving the build (R21).
+pub(crate) fn ends_item_db(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::CloseItemDb
+            | Command::ListBuilds { .. }
+            | Command::NewBuild
+            | Command::OpenBuild { .. }
+            | Command::ImportShareCode { .. }
+    )
+}
+
+/// The name `glue/itemdb.lua` knows a database by (also its serde name)
+fn db_name(db: ItemDb) -> &'static str {
+    match db {
+        ItemDb::Uniques => "Uniques",
+        ItemDb::Rares => "Rares",
+    }
+}
+
 /// Commands that end the gem search (R13): they add, drop or reorder the groups or gems, or
 /// leave the build.
 fn ends_gem_search(command: &Command) -> bool {
@@ -323,6 +353,8 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::PressPopupButton { .. }
             | Command::ClosePopup
             | Command::ControlTooltip(_)
+            | Command::SetItemDb(_)
+            | Command::CloseItemDb
             | Command::ItemTooltip(_)
             | Command::CopyItem { .. }
             | Command::Breakdown(_)
@@ -378,6 +410,41 @@ impl PobBackend {
             }
             // ended above
             Command::CloseGemSearch => Ok(Affected::default()),
+            Command::SetItemDb(query) => {
+                let table = self.lua.create_table().map_err(|e| anyhow!("{e}"))?;
+                for (key, value) in [
+                    ("slot", query.slot),
+                    ("kind", query.kind),
+                    ("league", query.league),
+                    ("requirement", query.requirement),
+                    ("obtainable", query.obtainable),
+                    ("sort", query.sort),
+                    ("search_mode", query.search_mode),
+                ] {
+                    table.set(key, value as i64).map_err(|e| anyhow!("{e}"))?;
+                }
+                table
+                    .set("search", query.search.clone())
+                    .map_err(|e| anyhow!("{e}"))?;
+                let restart = std::mem::take(&mut self.item_db_failed);
+                self.call::<_, ()>("item_db_open", (db_name(query.db), table, restart))?;
+                self.item_db = Some(query);
+                self.item_db_ended = false;
+                Ok(Affected {
+                    item_db: true,
+                    ..Affected::default()
+                })
+            }
+            // ended above
+            Command::CloseItemDb => Ok(Affected::default()),
+            Command::ViewDbItem { db, name } => {
+                self.call::<_, ()>("item_db_view_item", (db_name(db), name))?;
+                Ok(display_changed())
+            }
+            Command::AddDbItem { db, name } => {
+                self.call::<_, ()>("item_db_add", (db_name(db), name))?;
+                self.items_edited()
+            }
             Command::ItemTooltip(query) => Ok(Affected {
                 item_tooltip: Some(query),
                 ..Affected::default()
@@ -1101,11 +1168,19 @@ impl Backend for PobBackend {
         let ends = ends_gem_search(&command);
         let closes = matches!(command, Command::CloseGemSearch);
         let ends_popup = ends_popup_session(&command);
+        let ends_db = ends_item_db(&command);
         let mut affected = self.apply_command(command, send)?;
         // any other command may change what the popup is about, so it ends the session once
         // it went through, and the window is told (R4); a failed one changed nothing
         if ends_popup && self.call::<_, bool>("popup_end", ())? {
             affected.popup = true;
+        }
+        // the panel is told once that its database closed (R21)
+        if ends_db && self.item_db.take().is_some() {
+            self.item_db_failed = false;
+            self.item_db_ended = true;
+            self.call::<_, ()>("item_db_close", ())?;
+            affected.item_db = true;
         }
         if ends {
             // the picker is told it ended, unless it asked to close
@@ -1197,6 +1272,14 @@ impl Backend for PobBackend {
         {
             return Some(BackgroundTask::AnointSort);
         }
+        if let Some(query) = &self.item_db
+            && !self.item_db_failed
+            && self
+                .call::<_, bool>("item_db_pending", db_name(query.db))
+                .unwrap_or(false)
+        {
+            return Some(BackgroundTask::ItemDb);
+        }
         let power = self.heatmap_on
             && !self.power_failed
             && self.call::<_, bool>("power_pending", ()).unwrap_or(false);
@@ -1247,6 +1330,29 @@ impl Backend for PobBackend {
                 // the window shows the rows once the builder ends
                 Ok(Affected {
                     popup: step.finished,
+                    ..Affected::default()
+                })
+            }
+            BackgroundTask::ItemDb => {
+                let Some(query) = &self.item_db else {
+                    return Ok(Affected::default());
+                };
+                let step: Step = match self.view("item_db_step", db_name(query.db)) {
+                    Ok(step) => step,
+                    Err(e) => {
+                        self.item_db_failed = true;
+                        return Err(e);
+                    }
+                };
+                if let Some(percent) = step.percent {
+                    send(Event::Progress {
+                        task: BackgroundTask::ItemDb,
+                        percent,
+                    });
+                }
+                // the panel shows the rows once the list builder ends
+                Ok(Affected {
+                    item_db: step.finished,
                     ..Affected::default()
                 })
             }
@@ -1314,6 +1420,19 @@ impl Backend for PobBackend {
         }))
     }
 
+    fn item_db_view(&mut self) -> Result<DbSnapshot> {
+        if std::mem::take(&mut self.item_db_ended) {
+            return Ok(DbSnapshot::Ended);
+        }
+        let Some(query) = &self.item_db else {
+            return Ok(DbSnapshot::Quiet);
+        };
+        let db = query.db;
+        let mut view: ItemDbView = self.view("item_db_view", db_name(db))?;
+        view.sorting &= !self.item_db_failed;
+        Ok(DbSnapshot::View(view))
+    }
+
     fn gem_tooltip_view(&mut self, query: &GemTooltipQuery) -> Result<GemTooltipView> {
         #[derive(serde::Deserialize)]
         struct Found {
@@ -1355,8 +1474,9 @@ impl Backend for PobBackend {
             ControlTooltipQuery::Affix { slot, index } => {
                 self.view("affix_tooltip", (*slot, index.map(|i| i as i64)))?
             }
-            // the item databases answer in a later task
-            ControlTooltipQuery::DbItem { .. } => None,
+            ControlTooltipQuery::DbItem { db, name } => {
+                self.view("item_db_tooltip", (db_name(*db), name.clone()))?
+            }
         };
         Ok(found.map(|tooltip| ControlTooltipView {
             query: query.clone(),
@@ -1474,6 +1594,19 @@ mod tests {
                 name: "save".into(),
             },
             Command::ClosePopup,
+            // the DB search's debounce can land after an OpenPopup (R4)
+            Command::SetItemDb(ItemDbQuery {
+                db: ItemDb::Rares,
+                slot: 0,
+                kind: 0,
+                league: 0,
+                requirement: 0,
+                obtainable: 0,
+                sort: 0,
+                search: String::new(),
+                search_mode: 0,
+            }),
+            Command::CloseItemDb,
         ];
         for command in keeps {
             assert!(
@@ -1486,6 +1619,14 @@ mod tests {
             Command::SortItems,
             Command::PasteItem {
                 text: String::new(),
+            },
+            Command::ViewDbItem {
+                db: ItemDb::Uniques,
+                name: "x".into(),
+            },
+            Command::AddDbItem {
+                db: ItemDb::Uniques,
+                name: "x".into(),
             },
             Command::SetMainSkillCount {
                 control: crate::engine::CalcsCount::Stages,

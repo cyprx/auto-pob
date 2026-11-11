@@ -8,6 +8,9 @@ function recipe()
 	checkpoint()
 	act.filter(0)
 	act.move(3, 0)
+	-- and forward: the item at 0 lands at position 2
+	act.move(0, 2)
+	checkpoint()
 	-- the equipped body armour: PoB asks first
 	act.delete(pick.item("Kaom's Heart"))
 	checkpoint()

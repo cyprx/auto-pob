@@ -169,12 +169,16 @@ end
 local treeAlloc, treeDealloc = act.alloc, act.dealloc
 
 function act.alloc(node)
+	local before = #actions
 	treeAlloc(node)
+	assert(#actions == before + 1 and actions[#actions].alloc == node.id, "tree_lib recorded something else")
 	actions[#actions] = { cmd = "AllocNode", id = node.id }
 end
 
 function act.dealloc(node)
+	local before = #actions
 	treeDealloc(node)
+	assert(#actions == before + 1 and actions[#actions].dealloc == node.id, "tree_lib recorded something else")
 	actions[#actions] = { cmd = "DeallocNode", id = node.id }
 end
 
@@ -302,6 +306,32 @@ function act.weapon_set(second)
 	record({ cmd = "SelectWeaponSet", second = second })
 end
 
+-- The Skills tab's New button (SkillListControl.lua:38-52), for the weapon-set recipe
+function act.add_group()
+	build.skillsTab.controls.groupList.controls.new.onClick()
+	record({ cmd = "AddSocketGroup" })
+end
+
+-- A group's slot dropdown (SkillsTab.lua:168-184), after a click on its row
+function act.group_slot(index, slotName)
+	local tabS = build.skillsTab
+	local group = tabS.socketGroupList[index + 1]
+	assert(group, "no socket group " .. index)
+	local list = tabS.controls.groupList
+	list.selIndex, list.selValue = index + 1, group
+	list:OnSelect(index + 1, group)
+	local drop = tabS.controls.groupSlot
+	local found
+	for i, choice in ipairs(drop.list) do
+		if choice.slotName == slotName then
+			drop:SetSel(i)
+			found = true
+		end
+	end
+	assert(found, "no slot " .. tostring(slotName))
+	record({ cmd = "SetGroupSlot", group = index, slot = slotName })
+end
+
 -- Ctrl+Z and Ctrl+Y on the tab (ItemsTab.lua:1458-1465)
 function act.undo()
 	tab():Undo()
@@ -322,5 +352,5 @@ function checkpoint()
 	for node, id in pairs(build.spec.jewels) do
 		if id ~= 0 then jewels[node] = id end
 	end
-	table.insert(actions, { check = { items = itemsDump(), jewels = jewels, sidebar = sidebar_lines() } })
+	table.insert(actions, { check = { items = itemsDump(), jewels = jewels, sidebar = sidebar_lines(), main_group = build.mainSocketGroup } })
 end

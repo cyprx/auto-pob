@@ -325,9 +325,12 @@ function glue.items_set_flask(slot_name, on)
 	local tab = items_tab()
 	synced_list()
 	local slot = tab.slots[slot_name]
-	local activate = slot and slot.controls.activate
-	if not (slot and slot:IsShown() and activate) then
+	if not (slot and slot:IsShown()) then
 		error("no such slot", 0)
+	end
+	local activate = slot.controls.activate
+	if not activate then
+		error("not a flask slot", 0)
 	end
 	if not activate:IsEnabled() then
 		error("that flask slot is empty", 0)

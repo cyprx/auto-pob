@@ -655,6 +655,11 @@ enum ItemsAction {
         slot: String,
         on: bool,
     },
+    AddSocketGroup,
+    SetGroupSlot {
+        group: usize,
+        slot: Option<String>,
+    },
     SelectWeaponSet {
         second: bool,
     },
@@ -686,6 +691,8 @@ impl ItemsAction {
             ItemsAction::SetItemListFilter { index } => Command::SetItemListFilter { index },
             ItemsAction::EquipItem { slot, id } => Command::EquipItem { slot, id },
             ItemsAction::SetFlaskActive { slot, on } => Command::SetFlaskActive { slot, on },
+            ItemsAction::AddSocketGroup => Command::AddSocketGroup,
+            ItemsAction::SetGroupSlot { group, slot } => Command::SetGroupSlot { group, slot },
             ItemsAction::SelectWeaponSet { second } => Command::SelectWeaponSet { second },
             ItemsAction::AllocNode { id } => Command::AllocNode { id },
             ItemsAction::DeallocNode { id } => Command::DeallocNode { id },
@@ -708,6 +715,8 @@ struct ItemsCheckpoint {
     #[serde(default)]
     jewels: BTreeMap<u32, u32>,
     sidebar: Vec<SidebarLine>,
+    /// `mainSocketGroup`, 1-based as PoB has it: a weapon swap moves it (R6)
+    main_group: u32,
 }
 
 /// A recipe run in upstream PoB: the steps it took and where they ended.
@@ -802,6 +811,12 @@ fn our_items_checkpoint(s: &mut Session) -> ItemsCheckpoint {
         display: None,
         jewels: jewels.into_iter().filter(|(_, id)| *id != 0).collect(),
         sidebar,
+        main_group: s
+            .backend
+            .lua
+            .load("return pob.build.mainSocketGroup")
+            .eval()
+            .unwrap(),
     }
 }
 
@@ -852,6 +867,10 @@ fn check_items_recipe(name: &str) -> ItemsRecipe {
                     ours.sidebar, check.sidebar,
                     "{name}: checkpoint {checked} sidebar"
                 );
+                assert_eq!(
+                    ours.main_group, check.main_group,
+                    "{name}: checkpoint {checked} main group"
+                );
                 checked += 1;
             }
         }
@@ -896,7 +915,8 @@ fn list_slot_recipes_match_pob() {
             assert_eq!(checks[0].items["can_reorder"], true);
         } else {
             // the flask toggled off and undone: the checkpoint pins what PoB shows (R12)
-            assert!(slot(checks[0], "Flask 1").get("flask_active").is_some());
+            // PoB's undo restores the sets' copies, not the live flask: it stays off (R12)
+            assert_eq!(slot(checks[0], "Flask 1")["flask_active"], false);
             // a second jewel socket, then its node goes: the jewel stays, the slot hides
             assert_eq!(checks[1].jewels.len(), 2, "{:?}", checks[1].jewels);
             assert_eq!(checks[2].jewels.len(), 2, "{:?}", checks[2].jewels);
@@ -931,6 +951,9 @@ fn list_slot_recipes_match_pob() {
             assert_eq!(checks[3].items["second_weapon_set"], true);
             assert_eq!(slot(checks[3], "Weapon 1")["shown"], false);
             assert_eq!(slot(checks[3], "Weapon 1 Swap")["shown"], true);
+            // the switch moved the main group to the one in the swap set (R6)
+            assert_eq!(checks[2].main_group, 1);
+            assert_eq!(checks[3].main_group, 2);
         }
     }
 }
@@ -967,16 +990,35 @@ fn upstream_raw(lua: &mlua::Lua, name: &str) -> String {
 #[ignore = "needs the pinned PoB install"]
 fn items_undo_reverts_optimise() {
     let _guard = lock();
-    let (_, xml) = fixtures()
-        .into_iter()
-        .find(|(name, _)| name == "attack")
-        .expect("attack fixture");
-    let mut s = Session::start("items-undo-optimise");
-    s.open_fixture("attack", &xml);
-    let lua = upstream_with_items_lib(&xml, "attack");
+    // the gear build is attack plus items, so the list has something to move
+    let (mut s, lua) = gear_sessions("items-undo-optimise");
     const MAUL: &str = "Driftwood Maul";
     let original = our_raw(&mut s, MAUL);
-    assert_eq!(original, upstream_raw(&lua, MAUL));
+    // our Items tab and the Maul's text against upstream's, at every step
+    let same = |s: &mut Session, what: &str| -> (String, serde_json::Value) {
+        let ours = json(&s.backend.items_view().unwrap());
+        assert_same(&ours, &upstream_json(&lua), what);
+        let raw = our_raw(s, MAUL);
+        assert_eq!(raw, upstream_raw(&lua, MAUL), "{what}: raw text");
+        (raw, ours)
+    };
+    let (_, start) = same(&mut s, "start");
+    // the list's order; the second Undo also clears the tree jewel (the load's first undo
+    // state predates it), so the whole view isn't compared with the start
+    let order = |view: &serde_json::Value| -> Vec<u64> {
+        view["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["id"].as_u64().unwrap())
+            .collect()
+    };
+
+    // an Items edit first, so the stack is [S0, E, load]: the move is E's change
+    s.run(Command::MoveItem { from: 0, to: 1 }).unwrap();
+    lua.load("act.move(0, 1)").exec().unwrap();
+    let (_, moved) = same(&mut s, "moved");
+    assert_ne!(order(&moved), order(&start), "the move changes the list");
 
     // Optimise Sockets is the Skills tab's button, which adds the Items undo state first (R12)
     s.run(Command::SetGroupSlot {
@@ -1000,27 +1042,42 @@ fn items_undo_reverts_optimise() {
     )
     .exec()
     .unwrap();
-    let optimised = our_raw(&mut s, MAUL);
+    let (optimised, _) = same(&mut s, "optimised");
     assert_ne!(optimised, original, "Optimise Sockets edits the Maul");
-    assert_eq!(optimised, upstream_raw(&lua, MAUL));
 
-    // Ctrl+Z's body, and Ctrl+Y's
-    s.run(Command::Undo(Tab::Items)).unwrap();
-    lua.load("build.itemsTab:Undo() build.buildFlag = true runCallback('OnFrame')")
-        .exec()
-        .unwrap();
-    assert_eq!(our_raw(&mut s, MAUL), original, "one Undo reverts it");
-    assert_eq!(upstream_raw(&lua, MAUL), original);
-    s.run(Command::Redo(Tab::Items)).unwrap();
-    lua.load("build.itemsTab:Redo() build.buildFlag = true runCallback('OnFrame')")
-        .exec()
-        .unwrap();
+    let undo = |s: &mut Session| {
+        s.run(Command::Undo(Tab::Items)).unwrap();
+        lua.load("build.itemsTab:Undo() build.buildFlag = true runCallback('OnFrame')")
+            .exec()
+            .unwrap();
+    };
+    let redo = |s: &mut Session| {
+        s.run(Command::Redo(Tab::Items)).unwrap();
+        lua.load("build.itemsTab:Redo() build.buildFlag = true runCallback('OnFrame')")
+            .exec()
+            .unwrap();
+    };
+    // one Undo reverts the Optimise and nothing else: the list is still moved
+    undo(&mut s);
+    let (raw, view) = same(&mut s, "undo 1");
+    assert_eq!(raw, original, "one Undo reverts the optimise");
+    assert_eq!(order(&view), order(&moved), "and keeps the move");
+    // the second goes on to revert the move
+    undo(&mut s);
+    let (_, view) = same(&mut s, "undo 2");
     assert_eq!(
-        our_raw(&mut s, MAUL),
-        original,
-        "Redo doesn't re-apply it (R12)"
+        order(&view),
+        order(&start),
+        "the second Undo reverts the move"
     );
-    assert_eq!(upstream_raw(&lua, MAUL), original);
+    // Redo brings the move back, with the Maul as it was
+    redo(&mut s);
+    let (raw, view) = same(&mut s, "redo");
+    assert_eq!(order(&view), order(&moved));
+    assert_eq!(raw, original, "Redo doesn't re-apply the optimise (R12)");
+    // and a following Undo goes as upstream does
+    undo(&mut s);
+    same(&mut s, "undo after redo");
 }
 
 #[test]
@@ -1103,7 +1160,35 @@ fn item_slot_errors() {
     refuse(&mut s, Command::DeleteItem { id: kaom }, "no such item");
     s.run(Command::SetItemListFilter { index: 0 }).unwrap();
 
+    refuse(
+        &mut s,
+        Command::MoveItem { from: 0, to: 999 },
+        "no such item",
+    );
+    refuse(
+        &mut s,
+        Command::MoveItem { from: 999, to: 0 },
+        "no such item",
+    );
+    refuse(
+        &mut s,
+        Command::SetFlaskActive {
+            slot: "Helmet".into(),
+            on: true,
+        },
+        "not a flask slot",
+    );
+
     // the second weapon set hides "Weapon 1"
     s.run(Command::SelectWeaponSet { second: true }).unwrap();
     refuse(&mut s, equip("Weapon 1", maul), "no such slot");
+
+    // with nothing in the list, Del Unused and Del All do nothing (PoB's buttons are disabled)
+    s.run(Command::SelectWeaponSet { second: false }).unwrap();
+    s.run(Command::DeleteAllItems).unwrap();
+    assert!(s.backend.items_view().unwrap().items.is_empty());
+    let before = state(&mut s);
+    s.run(Command::DeleteUnusedItems).unwrap();
+    s.run(Command::DeleteAllItems).unwrap();
+    assert_eq!(state(&mut s), before);
 }

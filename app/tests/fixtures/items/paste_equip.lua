@@ -58,8 +58,10 @@ function recipe()
 	act.edit(ringA)
 	act.equip("Ring 2", ringB)
 	checkpoint()
-	act.cancel()
+	-- Ctrl+D with an item displayed
 	act.stat_differences(false)
+	checkpoint()
+	act.cancel()
 	act.equip("Ring 2", nil)
 	checkpoint()
 end

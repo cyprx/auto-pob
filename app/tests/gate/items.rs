@@ -326,7 +326,18 @@ const EXTRA_TEXTS: &str = r#"
         "Rarity: RARE\nSynth Loop\nIron Ring\nSynthesised Item\nImplicits: 0\n+33 to maximum Life",
         "Rarity: UNIQUE\nFoil Heart\nGlorious Plate\nFoil Unique (Gold)\nImplicits: 0\n+101 to maximum Life",
         "Rarity: RARE\nMemory Loop\nIron Ring\nMemory Strands: 40\nImplicits: 0\n+34 to maximum Life",
+        -- linked sockets, quality, and an enchant, a scourge, an implicit, an explicit and a
+        -- crucible line
+        "Rarity: RARE\nDread Shell\nGlorious Plate\nQuality: 20\nSockets: R-G-B B\nImplicits: 3\n{enchant}+3% to Fire Resistance\n{scourge}+4% to Cold Resistance\n+5% to Lightning Resistance\n{crucible}+10 to maximum Life\n+120 to maximum Life",
+        -- a catalyst (shown for a ring with tagged mods) and a ranged line with a slider
+        "Rarity: RARE\nCat Loop\nIron Ring\nCatalyst: Abrasive\nCatalystQuality: 20\nImplicits: 0\n{tags:life}+30 to maximum Life\n{range:0.5}+(10-20) to maximum Mana",
+        -- a unique with versions and grouped variants (no unique of PoB's data uses them)
+        "Rarity: UNIQUE\nGrouped Test\nSapphire Ring\nVersion: Release\nVersion: Rework\nVariant: Alpha\nVariant: Beta\nVariant: Gamma\nSelected Version: 2\nImplicits: 0\n{variant:1,2}{group:1}{version:1,2}+10 to Strength\n{variant:3}{group:1}{version:2}+20 to Strength",
     }
+    -- a unique with Foulborn lines, as it drops and with one line transformed
+    local howl = unique("Alpha's Howl")
+    texts[#texts + 1] = howl
+    texts[#texts + 1] = (howl:gsub("%+2 to Level of Socketed Aura Gems", "+2 to Level of Socketed Minion Gems"))
     return texts
 "#;
 
@@ -432,6 +443,123 @@ fn compare_tooltips(s: &mut Session, lua: &mlua::Lua, what: &str) -> Seen {
     seen
 }
 
+/// Upstream's `displayDump()`, with the nulls left out; none without a displayed item.
+fn upstream_display(lua: &mlua::Lua) -> Option<serde_json::Value> {
+    upstream_tooltip(lua, "return displayDump()")
+}
+
+/// What the pasted items made the display panel show: each part must be non-default at least
+/// once, or the comparison would only cover the defaults.
+#[derive(Default)]
+struct DisplaySeen {
+    version: bool,
+    variants: bool,
+    linked_sockets: bool,
+    shown_socket: bool,
+    can_add_socket: bool,
+    quality: bool,
+    catalyst: bool,
+    catalyst_quality: bool,
+    slider: bool,
+    influence: bool,
+    mutable: bool,
+    mutated: bool,
+    mod_lists: std::collections::BTreeSet<String>,
+}
+
+impl DisplaySeen {
+    fn note(&mut self, view: &serde_json::Value) {
+        let any = |key: &str, test: &dyn Fn(&serde_json::Value) -> bool| {
+            view[key].as_array().is_some_and(|a| a.iter().any(test))
+        };
+        self.version |= view.get("version").is_some();
+        self.variants |= !view["variants"].as_array().unwrap().is_empty();
+        self.linked_sockets |= any("sockets", &|s| s["linked"] == true);
+        self.shown_socket |= any("sockets", &|s| s["shown"] == true);
+        self.can_add_socket |= view["can_add_socket"] == true;
+        self.quality |= view.get("quality").is_some_and(|q| q != "0");
+        self.catalyst |= view["catalyst"]["selected"].as_u64().unwrap_or(0) > 0;
+        self.catalyst_quality |= view.get("catalyst_quality").is_some_and(|q| q != "0");
+        self.slider |= any("range_lines", &|l| l["slider"] == true);
+        self.influence |= any("influences", &|d| d["selected"].as_u64().unwrap_or(0) > 0);
+        self.mutable |= any("range_lines", &|l| l["mutable"] == true);
+        self.mutated |= any("range_lines", &|l| l["mutated"] == true);
+        for line in view["tooltip"]["lines"].as_array().unwrap() {
+            if let Some(list) = line["mod_line"]["list"].as_str() {
+                self.mod_lists.insert(list.to_string());
+            }
+        }
+    }
+
+    fn assert_all(&self) {
+        let flags = [
+            ("version", self.version),
+            ("variants", self.variants),
+            ("linked sockets", self.linked_sockets),
+            ("shown socket", self.shown_socket),
+            ("can_add_socket", self.can_add_socket),
+            ("quality", self.quality),
+            ("catalyst", self.catalyst),
+            ("catalyst_quality", self.catalyst_quality),
+            ("range slider", self.slider),
+            ("influence selection", self.influence),
+            ("mutable line", self.mutable),
+            ("mutated line", self.mutated),
+        ];
+        for (name, seen) in flags {
+            assert!(seen, "no pasted item made the display show: {name}");
+        }
+        for list in ["enchant", "scourge", "implicit", "explicit", "crucible"] {
+            assert!(
+                self.mod_lists.contains(list),
+                "no {list} mod_line: {:?}",
+                self.mod_lists
+            );
+        }
+    }
+}
+
+/// Every `mod_line` of the display tooltip names a line of the item whose words are in the
+/// tooltip line: a check on the list and index that doesn't repeat the glue's search.
+fn check_mod_lines(s: &Session, view: &serde_json::Value, what: &str) {
+    let letters = |text: &str| -> String {
+        let mut plain = String::new();
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '^' {
+                // a colour code: ^7 or ^xRRGGBB
+                if chars.peek() == Some(&'x') {
+                    chars.next();
+                    for _ in 0..6 {
+                        chars.next();
+                    }
+                } else {
+                    chars.next();
+                }
+            } else if c.is_alphabetic() {
+                plain.push(c);
+            }
+        }
+        plain
+    };
+    for line in view["tooltip"]["lines"].as_array().unwrap() {
+        let Some(list) = line["mod_line"]["list"].as_str() else {
+            continue;
+        };
+        let index = line["mod_line"]["index"].as_u64().unwrap() + 1;
+        let own: String = lua_value(
+            &s.backend.lua,
+            &format!("return pob.build.itemsTab.displayItem.{list}ModLines[{index}].line"),
+        );
+        let shown = letters(line["text"].as_str().unwrap());
+        assert!(
+            shown.contains(&letters(&own)),
+            "{what}: mod_line {list}[{index}] is {own:?}, the tooltip line is {:?}",
+            line["text"]
+        );
+    }
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn item_tooltips_match_pob() {
@@ -440,12 +568,23 @@ fn item_tooltips_match_pob() {
     // the items are added as the Items tab adds them: pasted, then saved (which equips what
     // fits an empty slot), on both sides
     let texts: Vec<String> = lua_value(&lua, EXTRA_TEXTS);
+    let mut shown = DisplaySeen::default();
     for text in &texts {
         s.run(Command::PasteItem { text: text.clone() }).unwrap();
-        s.run(Command::SaveDisplayItem).unwrap();
         lua.globals().set("pasted", text.as_str()).unwrap();
-        lua.load("act.paste(pasted) act.save()").exec().unwrap();
+        lua.load("act.paste(pasted)").exec().unwrap();
+        let ours = s.backend.display_item_view().unwrap();
+        // the display panel as PoB shows it for this item
+        let theirs = upstream_display(&lua).expect("upstream displays the paste");
+        let ours = json_of(&ours.expect("we display the paste"));
+        let label = format!("display of {}", text.lines().nth(1).unwrap());
+        assert_same(&ours, &theirs, &label);
+        shown.note(&ours);
+        check_mod_lines(&s, &ours, &label);
+        s.run(Command::SaveDisplayItem).unwrap();
+        lua.load("act.save()").exec().unwrap();
     }
+    shown.assert_all();
     let view = s.backend.items_view().unwrap();
     for name in [
         "The Anvil",
@@ -920,11 +1059,29 @@ fn check_items_recipe(name: &str) -> ItemsRecipe {
     for action in &recipe.actions {
         match action.command() {
             Some(command) => {
-                s.run(command)
+                let affected = s
+                    .run(command)
                     .unwrap_or_else(|e| panic!("{name}: {action:?}: {e}"));
-                // the loop sends the display item after each batch, which is what fills the
-                // tooltip PoB would otherwise rebuild only on an edit (R4)
-                s.backend.display_item_view().expect("display item view");
+                if matches!(
+                    action,
+                    ItemsAction::PasteItem { .. }
+                        | ItemsAction::EditItem { .. }
+                        | ItemsAction::SetDisplayItemText { .. }
+                        | ItemsAction::SaveDisplayItem
+                        | ItemsAction::CancelDisplayItem
+                ) {
+                    assert!(
+                        affected.display_item,
+                        "{name}: {action:?} doesn't flag the display item"
+                    );
+                }
+                assert_eq!(open_popups(&s), 0, "{name}: {action:?} left a popup open");
+                // the loop sends the display item after a batch that flags it or recalculates,
+                // which is what fills the tooltip PoB would otherwise rebuild only on an edit
+                // (R4)
+                if affected.display_item || affected.recalc {
+                    s.backend.display_item_view().expect("display item view");
+                }
             }
             None => {
                 let ItemsAction::Check { check } = action else {
@@ -1493,7 +1650,7 @@ fn display_recipe_matches_pob() {
     let _guard = lock();
     let recipe = check_items_recipe("paste_equip");
     let checks = checkpoints(&recipe);
-    assert_eq!(checks.len(), 6);
+    assert_eq!(checks.len(), 7);
     let display = |i: usize| checks[i].display.as_ref();
     // a new item: no id, "Add to build"
     let pasted = display(0).expect("the pasted ring is displayed");
@@ -1524,7 +1681,8 @@ fn display_recipe_matches_pob() {
     assert_eq!(order(2), order(3));
     // the item displayed again while another ring is equipped, then cancelled
     assert!(display(4).is_some());
-    assert!(display(5).is_none());
+    assert!(display(5).is_some());
+    assert!(display(6).is_none());
     // the display tooltip follows the outputs: equipping a ring while it is shown changes
     // its comparison (R4)
     assert_ne!(
@@ -1532,7 +1690,15 @@ fn display_recipe_matches_pob() {
         display(4).unwrap()["tooltip"],
         "the comparison didn't follow the new outputs"
     );
+    // and Ctrl+D with the item displayed drops the comparison
+    assert_ne!(
+        display(4).unwrap()["tooltip"],
+        display(5).unwrap()["tooltip"],
+        "the comparison didn't follow the toggle"
+    );
+    assert_eq!(checks[4].items["show_stat_differences"], true);
     assert_eq!(checks[5].items["show_stat_differences"], false);
+    assert_eq!(checks[6].items["show_stat_differences"], false);
 }
 
 #[test]

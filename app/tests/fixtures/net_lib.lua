@@ -53,3 +53,72 @@ end
 function treeCanUndo()
 	return build.spec.undo[2] ~= nil
 end
+
+-- ---- The Import/Export tab (ImportTab.lua:504-728) ----
+
+-- Pastes into the import box; its validator runs
+function act.code_set(text)
+	build.importTab.controls.importCodeIn:SetText(text, true)
+end
+
+-- The box, the target drop-down and Go, as a user does. A confirm popup stays open until
+-- `act.confirm()`; a download is delivered by the pump.
+function act.code_import(text, mode)
+	local controls = build.importTab.controls
+	controls.importCodeIn:SetText(text, true)
+	controls.importCodeMode:SetSel(mode == "this" and 1 or 2)
+	controls.importCodeGo.onClick()
+	frame()
+end
+
+-- The confirm button of the newest popup
+function act.confirm()
+	main.popups[1].controls.confirm.onClick()
+	frame()
+end
+
+-- Generate, pick the site in the drop-down, press Share
+function act.share(site)
+	local controls = build.importTab.controls
+	controls.generateCode.onClick()
+	for index, entry in ipairs(controls.exportFrom.list) do
+		if entry.id == site then controls.exportFrom:SetSel(index) end
+	end
+	controls.generateCodeByLink.onClick()
+	frame()
+end
+
+-- What the tab shows
+function importDump()
+	local tab = build.importTab
+	local controls = tab.controls
+	local sites = {}
+	for _, entry in ipairs(controls.exportFrom.list) do sites[#sites + 1] = entry.id end
+	table.sort(sites)
+	local site = tab.importCodeSite and buildSites.websiteList[tab.importCodeSite].id
+	return {
+		detail = StripEscapes(tab.importCodeDetail or ""),
+		valid = tab.importCodeValid and true or false,
+		site = site,
+		text = controls.importCodeIn.buf,
+		link = controls.generateCodeOut.buf,
+		sites = sites,
+		fetching = tab.importCodeFetching and true or false,
+		share_label = controls.generateCodeByLink.label,
+		last_site = tab.exportWebsiteSelected,
+		unsaved = build.unsaved and true or false,
+		import_link = build.importLink,
+	}
+end
+
+-- The sites PoB knows, as data
+function siteList()
+	local list = {}
+	for _, site in ipairs(buildSites.websiteList) do
+		list[#list + 1] = {
+			id = site.id, label = site.label, download = site.downloadURL,
+			post_url = site.postUrl, post_fields = site.postFields, code_out = site.codeOut,
+		}
+	end
+	return list
+end

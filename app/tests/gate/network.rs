@@ -1,12 +1,15 @@
 //! SP6 network gate tests: our engine's requests over the canned web.
 
 use super::net_harness::{
-    EXPIRED_TOKEN_SETTINGS, UpstreamNet, begin_fetch, canned, canned_web, net_session, net_user,
+    EXPIRED_TOKEN_SETTINGS, NetSession, UpstreamNet, begin_fetch, canned, canned_web, net_session,
+    net_user,
 };
-use super::{lock, pob_dir, set};
+use super::{assert_sidebar, lock, pob_dir, set};
 use auto_pob::engine::pob::PobBackend;
+use auto_pob::engine::upstream::golden_of;
 use auto_pob::engine::{
-    Backend, Command, ConfigValue, Engine, Event, FinishedRequest, RequestsView, Snapshot,
+    Backend, Command, ConfigValue, Engine, Event, FinishedRequest, ImportMode, RequestsView,
+    Snapshot,
 };
 use auto_pob::game::Game;
 use pob_runtime::net::Canned;
@@ -761,4 +764,697 @@ fn tree_links_over_network_match_pob() {
         "tree_links_over_network_match_pob took {:?}",
         started.elapsed()
     );
+}
+
+// ---- Build sites (Task 5) ----
+
+/// Settings that start PoB on its build list, with no build open.
+const LIST_SETTINGS: &str = "<PathOfBuilding>\n\t<Mode mode=\"LIST\"/>\n</PathOfBuilding>\n";
+
+/// A build site as PoB's `buildSites.websiteList` has it.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct SiteInfo {
+    id: String,
+    label: String,
+    download: String,
+    #[serde(default)]
+    post_url: Option<String>,
+    #[serde(default)]
+    post_fields: Option<String>,
+    #[serde(default)]
+    code_out: Option<String>,
+}
+
+impl SiteInfo {
+    fn can_share(&self) -> bool {
+        self.post_url.is_some()
+    }
+
+    /// A link of this site, with the build id `gate`
+    fn link(&self) -> &'static str {
+        match self.id.as_str() {
+            "Maxroll" => "https://maxroll.gg/poe/pob/gate",
+            "PoBCodes" => "https://pob.codes/b/gate",
+            "POBBin" => "https://pobb.in/gate",
+            "PoeNinja" => "https://poe.ninja/poe1/pob/gate",
+            "pastebin" => "https://pastebin.com/gate",
+            "pastebinProxy" => "https://pastebinp.com/gate",
+            "rentry" => "https://rentry.co/gate",
+            "PoEDB" => "https://poedb.tw/pob/gate",
+            other => panic!("no test link for the site {other}"),
+        }
+    }
+
+    /// Where the raw code of build `gate` is served (the `%1` of PoB's pattern is the id)
+    fn download_url(&self) -> String {
+        format!(
+            "https://{}",
+            self.download.replace("%1", "gate").replace("%.", ".")
+        )
+    }
+}
+
+/// What upstream's `importDump()` says.
+#[derive(Debug, serde::Deserialize)]
+struct UpImport {
+    detail: String,
+    valid: bool,
+    #[serde(default)]
+    site: Option<String>,
+    text: String,
+    link: String,
+    sites: Vec<String>,
+    fetching: bool,
+    share_label: String,
+    #[serde(default)]
+    last_site: Option<String>,
+    unsaved: bool,
+    #[serde(default)]
+    import_link: Option<String>,
+}
+
+fn up_dump(up: &UpstreamNet) -> UpImport {
+    use mlua::LuaSerdeExt;
+    let value: mlua::Value = up.eval("return importDump()");
+    up.lua.from_value(value).expect("upstream's import tab")
+}
+
+fn up_sites(up: &UpstreamNet) -> Vec<SiteInfo> {
+    use mlua::LuaSerdeExt;
+    let value: mlua::Value = up.eval("return siteList()");
+    let mut sites: Vec<SiteInfo> = up.lua.from_value(value).expect("PoB's site list");
+    sites.sort_by(|a, b| a.id.cmp(&b.id));
+    sites
+}
+
+/// The `importLink` attribute of the XML PoB would save for the build
+fn saved_import_link(xml: &str) -> Option<String> {
+    xml.split("importLink=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .map(str::to_owned)
+}
+
+fn import_command(url: &str, mode: ImportMode) -> Command {
+    Command::ImportFromUrl {
+        url: url.into(),
+        mode,
+    }
+}
+
+/// Imports and runs the request to its end, returning its entry.
+fn import_link(s: &mut NetSession, url: &str, mode: ImportMode) -> FinishedRequest {
+    s.backend
+        .apply(import_command(url, mode), &|_| {})
+        .expect("import");
+    finish_request(s)
+}
+
+fn assert_golden(s: &mut NetSession, name: &str, what: &str) {
+    let rows = s.backend.stats_view().expect("stats").stats;
+    assert_sidebar(name, what, &rows, &super::golden(name).sidebar);
+}
+
+fn our_view(s: &mut NetSession) -> auto_pob::engine::ShareView {
+    s.backend.share_view().expect("share view")
+}
+
+/// Build XML with each tag's attributes in alphabetical order: PoB writes them in `pairs`
+/// order, which differs from one Lua state (and one call) to the next.
+fn canonical_xml(xml: &str) -> String {
+    xml.lines()
+        .map(|line| {
+            let line = line.trim_end();
+            let Some((head, rest)) = line.split_once(' ') else {
+                return line.to_owned();
+            };
+            if !head.trim_start().starts_with('<') || rest.is_empty() {
+                return line.to_owned();
+            }
+            let mut pairs: Vec<&str> = Vec::new();
+            let mut left = rest;
+            while let Some(eq) = left.find("=\"") {
+                let end = left[eq + 2..]
+                    .find('"')
+                    .map_or(left.len(), |i| eq + 2 + i + 1);
+                pairs.push(left[..end].trim());
+                left = &left[end..];
+            }
+            pairs.sort_unstable();
+            format!("{head} {}{}", pairs.join(" "), left.trim())
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn our_saved_xml(s: &NetSession) -> String {
+    s.eval("return pob.build:SaveDB('code')")
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn build_sites_match_pob() {
+    let _guard = lock();
+    let started = Instant::now();
+    let web = canned_web();
+    let mut s = net_session("build-sites", canned(&web), None);
+    s.open_fixture("attack");
+    let attack_code = s.backend.share_code().expect("share code");
+    let attack_xml = std::fs::read_to_string(super::fixture_xml("attack")).unwrap();
+    let up = UpstreamNet::new(&web, Some(&attack_xml));
+    // the headless wrapper runs PoB in dev mode, which saves a build to its file whenever it
+    // is shut down; the app runs with it off
+    up.eval::<()>("launch.devMode = false");
+    let sites = up_sites(&up);
+    assert_eq!(sites.len(), 8);
+    let sharing: Vec<&SiteInfo> = sites.iter().filter(|site| site.can_share()).collect();
+    assert_eq!(sharing.len(), 5);
+
+    // ---- Routes: every site serves the attack code; the five that take uploads answer them ----
+    for site in &sites {
+        web.route("GET", &site.download_url(), Canned::ok(attack_code.clone()));
+        if let Some(post_url) = &site.post_url {
+            web.route("POST", post_url, Canned::ok(format!("gate-{}", site.id)));
+        }
+    }
+
+    // ---- Live validation: PoB's verdict, as the box shows it ----
+    for site in &sites {
+        up.eval::<()>(&format!("act.code_set('{}')", site.link()));
+        let theirs = up_dump(&up);
+        s.backend
+            .apply(
+                Command::SetImportCode {
+                    text: site.link().into(),
+                },
+                &|_| {},
+            )
+            .expect("set import code");
+        let ours = our_view(&mut s).import;
+        assert_eq!(ours.detail, format!("URL is valid ({})", site.label));
+        assert_eq!(ours.detail, theirs.detail, "{}", site.id);
+        assert!(ours.valid && theirs.valid);
+        assert_eq!(ours.site.as_deref(), Some(site.id.as_str()));
+        assert_eq!(ours.site, theirs.site);
+        assert_eq!(ours.text, site.link());
+        assert_eq!(ours.text, theirs.text);
+        assert!(!ours.fetching && !theirs.fetching);
+        assert!(ours.can_import_to_this_build, "attack has a file");
+    }
+    // surrounding whitespace is trimmed, as PoB's box does
+    s.backend
+        .apply(
+            Command::SetImportCode {
+                text: "  https://pobb.in/gate \n".into(),
+            },
+            &|_| {},
+        )
+        .unwrap();
+    assert_eq!(our_view(&mut s).import.text, "https://pobb.in/gate");
+    for (text, detail) in [
+        ("not a build at all", "Invalid input"),
+        (attack_code.as_str(), "Code is valid"),
+    ] {
+        up.eval::<()>(&format!("act.code_set('{text}')"));
+        s.backend
+            .apply(Command::SetImportCode { text: text.into() }, &|_| {})
+            .unwrap();
+        let ours = our_view(&mut s).import;
+        assert_eq!(ours.detail, detail);
+        assert_eq!(ours.detail, up_dump(&up).detail);
+        assert_eq!(ours.valid, detail == "Code is valid");
+        assert_eq!(ours.site, None);
+    }
+
+    // ---- Every site imports into a new build, equal to the fixture ----
+    for site in &sites {
+        up.eval::<()>(&format!("act.code_import('{}', 'new')", site.link()));
+        up.pump(Duration::from_secs(15));
+        let entry = import_link(&mut s, site.link(), ImportMode::NewBuild);
+        assert_eq!(entry.label, format!("Fetching build from {}", site.label));
+        assert_eq!(entry.error, None, "{}", site.id);
+        assert!(entry.new_build && !entry.cancelled);
+        let build = s.backend.build_view().unwrap();
+        assert_eq!(build.name, "Imported build");
+        assert_eq!(build.path, None);
+        assert_golden(&mut s, "attack", &site.id);
+        s.assert_clean(&site.id);
+        assert_eq!(
+            up.eval::<usize>("return #main.popups"),
+            0,
+            "{:?}",
+            up.eval::<Option<String>>("return popupMessage()")
+        );
+        // PoB stores no link for a fetch through the import box (Step 0)
+        assert_eq!(
+            saved_import_link(&our_saved_xml(&s)),
+            saved_import_link(&up.eval::<String>("return build:SaveDB('code')")),
+            "{}",
+            site.id
+        );
+    }
+    // the upstream build is the same one
+    let theirs = golden_of(&up.lua, Game::Poe1.pob_version()).expect("upstream stats");
+    assert_sidebar(
+        "attack",
+        "upstream import",
+        &s.backend.stats_view().unwrap().stats,
+        &theirs.sidebar,
+    );
+
+    // ---- A new build has no file: ThisBuild is refused ----
+    let err = s
+        .backend
+        .apply(
+            import_command(sites[0].link(), ImportMode::ThisBuild),
+            &|_| {},
+        )
+        .unwrap_err();
+    assert_eq!(
+        format!("{err:#}"),
+        "this build has no file yet; import into a new build"
+    );
+    assert!(!our_view(&mut s).import.can_import_to_this_build);
+    assert!(s.requests().pending.is_empty());
+
+    // ---- Share to each site that takes uploads ----
+    let our_code = s.backend.share_code().unwrap();
+    for site in &sharing {
+        let post_url = site.post_url.clone().unwrap();
+        let fields = site.post_fields.clone().unwrap();
+        let before = web.requests().len();
+        up.eval::<()>(&format!("act.share('{}')", site.id));
+        up.pump(Duration::from_secs(15));
+        let theirs = up_dump(&up);
+        let their_post = web.requests()[before..]
+            .iter()
+            .find(|r| r.method == "POST" && r.url == post_url)
+            .expect("upstream's upload")
+            .clone();
+
+        let before = web.requests().len();
+        let affected = s
+            .backend
+            .apply(
+                Command::ShareBuild {
+                    site: site.id.clone(),
+                },
+                &|_| {},
+            )
+            .expect("share");
+        assert!(affected.requests && affected.share);
+        // while it uploads
+        let mid = our_view(&mut s);
+        assert!(mid.sharing, "{}", site.id);
+        assert_eq!(mid.link, None);
+        let pending = s.requests().pending;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].label, format!("Sharing on {}", site.label));
+        let entry = finish_request(&mut s);
+        assert_eq!(entry.error, None, "{}", site.id);
+        assert!(!entry.new_build);
+        let want = format!("{}gate-{}", site.code_out.clone().unwrap(), site.id);
+        let ours = our_view(&mut s);
+        assert_eq!(ours.link.as_deref(), Some(want.as_str()), "{}", site.id);
+        assert_eq!(theirs.link, want);
+        assert_eq!(theirs.share_label, "Share");
+        // PoB remembers a choice made in its drop-down; picking the entry it already showed
+        // changes nothing
+        assert!(
+            theirs.last_site.is_none() || theirs.last_site.as_deref() == Some(site.id.as_str())
+        );
+        assert!(!ours.sharing);
+        assert_eq!(ours.last_site.as_deref(), Some(site.id.as_str()));
+        let ids: Vec<&str> = ours.sites.iter().map(|r| r.id.as_str()).collect();
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            sorted,
+            theirs.sites.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        assert_eq!(ours.sites.len(), 5);
+        // the upload carries PoB's field prefix and the build's code
+        let our_post = web.requests()[before..]
+            .iter()
+            .find(|r| r.method == "POST" && r.url == post_url)
+            .expect("our upload")
+            .clone();
+        assert_eq!(
+            String::from_utf8_lossy(&our_post.body),
+            format!("{fields}{our_code}"),
+            "{}",
+            site.id
+        );
+        // upstream's code is a different serialisation of the same build (PoB writes its
+        // stats in `pairs` order), but the field prefix is PoB's own
+        assert!(
+            their_post.body.starts_with(fields.as_bytes()) && their_post.body.len() > fields.len(),
+            "{}",
+            site.id
+        );
+        s.assert_clean(&site.id);
+    }
+    assert!(our_view(&mut s).sites.iter().any(|r| r.label == "pobb.in"));
+
+    // ---- The share code: PoB's Generate button ----
+    let code = s.backend.share_code().unwrap();
+    let inflated: String = s
+        .backend
+        .lua
+        .load("local c = ... return Inflate(common.base64.decode((c:gsub('-','+'):gsub('_','/'))))")
+        .call(code.clone())
+        .unwrap();
+    assert_eq!(canonical_xml(&inflated), canonical_xml(&our_saved_xml(&s)));
+    assert!(inflated.contains("<PathOfBuilding>"));
+
+    // ---- ThisBuild replaces the open build once PoB's confirm is pressed ----
+    let dot_xml = std::fs::read_to_string(super::fixture_xml("dot")).unwrap();
+    s.open_fixture("dot");
+    let dot_path = s.user.join("Path of Building/Builds/dot.xml");
+    let on_disk = std::fs::read(&dot_path).unwrap();
+    assert!(our_view(&mut s).import.can_import_to_this_build);
+    let before_rows = s.backend.stats_view().unwrap().stats;
+    auto_pob::engine::upstream::load_xml(&up.lua, &dot_xml, "dot").expect("loading dot");
+    up.eval::<()>("build.dbFileName = '/nonexistent/dot.xml'");
+    assert_sidebar("dot", "before", &before_rows, &super::golden("dot").sidebar);
+    up.eval::<()>("act.code_import('https://pobb.in/gate', 'this')");
+    up.pump(Duration::from_secs(15));
+    // PoB asks first; the build is still dot
+    assert_eq!(up.eval::<usize>("return #main.popups"), 1);
+    up.eval::<()>("act.confirm()");
+    let affected = s
+        .backend
+        .apply(
+            import_command("https://pobb.in/gate", ImportMode::ThisBuild),
+            &|_| {},
+        )
+        .expect("import");
+    assert!(affected.requests && !affected.build, "{affected:?}");
+    let steps = s.settle_net(Duration::from_secs(15));
+    assert!(
+        steps
+            .iter()
+            .any(|a| a.as_ref().is_ok_and(|a| a.build && a.stats && a.recalc)),
+        "no step answered for the replaced build"
+    );
+    let entry = s.requests().finished.remove(0);
+    assert_eq!((entry.error.clone(), entry.new_build), (None, true));
+    let ours = s.backend.stats_view().unwrap().stats;
+    let theirs = golden_of(&up.lua, Game::Poe1.pob_version()).expect("upstream stats");
+    assert_sidebar("attack", "this build", &ours, &theirs.sidebar);
+    assert_sidebar(
+        "attack",
+        "this build",
+        &ours,
+        &super::golden("attack").sidebar,
+    );
+    let build = s.backend.build_view().unwrap();
+    // it is still the file's build, now with changes (Step 0)
+    assert_eq!((build.name.as_str(), build.unsaved), ("dot", true));
+    assert_eq!(build.path.as_deref(), Some(dot_path.as_path()));
+    assert_eq!(up_dump(&up).unsaved, build.unsaved);
+    assert_eq!(
+        std::fs::read(&dot_path).unwrap(),
+        on_disk,
+        "the file changed"
+    );
+    s.assert_clean("this build");
+    assert_eq!(up.eval::<usize>("return #main.popups"), 0);
+    // PoB stores no link here either (Step 0)
+    assert_eq!(saved_import_link(&our_saved_xml(&s)), None);
+    assert_eq!(up_dump(&up).import_link, None);
+
+    // ---- A failure leaves nothing stuck, and the same request then works ----
+    let pobbin = sites.iter().find(|site| site.id == "POBBin").unwrap();
+    let (get, post) = (pobbin.download_url(), pobbin.post_url.clone().unwrap());
+    let flags = |s: &NetSession| -> (bool, String) {
+        s.backend
+            .lua
+            .load("local t = pob.build.importTab return t.importCodeFetching and true or false, t.controls.generateCodeByLink.label")
+            .eval()
+            .unwrap()
+    };
+    let cases: [(&str, Canned, &str); 3] = [
+        ("a 500", Canned::status(500, "oops"), "Response code: 500"),
+        (
+            "an HTML page",
+            Canned::ok("<html><body>Not found</body></html>"),
+            "that isn't a link PoB can import",
+        ),
+        (
+            "offline",
+            Canned::fail("Couldn't resolve host name"),
+            "Couldn't resolve host name",
+        ),
+    ];
+    for (what, reply, want) in cases {
+        web.route("GET", &get, reply);
+        up.eval::<()>("act.code_import('https://pobb.in/gate', 'this')");
+        up.pump(Duration::from_secs(15));
+        let theirs = up_dump(&up);
+        let entry = import_link(&mut s, "https://pobb.in/gate", ImportMode::ThisBuild);
+        assert_eq!(entry.error.as_deref(), Some(want), "{what}");
+        assert!(!entry.new_build && !entry.cancelled, "{what}");
+        // PoB's own text: its box says the same (an unreadable page is "Invalid input")
+        let ours = our_view(&mut s).import;
+        assert_eq!(ours.detail, theirs.detail, "{what}");
+        assert!(!ours.fetching && !theirs.fetching, "{what}");
+        assert!(!flags(&s).0);
+        assert_eq!(flags(&s).1, "Share");
+        s.assert_clean(what);
+        assert_eq!(up.eval::<usize>("return #main.popups"), 0, "{what}");
+        // the build is still the imported one
+        assert_golden(&mut s, "attack", what);
+    }
+    web.route("GET", &get, Canned::ok(attack_code.clone()));
+    let entry = import_link(&mut s, "https://pobb.in/gate", ImportMode::NewBuild);
+    assert_eq!(entry.error, None, "the good route works again");
+    assert!(entry.new_build);
+
+    // Share failing: PoB's message popup, captured as the error
+    web.route("POST", &post, Canned::status(500, "boom"));
+    up.eval::<()>("act.share('POBBin')");
+    up.pump(Duration::from_secs(15));
+    let message: String = up.eval("return popupMessage()");
+    assert_eq!(message, "Error creating link:");
+    up.eval::<()>("closePopups()");
+    assert_eq!(up_dump(&up).share_label, "Share");
+    s.backend
+        .apply(
+            Command::ShareBuild {
+                site: "POBBin".into(),
+            },
+            &|_| {},
+        )
+        .unwrap();
+    let entry = finish_request(&mut s);
+    let error = entry.error.expect("the share fails");
+    assert!(error.starts_with(&message), "{error}");
+    assert!(error.contains("boom"), "{error}");
+    assert_eq!(our_view(&mut s).link, None);
+    assert_eq!(flags(&s).1, "Share");
+    s.assert_clean("share 500");
+    web.route("POST", &post, Canned::ok("gate-POBBin"));
+    s.backend
+        .apply(
+            Command::ShareBuild {
+                site: "POBBin".into(),
+            },
+            &|_| {},
+        )
+        .unwrap();
+    assert_eq!(finish_request(&mut s).error, None);
+    assert_eq!(
+        our_view(&mut s).link.as_deref(),
+        Some("https://pobb.in/gate-POBBin")
+    );
+    // a site PoB doesn't offer
+    let err = s
+        .backend
+        .apply(
+            Command::ShareBuild {
+                site: "pastebin".into(),
+            },
+            &|_| {},
+        )
+        .unwrap_err();
+    assert_eq!(format!("{err:#}"), "no such site");
+
+    // ---- A late result never lands on another build (Review Focus 1) ----
+    s.open_fixture("dot");
+    web.route(
+        "GET",
+        &get,
+        Canned::ok(attack_code.clone()).delayed(Duration::from_millis(300)),
+    );
+    s.backend
+        .apply(
+            import_command("https://pobb.in/gate", ImportMode::ThisBuild),
+            &|_| {},
+        )
+        .unwrap();
+    let pending = s.requests().pending;
+    assert_eq!(pending.len(), 1);
+    assert!(our_view(&mut s).import.fetching);
+    s.open_fixture("new");
+    let view = s.requests();
+    assert!(view.pending.is_empty());
+    assert_eq!(view.finished.len(), 1);
+    assert_eq!(view.finished[0].id, pending[0].id);
+    assert!(view.finished[0].cancelled);
+    assert_eq!(view.finished[0].error.as_deref(), Some("Cancelled"));
+    assert!(!view.finished[0].new_build);
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(s.settle_net(Duration::from_secs(1)).is_empty());
+    assert_eq!(s.backend.build_view().unwrap().name, "new");
+    assert_golden(&mut s, "new", "after the late result");
+    assert!(!our_view(&mut s).import.fetching);
+    s.assert_clean("late result");
+
+    // ---- The proxy is PoB's own (R26) ----
+    let asked = web.requests().len();
+    assert!(web.requests().iter().all(|r| r.proxy.is_none()));
+    s.eval::<()>("pob.main.proxyURL = 'http://127.0.0.1:9'");
+    web.route("GET", &get, Canned::ok(attack_code.clone()));
+    let entry = import_link(&mut s, "https://pobb.in/gate", ImportMode::NewBuild);
+    assert_eq!(entry.error, None);
+    let proxied: Vec<_> = web.requests()[asked..]
+        .iter()
+        .map(|r| r.proxy.clone())
+        .collect();
+    assert_eq!(proxied, [Some("http://127.0.0.1:9".to_string())]);
+    s.eval::<()>("pob.main.proxyURL = nil");
+
+    // ---- A code imports at once, with no request ----
+    for (mode, name, unsaved) in [
+        (ImportMode::NewBuild, "Imported build", true),
+        (ImportMode::ThisBuild, "dot", true),
+    ] {
+        if mode == ImportMode::ThisBuild {
+            s.open_fixture("dot");
+        }
+        let affected = s
+            .backend
+            .apply(import_command(&format!(" {attack_code}\n"), mode), &|_| {})
+            .expect("import a code");
+        assert!(
+            affected.build && affected.stats && affected.share,
+            "{affected:?}"
+        );
+        assert!(s.requests().pending.is_empty());
+        let build = s.backend.build_view().unwrap();
+        assert_eq!((build.name.as_str(), build.unsaved), (name, unsaved));
+        assert_golden(&mut s, "attack", "a code");
+        s.assert_clean("a code");
+    }
+    let err = s
+        .backend
+        .apply(import_command("not a build", ImportMode::NewBuild), &|_| {})
+        .unwrap_err();
+    assert_eq!(format!("{err:#}"), "that isn't a link PoB can import");
+
+    // ---- From the build list: no build, so no ImportTab; the link is fetched and opened as
+    // Main:Init does for a protocol link (R15) ----
+    let mut list = net_session("sites-list", canned(&web), Some(LIST_SETTINGS));
+    assert!(!list.backend.build_loaded().unwrap());
+    let pob_link = "pob://pobbin/gate";
+    let want_link: Option<String> =
+        up.eval("return buildSites.ParseImportLinkFromURI('pob://pobbin/gate')");
+    assert_eq!(want_link.as_deref(), Some("https://pobb.in/gate"));
+    for (url, mode, want) in [
+        (
+            "pob://nosuch/gate",
+            ImportMode::NewBuild,
+            "that pob:// link names no site PoB knows",
+        ),
+        (
+            "nonsense",
+            ImportMode::NewBuild,
+            "that isn't a link PoB can import",
+        ),
+        (
+            pob_link,
+            ImportMode::ThisBuild,
+            "this build has no file yet; import into a new build",
+        ),
+    ] {
+        let err = list
+            .backend
+            .apply(import_command(url, mode), &|_| {})
+            .unwrap_err();
+        assert_eq!(format!("{err:#}"), want, "{url}");
+    }
+    assert!(
+        up.eval::<Option<String>>("return buildSites.ParseImportLinkFromURI('pob://nosuch/gate')")
+            .is_none()
+    );
+    for (what, reply, want) in [
+        ("a 500", Canned::status(500, "oops"), "Response code: 500"),
+        (
+            "an HTML page",
+            Canned::ok("<html></html>"),
+            "that isn't a link PoB can import",
+        ),
+    ] {
+        web.route("GET", &get, reply);
+        let entry = import_link(&mut list, pob_link, ImportMode::NewBuild);
+        assert_eq!(entry.error.as_deref(), Some(want), "{what}");
+        assert_eq!(entry.label, "Fetching build from pobb.in");
+        assert!(!entry.new_build);
+        assert!(!list.backend.build_loaded().unwrap(), "{what}");
+        list.assert_clean(what);
+    }
+    // a slow good one, with the user browsing the list meanwhile (R13)
+    web.route(
+        "GET",
+        &get,
+        Canned::ok(attack_code.clone()).delayed(Duration::from_millis(300)),
+    );
+    let affected = list
+        .backend
+        .apply(import_command(pob_link, ImportMode::NewBuild), &|_| {})
+        .expect("import from the list");
+    assert!(affected.requests && !affected.build, "{affected:?}");
+    let pending = list.requests().pending;
+    assert_eq!(pending.len(), 1);
+    list.backend
+        .apply(
+            Command::ListBuilds {
+                folder: String::new(),
+            },
+            &|_| {},
+        )
+        .unwrap();
+    assert_eq!(
+        list.requests().pending,
+        pending,
+        "browsing cancelled the import"
+    );
+    assert!(!list.backend.build_loaded().unwrap());
+    let steps = list.settle_net(Duration::from_secs(15));
+    assert!(
+        steps
+            .iter()
+            .any(|a| a.as_ref().is_ok_and(|a| a.build && a.stats && a.tree)),
+        "no step answered for the new build"
+    );
+    let entry = list.requests().finished.remove(0);
+    assert_eq!(entry.id, pending[0].id);
+    assert_eq!(
+        (entry.error.clone(), entry.new_build, entry.cancelled),
+        (None, true, false)
+    );
+    assert!(list.backend.build_loaded().unwrap());
+    let build = list.backend.build_view().unwrap();
+    assert_eq!(
+        (build.name.as_str(), build.path.as_deref()),
+        ("Imported build", None)
+    );
+    assert_golden(&mut list, "attack", "from the list");
+    // the link is stored: the protocol link's https form (Main.lua:68-77)
+    assert_eq!(saved_import_link(&our_saved_xml(&list)), want_link);
+    list.assert_clean("from the list");
+
+    assert!(web.unrouted().is_empty(), "unrouted: {:?}", web.unrouted());
+    eprintln!("build_sites_match_pob took {:?}", started.elapsed());
 }

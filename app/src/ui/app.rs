@@ -1376,6 +1376,14 @@ mod tests {
             Ok(None)
         }
 
+        fn share_view(&mut self) -> anyhow::Result<crate::engine::ShareView> {
+            Ok(crate::engine::ShareView::default())
+        }
+
+        fn share_code(&mut self) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+
         fn requests_view(&mut self) -> anyhow::Result<crate::engine::RequestsView> {
             Ok(crate::engine::RequestsView::default())
         }

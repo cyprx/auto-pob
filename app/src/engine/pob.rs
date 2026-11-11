@@ -2,8 +2,8 @@
 
 use super::commands::{
     Command, ConfigValue, ControlTooltipQuery, GemSearchQuery, GemTarget, GemToggle,
-    GemTooltipQuery, ItemDb, ItemDbQuery, ItemTooltipQuery, PopupInput, PopupKind, SkillOption,
-    SocketColour, Tab,
+    GemTooltipQuery, ImportMode, ItemDb, ItemDbQuery, ItemTooltipQuery, PopupInput, PopupKind,
+    SkillOption, SocketColour, Tab,
 };
 use super::net::{Dispatch, NetHandle};
 use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Engine, Event};
@@ -11,8 +11,8 @@ use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, ControlTooltipView,
     DisplayItemView, GemRow, GemSearchView, GemTooltipView, GroupTooltipView, ItemDbView, ItemText,
     ItemTooltip, ItemTooltipView, ItemsView, ModLineList, NodePower, NodeTooltip, NotesView,
-    PopupView, PowerReport, RequestsView, SkillsView, SocketGroupText, StatsView, TooltipLine,
-    TreeLayout, TreeState,
+    PopupView, PowerReport, RequestsView, ShareView, SkillsView, SocketGroupText, StatsView,
+    TooltipLine, TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -140,6 +140,7 @@ impl PobBackend {
             ("@glue/itemdb.lua", include_str!("glue/itemdb.lua")),
             ("@glue/notes.lua", include_str!("glue/notes.lua")),
             ("@glue/net.lua", include_str!("glue/net.lua")),
+            ("@glue/import.lua", include_str!("glue/import.lua")),
         ] {
             lua.load(source)
                 .set_name(name)
@@ -308,6 +309,8 @@ impl PobBackend {
         let mut affected = if effects.rebuilt {
             let mut affected = self.left_build()?;
             affected.merge(self.all_views()?);
+            // the build was initialised inside a callback, not in a frame (the loop calculates)
+            affected.recalc = true;
             affected
         } else if effects.edited {
             Affected {
@@ -411,9 +414,10 @@ pub(crate) enum CancelScope {
 
 pub(crate) fn cancels_requests(command: &Command) -> Option<CancelScope> {
     match command {
-        Command::OpenBuild { .. } | Command::NewBuild | Command::ImportShareCode { .. } => {
-            Some(CancelScope::All)
-        }
+        Command::OpenBuild { .. }
+        | Command::NewBuild
+        | Command::ImportShareCode { .. }
+        | Command::ImportFromUrl { .. } => Some(CancelScope::All),
         Command::ListBuilds { .. } => Some(CancelScope::Build),
         _ => None,
     }
@@ -427,6 +431,7 @@ fn leaves_build(command: &Command) -> bool {
             | Command::NewBuild
             | Command::OpenBuild { .. }
             | Command::ImportShareCode { .. }
+            | Command::ImportFromUrl { .. }
     )
 }
 
@@ -439,6 +444,7 @@ pub(crate) fn ends_item_db(command: &Command) -> bool {
             | Command::NewBuild
             | Command::OpenBuild { .. }
             | Command::ImportShareCode { .. }
+            | Command::ImportFromUrl { .. }
     )
 }
 
@@ -471,6 +477,7 @@ fn ends_gem_search(command: &Command) -> bool {
             | Command::NewBuild
             | Command::OpenBuild { .. }
             | Command::ImportShareCode { .. }
+            | Command::ImportFromUrl { .. }
             | Command::CloseGemSearch
     )
 }
@@ -497,6 +504,10 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::ExportTreeLink
             // a shrink only reads the tree and asks the network (R20)
             | Command::ShrinkTreeLink
+            // sharing reads the build and asks the network; the import box is PoB's own (R16, R17)
+            | Command::SetImportCode { .. }
+            | Command::ShareBuild { .. }
+            | Command::ExportShareCode
             // the tree search's debounce can land after a node-replacement open: it changes
             // neither the item nor the build
             | Command::SetTreeSearch { .. }
@@ -633,6 +644,37 @@ impl PobBackend {
                 self.call::<_, ()>("import_code", code)?;
                 self.all_views()
             }
+            Command::SetImportCode { text } => {
+                self.call::<_, ()>("set_import_code", text)?;
+                Ok(Affected {
+                    share: true,
+                    ..Affected::default()
+                })
+            }
+            Command::ImportFromUrl { url, mode } => {
+                let mode = match mode {
+                    ImportMode::ThisBuild => "this",
+                    ImportMode::NewBuild => "new",
+                };
+                // a link is a request, finished by a later Network step; a code imports at once
+                let request: Option<u64> = self.call("import_from_url", (url, mode))?;
+                let mut affected = match request {
+                    Some(_) => self.network_affected()?,
+                    None => self.all_views()?,
+                };
+                affected.share = true;
+                Ok(affected)
+            }
+            Command::ShareBuild { site } => {
+                self.call::<_, u64>("share_build", site)?;
+                let mut affected = self.network_affected()?;
+                affected.share = true;
+                Ok(affected)
+            }
+            Command::ExportShareCode => Ok(Affected {
+                share_code: true,
+                ..Affected::default()
+            }),
             Command::Save => {
                 self.call::<_, ()>("save", ())?;
                 // PoB's save rewrites the notes' `^_` escapes
@@ -1750,6 +1792,14 @@ impl Backend for PobBackend {
         self.view("requests_view", ())
     }
 
+    fn share_view(&mut self) -> Result<ShareView> {
+        self.view("share_view", ())
+    }
+
+    fn share_code(&mut self) -> Result<String> {
+        self.call("share_code", ())
+    }
+
     fn set_waker(&mut self, wake: Waker) {
         self.net.set_waker(wake);
     }
@@ -1908,6 +1958,40 @@ mod tests {
         fake.pending = vec![(1, "build")];
         let _ = fake.apply(Command::Save, &|_| {});
         assert_eq!(log.lock().unwrap().requests, ["apply Save"]);
+    }
+
+    #[test]
+    fn import_from_url_cancels_pending_first() {
+        use crate::engine::ImportMode;
+        use crate::engine::fake::Fake;
+        // R13: either mode replaces the build, so every request is cancelled before it acts
+        for mode in [ImportMode::ThisBuild, ImportMode::NewBuild] {
+            let (mut fake, log) = Fake::new();
+            fake.pending = vec![(1, "build"), (2, "list")];
+            let command = Command::ImportFromUrl {
+                url: "https://pobb.in/x".into(),
+                mode,
+            };
+            let shown = format!("apply {command:?}");
+            let _ = fake.apply(command, &|_| {});
+            assert_eq!(
+                log.lock().unwrap().requests,
+                ["cancel 1", "cancel 2", &shown]
+            );
+            assert!(fake.pending.is_empty());
+        }
+        // it leaves the build like the other commands that replace it
+        assert!(leaves_build(&Command::ImportFromUrl {
+            url: String::new(),
+            mode: ImportMode::NewBuild
+        }));
+        // a share only reads the build
+        assert_eq!(
+            cancels_requests(&Command::ShareBuild {
+                site: "POBBin".into()
+            }),
+            None
+        );
     }
 
     fn pinned_dir() -> std::path::PathBuf {

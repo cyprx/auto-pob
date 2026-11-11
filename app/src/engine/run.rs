@@ -13,7 +13,7 @@ use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, ControlTooltipView,
     DisplayItemView, GemSearchView, GemTooltipView, GroupTooltipView, ItemDbView, ItemText,
     ItemTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, PopupView, PowerReport,
-    RequestsView, SkillsView, SocketGroupText, StatsView, TreeLayout, TreeState,
+    RequestsView, ShareView, SkillsView, SocketGroupText, StatsView, TreeLayout, TreeState,
 };
 use pob_runtime::net::Waker;
 
@@ -49,6 +49,10 @@ pub enum Snapshot {
     Notes(Arc<NotesView>),
     /// The pending and newly finished network requests; sent with or without a build (R10)
     Requests(Arc<RequestsView>),
+    /// The build sharing and import box of the Import/Export tab (R16, R17)
+    Share(Arc<ShareView>),
+    /// The build's share code, answering `ExportShareCode` (R17)
+    ShareCode(Arc<String>),
 }
 
 /// Long-running work the engine does between commands.
@@ -146,6 +150,10 @@ pub struct Affected {
     pub short_link: bool,
     /// The network requests changed: one began, finished or was cancelled (R10)
     pub requests: bool,
+    /// The import box or the sharing state changed (R16, R17); build-only
+    pub share: bool,
+    /// The share code was requested (R17); build-only
+    pub share_code: bool,
 }
 
 impl Affected {
@@ -178,6 +186,8 @@ impl Affected {
         link: false,
         short_link: false,
         requests: true,
+        share: true,
+        share_code: false,
     };
 
     /// Only views that need no build are asked for: the build list and the requests (R10).
@@ -231,6 +241,8 @@ impl Affected {
         self.link |= other.link;
         self.short_link |= other.short_link;
         self.requests |= other.requests;
+        self.share |= other.share;
+        self.share_code |= other.share_code;
     }
 }
 
@@ -305,6 +317,10 @@ pub trait Backend {
     fn tree_link_view(&mut self) -> anyhow::Result<String>;
     /// The short link a finished PoEURL shrink produced, or `None` once taken (R20).
     fn short_tree_link_view(&mut self) -> anyhow::Result<Option<String>>;
+    /// The Import/Export tab's sharing state and import box (R16, R17)
+    fn share_view(&mut self) -> anyhow::Result<ShareView>;
+    /// The build's share code: PoB's Generate button, no network (R17)
+    fn share_code(&mut self) -> anyhow::Result<String>;
     /// Hands back the memory the last busy stretch left behind. The loop calls it once it has
     /// been idle for a while after work, never between a background job's steps.
     fn release_memory(&mut self);
@@ -556,6 +572,41 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
     if flags.requests {
         emit(seq, send, backend.requests_view(), Snapshot::Requests);
     }
+    if flags.share {
+        emit(seq, send, backend.share_view(), Snapshot::Share);
+    }
+    if flags.share_code {
+        emit(seq, send, backend.share_code(), Snapshot::ShareCode);
+    }
+}
+
+/// Recalculates once when `affected` asks for it, and adds the views that depend on the result.
+fn recalculate_if_asked(
+    backend: &mut dyn Backend,
+    affected: &mut Affected,
+    seq: u64,
+    send: &dyn Fn(Event),
+) {
+    if !affected.recalc {
+        return;
+    }
+    if let Err(e) = backend.recalculate() {
+        send(Event::Error {
+            seq,
+            message: format!("{e:#}"),
+        });
+    }
+    // Config visibility depends on the calculation.
+    affected.stats = true;
+    affected.config = true;
+    // Allocated points and the paths between them depend on the calculation too.
+    affected.tree = true;
+    affected.calcs = true;
+    affected.skills = true;
+    affected.items = true;
+    affected.display_item = true;
+    // Draw restarts an open list on a new output revision (R14)
+    affected.item_db = true;
 }
 
 /// Processes commands until `Shutdown` or until every sender is gone.
@@ -598,7 +649,11 @@ fn run_loop_with_delay(
                 Err(TryRecvError::Empty) => {
                     worked = true;
                     match backend.background_step(task, send) {
-                        Ok(affected) => send_snapshots(backend, last_seq, affected, send),
+                        Ok(mut affected) => {
+                            // a network step that edited or replaced the build (R14)
+                            recalculate_if_asked(backend, &mut affected, last_seq, send);
+                            send_snapshots(backend, last_seq, affected, send);
+                        }
                         Err(e) => send(Event::BackgroundFailed {
                             task,
                             message: format!("{e:#}"),
@@ -654,25 +709,7 @@ fn run_loop_with_delay(
                 }
             }
         }
-        if affected.recalc {
-            if let Err(e) = backend.recalculate() {
-                send(Event::Error {
-                    seq: last_seq,
-                    message: format!("{e:#}"),
-                });
-            }
-            // Config visibility depends on the calculation.
-            affected.stats = true;
-            affected.config = true;
-            // Allocated points and the paths between them depend on the calculation too.
-            affected.tree = true;
-            affected.calcs = true;
-            affected.skills = true;
-            affected.items = true;
-            affected.display_item = true;
-            // Draw restarts an open list on a new output revision (R14)
-            affected.item_db = true;
-        }
+        recalculate_if_asked(backend, &mut affected, last_seq, send);
         send_snapshots(backend, last_seq, affected, send);
         if shutdown {
             return;
@@ -938,6 +975,7 @@ mod tests {
                     Snapshot::Popup(_) => "popup",
                     Snapshot::Notes(_) => "notes",
                     Snapshot::Requests(_) => "requests",
+                    Snapshot::Share(_) => "share",
                     other => panic!("unexpected {other:?}"),
                 }
             })
@@ -957,7 +995,8 @@ mod tests {
                 "display_item",
                 "popup",
                 "notes",
-                "requests"
+                "requests",
+                "share"
             ]
         );
     }
@@ -1042,9 +1081,9 @@ mod tests {
         assert_eq!(stats_seq, Some(3));
         assert_eq!(config_seq, Some(3));
         assert_eq!(log.lock().unwrap().set_configs, 2);
-        // Ready + 13 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items + DisplayItem; the channel disconnect means the
+        // Ready + 14 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items + DisplayItem; the channel disconnect means the
         // thread (and so every wake) is finished.
-        assert_eq!(wakes.load(Ordering::SeqCst), 21);
+        assert_eq!(wakes.load(Ordering::SeqCst), 22);
     }
 
     #[test]
@@ -1943,6 +1982,24 @@ mod tests {
     }
 
     #[test]
+    fn network_step_that_edits_the_build_recalculates() {
+        // a request's callback replaced the build (R14); the loop calculates it, as it does
+        // for a command that asks, and the views that depend on the result follow
+        let (mut fake, log) = Fake::new();
+        fake.net_ready.store(true, Ordering::SeqCst);
+        fake.network_recalc = true;
+        let events = run_until_idle(&mut fake, vec![], 1);
+        assert_eq!(log.lock().unwrap().recalculations, 1);
+        assert_eq!(count_of(&events, |s| matches!(s, Snapshot::Stats(_))), 1);
+        // a step that asks for nothing recalculates nothing
+        let (mut fake, log) = Fake::new();
+        fake.net_ready.store(true, Ordering::SeqCst);
+        let events = run_until_idle(&mut fake, vec![], 1);
+        assert_eq!(log.lock().unwrap().recalculations, 0);
+        assert_eq!(count_of(&events, |s| matches!(s, Snapshot::Stats(_))), 0);
+    }
+
+    #[test]
     fn requests_view_is_sent_without_a_build() {
         let flags = Affected {
             requests: true,
@@ -1967,6 +2024,64 @@ mod tests {
         };
         assert_eq!(kinds(true), ["stats", "requests"]);
         assert_eq!(kinds(false), ["requests"]);
+    }
+
+    fn count_of(events: &[Event], wanted: fn(&Snapshot) -> bool) -> usize {
+        snapshots(events).iter().filter(|(_, s)| wanted(s)).count()
+    }
+
+    #[test]
+    fn share_code_query_latest_wins() {
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(
+            &mut fake,
+            vec![
+                Command::ExportShareCode,
+                Command::ExportShareCode,
+                Command::ExportShareCode,
+            ],
+        );
+        assert_eq!(
+            count_of(&events, |s| matches!(s, Snapshot::ShareCode(_))),
+            1
+        );
+        assert_eq!(log.lock().unwrap().share_codes, 1);
+        // a later batch asks again
+        let events = run_queued(&mut fake, vec![Command::ExportShareCode]);
+        assert_eq!(
+            count_of(&events, |s| matches!(s, Snapshot::ShareCode(_))),
+            1
+        );
+        assert_eq!(log.lock().unwrap().share_codes, 2);
+    }
+
+    #[test]
+    fn share_views_masked_without_a_build() {
+        let queries = || {
+            vec![
+                Command::SetImportCode { text: "x".into() },
+                Command::ExportShareCode,
+            ]
+        };
+        let shares = |events: &[Event]| {
+            count_of(events, |s| {
+                matches!(s, Snapshot::Share(_) | Snapshot::ShareCode(_))
+            })
+        };
+        // with a build both are answered
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(&mut fake, queries());
+        assert_eq!(shares(&events), 2);
+        assert_eq!(log.lock().unwrap().share_codes, 1);
+        // with none, neither reaches the backend; the requests view still does
+        let (mut fake, log) = Fake::new();
+        fake.build_loaded = false;
+        let events = run_queued(&mut fake, queries());
+        assert_eq!(shares(&events), 0);
+        assert_eq!(log.lock().unwrap().share_codes, 0);
+        assert_eq!(log.lock().unwrap().share_views, 0);
+        assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
+        assert_eq!(count_of(&events, |s| matches!(s, Snapshot::Requests(_))), 1);
     }
 
     #[test]

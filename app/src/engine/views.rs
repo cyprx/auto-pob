@@ -1376,3 +1376,47 @@ pub struct FinishedRequest {
     #[serde(default)]
     pub new_build: bool,
 }
+
+/// The Import/Export tab's build sharing: the sites Share offers, the last link it made, and
+/// PoB's import box (R16, R17).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ShareView {
+    /// The sites Share uploads to, in PoB's dropdown order
+    #[serde(default)]
+    pub sites: Vec<SiteRef>,
+    /// The site chosen last in this build, if any
+    #[serde(default)]
+    pub last_site: Option<String>,
+    /// The link the last Share made, until the code box changes
+    #[serde(default)]
+    pub link: Option<String>,
+    /// A Share is uploading
+    #[serde(default)]
+    pub sharing: bool,
+    pub import: ImportCodeView,
+}
+
+/// A build site by PoB's id (`"POBBin"`) and the name it shows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SiteRef {
+    pub id: String,
+    pub label: String,
+}
+
+/// PoB's import box as it stands.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ImportCodeView {
+    pub text: String,
+    /// PoB's validator accepts the text
+    pub valid: bool,
+    /// PoB's verdict, such as `URL is valid (pobb.in)`, with colour codes stripped
+    #[serde(default)]
+    pub detail: String,
+    /// The id of the site the text names
+    #[serde(default)]
+    pub site: Option<String>,
+    /// A link is being fetched
+    pub fetching: bool,
+    /// The open build has a file, so it can be replaced
+    pub can_import_to_this_build: bool,
+}

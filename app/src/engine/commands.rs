@@ -15,6 +15,15 @@ pub enum SocketColour {
     W,
 }
 
+/// Where an import from a link or code goes (R16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ImportMode {
+    /// Replaces the open build; only for a build with a file
+    ThisBuild,
+    /// Opens a new, unsaved build
+    NewBuild,
+}
+
 #[derive(Debug, Clone)]
 pub enum Command {
     /// Sub-path relative to the Builds folder; "" is the root.
@@ -28,6 +37,24 @@ pub enum Command {
     ImportShareCode {
         code: String,
     },
+    /// Pastes into PoB's import box, whose validator runs live; the verdict is in
+    /// `ShareView.import` (R16).
+    SetImportCode {
+        text: String,
+    },
+    /// Imports from a build site's link, a `pob://` link or a share code (R15, R16). A link is
+    /// a network request; a code imports at once.
+    ImportFromUrl {
+        url: String,
+        mode: ImportMode,
+    },
+    /// Uploads the build to a build site (a network request); the new link comes in
+    /// `ShareView.link` (R17).
+    ShareBuild {
+        site: String,
+    },
+    /// Ask for the build's share code: PoB's Generate button, no network (R17).
+    ExportShareCode,
     Save,
     SaveAs {
         folder: String,

@@ -409,7 +409,10 @@ fn import_share_code_trims_and_rejects_urls() {
             code: "https://pobb.in/abc".into(),
         })
         .unwrap_err();
-    assert!(format!("{err:#}").contains("network features"), "{err:#}");
+    assert!(
+        format!("{err:#}").contains("that's a link; use Import from URL"),
+        "{err:#}"
+    );
 }
 
 fn save_as(name: &str, overwrite: bool) -> Command {

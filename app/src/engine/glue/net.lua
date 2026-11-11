@@ -268,6 +268,13 @@ local function finish(req)
 		end
 		req.popup = nil
 	end
+	-- what PoB's own flags say about a request that ended without its effect (R16)
+	if req.opts.after and not req.cancelled then
+		local ok, err = pcall(req.opts.after, req)
+		if not ok then
+			record_error(req, err)
+		end
+	end
 	requests[req.id] = nil
 	remove_pending(req.id)
 	local entry = {
@@ -298,7 +305,8 @@ end
 -- `opts.confirmed`: confirms PoB's confirm popups; `opts.popup`: a detached PopupDialog the
 -- request owns (taken out of `main.popups` if it is on top); `opts.scope`: "build" (default) or
 -- "list"; `opts.done(req)`: called when the request ends with its owned popup still open (not
--- when cancelled), before `req.error` is read from the popup. Returns the request id, or nil plus PoB's message when nothing was launched.
+-- when cancelled), before `req.error` is read from the popup; `opts.after(req)`: called when the
+-- request ends, not cancelled, once its error is known (it may set `req.error`). Returns the request id, or nil plus PoB's message when nothing was launched.
 -- An error `fn` raises before launching anything is raised.
 function glue.net_begin(label, opts, fn)
 	opts = opts or {}

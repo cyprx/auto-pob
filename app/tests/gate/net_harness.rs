@@ -117,7 +117,12 @@ pub(crate) fn settle_net(
     let mut steps = Vec::new();
     loop {
         if backend.next_background() == Some(BackgroundTask::Network) {
-            steps.push(backend.background_step(BackgroundTask::Network, &|_| {}));
+            let step = backend.background_step(BackgroundTask::Network, &|_| {});
+            // the loop recalculates for a step that asks (R14)
+            if step.as_ref().is_ok_and(|affected| affected.recalc) {
+                backend.recalculate().expect("recalculating");
+            }
+            steps.push(step);
             continue;
         }
         let pending: usize = backend

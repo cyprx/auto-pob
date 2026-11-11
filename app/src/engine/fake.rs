@@ -15,8 +15,8 @@ use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, ControlTooltipView,
     DisplayItemView, DropList, GemSearchView, GemTooltipView, GroupTooltipView, ItemDbView,
     ItemText, ItemTooltip, ItemTooltipView, ItemsView, NodePower, NodeTooltip, NotesView,
-    PendingRequest, Points, PopupView, PowerReport, RequestsView, SkillsView, SocketGroupText,
-    StatsView, TooltipLine, TreeLayout, TreeState,
+    PendingRequest, Points, PopupView, PowerReport, RequestsView, ShareView, SkillsView,
+    SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
 };
 
 #[derive(Default, Debug)]
@@ -41,6 +41,10 @@ pub struct Log {
     pub releases: usize,
     /// Cancels and applied commands, in order: `cancel <id>`, `apply <command>`
     pub requests: Vec<String>,
+    /// Share codes asked for
+    pub share_codes: usize,
+    /// Share views asked for
+    pub share_views: usize,
     pub applies: usize,
 }
 
@@ -91,6 +95,8 @@ pub struct Fake {
     pub waker: Option<Waker>,
     /// The short link `short_tree_link_view` answers once
     pub short_link: Option<String>,
+    /// A Network step reports that it changed the build and asks for a recalculation
+    pub network_recalc: bool,
 }
 
 impl Fake {
@@ -120,6 +126,7 @@ impl Fake {
                 pending: Vec::new(),
                 waker: None,
                 short_link: None,
+                network_recalc: false,
             },
             log,
         )
@@ -212,6 +219,20 @@ impl Fake {
             Command::ShrinkTreeLink => Ok(Affected {
                 short_link: true,
                 requests: true,
+                ..Affected::default()
+            }),
+            Command::SetImportCode { .. } | Command::ShareBuild { .. } => Ok(Affected {
+                share: true,
+                requests: true,
+                ..Affected::default()
+            }),
+            Command::ImportFromUrl { .. } => Ok(Affected {
+                share: true,
+                requests: true,
+                ..Affected::default()
+            }),
+            Command::ExportShareCode => Ok(Affected {
+                share_code: true,
                 ..Affected::default()
             }),
             _ => Ok(Affected::default()),
@@ -381,6 +402,7 @@ impl Backend for Fake {
             }
             return Ok(Affected {
                 requests: true,
+                recalc: self.network_recalc,
                 ..Affected::default()
             });
         }
@@ -565,6 +587,16 @@ impl Backend for Fake {
 
     fn short_tree_link_view(&mut self) -> anyhow::Result<Option<String>> {
         Ok(self.short_link.take())
+    }
+
+    fn share_view(&mut self) -> anyhow::Result<ShareView> {
+        self.log.lock().unwrap().share_views += 1;
+        Ok(ShareView::default())
+    }
+
+    fn share_code(&mut self) -> anyhow::Result<String> {
+        self.log.lock().unwrap().share_codes += 1;
+        Ok("fake-code".into())
     }
 
     fn requests_view(&mut self) -> anyhow::Result<RequestsView> {

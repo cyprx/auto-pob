@@ -3,6 +3,7 @@ pub mod build;
 pub mod build_list;
 pub mod calcs;
 pub mod config;
+pub mod items;
 pub mod notes;
 pub mod sidebar;
 pub mod skills;

@@ -11,6 +11,7 @@ use crate::ui::build::{self, BuildAction, BuildTab};
 use crate::ui::build_list::{BuildListUi, ListScreenAction};
 use crate::ui::calcs::{CalcsOutput, CalcsUi};
 use crate::ui::config::ConfigUi;
+use crate::ui::items::{ItemsOutput, ItemsUi};
 use crate::ui::notes::NotesUi;
 use crate::ui::skills::{SkillsOutput, SkillsUi};
 use crate::ui::tree::{TreeOutput, TreeTab};
@@ -72,6 +73,7 @@ pub struct AutoPobApp {
     tree: TreeTab,
     calcs: CalcsUi,
     skills: SkillsUi,
+    items: ItemsUi,
     sidebar: sidebar::SidebarState,
     notes: NotesUi,
     config_ui: ConfigUi,
@@ -117,6 +119,7 @@ impl AutoPobApp {
             tree: TreeTab::default(),
             calcs: CalcsUi::default(),
             skills: SkillsUi::default(),
+            items: ItemsUi::default(),
             sidebar: sidebar::SidebarState::default(),
             notes: NotesUi::default(),
             config_ui: ConfigUi::default(),
@@ -205,6 +208,7 @@ impl AutoPobApp {
                     self.tree.reset();
                     self.calcs.reset();
                     self.skills.reset();
+                    self.items.reset();
                     self.sidebar = sidebar::SidebarState::default();
                     self.notes.reset();
                 }
@@ -227,11 +231,10 @@ impl AutoPobApp {
                     | Snapshot::GroupTooltip(_)
                     | Snapshot::GemSearch(_)
                     | Snapshot::GemTooltip(_) => self.skills.on_snapshot(&snapshot),
-                    // the Items tab's UI comes later
                     Snapshot::Items(_)
                     | Snapshot::DisplayItem(_)
                     | Snapshot::ItemTooltip(_)
-                    | Snapshot::ItemText(_) => {}
+                    | Snapshot::ItemText(_) => self.items.on_snapshot(&snapshot),
                     Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
@@ -322,6 +325,9 @@ impl AutoPobApp {
         if let Some(command) = self.skills.flush() {
             self.send(command);
         }
+        if let Some(command) = self.items.flush() {
+            self.send(command);
+        }
     }
 
     fn run_action(&mut self, ctx: &egui::Context, action: Pending) {
@@ -409,6 +415,7 @@ impl AutoPobApp {
             BuildTab::Config => Tab::Config,
             BuildTab::Tree => Tab::Tree,
             BuildTab::Skills => Tab::Skills,
+            BuildTab::Items => Tab::Items,
             BuildTab::Calcs => Tab::Calcs,
             // the notes editor keeps its own history
             BuildTab::Notes => return,
@@ -548,7 +555,8 @@ impl AutoPobApp {
             || self.save_as.is_some()
             || self.import.is_some()
             || self.tree.has_dialog()
-            || self.skills.has_dialog();
+            || self.skills.has_dialog()
+            || self.items.has_dialog();
         // a focused button or row doesn't take Ctrl+Z from the tab
         let typing = ui.ctx().text_edit_focused();
         let mut action = None;
@@ -574,6 +582,7 @@ impl AutoPobApp {
             let history = match self.tab {
                 BuildTab::Tree => self.tree.history(),
                 BuildTab::Skills => self.skills.history(),
+                BuildTab::Items => self.items.history(),
                 BuildTab::Calcs => self.calcs.history(),
                 _ => (view.can_undo, view.can_redo),
             };
@@ -581,6 +590,7 @@ impl AutoPobApp {
         });
         let behind = self.behind();
         self.skills.set_modal(modal);
+        self.items.set_modal(modal);
         let mut sidebar_commands = Vec::new();
         egui::Panel::left("stats_sidebar")
             .resizable(true)
@@ -597,6 +607,7 @@ impl AutoPobApp {
         let mut tree_out = TreeOutput::default();
         let mut calcs_out = CalcsOutput::default();
         let mut skills_out = SkillsOutput::default();
+        let mut items_out = ItemsOutput::default();
         let mut notes_command = None;
         let config = self.config.clone();
         egui::CentralPanel::default().show(ui, |ui| {
@@ -607,6 +618,10 @@ impl AutoPobApp {
                 BuildTab::Skills => {
                     let now = ui.input(|i| i.time);
                     skills_out = self.skills.show(ui, now, behind);
+                }
+                BuildTab::Items => {
+                    let now = ui.input(|i| i.time);
+                    items_out = self.items.show(ui, now, behind);
                 }
                 BuildTab::Calcs => calcs_out = self.calcs.show(ui, behind),
                 BuildTab::Notes => {
@@ -643,6 +658,20 @@ impl AutoPobApp {
             if let Some(command) = self.skills.close_dialogs() {
                 self.send(command);
             }
+        }
+        if self.tab != BuildTab::Items {
+            // leaving the tab sends an edit still being typed and closes its dialogs
+            if let Some(command) = self.items.flush() {
+                self.send(command);
+            }
+            self.items.close_dialogs();
+        }
+        for command in items_out.commands {
+            self.send(command);
+        }
+        // questions never leave the app waiting
+        for query in items_out.queries {
+            self.engine.send(query);
         }
         for command in skills_out.commands {
             self.send(command);
@@ -2053,6 +2082,74 @@ mod tests {
             ),
         );
         assert_eq!(sent_since(&app, before), ["Undo(Skills)", "Redo(Skills)"]);
+    }
+
+    fn items_app() -> (AutoPobApp, egui::Context) {
+        let (mut app, ctx) = tree_app();
+        app.on_event(Event::Snapshot {
+            seq: 90,
+            snapshot: Snapshot::Items(Arc::new(crate::ui::items::tests::sample())),
+        });
+        app.tab = BuildTab::Items;
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        (app, ctx)
+    }
+
+    #[test]
+    fn ctrl_z_on_items_sends_items_undo() {
+        let (mut app, ctx) = items_app();
+        // a focused row must not count as typing
+        let pos = app.items.rect("row_1").center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        assert!(ctx.egui_wants_keyboard_input() && !ctx.text_edit_focused());
+        let before = app.sent_full.len();
+        frame(&mut app, &ctx, ctrl(egui::Key::Z));
+        frame(
+            &mut app,
+            &ctx,
+            key_with(
+                egui::Key::Z,
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            ),
+        );
+        assert_eq!(sent_since(&app, before), ["Undo(Items)", "Redo(Items)"]);
+    }
+
+    #[test]
+    fn leaving_the_items_tab_closes_its_dialogs() {
+        let (mut app, ctx) = items_app();
+        let pos = app.items.rect("manage").center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        assert!(app.items.has_dialog());
+        app.tab = BuildTab::Notes;
+        frame(&mut app, &ctx, vec![]);
+        assert!(!app.items.has_dialog());
     }
 
     #[test]

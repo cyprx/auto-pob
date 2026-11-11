@@ -6,19 +6,7 @@ use crate::engine::{Command, SkillOption};
 use crate::widgets::{pob_text, tooltip_ui};
 use eframe::egui::{self, Color32, Rect, Stroke};
 
-/// Where a dragged group ends up, as `ListControl`'s drop does it. `hovered` is the row the
-/// pointer is over and `below` whether it is in that row's lower half. `None` when the drop
-/// changes nothing (the gap is right above or right below the dragged row).
-pub fn drop_index(from: usize, hovered: usize, below: bool) -> Option<usize> {
-    let gap = hovered + usize::from(below);
-    if gap == from || gap == from + 1 {
-        None
-    } else if gap > from {
-        Some(gap - 1)
-    } else {
-        Some(gap)
-    }
-}
+pub use crate::widgets::drop_index;
 
 /// The row's text: a star on the main skill, dimmed when disabled, italic for an item's group.
 fn row_text(g: &SocketGroupView, default: Color32) -> egui::text::LayoutJob {

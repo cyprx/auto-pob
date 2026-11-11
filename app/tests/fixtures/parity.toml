@@ -2133,13 +2133,13 @@ ported = "app/src/ui/items/db.rs stat sort"
 ported = "app/src/ui/items/db.rs filters"
 
 [controls."items.weaponSwap1"]
-ported = "app/src/ui/items/slots.rs weapon set I/II"
+ported = "app/src/ui/items/sets.rs weapon set I/II"
 
 [controls."items.weaponSwap2"]
-ported = "app/src/ui/items/slots.rs weapon set I/II"
+ported = "app/src/ui/items/sets.rs weapon set I/II"
 
 [controls."items.weaponSwapLabel"]
-ported = "app/src/ui/items/slots.rs weapon set I/II"
+ported = "app/src/ui/items/sets.rs weapon set I/II"
 
 [controls."list.buildList"]
 gap = "Task 6"
@@ -2525,365 +2525,95 @@ ported = "app/src/ui/skills/group.rs gem table"
 [controls."skills.gemQualityHeader"]
 ported = "app/src/ui/skills/group.rs gem table"
 
-[controls."skills.gemSlot1Count"]
+[controls."skills.gemSlot#Count"]
 gap = "Task 13"
 note = "box ported (skills/group.rs); the what-if tooltip is R22"
 
-[controls."skills.gemSlot1Count.buttonDown"]
+[controls."skills.gemSlot#Count.buttonDown"]
 gap = "Task 13"
-note = "part of skills.gemSlot1Count"
+note = "part of skills.gemSlot#Count"
 
-[controls."skills.gemSlot1Count.buttonUp"]
+[controls."skills.gemSlot#Count.buttonUp"]
 gap = "Task 13"
-note = "part of skills.gemSlot1Count"
+note = "part of skills.gemSlot#Count"
 
-[controls."skills.gemSlot1Count.scrollBarH"]
+[controls."skills.gemSlot#Count.scrollBarH"]
 gap = "Task 13"
-note = "part of skills.gemSlot1Count"
+note = "part of skills.gemSlot#Count"
 
-[controls."skills.gemSlot1Count.scrollBarV"]
+[controls."skills.gemSlot#Count.scrollBarV"]
 gap = "Task 13"
-note = "part of skills.gemSlot1Count"
+note = "part of skills.gemSlot#Count"
 
-[controls."skills.gemSlot1Delete"]
+[controls."skills.gemSlot#Delete"]
 ported = "app/src/ui/skills/group.rs gem table"
 
-[controls."skills.gemSlot1Enable"]
+[controls."skills.gemSlot#Enable"]
 gap = "Task 13"
 note = "box ported (skills/group.rs); the what-if tooltip is R22"
 
-[controls."skills.gemSlot1EnableGlobal1"]
+[controls."skills.gemSlot#EnableGlobal1"]
 ported = "app/src/ui/skills/group.rs Vaal toggles"
 
-[controls."skills.gemSlot1EnableGlobal2"]
+[controls."skills.gemSlot#EnableGlobal2"]
 ported = "app/src/ui/skills/group.rs Vaal toggles"
 
-[controls."skills.gemSlot1ErrMsg"]
+[controls."skills.gemSlot#ErrMsg"]
 ported = "app/src/ui/skills/group.rs unknown gems in red"
 
-[controls."skills.gemSlot1Level"]
+[controls."skills.gemSlot#Level"]
 ported = "app/src/ui/skills/group.rs gem table"
 
-[controls."skills.gemSlot1Level.buttonDown"]
+[controls."skills.gemSlot#Level.buttonDown"]
 ported = "app/src/ui/skills/group.rs gem table"
-note = "part of skills.gemSlot1Level"
+note = "part of skills.gemSlot#Level"
 
-[controls."skills.gemSlot1Level.buttonUp"]
+[controls."skills.gemSlot#Level.buttonUp"]
 ported = "app/src/ui/skills/group.rs gem table"
-note = "part of skills.gemSlot1Level"
+note = "part of skills.gemSlot#Level"
 
-[controls."skills.gemSlot1Level.scrollBarH"]
+[controls."skills.gemSlot#Level.scrollBarH"]
 ported = "app/src/ui/skills/group.rs gem table"
-note = "part of skills.gemSlot1Level"
+note = "part of skills.gemSlot#Level"
 
-[controls."skills.gemSlot1Level.scrollBarV"]
+[controls."skills.gemSlot#Level.scrollBarV"]
 ported = "app/src/ui/skills/group.rs gem table"
-note = "part of skills.gemSlot1Level"
+note = "part of skills.gemSlot#Level"
 
-[controls."skills.gemSlot1Name"]
+[controls."skills.gemSlot#Name"]
 ported = "app/src/ui/skills/picker.rs gem picker"
 
-[controls."skills.gemSlot1Name.scrollBar"]
+[controls."skills.gemSlot#Name.scrollBar"]
 ported = "app/src/ui/skills/picker.rs gem picker"
-note = "part of skills.gemSlot1Name"
+note = "part of skills.gemSlot#Name"
 
-[controls."skills.gemSlot1Name.scrollBarH"]
+[controls."skills.gemSlot#Name.scrollBarH"]
 ported = "app/src/ui/skills/picker.rs gem picker"
-note = "part of skills.gemSlot1Name"
+note = "part of skills.gemSlot#Name"
 
-[controls."skills.gemSlot1Name.scrollBarV"]
+[controls."skills.gemSlot#Name.scrollBarV"]
 ported = "app/src/ui/skills/picker.rs gem picker"
-note = "part of skills.gemSlot1Name"
+note = "part of skills.gemSlot#Name"
 
-[controls."skills.gemSlot1Quality"]
+[controls."skills.gemSlot#Quality"]
 gap = "Task 13"
 note = "box ported (skills/group.rs); the what-if tooltip is R22"
 
-[controls."skills.gemSlot1Quality.buttonDown"]
+[controls."skills.gemSlot#Quality.buttonDown"]
 gap = "Task 13"
-note = "part of skills.gemSlot1Quality"
+note = "part of skills.gemSlot#Quality"
 
-[controls."skills.gemSlot1Quality.buttonUp"]
+[controls."skills.gemSlot#Quality.buttonUp"]
 gap = "Task 13"
-note = "part of skills.gemSlot1Quality"
+note = "part of skills.gemSlot#Quality"
 
-[controls."skills.gemSlot1Quality.scrollBarH"]
+[controls."skills.gemSlot#Quality.scrollBarH"]
 gap = "Task 13"
-note = "part of skills.gemSlot1Quality"
+note = "part of skills.gemSlot#Quality"
 
-[controls."skills.gemSlot1Quality.scrollBarV"]
+[controls."skills.gemSlot#Quality.scrollBarV"]
 gap = "Task 13"
-note = "part of skills.gemSlot1Quality"
-
-[controls."skills.gemSlot2Count"]
-gap = "Task 13"
-note = "box ported (skills/group.rs); the what-if tooltip is R22"
-
-[controls."skills.gemSlot2Count.buttonDown"]
-gap = "Task 13"
-note = "part of skills.gemSlot2Count"
-
-[controls."skills.gemSlot2Count.buttonUp"]
-gap = "Task 13"
-note = "part of skills.gemSlot2Count"
-
-[controls."skills.gemSlot2Count.scrollBarH"]
-gap = "Task 13"
-note = "part of skills.gemSlot2Count"
-
-[controls."skills.gemSlot2Count.scrollBarV"]
-gap = "Task 13"
-note = "part of skills.gemSlot2Count"
-
-[controls."skills.gemSlot2Delete"]
-ported = "app/src/ui/skills/group.rs gem table"
-
-[controls."skills.gemSlot2Enable"]
-gap = "Task 13"
-note = "box ported (skills/group.rs); the what-if tooltip is R22"
-
-[controls."skills.gemSlot2EnableGlobal1"]
-ported = "app/src/ui/skills/group.rs Vaal toggles"
-
-[controls."skills.gemSlot2EnableGlobal2"]
-ported = "app/src/ui/skills/group.rs Vaal toggles"
-
-[controls."skills.gemSlot2ErrMsg"]
-ported = "app/src/ui/skills/group.rs unknown gems in red"
-
-[controls."skills.gemSlot2Level"]
-ported = "app/src/ui/skills/group.rs gem table"
-
-[controls."skills.gemSlot2Level.buttonDown"]
-ported = "app/src/ui/skills/group.rs gem table"
-note = "part of skills.gemSlot2Level"
-
-[controls."skills.gemSlot2Level.buttonUp"]
-ported = "app/src/ui/skills/group.rs gem table"
-note = "part of skills.gemSlot2Level"
-
-[controls."skills.gemSlot2Level.scrollBarH"]
-ported = "app/src/ui/skills/group.rs gem table"
-note = "part of skills.gemSlot2Level"
-
-[controls."skills.gemSlot2Level.scrollBarV"]
-ported = "app/src/ui/skills/group.rs gem table"
-note = "part of skills.gemSlot2Level"
-
-[controls."skills.gemSlot2Name"]
-ported = "app/src/ui/skills/picker.rs gem picker"
-
-[controls."skills.gemSlot2Name.scrollBar"]
-ported = "app/src/ui/skills/picker.rs gem picker"
-note = "part of skills.gemSlot2Name"
-
-[controls."skills.gemSlot2Name.scrollBarH"]
-ported = "app/src/ui/skills/picker.rs gem picker"
-note = "part of skills.gemSlot2Name"
-
-[controls."skills.gemSlot2Name.scrollBarV"]
-ported = "app/src/ui/skills/picker.rs gem picker"
-note = "part of skills.gemSlot2Name"
-
-[controls."skills.gemSlot2Quality"]
-gap = "Task 13"
-note = "box ported (skills/group.rs); the what-if tooltip is R22"
-
-[controls."skills.gemSlot2Quality.buttonDown"]
-gap = "Task 13"
-note = "part of skills.gemSlot2Quality"
-
-[controls."skills.gemSlot2Quality.buttonUp"]
-gap = "Task 13"
-note = "part of skills.gemSlot2Quality"
-
-[controls."skills.gemSlot2Quality.scrollBarH"]
-gap = "Task 13"
-note = "part of skills.gemSlot2Quality"
-
-[controls."skills.gemSlot2Quality.scrollBarV"]
-gap = "Task 13"
-note = "part of skills.gemSlot2Quality"
-
-[controls."skills.gemSlot3Count"]
-gap = "Task 13"
-note = "box ported (skills/group.rs); the what-if tooltip is R22"
-
-[controls."skills.gemSlot3Count.buttonDown"]
-gap = "Task 13"
-note = "part of skills.gemSlot3Count"
-
-[controls."skills.gemSlot3Count.buttonUp"]
-gap = "Task 13"
-note = "part of skills.gemSlot3Count"
-
-[controls."skills.gemSlot3Count.scrollBarH"]
-gap = "Task 13"
-note = "part of skills.gemSlot3Count"
-
-[controls."skills.gemSlot3Count.scrollBarV"]
-gap = "Task 13"
-note = "part of skills.gemSlot3Count"
-
-[controls."skills.gemSlot3Delete"]
-ported = "app/src/ui/skills/group.rs gem table"
-
-[controls."skills.gemSlot3Enable"]
-gap = "Task 13"
-note = "box ported (skills/group.rs); the what-if tooltip is R22"
-
-[controls."skills.gemSlot3EnableGlobal1"]
-ported = "app/src/ui/skills/group.rs Vaal toggles"
-
-[controls."skills.gemSlot3EnableGlobal2"]
-ported = "app/src/ui/skills/group.rs Vaal toggles"
-
-[controls."skills.gemSlot3ErrMsg"]
-ported = "app/src/ui/skills/group.rs unknown gems in red"
-
-[controls."skills.gemSlot3Level"]
-ported = "app/src/ui/skills/group.rs gem table"
-
-[controls."skills.gemSlot3Level.buttonDown"]
-ported = "app/src/ui/skills/group.rs gem table"
-note = "part of skills.gemSlot3Level"
-
-[controls."skills.gemSlot3Level.buttonUp"]
-ported = "app/src/ui/skills/group.rs gem table"
-note = "part of skills.gemSlot3Level"
-
-[controls."skills.gemSlot3Level.scrollBarH"]
-ported = "app/src/ui/skills/group.rs gem table"
-note = "part of skills.gemSlot3Level"
-
-[controls."skills.gemSlot3Level.scrollBarV"]
-ported = "app/src/ui/skills/group.rs gem table"
-note = "part of skills.gemSlot3Level"
-
-[controls."skills.gemSlot3Name"]
-ported = "app/src/ui/skills/picker.rs gem picker"
-
-[controls."skills.gemSlot3Name.scrollBar"]
-ported = "app/src/ui/skills/picker.rs gem picker"
-note = "part of skills.gemSlot3Name"
-
-[controls."skills.gemSlot3Name.scrollBarH"]
-ported = "app/src/ui/skills/picker.rs gem picker"
-note = "part of skills.gemSlot3Name"
-
-[controls."skills.gemSlot3Name.scrollBarV"]
-ported = "app/src/ui/skills/picker.rs gem picker"
-note = "part of skills.gemSlot3Name"
-
-[controls."skills.gemSlot3Quality"]
-gap = "Task 13"
-note = "box ported (skills/group.rs); the what-if tooltip is R22"
-
-[controls."skills.gemSlot3Quality.buttonDown"]
-gap = "Task 13"
-note = "part of skills.gemSlot3Quality"
-
-[controls."skills.gemSlot3Quality.buttonUp"]
-gap = "Task 13"
-note = "part of skills.gemSlot3Quality"
-
-[controls."skills.gemSlot3Quality.scrollBarH"]
-gap = "Task 13"
-note = "part of skills.gemSlot3Quality"
-
-[controls."skills.gemSlot3Quality.scrollBarV"]
-gap = "Task 13"
-note = "part of skills.gemSlot3Quality"
-
-[controls."skills.gemSlot4Count"]
-gap = "Task 13"
-note = "box ported (skills/group.rs); the what-if tooltip is R22"
-
-[controls."skills.gemSlot4Count.buttonDown"]
-gap = "Task 13"
-note = "part of skills.gemSlot4Count"
-
-[controls."skills.gemSlot4Count.buttonUp"]
-gap = "Task 13"
-note = "part of skills.gemSlot4Count"
-
-[controls."skills.gemSlot4Count.scrollBarH"]
-gap = "Task 13"
-note = "part of skills.gemSlot4Count"
-
-[controls."skills.gemSlot4Count.scrollBarV"]
-gap = "Task 13"
-note = "part of skills.gemSlot4Count"
-
-[controls."skills.gemSlot4Delete"]
-ported = "app/src/ui/skills/group.rs gem table"
-
-[controls."skills.gemSlot4Enable"]
-gap = "Task 13"
-note = "box ported (skills/group.rs); the what-if tooltip is R22"
-
-[controls."skills.gemSlot4EnableGlobal1"]
-ported = "app/src/ui/skills/group.rs Vaal toggles"
-
-[controls."skills.gemSlot4EnableGlobal2"]
-ported = "app/src/ui/skills/group.rs Vaal toggles"
-
-[controls."skills.gemSlot4ErrMsg"]
-ported = "app/src/ui/skills/group.rs unknown gems in red"
-
-[controls."skills.gemSlot4Level"]
-ported = "app/src/ui/skills/group.rs gem table"
-
-[controls."skills.gemSlot4Level.buttonDown"]
-ported = "app/src/ui/skills/group.rs gem table"
-note = "part of skills.gemSlot4Level"
-
-[controls."skills.gemSlot4Level.buttonUp"]
-ported = "app/src/ui/skills/group.rs gem table"
-note = "part of skills.gemSlot4Level"
-
-[controls."skills.gemSlot4Level.scrollBarH"]
-ported = "app/src/ui/skills/group.rs gem table"
-note = "part of skills.gemSlot4Level"
-
-[controls."skills.gemSlot4Level.scrollBarV"]
-ported = "app/src/ui/skills/group.rs gem table"
-note = "part of skills.gemSlot4Level"
-
-[controls."skills.gemSlot4Name"]
-ported = "app/src/ui/skills/picker.rs gem picker"
-
-[controls."skills.gemSlot4Name.scrollBar"]
-ported = "app/src/ui/skills/picker.rs gem picker"
-note = "part of skills.gemSlot4Name"
-
-[controls."skills.gemSlot4Name.scrollBarH"]
-ported = "app/src/ui/skills/picker.rs gem picker"
-note = "part of skills.gemSlot4Name"
-
-[controls."skills.gemSlot4Name.scrollBarV"]
-ported = "app/src/ui/skills/picker.rs gem picker"
-note = "part of skills.gemSlot4Name"
-
-[controls."skills.gemSlot4Quality"]
-gap = "Task 13"
-note = "box ported (skills/group.rs); the what-if tooltip is R22"
-
-[controls."skills.gemSlot4Quality.buttonDown"]
-gap = "Task 13"
-note = "part of skills.gemSlot4Quality"
-
-[controls."skills.gemSlot4Quality.buttonUp"]
-gap = "Task 13"
-note = "part of skills.gemSlot4Quality"
-
-[controls."skills.gemSlot4Quality.scrollBarH"]
-gap = "Task 13"
-note = "part of skills.gemSlot4Quality"
-
-[controls."skills.gemSlot4Quality.scrollBarV"]
-gap = "Task 13"
-note = "part of skills.gemSlot4Quality"
+note = "part of skills.gemSlot#Quality"
 
 [controls."skills.groupCount"]
 ported = "app/src/ui/skills/group.rs count (item groups)"
@@ -3177,9 +2907,45 @@ ported = "app/src/ui/popup.rs session (SP5b)"
 ported = "app/src/ui/import.rs confirm"
 note = "PoB's warning text"
 
+[popups."Build:2071"]
+ported = "app/src/ui/app.rs save error"
+note = "a failed save shows the error"
+
+[popups."BuildList:143"]
+gap = "Task 6"
+note = "PoB's message: a folder cannot be copied into itself (NF-13) (R16 operations show PoB's text)"
+
+[popups."BuildList:158"]
+gap = "Task 6"
+note = "PoB's message: a folder cannot be moved into itself (R16 operations show PoB's text)"
+
+[popups."BuildListControl:121"]
+gap = "Task 6"
+note = "PoB's message: rename failure (R16 operations show PoB's text)"
+
+[popups."BuildListControl:131"]
+gap = "Task 6"
+note = "PoB's message: copy failure (R16 operations show PoB's text)"
+
+[popups."BuildListControl:137"]
+gap = "Task 6"
+note = "PoB's message: rename failure (R16 operations show PoB's text)"
+
 [popups."BuildListControl:152"]
 gap = "Task 6"
 note = "Copy/Rename Build/Folder name popup (R16)"
+
+[popups."BuildListControl:167"]
+gap = "Task 6"
+note = "PoB's message: delete failure (R16 operations show PoB's text)"
+
+[popups."BuildListControl:238"]
+gap = "Task 6"
+note = "PoB's message: move (drag) failure (R16 operations show PoB's text)"
+
+[popups."BuildListControl:41"]
+gap = "Task 6"
+note = "PoB's message: move failure (R16 operations show PoB's text)"
 
 [popups."Change Settings Path"]
 ruled_out = "R3"
@@ -3196,6 +2962,18 @@ note = "controller ruling: full parity; the canvas site (another class ascendanc
 [popups."CompareBuySimilar:531"]
 gap = "Task 10"
 note = "Buy similar popup (R10)"
+
+[popups."CompareTab:1566"]
+gap = "Task 9"
+note = "comparison load failure text (R5)"
+
+[popups."CompareTab:1572"]
+gap = "Task 9"
+note = "comparison load failure text (R5)"
+
+[popups."CompareTab:1578"]
+gap = "Task 9"
+note = "comparison load failure text (R5)"
 
 [popups."Confirm Delete"]
 gap = "Task 6"
@@ -3245,6 +3023,14 @@ ported = "app/src/ui/tree/toolbar.rs Link menu Copy link"
 gap = "Task 11"
 note = "R17"
 
+[popups."FolderListControl:84"]
+gap = "Task 6"
+note = "PoB's message: Save As folder list: folder not empty (NF-15) (R16 operations show PoB's text)"
+
+[popups."FolderListControl:88"]
+gap = "Task 6"
+note = "PoB's message: Save As folder list: delete failure (NF-15) (R16 operations show PoB's text)"
+
 [popups."Game Version"]
 ruled_out = "R3"
 note = "pending Open check 14: our open path must refuse those builds with PoB text, or this becomes a gap; provisional ruling until Open check 14 runs"
@@ -3260,25 +3046,61 @@ note = "our list picker does it"
 [popups."Import Tree"]
 ported = "app/src/ui/tree/toolbar.rs Import link"
 
+[popups."ImportTab:548"]
+ported = "app/src/ui/import.rs share error"
+note = "PoB's Error creating link text (SP6)"
+
+[popups."ImportTab:660"]
+gap = "Task 9"
+note = "Import as comparison failure text (R5)"
+
 [popups."ItemsTab:3340"]
 ported = "app/src/ui/popup.rs session (SP5b)"
 note = "Corrupt Item and its implicit / roll range pages (title modType Item)"
+
+[popups."Main:1551"]
+gap = "Task 6"
+note = "PoB's message: MoveFolder failure (R16 operations show PoB's text)"
+
+[popups."Main:1572"]
+gap = "Task 6"
+note = "PoB's message: MoveFolder failure (R16 operations show PoB's text)"
+
+[popups."Main:1583"]
+gap = "Task 6"
+note = "PoB's message: MoveFolder delete failure (R16 operations show PoB's text)"
+
+[popups."Main:1592"]
+gap = "Task 6"
+note = "PoB's message: CopyFolder failure (R16 operations show PoB's text)"
+
+[popups."Main:1614"]
+gap = "Task 6"
+note = "PoB's message: CopyFolder failure (R16 operations show PoB's text)"
 
 [popups."Main:1643"]
 ported = "app/src/ui/app.rs error and notice display"
 note = "OpenMessagePopup: PoB's messages reach the UI as errors"
 
 [popups."Main:1679"]
-ported = "each feature's own confirm"
+ported = "app/src/ui/app.rs AppConfirm and each tab's own confirm"
 note = "OpenConfirmPopup body; every confirm title is its own row"
 
 [popups."Main:1689"]
-ported = "each feature's own confirm"
+ported = "app/src/ui/app.rs AppConfirm and each tab's own confirm"
 note = "OpenConfirmPopup body; every confirm title is its own row"
+
+[popups."Main:1703"]
+gap = "Task 6"
+note = "PoB's message: New Folder failure (R16 operations show PoB's text)"
 
 [popups."Main:1747"]
 gap = "Task 6"
 note = "controller ruling: full parity; PoB's cloud-folder save error text; today ported app/src/ui/app.rs save error; OpenCloudErrorPopup: a failed save shows our error; PoB's OneDrive hint is Windows-only"
+
+[popups."Main:804"]
+ruled_out = "R3"
+note = "Change Settings Path is out (R15)"
 
 [popups."Manage Config Sets"]
 gap = "Task 13"
@@ -3349,6 +3171,10 @@ note = "set-manager sites ported; Build.lua New Loadout is R21; the shared item 
 ruled_out = "R3"
 note = "Archives and Similar Builds out (SP6)"
 
+[popups."SkillListControl:166"]
+ported = "app/src/ui/skills/groups.rs"
+note = "Delete is disabled for item-granted groups, so the message can't arise"
+
 [popups."Spectre Library"]
 gap = "Task 12"
 note = "R18"
@@ -3364,11 +3190,23 @@ note = "trade query"
 [popups."TreeTab:1034"]
 ported = "app/src/ui/tree/mod.rs mastery picker"
 
+[popups."TreeTab:508"]
+ruled_out = "R3"
+note = "unknown tree version on load: provisional with Game Version until Open check 14 runs"
+
+[popups."TreeTab:610"]
+gap = "Task 13"
+note = "the Tree Converted notice after a conversion isn't shown"
+
 [popups."TreeTab:665"]
 ported = "app/src/ui/tree/toolbar.rs Link menu Convert this tree"
 
 [popups."TreeTab:679"]
 ported = "app/src/ui/tree/toolbar.rs Link menu Convert all trees"
+
+[popups."TreeTab:824"]
+ported = "app/src/ui/tree/toolbar.rs"
+note = "PoEURL shrink failure shows PoB's text (SP6)"
 
 [popups."Update Available"]
 ruled_out = "D-009"
@@ -3419,6 +3257,18 @@ ported = "app/src/ui/app.rs Ctrl+S"
 gap = "Task 14"
 note = "Ctrl+W (R25)"
 
+[keys."BuildListControl.F2"]
+gap = "Task 6"
+note = "NF-13 rename"
+
+[keys."BuildListControl.RETURN"]
+gap = "Task 6"
+note = "NF-13 open"
+
+[keys."ButtonControl.LEFTBUTTON"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
 [keys."calcs.f"]
 ported = "app/src/ui/calcs/mod.rs Ctrl+F"
 
@@ -3427,6 +3277,14 @@ ported = "app/src/ui/app.rs Ctrl+Y redo"
 
 [keys."calcs.z"]
 ported = "app/src/ui/app.rs Ctrl+Z undo"
+
+[keys."CalcSectionControl.LEFTBUTTON"]
+gap = "Task 13"
+note = "pop-out window handling (R24)"
+
+[keys."CheckBoxControl.LEFTBUTTON"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
 
 [keys."compare.f"]
 gap = "Task 14"
@@ -3444,6 +3302,10 @@ note = "Compare view scrolling"
 gap = "Task 9"
 note = "Compare view scrolling"
 
+[keys."CompareTab.RETURN"]
+ruled_out = "R5"
+note = "Import from Folder is out"
+
 [keys."config.f"]
 gap = "Task 14"
 note = "Ctrl+F (R25)"
@@ -3453,6 +3315,186 @@ ported = "app/src/ui/app.rs Ctrl+Y redo"
 
 [keys."config.z"]
 ported = "app/src/ui/app.rs Ctrl+Z undo"
+
+[keys."ConfigSetListControl.F2"]
+gap = "Task 14"
+note = "NF-14 F2 rename"
+
+[keys."DraggerControl.LEFTBUTTON"]
+ported = "app/src/ui/app.rs resizable sidebar"
+note = "egui side panel drag"
+
+[keys."DraggerControl.RIGHTBUTTON"]
+gap = "Task 14"
+note = "PoB resets the sidebar width on right-click"
+
+[keys."DropDownControl.DOWN"]
+gap = "Task 14"
+note = "arrow keys step a focused dropdown"
+
+[keys."DropDownControl.ESCAPE"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."DropDownControl.LEFTBUTTON"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."DropDownControl.RIGHTBUTTON"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."DropDownControl.UP"]
+gap = "Task 14"
+note = "arrow keys step a focused dropdown"
+
+[keys."DropDownControl.WHEELDOWN"]
+ruled_out = "R13"
+note = "egui sliders and combos ignore the wheel; PoB's scroll options have no effect here"
+
+[keys."DropDownControl.WHEELUP"]
+ruled_out = "R13"
+note = "egui sliders and combos ignore the wheel; PoB's scroll options have no effect here"
+
+[keys."EditControl.+"]
+gap = "Task 13"
+note = "Ctrl +/-/0 text zoom (controller ruling on notes zoom)"
+
+[keys."EditControl.-"]
+gap = "Task 13"
+note = "Ctrl +/-/0 text zoom (controller ruling on notes zoom)"
+
+[keys."EditControl.0"]
+gap = "Task 13"
+note = "Ctrl +/-/0 text zoom (controller ruling on notes zoom)"
+
+[keys."EditControl.a"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.BACK"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.c"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.DELETE"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.DOWN"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.END"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.ESCAPE"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.HOME"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.LEFT"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.LEFTBUTTON"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.PAGEDOWN"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.PAGEUP"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.RETURN"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.RIGHT"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.RIGHTBUTTON"]
+gap = "Task 14"
+note = "right-click pastes into a box"
+
+[keys."EditControl.TAB"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.UP"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.v"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.WHEELDOWN"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.WHEELUP"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.x"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.y"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.z"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."GemSelectControl.DOWN"]
+ported = "app/src/ui/skills/picker.rs"
+note = "picker keys"
+
+[keys."GemSelectControl.ESCAPE"]
+ported = "app/src/ui/skills/picker.rs"
+note = "picker keys"
+
+[keys."GemSelectControl.LEFTBUTTON"]
+ported = "app/src/ui/skills/picker.rs"
+note = "picker keys"
+
+[keys."GemSelectControl.RETURN"]
+ported = "app/src/ui/skills/picker.rs"
+note = "picker keys"
+
+[keys."GemSelectControl.RIGHTBUTTON"]
+gap = "Task 14"
+note = "right-click opens the gem list"
+
+[keys."GemSelectControl.UP"]
+ported = "app/src/ui/skills/picker.rs"
+note = "picker keys"
+
+[keys."GemSelectControl.wiki"]
+gap = "Task 14"
+note = "wiki key: controller ruling puts it in scope; the UI opens the wiki URL with ctx.open_url on the keypress"
+
+[keys."ItemDBControl.wiki"]
+gap = "Task 14"
+note = "wiki key: controller ruling puts it in scope; the UI opens the wiki URL with ctx.open_url on the keypress"
+
+[keys."ItemListControl.wiki"]
+gap = "Task 14"
+note = "wiki key: controller ruling puts it in scope; the UI opens the wiki URL with ctx.open_url on the keypress"
 
 [keys."items.d"]
 ported = "app/src/ui/items/mod.rs Ctrl+D"
@@ -3474,6 +3516,14 @@ ported = "app/src/ui/app.rs Ctrl+Y redo"
 [keys."items.z"]
 ported = "app/src/ui/app.rs Ctrl+Z undo"
 
+[keys."ItemSetListControl.F2"]
+gap = "Task 14"
+note = "NF-14 F2 rename"
+
+[keys."ItemSlotControl.wiki"]
+gap = "Task 14"
+note = "wiki key: controller ruling puts it in scope; the UI opens the wiki URL with ctx.open_url on the keypress"
+
 [keys."list.MOUSE4"]
 gap = "Task 6"
 note = "folder back (R25)"
@@ -3489,6 +3539,42 @@ note = "Ctrl+N (R25)"
 [keys."list.v"]
 gap = "Task 6"
 note = "Ctrl+V after Ctrl+X moves (R16); after Ctrl+C it copies into the folder, NF-13"
+
+[keys."ListControl.BACK"]
+gap = "Task 14"
+note = "Delete key: item list ported (items/list.rs); build list is NF-13 (Task 6); socket groups and set lists need it"
+
+[keys."ListControl.c"]
+gap = "Task 6"
+note = "Ctrl+C: items and socket groups ported (items/list.rs, skills/groups.rs); the build list is NF-13"
+
+[keys."ListControl.DELETE"]
+gap = "Task 14"
+note = "Delete key: item list ported (items/list.rs); build list is NF-13 (Task 6); socket groups and set lists need it"
+
+[keys."ListControl.DOWN"]
+gap = "Task 14"
+note = "keyboard selection in lists"
+
+[keys."ListControl.END"]
+gap = "Task 14"
+note = "keyboard selection in lists"
+
+[keys."ListControl.HOME"]
+gap = "Task 14"
+note = "keyboard selection in lists"
+
+[keys."ListControl.LEFTBUTTON"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."ListControl.UP"]
+gap = "Task 14"
+note = "keyboard selection in lists"
+
+[keys."ListControl.x"]
+gap = "Task 6"
+note = "Ctrl+X: the build list cut (R16)"
 
 [keys."main.F1"]
 gap = "Task 14"
@@ -3510,6 +3596,14 @@ note = "Party tab dropped"
 ruled_out = "D-003"
 note = "Party tab dropped"
 
+[keys."PassiveSpecListControl.F2"]
+gap = "Task 14"
+note = "NF-14 F2 rename"
+
+[keys."PassiveTreeView.wiki"]
+gap = "Task 14"
+note = "wiki key: controller ruling puts it in scope; the UI opens the wiki URL with ctx.open_url on the keypress"
+
 [keys."popup.ESCAPE"]
 ported = "app/src/ui/popup.rs Esc closes the session"
 note = "PoB presses the popup's escape button, which closes it"
@@ -3517,6 +3611,34 @@ note = "PoB presses the popup's escape button, which closes it"
 [keys."popup.RETURN"]
 gap = "Task 14"
 note = "NF-12 (new finding, in scope by controller ruling): Enter doesn't press a PoB popup session's default button (save, go, search, convert...)"
+
+[keys."ScrollBarControl.LEFTBUTTON"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."SearchHost.BACK"]
+gap = "Task 14"
+note = "type-to-search in a dropped dropdown (SearchHost)"
+
+[keys."SearchHost.ESCAPE"]
+gap = "Task 14"
+note = "type-to-search in a dropped dropdown (SearchHost)"
+
+[keys."SharedItemSetListControl.F2"]
+gap = "Task 13"
+note = "NF-2 shared item sets, NF-14 F2"
+
+[keys."SkillListControl.LEFTBUTTON"]
+gap = "Task 14"
+note = "click ported; NF-11 Ctrl+click toggles enabled"
+
+[keys."SkillListControl.RIGHTBUTTON"]
+gap = "Task 14"
+note = "right-click menu ported; NF-11 Ctrl+right-click toggles Full DPS"
+
+[keys."SkillListControl.wiki"]
+gap = "Task 14"
+note = "wiki key: controller ruling puts it in scope; the UI opens the wiki URL with ctx.open_url on the keypress"
 
 [keys."skills.v"]
 ported = "app/src/ui/skills/mod.rs Ctrl+V paste"
@@ -3526,6 +3648,46 @@ ported = "app/src/ui/app.rs Ctrl+Y redo"
 
 [keys."skills.z"]
 ported = "app/src/ui/app.rs Ctrl+Z undo"
+
+[keys."SkillSetListControl.F2"]
+gap = "Task 14"
+note = "NF-14 F2 rename"
+
+[keys."SliderControl.DOWN"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."SliderControl.LEFT"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."SliderControl.LEFTBUTTON"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."SliderControl.RIGHT"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."SliderControl.UP"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."SliderControl.WHEELDOWN"]
+ruled_out = "R13"
+note = "egui sliders and combos ignore the wheel; PoB's scroll options have no effect here"
+
+[keys."SliderControl.WHEELUP"]
+ruled_out = "R13"
+note = "egui sliders and combos ignore the wheel; PoB's scroll options have no effect here"
+
+[keys."TextListControl.WHEELDOWN"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."TextListControl.WHEELUP"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
 
 [keys."tree.c"]
 gap = "Task 14"

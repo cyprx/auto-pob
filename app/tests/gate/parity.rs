@@ -6,13 +6,19 @@
 //!   `main.modes.LIST.controls`, and one level of nested `controls`, read from upstream PoB with
 //!   `attack.xml` loaded. Rows are `[controls."<tab>.<key>"]` or `<tab>.<key>.<child>`. Controls
 //!   held in a tab's array part (item slots, Calcs sections, Config options) have no name, so
-//!   they are keyed by class, `<tab>.#<class>`.
+//!   they are keyed by class, `<tab>.#<class>`. The Skills tab's per-gem controls are keyed
+//!   `gemSlot#…`, whatever the fixture's gem count. Controls PoB makes only later (the Compare
+//!   Config view's `cfg_p_*`/`cfg_c_*`, made once a comparison loads) are not listed.
 //! - **Popups** are the titles of every `:OpenPopup(` (third argument) and `:OpenConfirmPopup(`
 //!   (first argument) call in PoB's `Classes` and `Modules`. A title written as
 //!   `cond and "A" or "B"` yields both. Rows are `[popups."<title>"]`; a title computed any other
-//!   way is keyed by its call site, `[popups."<file>:<line>"]`.
-//! - **Keys** are every `event.key == "<k>"` in the same folders. Rows are `[keys."<area>.<k>"]`,
-//!   where the area is the tab the file belongs to (see `key_area`).
+//!   way is keyed by its call site, `[popups."<file>:<line>"]`, as is every `:OpenMessagePopup(`
+//!   call (their behaviour, behind generic titles like "Error", is per site).
+//! - **Keys** are every `event.key == "<k>"` in the same folders, as `[keys."<area>.<k>"]` where
+//!   the area is the tab the file belongs to (see `key_area`); every widget-level `key == "<k>"`
+//!   in `Classes`, as `[keys."<file stem>.<k>"]`; and every wiki-key site, as
+//!   `[keys."<file stem>.wiki"]`. Modifier-held mouse behaviour (`IsKeyDown` around a click) is
+//!   not scanned; the Task 2 report lists it.
 //!
 //! Each row has exactly one of `ported`, `ruled_out` (naming an R# or D-# ruling) or `gap`
 //! (naming the task that closes it), plus an optional `note`.
@@ -103,7 +109,20 @@ fn upstream_controls(dump: bool) -> BTreeSet<String> {
         .eval()
         .expect("listing controls");
     let _ = fs::remove_dir_all(&builds);
-    keys.into_iter().collect()
+    // the Skills tab has one `gemSlot<n>…` set per gem of the displayed group: key them as
+    // `gemSlot#…` so the rows don't depend on the fixture's gem count
+    keys.into_iter()
+        .map(|k| match k.find("gemSlot") {
+            Some(at) => {
+                let (head, tail) = k.split_at(at + "gemSlot".len());
+                format!(
+                    "{head}#{}",
+                    tail.trim_start_matches(|c: char| c.is_ascii_digit())
+                )
+            }
+            None => k,
+        })
+        .collect()
 }
 
 /// PoB's `Classes` and `Modules` sources, by file stem.
@@ -186,11 +205,17 @@ fn upstream_popups(sources: &[(String, String)]) -> BTreeSet<String> {
             if trimmed.starts_with("--") || trimmed.starts_with("function") {
                 continue;
             }
-            for (needle, index) in [(":OpenPopup(", 2), (":OpenConfirmPopup(", 0)] {
+            // a message popup's behaviour lives at its call site (generic titles like "Error"),
+            // so each site is its own row
+            for (needle, index) in [
+                (":OpenPopup(", Some(2)),
+                (":OpenConfirmPopup(", Some(0)),
+                (":OpenMessagePopup(", None),
+            ] {
                 let mut rest = line;
                 while let Some(at) = rest.find(needle) {
                     rest = &rest[at + needle.len()..];
-                    let titles = call_args(rest).get(index).map(|a| titles_of(a));
+                    let titles = index.and_then(|i| call_args(rest).get(i).map(|a| titles_of(a)));
                     match titles {
                         Some(titles) if !titles.is_empty() => out.extend(titles),
                         _ => {
@@ -225,16 +250,40 @@ fn key_area(stem: &str) -> String {
     .to_string()
 }
 
-/// Every `event.key == "<k>"` in PoB's sources, as `<area>.<k>`.
+/// Every key PoB handles:
+/// - `event.key == "<k>"` (frame-level handlers) in `Classes` and `Modules`, as `<area>.<k>`;
+/// - `key == "<k>"` not preceded by `.` or a word character (widget handlers such as
+///   `OnKeyDown(key)`, `OnSelKeyDown`, `OnHoverKeyUp`) in `Classes`, as `<file stem>.<k>`;
+/// - every `itemLib.wiki.matchesKey(` site (PoB's wiki key), as `<file stem>.wiki`.
 fn upstream_keys(sources: &[(String, String)]) -> BTreeSet<String> {
-    const NEEDLE: &str = "event.key == \"";
+    const FRAME: &str = "event.key == \"";
+    const WIDGET: &str = "key == \"";
+    const WIKI: &str = "itemLib.wiki.matchesKey(";
     let mut out = BTreeSet::new();
     for (stem, text) in sources {
         let mut rest = text.as_str();
-        while let Some(at) = rest.find(NEEDLE) {
-            rest = &rest[at + NEEDLE.len()..];
+        while let Some(at) = rest.find(FRAME) {
+            rest = &rest[at + FRAME.len()..];
             let key = &rest[..rest.find('"').unwrap()];
             out.insert(format!("{}.{key}", key_area(stem)));
+        }
+        if !pob_dir()
+            .join("Classes")
+            .join(format!("{stem}.lua"))
+            .exists()
+        {
+            continue;
+        }
+        for (at, _) in text.match_indices(WIDGET) {
+            let before = text[..at].chars().next_back();
+            if before.is_some_and(|c| c == '.' || c == '_' || c.is_alphanumeric()) {
+                continue;
+            }
+            let rest = &text[at + WIDGET.len()..];
+            out.insert(format!("{stem}.{}", &rest[..rest.find('"').unwrap()]));
+        }
+        if text.contains(WIKI) {
+            out.insert(format!("{stem}.wiki"));
         }
     }
     out
@@ -313,7 +362,15 @@ fn row_problem(row: &Row) -> Option<String> {
         })
     };
     match status[0] {
-        "ported" if value.trim().is_empty() => Some("ported needs a place".into()),
+        "ported" => {
+            // the place starts with a repository path, which must exist
+            let first = value.split_whitespace().next().unwrap_or("");
+            let path = first.trim_end_matches([',', ';', ':', ')']);
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+            (!path.contains('/') || !root.join(path).exists()).then(|| {
+                format!("ported must start with an existing repository path, not {first:?}")
+            })
+        }
         "ruled_out" if !cites(&["R", "D-"]) => Some("ruled_out needs an R# or D-# id".into()),
         "gap" if !cites(&["Task "]) => Some("gap needs \"Task N\"".into()),
         _ => None,

@@ -2606,7 +2606,42 @@ fn oauth_flow_matches_pob() {
         ours,
         (90, "Alira".into(), "Lunaris".into(), "Shakari".into())
     );
-    assert_eq!(requests_to(&web, "GET", &format!("{API}/GateOne")), 2);
+    // boxes that aren't PoB's defaults, each compared with upstream on the same arguments
+    run(
+        &mut s,
+        &rec,
+        import_oauth(
+            Realm::Pc,
+            Some("Mirage Gate"),
+            "GateOne",
+            CharacterPart::Tree {
+                delete_jewels: false,
+            },
+        ),
+    )
+    .unwrap();
+    assert_eq!(ended(&mut s, &rec).error, None);
+    up.eval::<()>("oauthImport(character, 'tree', false)");
+    assert_imported_equal(&mut s, &up, "oauth tree, jewels kept");
+    run(
+        &mut s,
+        &rec,
+        import_oauth(
+            Realm::Pc,
+            Some("Mirage Gate"),
+            "GateOne",
+            CharacterPart::ItemsAndSkills {
+                clear_items: false,
+                clear_skills: false,
+                ignore_weapon_swap: true,
+            },
+        ),
+    )
+    .unwrap();
+    assert_eq!(ended(&mut s, &rec).error, None);
+    up.eval::<()>("oauthImport(character, 'items', false, false, true)");
+    assert_imported_equal(&mut s, &up, "oauth items, nothing cleared, no swap");
+    assert_eq!(requests_to(&web, "GET", &format!("{API}/GateOne")), 4);
     let imported = oauth(&mut s, &rec);
     assert_eq!((imported.error, imported.busy), (None, false));
     assert!(s.backend.build_view().unwrap().unsaved);
@@ -2645,38 +2680,6 @@ fn oauth_flow_matches_pob() {
     );
     s.assert_clean("refresh");
 
-    // ---- A 401 that every good refresh meets again: PoB would refresh forever; the request
-    // ends after 2 refreshes, the tokens left as PoB has them (deviation, to spare GGG) ----
-    let gate_one = format!("{API}/GateOne");
-    web.route("GET", &gate_one, Canned::status(401, ""));
-    let refreshes = || {
-        web.requests()
-            .iter()
-            .filter(|r| r.url == TOKEN_URL && r.body.starts_with(REFRESH_GRANT.as_bytes()))
-            .count()
-    };
-    let before = refreshes();
-    run(
-        &mut s,
-        &rec,
-        import_oauth(Realm::Pc, None, "GateOne", items_part()),
-    )
-    .unwrap();
-    let entry = ended(&mut s, &rec);
-    let expired = "Your Path of Exile session expired. Please sign in again.";
-    assert_eq!(entry.error.as_deref(), Some(expired));
-    assert_eq!(refreshes() - before, 2, "refreshes in the request");
-    let view = oauth(&mut s, &rec);
-    assert_eq!(view.error.as_deref(), Some(expired));
-    assert!(view.signed_in && !view.busy, "{view:?}");
-    assert!(accounts(&s).contains(r#"lastToken="FAKE-ACCESS-2""#));
-    s.assert_clean("refresh limit");
-    web.route(
-        "GET",
-        &gate_one,
-        Canned::ok(net_fixture("oauth_character.json")),
-    );
-
     // ---- Review Focus 2: the list and the character failing, then a good retry ----
     let sony = format!("{API}/sony");
     for (reply, wanted) in [
@@ -2709,17 +2712,35 @@ fn oauth_flow_matches_pob() {
     assert!(listed.fetched && listed.error.is_none(), "{listed:?}");
     let names: Vec<&str> = listed.characters.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, ["aSonyOne"]);
+    // a character of another realm comes from that realm's endpoint
+    let sony_one = format!("{API}/sony/aSonyOne");
+    web.route(
+        "GET",
+        &sony_one,
+        Canned::ok(net_fixture("oauth_character.json")),
+    );
+    run(
+        &mut s,
+        &rec,
+        import_oauth(Realm::Sony, None, "aSonyOne", tree_part()),
+    )
+    .unwrap();
+    assert_eq!(ended(&mut s, &rec).error, None);
+    assert_eq!(requests_to(&web, "GET", &sony_one), 1);
     // a fetched realm isn't fetched again (PoB's button says "Fetched")
     let before = web.requests().len();
     run(&mut s, &rec, Command::ListCharacters { realm: Realm::Pc }).unwrap();
     assert_eq!(s.requests().pending.len(), 0);
     assert_eq!(web.requests().len(), before);
     assert_eq!(oauth(&mut s, &rec).realm, Realm::Pc);
+    let gate_one = format!("{API}/GateOne");
     for (reply, wanted) in [
         (
             Canned::status(500, "oops"),
             "Could not import: Response code: 500",
         ),
+        (Canned::ok("{"), "Could not import character"),
+        // the same failure again is still a failure (PoB keeps the label until a success)
         (Canned::ok("{"), "Could not import character"),
         (
             Canned::fail("Couldn't resolve host name"),
@@ -2878,12 +2899,31 @@ fn oauth_flow_matches_pob() {
     assert!(!accounts(&s).contains("lastToken="));
     s.assert_clean("401");
 
-    // ---- 10. A redirect with another state is refused ----
-    let (entry, _) = sign_in(&mut s, &rec, Some("0123456789abcdef"));
-    assert_eq!(entry.error.as_deref(), Some("OAuth state mismatch"));
+    // ---- 10. A redirect with another state is refused, the second time too ----
+    for _ in 0..2 {
+        let (entry, _) = sign_in(&mut s, &rec, Some("0123456789abcdef"));
+        assert_eq!(entry.error.as_deref(), Some("OAuth state mismatch"));
+        let view = oauth(&mut s, &rec);
+        assert_eq!(view.error.as_deref(), Some("OAuth state mismatch"));
+        assert!(!view.signed_in && !view.signing_in, "{view:?}");
+    }
+
+    // ---- The user says no on GGG's page, after a stray connection that sent nothing: PoB's
+    // listener waits on past the stray one, then ends with PoB's "No auth token" ----
+    run(&mut s, &rec, Command::SignIn).unwrap();
+    let (_, port) = link_parts(&wait_for_link(&mut s, &rec));
+    drop(std::net::TcpStream::connect(("127.0.0.1", port)).expect("the listener"));
+    let page = redirect(
+        port,
+        "error=access_denied&error_description=The%20user%20said%20no",
+    );
+    assert!(page.contains("Authentication Failed"), "{page}");
+    assert!(page.contains("access_denied: The user said no"), "{page}");
+    let entry = ended(&mut s, &rec);
+    assert_eq!(entry.error.as_deref(), Some("No auth token"));
     let view = oauth(&mut s, &rec);
-    assert_eq!(view.error.as_deref(), Some("OAuth state mismatch"));
     assert!(!view.signed_in && !view.signing_in, "{view:?}");
+    s.assert_clean("denied");
 
     // ---- PoB's three ports all taken: the sign-in ends at once, with our text for PoB's nil ----
     let held: Vec<_> = (49082..=49084)
@@ -2892,7 +2932,7 @@ fn oauth_flow_matches_pob() {
     run(&mut s, &rec, Command::SignIn).unwrap();
     let entry = ended(&mut s, &rec);
     drop(held);
-    let no_port = "couldn't listen on localhost ports 49082-49084 for the sign-in";
+    let no_port = "couldn't start the sign-in listener on localhost (ports 49082-49084)";
     assert_eq!(entry.error.as_deref(), Some(no_port));
     let view = oauth(&mut s, &rec);
     assert_eq!(view.error.as_deref(), Some(no_port));
@@ -3120,4 +3160,122 @@ fn no_silent_writes_network() {
     let took = started.elapsed();
     eprintln!("no_silent_writes_network took {took:?}");
     assert!(took < Duration::from_secs(10), "over its budget: {took:?}");
+}
+
+/// Settings.xml signed in as the classic app leaves it, the token valid for long: no sign-in
+/// is needed, and every policy of PoB's rate limiter is fresh. The tokens are fake.
+const SIGNED_IN_SETTINGS: &str = "<PathOfBuilding>\n\t<Accounts lastToken=\"FAKE-ACCESS-1\" lastRefreshToken=\"FAKE-REFRESH-1\" tokenExpiry=\"9999999999\"/>\n</PathOfBuilding>\n";
+
+/// Neither a quick second Fetch nor the refresh limit may lock PoB's rate limiter (fix round
+/// 1, I2 and I3), and only a sign-in keeps an `OpenURL` link (M2).
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn oauth_limits_never_lock_the_account() {
+    let _guard = lock();
+    let started = Instant::now();
+    let web = canned_web();
+    route_oauth(&web);
+    web.route(
+        "GET",
+        API,
+        Canned::ok(net_fixture("oauth_characters.json")).delayed(Duration::from_millis(300)),
+    );
+    web.route(
+        "GET",
+        &format!("{API}/xbox"),
+        Canned::ok(net_fixture("oauth_characters.json")),
+    );
+    let mut s = net_session("oauth-limits", canned(&web), Some(SIGNED_IN_SETTINGS));
+    s.open_fixture("new");
+    let rec = Recorder::default();
+    assert!(oauth(&mut s, &rec).signed_in);
+    assert!(web.requests().is_empty(), "opening the build fetched");
+
+    // ---- I3: a second Fetch while the first list is out is refused; once it is in, the
+    // other realm fetches normally ----
+    run(&mut s, &rec, Command::ListCharacters { realm: Realm::Pc }).unwrap();
+    assert_eq!(s.requests().pending[0].label, "Fetching characters");
+    // M2: an authorize-shaped link from a request that isn't a sign-in is dropped
+    s.eval::<()>(
+        r#"for id in pairs(pob.main.subScripts) do
+            glue.net_dispatch("call", id, "OpenURL",
+                "https://www.pathofexile.com/oauth/authorize?client_id=pob&state=evil")
+        end"#,
+    );
+    assert!(
+        s.eval::<bool>(r#"return glue.net_find("Fetching characters").auth_url == nil"#),
+        "a list request kept a sign-in link"
+    );
+    assert_eq!(
+        run(&mut s, &rec, Command::ListCharacters { realm: Realm::Xbox }),
+        Err("PoB is still loading your characters".into())
+    );
+    assert_eq!(ended(&mut s, &rec).error, None);
+    run(&mut s, &rec, Command::ListCharacters { realm: Realm::Xbox }).unwrap();
+    assert_eq!(
+        s.requests().pending.len(),
+        1,
+        "the second realm wasn't fetched"
+    );
+    assert_eq!(ended(&mut s, &rec).error, None);
+    let xbox = oauth(&mut s, &rec);
+    assert!(xbox.fetched && xbox.retry_at.is_none(), "{xbox:?}");
+    assert!(!xbox.status.contains("too fast"), "{}", xbox.status);
+
+    // ---- I2: a 401 that every good refresh meets again, on the character policy's first
+    // request: PoB's own last branch ends it after 2 refreshes ----
+    let gate_one = format!("{API}/GateOne");
+    web.route("GET", &gate_one, Canned::status(401, ""));
+    let refreshes = || {
+        web.requests()
+            .iter()
+            .filter(|r| r.url == TOKEN_URL && r.body.starts_with(REFRESH_GRANT.as_bytes()))
+            .count()
+    };
+    let tokens_before = accounts(&s);
+    assert!(tokens_before.contains(r#"lastToken="FAKE-ACCESS-1""#));
+    run(
+        &mut s,
+        &rec,
+        import_oauth(Realm::Pc, None, "GateOne", items_part()),
+    )
+    .unwrap();
+    let entry = ended(&mut s, &rec);
+    let wanted = "Could not import: Response code: 401";
+    assert_eq!(entry.error.as_deref(), Some(wanted));
+    assert_eq!(refreshes(), 2, "refreshes in the request");
+    assert_eq!(requests_to(&web, "GET", &gate_one), 3);
+    let view = oauth(&mut s, &rec);
+    assert_eq!(view.error.as_deref(), Some(wanted));
+    assert!(view.signed_in && !view.busy, "{view:?}");
+    // PoB saved the refreshed tokens, as it does; nothing signed out
+    let tokens_after = accounts(&s);
+    assert_ne!(tokens_after, tokens_before);
+    assert!(tokens_after.contains(r#"lastToken="FAKE-ACCESS-2""#));
+    assert!(tokens_after.contains(r#"lastRefreshToken="FAKE-REFRESH-2""#));
+    s.assert_clean("refresh limit");
+    // the limiter isn't stuck: the next press goes out and imports
+    web.route(
+        "GET",
+        &gate_one,
+        Canned::ok(net_fixture("oauth_character.json")),
+    );
+    run(
+        &mut s,
+        &rec,
+        import_oauth(Realm::Pc, None, "GateOne", items_part()),
+    )
+    .unwrap();
+    assert_eq!(
+        s.requests().pending.len(),
+        1,
+        "the limiter held the next press"
+    );
+    assert_eq!(ended(&mut s, &rec).error, None);
+    assert_eq!(oauth(&mut s, &rec).error, None);
+    s.assert_clean("after the limit");
+    assert!(web.unrouted().is_empty(), "unrouted: {:?}", web.unrouted());
+    let took = started.elapsed();
+    eprintln!("oauth_limits_never_lock_the_account took {took:?}");
+    assert!(took < Duration::from_secs(8), "over its budget: {took:?}");
 }

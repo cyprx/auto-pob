@@ -248,9 +248,15 @@ fn dispatch_glue(lua: &Lua, event: SubscriptEvent) {
         }
     };
     if let Some(message) = failure {
-        log::warn!("network callback failed: {message}");
+        log::warn!(
+            "network callback failed: {}",
+            super::native::redact(&message)
+        );
         if let Err(e) = call_glue(lua, "net_fail", (id, message)) {
-            log::warn!("ending the request failed too: {}", message_of(&e));
+            log::warn!(
+                "ending the request failed too: {}",
+                super::native::redact(&message_of(&e))
+            );
         }
     }
 }

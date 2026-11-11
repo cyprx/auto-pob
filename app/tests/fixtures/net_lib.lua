@@ -263,13 +263,17 @@ function oauthDump(json, realm)
 end
 
 -- A part of the character endpoint's body `json`, imported as the account import's buttons do
--- with their default boxes
-function oauthImport(json, part)
+-- with their boxes (PoB's defaults when not given)
+function oauthImport(json, part, a, b, c)
 	local character = dkjson.decode(json).character
+	local function box(value, default)
+		if value == nil then return default end
+		return value
+	end
 	if part == "tree" then
-		build.importTab:ImportPassiveTreeAndJewels(character, true)
+		build.importTab:ImportPassiveTreeAndJewels(character, box(a, true))
 	else
-		build.importTab:ImportItemsAndSkills(character, true, true, false)
+		build.importTab:ImportItemsAndSkills(character, box(a, true), box(b, true), box(c, false))
 	end
 	frame()
 end

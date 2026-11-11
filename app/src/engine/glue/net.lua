@@ -178,28 +178,29 @@ local function attach(req, id)
 end
 
 -- PoB refreshes the token again after every 401 that follows a good refresh (PoEAPI.lua:54
--- against :164), so a 401 the refresh can't cure would loop forever. A request makes at most
--- this many refreshes; the next ends it with SESSION_EXPIRED, the tokens left as PoB has them.
--- A deviation from PoB, to spare GGG's API.
+-- resets `retries`, :164 retries while it is 0), so a 401 the refresh can't cure would loop
+-- forever. Once a request has made this many refreshes, each download it launches next is
+-- delivered with `api.retries = 1`: a 401 then takes PoB's own last branch (:169-182), which
+-- finishes the rate limiter's request and gives PoB's own error. A deviation from PoB, to
+-- spare GGG's API.
 local REFRESH_LIMIT = 2
 local TOKEN_URL = "https://www.pathofexile.com/oauth/token"
-glue.SESSION_EXPIRED = "Your Path of Exile session expired. Please sign in again."
 
 -- Runs `fn` with launches recorded into `req`, the native gate open when `open`.
 local function in_scope(req, open, fn)
 	local saved = LaunchSubScript
 	LaunchSubScript = function(script, blocking, nonblocking, url, header, body, ...)
-		if url == TOKEN_URL and type(body) == "string" and body:match("^client_id=pob&grant_type=refresh_token") then
-			req.refreshes = (req.refreshes or 0) + 1
-			if req.refreshes > REFRESH_LIMIT then
-				req.expired = true
-				req.error = glue.SESSION_EXPIRED
-				return nil
-			end
-		end
+		local refresh = url == TOKEN_URL and type(body) == "string"
+			and body:match("^client_id=pob&grant_type=refresh_token") ~= nil
 		local id = native_launch(script, blocking, nonblocking, url, header, body, ...)
 		if id then
 			attach(req, id)
+			if refresh then
+				req.refreshes = (req.refreshes or 0) + 1
+			elseif (req.refreshes or 0) >= REFRESH_LIMIT then
+				req.last_leg = req.last_leg or {}
+				req.last_leg[id] = true
+			end
 		end
 		return id
 	end
@@ -400,6 +401,10 @@ function glue.net_dispatch(kind, id, ...)
 		return
 	end
 	local entry = launch.subScripts[id]
+	-- the refresh limit: PoB's next 401 ends the chain itself (see REFRESH_LIMIT)
+	if req.last_leg and req.last_leg[id] and main().api then
+		main().api.retries = 1
+	end
 	if kind == "finished" then
 		-- a download hands its callback (body, errMsg, header)
 		if entry and entry.type == "DOWNLOAD" then
@@ -521,14 +526,19 @@ function glue.on_open_url(url)
 	end
 end
 
--- The pending sign-in, if any: { id, auth_url }
-function glue.net_sign_in()
+-- The first pending request labelled `label`, if any: { id, auth_url }
+function glue.net_find(label)
 	for _, id in ipairs(pending) do
 		local req = requests[id]
-		if req.label == SIGNING_IN then
+		if req.label == label then
 			return { id = id, auth_url = req.auth_url }
 		end
 	end
+end
+
+-- The pending sign-in, if any: { id, auth_url }
+function glue.net_sign_in()
+	return glue.net_find(SIGNING_IN)
 end
 
 -- What the dispatches since the last call did to the build (R14).

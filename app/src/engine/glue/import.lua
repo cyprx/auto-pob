@@ -543,21 +543,14 @@ end
 
 -- PoB's text for a body it can't read (PoEAPI.lua:48)
 local MALFORMED = "Malformed response"
--- No `OpenURL` came: LaunchServer.lua got none of its three ports. PoB's own error is nil
--- (its `assert` on the `or` chain), shown as "nil".
-local NO_PORT = "couldn't listen on localhost ports 49082-49084 for the sign-in"
+-- No `OpenURL` came: LaunchServer.lua didn't start, almost always because none of its three
+-- ports was free. PoB's own error is nil (its `assert` on the `or` chain), shown as "nil".
+local NO_PORT = "couldn't start the sign-in listener on localhost (ports 49082-49084)"
 
 -- Puts right what a raising PoB callback leaves behind, and makes PoB's message the request's
--- error when the request changed it. `before` is `oauthErrCode` when the press began.
-local function oauth_after(tab, before, sign_in)
+-- error. The press cleared `oauthErrCode` (see `press`), so any message is this request's.
+local function oauth_after(tab, sign_in)
 	return function(req)
-		if req.expired then
-			-- the refresh limit ended the chain inside PoB's download (net.lua)
-			tab.oauthLoading = false
-			tab.oauthErrCode = glue.SESSION_EXPIRED
-			req.error = glue.SESSION_EXPIRED
-			return
-		end
 		local stuck
 		if sign_in and not req.auth_url and not tab.isAuthorized() then
 			-- the listener never started
@@ -576,10 +569,17 @@ local function oauth_after(tab, before, sign_in)
 		if stuck then
 			tab.oauthErrCode = stuck
 			req.error = stuck
-		elseif tab.oauthErrCode and tab.oauthErrCode ~= before then
+		elseif tab.oauthErrCode then
 			req.error = StripEscapes(tostring(tab.oauthErrCode))
 		end
 	end
+end
+
+-- Begins request `label` with a press of PoB's: the last press's error leaves the label first
+-- (PoB clears it only on success), so the request's error is its own.
+local function press(tab, label, opts, fn)
+	tab.oauthErrCode = nil
+	return glue.net_begin(label, opts, fn)
 end
 
 local function authorized_tab()
@@ -615,7 +615,7 @@ function glue.sign_in()
 	if glue.net_sign_in() then
 		error("already signing in", 0)
 	end
-	local id, message = glue.net_begin("Signing in", { after = oauth_after(tab, tab.oauthErrCode, true) }, button.onClick)
+	local id, message = press(tab, "Signing in", { after = oauth_after(tab, true) }, button.onClick)
 	if not id then
 		error(message or "couldn't start the request", 0)
 	end
@@ -636,9 +636,9 @@ end
 -- limiter answered at once (the view says so).
 function glue.list_characters(realm_id)
 	local tab = authorized_tab()
-	-- the sign-in's own list fetch is out: PoB's limiter, knowing no limits yet, would hold a
-	-- second one until 2032 and keep that time for the tab's life
-	if glue.net_sign_in() then
+	-- a list fetch is out (the user's, or the sign-in's own): before its answer PoB's limiter
+	-- knows no limits, would hold a second one until 2032 and keep that time for the tab's life
+	if glue.net_sign_in() or glue.net_find("Fetching characters") or tab.oauthLoading then
 		error("PoB is still loading your characters", 0)
 	end
 	local controls = tab.controls
@@ -647,7 +647,7 @@ function glue.list_characters(realm_id)
 	if not fetch:IsEnabled() then
 		return nil
 	end
-	local id = glue.net_begin("Fetching characters", { after = oauth_after(tab, tab.oauthErrCode) }, fetch.onClick)
+	local id = press(tab, "Fetching characters", { after = oauth_after(tab) }, fetch.onClick)
 	return id
 end
 
@@ -700,6 +700,6 @@ function glue.import_character(realm_id, league, name, kind, a, b, c)
 	if not button:IsShown() or not button:IsEnabled() then
 		error(OFFERED, 0)
 	end
-	local id = glue.net_begin(label, { confirmed = true, after = oauth_after(tab, tab.oauthErrCode) }, button.onClick)
+	local id = press(tab, label, { confirmed = true, after = oauth_after(tab) }, button.onClick)
 	return id
 end

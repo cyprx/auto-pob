@@ -26,7 +26,10 @@ pub(crate) fn redact(line: &str) -> String {
                 .filter_map(|mark| word.find(mark).map(|i| i + mark.len()))
                 .min()
             {
-                format!("{}{REDACTED}", &word[..at])
+                // the sentence's own punctuation stays
+                let tail = &word[at..];
+                let punct = &tail[tail.trim_end_matches([':', ',', ';', '.', ')']).len()..];
+                format!("{}{REDACTED}{punct}", &word[..at])
             } else {
                 word.to_string()
             };
@@ -220,7 +223,7 @@ mod tests {
     fn redact_hides_names_queries_and_urls() {
         assert_eq!(
             redact("Failed to download /character/GateOne: Response code: 500"),
-            "Failed to download /character/<redacted> Response code: 500"
+            "Failed to download /character/<redacted>: Response code: 500"
         );
         assert_eq!(
             redact("Download /character/xbox/GateTwo"),

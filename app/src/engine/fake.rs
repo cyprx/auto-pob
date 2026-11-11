@@ -26,6 +26,7 @@ pub struct Log {
     pub breakdowns: Vec<CellRef>,
     pub copies: Vec<usize>,
     pub tooltips: Vec<usize>,
+    pub releases: usize,
 }
 
 /// One scripted background step: what it affects, or the error it fails with.
@@ -44,6 +45,8 @@ pub struct Fake {
     pub restart_on_build: Vec<Step>,
     /// Called after each step with the number of steps run so far.
     pub on_step: Option<Box<dyn FnMut(usize) + Send>>,
+    /// Called after each memory release with the number of releases so far.
+    pub on_release: Option<Box<dyn FnMut(usize) + Send>>,
     /// `node_tooltip_view` answers `None`, as for a node that no longer exists.
     pub tooltip_vanished: bool,
     /// `breakdown_view` fails with this message.
@@ -64,6 +67,7 @@ impl Fake {
                 gem_search: None,
                 restart_on_build: Vec::new(),
                 on_step: None,
+                on_release: None,
                 tooltip_vanished: false,
                 fail_breakdown: None,
                 build_loaded: true,
@@ -338,6 +342,17 @@ impl Backend for Fake {
 
     fn tree_link_view(&mut self) -> anyhow::Result<String> {
         Ok("https://example.test/tree".into())
+    }
+
+    fn release_memory(&mut self) {
+        let releases = {
+            let mut log = self.log.lock().unwrap();
+            log.releases += 1;
+            log.releases
+        };
+        if let Some(on_release) = &mut self.on_release {
+            on_release(releases);
+        }
     }
 }
 

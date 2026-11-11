@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod memory;
 pub mod native;
 pub mod pob;
 pub mod run;

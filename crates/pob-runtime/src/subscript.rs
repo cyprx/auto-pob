@@ -1,6 +1,6 @@
 use crate::{
     modules,
-    net::{CancelFlag, NetConfig, Waker},
+    net::{CancelFlag, NetConfig, SharedWaker, Waker, wake},
     util::{append_lua_package_dir, fix_script_header},
 };
 use anyhow::{Result, anyhow};
@@ -19,6 +19,17 @@ use std::{
 
 /// How long to wait for a subscript's next call after replying to one of its blocking calls.
 const FOLLOW_UP_WAIT: Duration = Duration::from_millis(1);
+
+impl SubscriptEvent {
+    /// Id of the subscript that produced the event.
+    pub fn id(&self) -> u64 {
+        match self {
+            SubscriptEvent::Call { id, .. }
+            | SubscriptEvent::Finished { id, .. }
+            | SubscriptEvent::Error { id, .. } => *id,
+        }
+    }
+}
 
 /// A unit of work produced by advancing the running subscripts.
 pub enum SubscriptEvent {
@@ -45,7 +56,9 @@ pub struct SubscriptManager {
     next_id: u64,
     scripts: Vec<Subscript>,
     net: NetConfig,
-    waker: Option<Waker>,
+    waker: SharedWaker,
+    /// Ids aborted since the last [`Self::process`]: their events are discarded.
+    aborted: Vec<u64>,
 }
 
 impl SubscriptManager {
@@ -58,20 +71,22 @@ impl SubscriptManager {
     }
 
     /// Sets a function called from subscript threads on each call sent and when a thread ends
-    /// (also when it panics). Applies to subscripts started afterwards.
+    /// (also when it panics). Applies to running subscripts too.
     pub fn set_waker(&mut self, waker: Waker) {
-        self.waker = Some(waker);
+        *self.waker.lock().unwrap() = Some(waker);
     }
 
     /// Stops the subscript with the given id: curl and the socket shim notice within a moment
     /// and fail, and the manager forgets the subscript, so its result and calls are discarded.
     /// Returns `false` if it is not running.
     pub fn abort(&mut self, id: u64) -> bool {
+        // events of `id` already taken by `process` are discarded too
+        self.aborted.push(id);
         let Some(index) = self.scripts.iter().position(|s| s.id == id) else {
             return false;
         };
-        let subscript = self.scripts.remove(index);
-        subscript.cancel.store(true, Ordering::Relaxed);
+        // dropping the subscript sets its cancel flag
+        self.scripts.remove(index);
         true
     }
 
@@ -115,6 +130,7 @@ impl SubscriptManager {
 
     /// Advances all running subscripts by one step.
     pub fn process(&mut self) -> Vec<SubscriptEvent> {
+        self.aborted.clear();
         let mut events = vec![];
 
         self.scripts.retain_mut(|subscript| {
@@ -150,6 +166,11 @@ impl SubscriptManager {
         }
     }
 
+    /// Whether the subscript was aborted after the last [`Self::process`] produced its events.
+    pub fn was_aborted(&self, id: u64) -> bool {
+        self.aborted.contains(&id)
+    }
+
     /// Returns `true` if at least one subscript is running.
     pub fn has_running_subscripts(&self) -> bool {
         !self.scripts.is_empty()
@@ -182,7 +203,7 @@ enum SubscriptCall {
 fn send_call(
     call_tx: &Sender<SubscriptCall>,
     queued: &AtomicUsize,
-    waker: &Option<Waker>,
+    waker: &SharedWaker,
     call: SubscriptCall,
 ) -> Result<()> {
     queued.fetch_add(1, Ordering::AcqRel);
@@ -190,9 +211,7 @@ fn send_call(
         queued.fetch_sub(1, Ordering::AcqRel);
         return Err(anyhow!("{e}"));
     }
-    if let Some(waker) = waker {
-        waker();
-    }
+    wake(waker);
     Ok(())
 }
 
@@ -218,15 +237,21 @@ pub struct Subscript {
 /// Marks a subscript thread as done and wakes the main loop, even when the thread panics.
 struct ThreadEnd {
     done: Arc<AtomicBool>,
-    waker: Option<Waker>,
+    waker: SharedWaker,
 }
 
 impl Drop for ThreadEnd {
     fn drop(&mut self) {
         self.done.store(true, Ordering::Release);
-        if let Some(waker) = &self.waker {
-            waker();
-        }
+        wake(&self.waker);
+    }
+}
+
+impl Drop for Subscript {
+    /// Dropping a subscript (an abort, or its manager going away) cancels its transfers and
+    /// socket waits, which frees any listener port.
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
     }
 }
 
@@ -253,7 +278,7 @@ impl Subscript {
         arguments: NativeMultiValue,
         script_dir: PathBuf,
         net: NetConfig,
-        waker: Option<Waker>,
+        waker: SharedWaker,
     ) -> Self {
         let (call_tx, call_rx) = channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -456,6 +481,10 @@ where
 
         let mut awaiting_follow_up = Vec::new();
         for event in events {
+            // a handler may have aborted a subscript whose events are still in this batch
+            if manager().was_aborted(event.id()) {
+                continue;
+            }
             if let SubscriptEvent::Call {
                 id,
                 reply_tx: Some(_),

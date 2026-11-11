@@ -124,6 +124,8 @@ impl PathOfBuilding {
         // make context and subscript manager accessible to API functions
         lua.set_app_data(ctx);
         lua.set_app_data(subscript_manager);
+        // the classic app uses real curl, with no timeouts
+        lua.set_app_data(pob_runtime::net::NetConfig::default());
 
         // register API functions
         api::register_globals(&lua)?;

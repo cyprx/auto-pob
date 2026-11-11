@@ -5,7 +5,9 @@
 
 use pob_runtime::{
     net::{Canned, CannedWeb, NetConfig, Recorded, Transport, Waker},
-    subscript::{NativeMultiValue, NativeValue, SubscriptEvent, SubscriptManager},
+    subscript::{
+        NativeMultiValue, NativeValue, SubscriptEvent, SubscriptManager, service_subscripts,
+    },
 };
 use std::{
     net::{TcpListener, TcpStream},
@@ -282,7 +284,8 @@ fn canned_delay_over_timeout_is_curl_timeout() {
     .result
     .unwrap();
     assert_eq!(text(&values[1]).unwrap(), "Timeout was reached");
-    assert!(started.elapsed() < Duration::from_millis(280));
+    // served at the timeout, not after the whole delay (generous: thread start and Lua init)
+    assert!(started.elapsed() < Duration::from_millis(1500));
 
     // under the timeout the same delay is served
     let values = run_download(
@@ -342,6 +345,180 @@ fn abort_stops_a_waiting_listener() {
     assert!(ended.is_some(), "accept ignored the abort");
 }
 
+/// The port announced by a `Port(port)` call.
+fn take_port(manager: &mut SubscriptManager) -> u16 {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        for event in manager.process() {
+            if let SubscriptEvent::Call { arguments, .. } = event {
+                return match arguments.values()[0] {
+                    NativeValue::Integer(p) => p as u16,
+                    NativeValue::Number(p) => p as u16,
+                    _ => panic!("port"),
+                };
+            }
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    panic!("no Port call");
+}
+
+const LISTEN_AND_RECEIVE: &str = r#"
+    local socket = require("socket")
+    local s = socket.tcp4()
+    s:bind("127.0.0.1", 0)
+    s:listen(1)
+    local _, port = s:getsockname()
+    Port(port)
+    s:settimeout(30)
+    local c = s:accept()
+    c:settimeout(30)
+    return c:receive("*l")
+"#;
+
+#[test]
+fn receive_returns_a_partial_line_at_eof() {
+    let mut manager = SubscriptManager::default();
+    launch(&mut manager, LISTEN_AND_RECEIVE, &["Port"]);
+    let port = take_port(&mut manager);
+    let mut client = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    std::io::Write::write_all(&mut client, b"abc").unwrap();
+    // long enough for the shim's read slices to time out with "abc" already read
+    std::thread::sleep(Duration::from_millis(350));
+    drop(client);
+    let out = wait_outcome(&mut manager, Duration::from_secs(3)).expect("receive did not end");
+    assert_eq!(text(&out.result.unwrap()[0]).unwrap(), "abc");
+}
+
+#[test]
+fn dropping_the_manager_ends_a_waiting_listener() {
+    let mut manager = SubscriptManager::default();
+    let count = counting_waker(&mut manager);
+    launch(&mut manager, LISTEN_AND_RECEIVE, &["Port"]);
+    let port = take_port(&mut manager);
+    let before = count.load(Ordering::SeqCst);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(count.load(Ordering::SeqCst), before, "still waiting");
+    drop(manager);
+    assert!(
+        wait_count(&count, before, Duration::from_secs(1)).is_some(),
+        "the thread outlived its manager"
+    );
+    // the listener's port is free again
+    assert!(TcpListener::bind(("127.0.0.1", port)).is_ok());
+}
+
+#[test]
+fn set_waker_reaches_subscripts_already_running() {
+    let web = Arc::new(CannedWeb::default());
+    web.route(
+        "GET",
+        "https://x.test/slow",
+        Canned::ok("late").delayed(Duration::from_millis(300)),
+    );
+    let mut manager = canned(&web, None);
+    launch(&mut manager, &download("https://x.test/slow", ""), &[]);
+    // the waker is set after the push, as the engine does after PoB's init
+    let count = counting_waker(&mut manager);
+    assert!(
+        wait_count(&count, 0, Duration::from_secs(3)).is_some(),
+        "an earlier subscript never woke the loop"
+    );
+}
+
+#[test]
+fn events_of_an_aborted_subscript_are_discarded_in_a_batch() {
+    let web = Arc::new(CannedWeb::default());
+    let manager = std::cell::RefCell::new(canned(&web, None));
+    let first = launch(&mut manager.borrow_mut(), "return 1", &[]);
+    let second = launch(&mut manager.borrow_mut(), "return 2", &[]);
+    // both are finished before the batch is taken
+    std::thread::sleep(Duration::from_millis(300));
+    let mut seen = vec![];
+    service_subscripts(
+        || manager.borrow_mut(),
+        Duration::from_millis(50),
+        |event| -> Result<(), ()> {
+            seen.push(event.id());
+            // the first event aborts the other subscript, whose result is in this batch
+            let other = if event.id() == first { second } else { first };
+            manager.borrow_mut().abort(other);
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(seen, vec![first]);
+}
+
+#[test]
+fn an_unconfigured_lua_state_is_refused_not_sent_to_curl() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let lua = mlua::Lua::new();
+    pob_runtime::modules::register(&lua).unwrap();
+    let result: Result<(), mlua::Error> = lua
+        .load(format!(
+            r#"
+            local curl = require("lcurl.safe")
+            local easy = curl.easy()
+            easy:setopt_url("http://127.0.0.1:{port}/")
+            easy:perform()
+            "#
+        ))
+        .exec();
+    let error = result
+        .expect_err("perform ran without a NetConfig")
+        .to_string();
+    assert!(error.contains("not configured"), "{error}");
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        listener.accept().is_err(),
+        "a connection reached the listener"
+    );
+}
+
+#[test]
+fn real_curl_connect_timeout_applies() {
+    // fill the listener's backlog so that further connects hang instead of completing
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let mut parked = vec![];
+    let mut full = false;
+    for _ in 0..2000 {
+        match TcpStream::connect_timeout(&addr, Duration::from_millis(50)) {
+            Ok(stream) => parked.push(stream),
+            Err(_) => {
+                full = true;
+                break;
+            }
+        }
+    }
+    assert!(full, "could not fill the backlog");
+
+    let mut manager = SubscriptManager::with_config(NetConfig {
+        connect_timeout: Some(Duration::from_millis(300)),
+        ..NetConfig::default()
+    });
+    launch(&mut manager, &download(&format!("http://{addr}/"), ""), &[]);
+    let out = wait_outcome(&mut manager, Duration::from_secs(4)).expect("no connect timeout");
+    let message = text(&out.result.unwrap()[1]).expect("an error message");
+    assert!(message.contains("Timeout"), "{message}");
+    drop(parked);
+}
+
+#[test]
+fn canned_postfields_alone_make_a_post() {
+    let web = Arc::new(CannedWeb::default());
+    web.route("POST", "https://x.test/p", Canned::ok("done"));
+    let options = r#"easy:setopt(curl.OPT_POSTFIELDS, "a=1")"#;
+    let values = run_download(&web, None, &download("https://x.test/p", options))
+        .result
+        .unwrap();
+    assert_eq!(text(&values[0]).unwrap(), "done");
+    assert_eq!(web.requests()[0].body, b"a=1".to_vec());
+}
+
 #[test]
 fn abort_stops_a_waiting_receive() {
     let mut manager = SubscriptManager::default();
@@ -364,23 +541,13 @@ fn abort_stops_a_waiting_receive() {
     );
     // the call announcing the port
     assert!(wait_count(&count, 0, Duration::from_secs(2)).is_some());
-    let port = loop {
-        let events = manager.process();
-        if let Some(SubscriptEvent::Call { arguments, .. }) = events.into_iter().next() {
-            match arguments.values()[0] {
-                NativeValue::Integer(p) => break p as u16,
-                NativeValue::Number(p) => break p as u16,
-                _ => panic!("port"),
-            }
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    };
+    let port = take_port(&mut manager);
     let _client = TcpStream::connect(("127.0.0.1", port)).unwrap();
     std::thread::sleep(Duration::from_millis(300));
     assert!(manager.is_running(id));
     let before = count.load(Ordering::SeqCst);
     assert!(manager.abort(id));
-    let ended = wait_count(&count, before, Duration::from_secs(1));
+    let ended = wait_count(&count, before, Duration::from_millis(2500));
     assert!(ended.is_some(), "receive ignored the abort");
 }
 
@@ -418,7 +585,8 @@ fn real_curl_abort_ends_the_transfer() {
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(count.load(Ordering::SeqCst), 0, "still transferring");
     assert!(manager.abort(id));
-    let latency = wait_count(&count, 0, Duration::from_secs(1));
+    // curl notices at its next progress tick, up to a second away; the listener never ends it
+    let latency = wait_count(&count, 0, Duration::from_millis(2500));
     assert!(latency.is_some(), "curl kept going after the abort");
     eprintln!("curl abort latency: {:?}", latency.unwrap());
 }

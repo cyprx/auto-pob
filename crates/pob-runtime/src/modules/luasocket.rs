@@ -225,8 +225,10 @@ impl UserData for LuaTcpClient {
                         };
 
                         match result {
-                            Ok(0) => Err(mlua::Error::external("closed")),
+                            // EOF after part of a line: that part is the answer
+                            Ok(0) if line.is_empty() => Err(mlua::Error::external("closed")),
                             Ok(_) => {
+                                this.reader.get_ref().set_read_timeout(this.timeout)?;
                                 if line.last() == Some(&b'\n') {
                                     line.pop();
                                 }

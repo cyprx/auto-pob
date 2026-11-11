@@ -121,6 +121,7 @@ pub struct EasyHandle {
     header_callback: Option<Callback>,
     // what the canned transport records
     url: Option<String>,
+    /// Whether libcurl would send a POST: `OPT_POST`, or `OPT_POSTFIELDS` which implies it.
     post: bool,
     post_fields: Vec<u8>,
     headers: Vec<String>,
@@ -228,6 +229,8 @@ impl EasyHandle {
                     _ => Err(bad_argument("setopt", 1, "string expected")),
                 }?;
                 easy.post_fields_copy(&data).map_err(LuaError::external)?;
+                // libcurl: POSTFIELDS makes the request a POST
+                self.post = true;
                 self.post_fields = data.to_vec();
             }
             constants::OPT_PROXY => {
@@ -327,10 +330,12 @@ impl EasyHandle {
             .map(|callback| callback.resolve(lua))
             .transpose()?;
 
-        let config = lua
-            .app_data_ref::<NetConfig>()
-            .map(|config| config.clone())
-            .unwrap_or_default();
+        // fail closed: a state nobody configured must not reach the network
+        let Some(config) = lua.app_data_ref::<NetConfig>().map(|config| config.clone()) else {
+            return Err(LuaError::runtime(
+                "network is not configured for this Lua state",
+            ));
+        };
         let cancel = lua
             .app_data_ref::<CancelFlag>()
             .map(|flag| flag.clone())

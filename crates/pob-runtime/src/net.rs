@@ -12,6 +12,16 @@ use std::{
 /// Called from subscript threads to wake whoever services the [`crate::subscript::SubscriptManager`].
 pub type Waker = Arc<dyn Fn() + Send + Sync>;
 
+/// A waker that can be set after subscripts exist; threads read it when they wake.
+pub(crate) type SharedWaker = Arc<Mutex<Option<Waker>>>;
+
+pub(crate) fn wake(waker: &SharedWaker) {
+    let waker = waker.lock().unwrap().clone();
+    if let Some(waker) = waker {
+        waker();
+    }
+}
+
 /// How requests leave the process.
 #[derive(Clone, Default)]
 pub enum Transport {
@@ -141,6 +151,9 @@ impl CannedWeb {
     }
 
     /// Every request made so far, in order, routed or not.
+    ///
+    /// Test-only: the records keep full headers (including any Authorization header) and URLs.
+    /// Nothing may log or print them.
     pub fn requests(&self) -> Vec<Recorded> {
         self.log.lock().unwrap().clone()
     }

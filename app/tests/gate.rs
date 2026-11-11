@@ -31,6 +31,8 @@ mod items_harness;
 mod net_harness;
 #[path = "gate/network.rs"]
 mod network;
+#[path = "gate/parity.rs"]
+mod parity;
 #[path = "gate/skills.rs"]
 mod skills;
 #[path = "gate/tattoos.rs"]

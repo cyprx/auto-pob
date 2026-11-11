@@ -20,7 +20,8 @@ Doom Loop
 Iron Ring
 Implicits: 0
 +30 to maximum Life]], "Ring 1")
-	add([[Rarity: RARE
+	-- (equipped in Ring 2 of the second item set only, below)
+	local paua = add([[Rarity: RARE
 Gale Band
 Paua Ring
 Implicits: 0
@@ -46,6 +47,12 @@ Gloom Eye
 Murderous Eye Jewel
 Implicits: 0
 +12 to maximum Life]], "Belt Abyssal Socket 1")
+	-- an abyss jewel that only the second item set holds (below)
+	local eye = add([[Rarity: RARE
+Dusk Eye
+Murderous Eye Jewel
+Implicits: 0
++14 to maximum Mana]])
 
 	-- a life flask, switched on with its own checkbox
 	add([[Rarity: NORMAL
@@ -54,20 +61,35 @@ Divine Life Flask]], "Flask 1")
 	activate.state = true
 	activate.changeFunc(true)
 
-	-- an unused magic jewel, and a unique one in an allocated tree socket
-	add([[Rarity: MAGIC
+	-- a magic jewel in an allocated tree socket, and an unused one
+	local magic = add([[Rarity: MAGIC
 Cobalt Jewel
 Implicits: 0
 +10 to Intelligence]])
+	add([[Rarity: MAGIC
+Viridian Jewel
+Implicits: 0
++10 to Dexterity]])
+	local socket = pick.socket()
+	act.alloc(socket)
+	tab.sockets[socket.id]:SetSelItemId(magic.id)
+	tab:PopulateSlots()
+
+	-- a second tree, PoB's own copy of this one (Convert makes it and shows it), where the
+	-- unique jewel sits in the same socket; the first tree is shown again afterwards
 	local jewel = add([[Rarity: UNIQUE
 Eldritch Knowledge
 Cobalt Jewel
 Radius: Medium
 5% increased Chaos Damage per 10 Intelligence from Allocated Passives in Radius]])
-	local socket = pick.socket()
-	act.alloc(socket)
+	local treeTab = build.treeTab
+	treeTab:ConvertToVersion(build.spec.treeVersion)
+	treeTab.specList[2].title = "Other tree"
 	tab.sockets[socket.id]:SetSelItemId(jewel.id)
 	tab:PopulateSlots()
+	treeTab:SetActiveSpec(1)
+	tab:PopulateSlots()
+	assert(build.spec.jewels[socket.id] == magic.id and treeTab.specList[2].jewels[socket.id] == jewel.id)
 
 	-- a second item set, a copy of set 1 as the set manager's Copy makes it, that uses the
 	-- second weapon set and has a one-hand weapon in "Weapon 1 Swap"
@@ -80,6 +102,9 @@ Adds 1 to 4 Physical Damage]])
 	copy.id = 2
 	copy.title = "Swap"
 	copy.useSecondWeaponSet = true
+	-- what set 1 lacks, in slots that aren't swap slots
+	copy["Ring 2"].selItemId = paua.id
+	copy["Belt Abyssal Socket 1"].selItemId = eye.id
 	copy["Weapon 1 Swap"].selItemId = sword.id
 	tab.itemSets[2] = copy
 	table.insert(tab.itemSetOrderList, 2)

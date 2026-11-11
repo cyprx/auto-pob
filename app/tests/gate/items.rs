@@ -21,10 +21,60 @@ fn upstream_with_items_lib(xml: &std::path::Path, name: &str) -> mlua::Lua {
     lua
 }
 
-/// What upstream's Items tab shows now (`itemsDump()`).
-fn upstream_dump(lua: &mlua::Lua) -> ItemsView {
+/// What upstream's Items tab shows now (`itemsDump()`), as JSON with the nulls left out:
+/// a Lua table has no nil fields.
+fn upstream_json(lua: &mlua::Lua) -> serde_json::Value {
     let value: mlua::Value = lua.load("return itemsDump()").eval().unwrap();
-    lua.from_value(value).unwrap()
+    strip_nulls(lua.from_value(value).unwrap())
+}
+
+/// Our view as JSON, without the `None` fields (they are nulls here and absent upstream).
+fn json(view: &ItemsView) -> serde_json::Value {
+    strip_nulls(serde_json::to_value(view).unwrap())
+}
+
+/// The path of the first difference between two JSON values.
+fn first_difference(path: &str, a: &serde_json::Value, b: &serde_json::Value) -> Option<String> {
+    use serde_json::Value;
+    match (a, b) {
+        (Value::Object(x), Value::Object(y)) => {
+            let keys: std::collections::BTreeSet<_> = x.keys().chain(y.keys()).collect();
+            keys.into_iter().find_map(|k| match (x.get(k), y.get(k)) {
+                (Some(p), Some(q)) => first_difference(&format!("{path}.{k}"), p, q),
+                (p, q) => Some(format!("{path}.{k}: {p:?} vs {q:?}")),
+            })
+        }
+        (Value::Array(x), Value::Array(y)) if x.len() == y.len() => x
+            .iter()
+            .zip(y)
+            .enumerate()
+            .find_map(|(i, (p, q))| first_difference(&format!("{path}[{i}]"), p, q)),
+        _ if a == b => None,
+        _ => Some(format!("{path}: {a} vs {b}")),
+    }
+}
+
+/// Asserts equality, naming the first difference.
+fn assert_same(ours: &serde_json::Value, theirs: &serde_json::Value, what: &str) {
+    if let Some(difference) = first_difference("", ours, theirs) {
+        panic!("{what}: ours vs upstream at {difference}");
+    }
+}
+
+fn strip_nulls(value: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match value {
+        // an empty Lua table is an object here, whatever it holds
+        Value::Object(map) if map.is_empty() => Value::Array(Vec::new()),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .filter(|(_, v)| !v.is_null())
+                .map(|(k, v)| (k, strip_nulls(v)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.into_iter().map(strip_nulls).collect()),
+        other => other,
+    }
 }
 
 /// The build `items/<name>.lua` prepares, saved as XML. The script runs in upstream PoB on its
@@ -84,7 +134,7 @@ fn items_view_matches_pob() {
     let lua = upstream_with_items_lib(&xml, "attack");
     let ours = s.backend.items_view().unwrap();
     assert!(!ours.items.is_empty(), "attack: no items");
-    assert_eq!(ours, upstream_dump(&lua), "attack");
+    assert_same(&json(&ours), &upstream_json(&lua), "attack");
     drop(s);
 
     // the gear setup, with the second set active and the "Unused Items" filter on, so that the
@@ -92,10 +142,35 @@ fn items_view_matches_pob() {
     // than the default ones
     let (mut s, lua) = gear_sessions("items-gear");
     let before = s.backend.items_view().unwrap();
+    assert_same(
+        &json(&before),
+        &upstream_json(&lua),
+        "gear, before the set and the filter change",
+    );
+    // the finders' fields in a state where each is set (lesson 8)
+    let item = |view: &ItemsView, name: &str| -> auto_pob::engine::ItemEntry {
+        view.items
+            .iter()
+            .find(|item| item.name.starts_with(name))
+            .unwrap_or_else(|| panic!("no item {name}"))
+            .clone()
+    };
+    let paua = item(&before, "Gale Band");
+    let equipped = paua.equipped.expect("Gale Band is equipped in set 2");
     assert_eq!(
-        before,
-        upstream_dump(&lua),
-        "gear, before the set and the filter change"
+        (equipped.slot.as_str(), equipped.set.as_deref()),
+        ("Ring 2", Some("Swap"))
+    );
+    assert!(paua.display_label.contains("(Used in 'Swap')"));
+    assert_eq!(item(&before, "Dusk Eye").abyss_set.as_deref(), Some("Swap"));
+    assert_eq!(
+        item(&before, "Eldritch Knowledge").tree.as_deref(),
+        Some("Other tree")
+    );
+    assert!(
+        item(&before, "Eldritch Knowledge")
+            .display_label
+            .contains("(Used in 'Other tree')")
     );
     on_both(
         &s,
@@ -105,7 +180,16 @@ fn items_view_matches_pob() {
          t.controls.itemList.controls.loadoutFilter:SetSel(3)",
     );
     let ours = s.backend.items_view().unwrap();
-    assert_eq!(ours, upstream_dump(&lua), "gear, set 2 and the filter");
+    assert_eq!(
+        json(&ours),
+        upstream_json(&lua),
+        "gear, set 2 and the filter"
+    );
+    // with set 2 active, set 1's belt jewel is the one another set holds
+    assert_eq!(
+        item(&ours, "Gloom Eye").abyss_set.as_deref(),
+        Some("Default")
+    );
 
     assert!(ours.second_weapon_set);
     assert!(!ours.can_reorder);

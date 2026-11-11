@@ -207,6 +207,18 @@ fn rows_split_when_centres_are_further_apart_than_six_pixels() {
 }
 
 #[test]
+fn rows_group_by_centre_not_by_top() {
+    // tops 14 apart but centres equal: one row
+    let tall = control("tall", PopupControlKind::Label, [0.0, 0.0], [50.0, 40.0]);
+    let short = control("short", PopupControlKind::Label, [60.0, 14.0], [50.0, 12.0]);
+    assert_eq!(rows(&popup(vec![tall, short])), [vec![0, 1]]);
+    // tops equal but centres 10 apart: two rows
+    let a = control("a", PopupControlKind::Label, [0.0, 0.0], [50.0, 20.0]);
+    let b = control("b", PopupControlKind::Label, [60.0, 0.0], [50.0, 40.0]);
+    assert_eq!(rows(&popup(vec![a, b])), [vec![0], vec![1]]);
+}
+
+#[test]
 fn hidden_popup_controls_are_not_drawn() {
     let mut hidden = button("secret", 0.0, 40.0);
     hidden.shown = false;
@@ -375,6 +387,28 @@ fn escape_in_a_text_box_reverts_it_and_keeps_the_window() {
     let mut h = Harness::new(popup(vec![edit]));
     h.click("edit_custom");
     h.frame(vec![Event::Text("abc".into())]);
+    let out = h.key(Key::Escape);
+    assert!(out.commands.is_empty(), "{:?}", out.commands);
+    assert!(h.popup.is_open());
+    h.frame(vec![]);
+    assert_eq!(
+        h.popup.box_text("custom"),
+        Some(""),
+        "the typed text is reverted"
+    );
+    // nothing pending is left to send, and the next Esc closes
+    assert!(h.popup.flush().is_none());
+    let out = h.key(Key::Escape);
+    assert_eq!(debug(&out.commands), [format!("{:?}", Command::ClosePopup)]);
+}
+
+#[test]
+fn escape_does_not_close_while_a_dropdown_is_open() {
+    // the dropdown's own filter box is not what stops the window: the guard is
+    let mut h = Harness::new(popup(vec![dropdown("kind", &["One", "Two"], 0)]));
+    h.click("kind");
+    h.frame(vec![]);
+    h.popup.forget_typing();
     let out = h.key(Key::Escape);
     assert!(out.commands.is_empty(), "{:?}", out.commands);
     assert!(h.popup.is_open());
@@ -549,6 +583,32 @@ fn popup_edit_box_flushes_before_press() {
 }
 
 #[test]
+fn a_check_flushes_a_pending_box_first() {
+    let check = control("legacy", PopupControlKind::Check, [0.0, 0.0], [100.0, 20.0]);
+    let edit = control("custom", PopupControlKind::Edit, [0.0, 60.0], [200.0, 20.0]);
+    let mut h = Harness::new(popup(vec![check, edit]));
+    h.click("edit_custom");
+    h.frame(vec![Event::Text("abc".into())]);
+    let pos = h.rect("legacy").center();
+    h.frame(vec![Event::PointerMoved(pos)]);
+    let b = |pressed| Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    let mut sent = h.frame(vec![b(true), b(false)]).commands;
+    sent.extend(h.frame(vec![]).commands);
+    assert_eq!(
+        debug(&sent),
+        [
+            set("custom", PopupInput::Text("abc".into())),
+            set("legacy", PopupInput::Check(true))
+        ]
+    );
+}
+
+#[test]
 fn a_box_typed_into_sends_on_enter() {
     let edit = control("custom", PopupControlKind::Edit, [0.0, 0.0], [200.0, 20.0]);
     let mut h = Harness::new(popup(vec![edit]));
@@ -610,9 +670,12 @@ fn anoint_view(rows: usize) -> PopupView {
 fn anoint_progress_and_failure_shown_in_list() {
     let mut h = Harness::new(anoint_view(3));
     assert_eq!(h.popup.sort_line(), (None, None));
+    h.popup.rects.map.clear();
+    assert!(!h.has("notableDB_progress"));
     h.popup.on_progress(40);
     h.frame(vec![]);
     assert_eq!(h.popup.sort_line(), (Some(40), None));
+    assert!(h.has("notableDB_progress"), "the progress line is drawn");
 
     // the failure replaces the progress and offers Retry
     h.popup.on_failed("calc broke".into());
@@ -637,6 +700,9 @@ fn anoint_progress_and_failure_shown_in_list() {
     h.popup.on_progress(90);
     h.view(anoint_view(3));
     assert_eq!(h.popup.sort_line(), (None, None));
+    h.popup.rects.map.clear();
+    h.frame(vec![]);
+    assert!(!h.has("notableDB_progress"));
 }
 
 #[test]

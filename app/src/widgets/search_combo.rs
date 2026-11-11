@@ -66,8 +66,12 @@ pub fn search_combo_ui(
                     first_match.get_or_insert(i);
                     let item = ui.selectable_label(i == selected, text);
                     entry(i, &item);
-                    if item.clicked() && i != selected {
-                        picked = Some(i);
+                    if item.clicked() {
+                        if i == selected {
+                            ui.close();
+                        } else {
+                            picked = Some(i);
+                        }
                     }
                 }
             });

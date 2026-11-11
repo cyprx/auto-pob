@@ -172,7 +172,11 @@ impl AutoPobApp {
         );
         let is_notes = matches!(command, Command::SetNotes { .. });
         let is_close = matches!(command, Command::ClosePopup);
+        let is_open = matches!(command, Command::OpenPopup(_));
         let seq = self.engine.send(command);
+        if is_open {
+            self.popup.open_sent(seq);
+        }
         if is_close {
             self.popup.close_sent(seq);
         }
@@ -317,7 +321,7 @@ impl AutoPobApp {
 
     fn on_error(&mut self, seq: u64, message: String) {
         // the window stays open for another try (R4)
-        self.popup.on_error();
+        self.popup.on_error(seq);
         if self.text_seq == Some(seq) {
             self.text_seq = None;
             // the raw-text window stays open for another try
@@ -501,6 +505,10 @@ impl AutoPobApp {
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.prompt = Some(Pending::Close);
+            // the prompt sits under the window's modal layer, so the window goes first
+            if let Some(command) = self.popup.close() {
+                self.send(command);
+            }
         }
 
         for action in std::mem::take(&mut self.ready_actions) {
@@ -616,7 +624,7 @@ impl AutoPobApp {
             || self.tree.has_dialog()
             || self.skills.has_dialog()
             || self.items.has_dialog()
-            || self.popup.is_open();
+            || self.popup.is_blocking();
         // a focused button or row doesn't take Ctrl+Z from the tab
         let typing = ui.ctx().text_edit_focused();
         let mut action = None;
@@ -732,7 +740,7 @@ impl AutoPobApp {
                 self.send(command);
             }
         }
-        let popup_out = if self.popup.is_open() {
+        let popup_out = if self.popup.is_blocking() {
             let now = ui.input(|i| i.time);
             self.popup.show(ui.ctx(), now, behind)
         } else {
@@ -3299,6 +3307,137 @@ mod tests {
         }
         assert_eq!(sent_since(&app, before), Vec::<&str>::new());
         assert!(app.popup.is_open());
+    }
+
+    /// Clicks over a grid of points, so every widget in the region gets pressed.
+    fn click_sweep(
+        app: &mut AutoPobApp,
+        ctx: &egui::Context,
+        xs: std::ops::Range<u32>,
+        ys: std::ops::Range<u32>,
+        step: usize,
+    ) {
+        for y in ys.step_by(step) {
+            for x in xs.clone().step_by(step) {
+                let pos = egui::Pos2::new(x as f32, y as f32);
+                let press = |pressed| egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                for events in [
+                    vec![egui::Event::PointerMoved(pos)],
+                    vec![press(true)],
+                    vec![press(false)],
+                ] {
+                    frame(app, ctx, events);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_open_popup_blocks_the_top_bar_the_tabs_and_the_sidebar() {
+        let (mut app, ctx) = popup_app();
+        let before = app.sent_full.len();
+        // top bar (Back, Save, Save as, undo, redo), the tab strip and the sidebar
+        click_sweep(&mut app, &ctx, 0..700, 0..120, 10);
+        click_sweep(&mut app, &ctx, 0..300, 120..400, 30);
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        assert_eq!(app.tab, BuildTab::Items);
+        assert_eq!(app.screen, Screen::Build);
+        assert!(app.prompt.is_none() && app.save_as.is_none());
+        assert!(app.popup.is_open());
+    }
+
+    #[test]
+    fn the_ui_is_blocked_from_the_opener_press_until_the_view_or_an_error() {
+        let (mut app, ctx) = items_app();
+        app.on_event(Event::Snapshot {
+            seq: 91,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(corrupt_display()))),
+        });
+        for _ in 0..4 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        click_item_key(&mut app, &ctx, "open_Corrupt...");
+        frame(&mut app, &ctx, vec![]);
+        assert!(!app.popup.is_open());
+        assert!(app.popup.is_blocking(), "OpenPopup is pending");
+        // Cancel, behind the pending window, would end the session
+        let before = app.sent_full.len();
+        click_item_key(&mut app, &ctx, "cancel");
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        // an error for the open frees the UI
+        let open_seq = app.last_sent;
+        app.on_event(Event::Error {
+            seq: open_seq,
+            message: "refused".into(),
+        });
+        assert!(!app.popup.is_blocking());
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        click_item_key(&mut app, &ctx, "cancel");
+        assert_eq!(
+            sent_since(&app, before),
+            ["CancelDisplayItem { if_id: None }"]
+        );
+    }
+
+    #[test]
+    fn the_view_frees_a_pending_open() {
+        let (mut app, ctx) = items_app();
+        app.on_event(Event::Snapshot {
+            seq: 91,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(corrupt_display()))),
+        });
+        for _ in 0..4 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        click_item_key(&mut app, &ctx, "open_Corrupt...");
+        // a view older than the open doesn't count
+        app.on_event(Event::Snapshot {
+            seq: 1,
+            snapshot: Snapshot::Popup(None),
+        });
+        assert!(app.popup.is_blocking());
+        app.on_event(Event::Snapshot {
+            seq: app.last_sent,
+            snapshot: Snapshot::Popup(Some(Arc::new(popup_view(
+                crate::engine::PopupKind::Corrupt,
+            )))),
+        });
+        assert!(app.popup.is_open());
+    }
+
+    #[test]
+    fn closing_the_window_with_the_popup_open_closes_it_and_shows_the_prompt() {
+        let (mut app, ctx) = popup_app();
+        app.notes.type_for_test("my notes", 0.0);
+        let before = app.sent_full.len();
+        ctx.run_ui(
+            egui::RawInput {
+                viewports: std::iter::once((
+                    egui::ViewportId::ROOT,
+                    egui::ViewportInfo {
+                        events: vec![egui::ViewportEvent::Close],
+                        ..Default::default()
+                    },
+                ))
+                .collect(),
+                ..Default::default()
+            },
+            |ui| app.show(ui),
+        )
+        .drop_without_applying_deltas();
+        assert_eq!(app.prompt, Some(Pending::Close));
+        assert!(
+            !app.popup.is_open(),
+            "the prompt must not hide under the modal"
+        );
+        assert!(sent_since(&app, before).contains(&"ClosePopup"));
     }
 
     #[test]

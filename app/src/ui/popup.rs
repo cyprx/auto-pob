@@ -142,6 +142,8 @@ pub struct PopupWindow {
     close_seq: Option<u64>,
     /// A text box had the focus when the last frame ended
     typing: bool,
+    /// `OpenPopup` went out as this command and nothing has answered it yet
+    opening: Option<u64>,
     pub(crate) rects: Rects,
 }
 
@@ -150,8 +152,29 @@ impl PopupWindow {
         self.view.is_some()
     }
 
+    /// The window is up, or an `OpenPopup` is on its way: nothing behind may take input, or
+    /// a command could end the session before it shows.
+    pub fn is_blocking(&self) -> bool {
+        self.view.is_some() || self.opening.is_some()
+    }
+
+    /// `OpenPopup` went out as command `seq`.
+    pub fn open_sent(&mut self, seq: u64) {
+        self.opening = Some(seq);
+    }
+
     pub fn kind(&self) -> Option<&PopupKind> {
         self.view.as_ref().map(|v| &v.kind)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn box_text(&self, name: &str) -> Option<&str> {
+        self.boxes.text(&name.to_owned())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn forget_typing(&mut self) {
+        self.typing = false;
     }
 
     #[cfg(test)]
@@ -175,6 +198,9 @@ impl PopupWindow {
     }
 
     pub fn on_snapshot_at(&mut self, snapshot: &Snapshot, seq: u64) {
+        if matches!(snapshot, Snapshot::Popup(_)) && self.opening.is_some_and(|o| seq >= o) {
+            self.opening = None;
+        }
         match snapshot {
             Snapshot::Popup(Some(view)) => {
                 // a view the engine made before it heard of the close must not reopen the window
@@ -187,6 +213,8 @@ impl PopupWindow {
                     self.forget();
                 }
                 self.sliders.clear();
+                // a rebuilt list may put another entry under the pointer
+                self.tip.reset();
                 // the engine's next view is the end of a sort that was running
                 self.sort.percent = None;
                 self.view = Some(view.clone());
@@ -213,8 +241,11 @@ impl PopupWindow {
     }
 
     /// The engine refused something: a value shown ahead of its view is not what PoB has.
-    pub fn on_error(&mut self) {
+    pub fn on_error(&mut self, seq: u64) {
         self.sliders.clear();
+        if self.opening.is_some_and(|o| seq >= o) {
+            self.opening = None;
+        }
     }
 
     /// The Anoint stat sort is at `percent`.
@@ -255,6 +286,12 @@ impl PopupWindow {
     pub fn show(&mut self, ctx: &egui::Context, now: f64, busy: bool) -> PopupOutput {
         let mut out = PopupOutput::default();
         let Some(view) = self.view.clone() else {
+            if self.opening.is_some() {
+                // nothing to show yet, but nothing behind may be touched either
+                egui::Modal::new(egui::Id::unique("auto_pob_popup_pending"))
+                    .backdrop_color(egui::Color32::TRANSPARENT)
+                    .show(ctx, |ui| ui.spinner());
+            }
             return out;
         };
         // Esc closes the window, unless it is closing a dropdown or reverting a box
@@ -337,6 +374,25 @@ impl PopupWindow {
         busy: bool,
         out: &mut PopupOutput,
     ) {
+        let first = out.commands.len();
+        self.draw_control(ui, view, c, busy, out);
+        // a box still being typed in goes first, whichever control comes next (Review Focus 4)
+        if c.kind != PopupControlKind::Edit
+            && out.commands.len() > first
+            && let Some(flush) = self.flush()
+        {
+            out.commands.insert(first, flush);
+        }
+    }
+
+    fn draw_control(
+        &mut self,
+        ui: &mut egui::Ui,
+        view: &PopupView,
+        c: &PopupControl,
+        busy: bool,
+        out: &mut PopupOutput,
+    ) {
         let default = ui.visuals().text_color();
         let name = c.name.as_str();
         let width = c.size[0].clamp(0.0, MAX_CONTROL_WIDTH);
@@ -351,8 +407,6 @@ impl PopupWindow {
                 self.rects.note(&response, || format!("btn_{name}"));
                 self.hint(&response, c, None);
                 if response.clicked() {
-                    // a box still being typed in goes first (Review Focus 4)
-                    out.commands.extend(self.flush());
                     out.commands.push(Command::PressPopupButton {
                         name: name.to_owned(),
                     });
@@ -408,10 +462,11 @@ impl PopupWindow {
                 self.caption(ui, c);
                 let mut value = self.sliders.get(name).copied().unwrap_or(c.value);
                 ui.spacing_mut().slider_width = width.max(80.0);
-                let slider = ui.add_enabled(
-                    c.enabled,
-                    egui::Slider::new(&mut value, 0.0..=1.0).show_value(false),
-                );
+                let mut widget = egui::Slider::new(&mut value, 0.0..=1.0).show_value(false);
+                if let Some(d) = c.divisions.filter(|d| *d > 0) {
+                    widget = widget.step_by(1.0 / f64::from(d));
+                }
+                let slider = ui.add_enabled(c.enabled, widget);
                 self.rects.note(&slider, || name.to_owned());
                 self.hint(&slider, c, None);
                 if slider.dragged() || slider.changed() {
@@ -429,7 +484,10 @@ impl PopupWindow {
             }
             PopupControlKind::Check => {
                 let mut on = c.checked;
-                let check = ui.add_enabled(c.enabled, egui::Checkbox::new(&mut on, &c.label));
+                let check = ui.add_enabled(
+                    c.enabled,
+                    egui::Checkbox::new(&mut on, pob_text(&c.label, 14.0, default)),
+                );
                 self.rects.note(&check, || name.to_owned());
                 self.hint(&check, c, None);
                 if check.changed() {
@@ -515,7 +573,8 @@ impl PopupWindow {
                 });
             } else if let Some(percent) = self.sort.percent {
                 ui.horizontal(|ui| {
-                    ui.label(format!("Sorting\u{2026} {percent}%"));
+                    let label = ui.label(format!("Sorting\u{2026} {percent}%"));
+                    self.rects.note(&label, || format!("{name}_progress"));
                     let fraction = f32::from(percent.min(100) as u16) / 100.0;
                     ui.add(
                         egui::ProgressBar::new(fraction)

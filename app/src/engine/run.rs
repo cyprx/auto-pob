@@ -142,6 +142,8 @@ pub struct Affected {
     pub item_text: Option<u32>,
     /// The tree link was requested
     pub link: bool,
+    /// A PoEURL shrink finished: `short_tree_link_view` has the short link (R20)
+    pub short_link: bool,
     /// The network requests changed: one began, finished or was cancelled (R10)
     pub requests: bool,
 }
@@ -174,6 +176,7 @@ impl Affected {
         control_tooltip: None,
         item_text: None,
         link: false,
+        short_link: false,
         requests: true,
     };
 
@@ -226,6 +229,7 @@ impl Affected {
         }
         self.item_text = other.item_text.or(self.item_text);
         self.link |= other.link;
+        self.short_link |= other.short_link;
         self.requests |= other.requests;
     }
 }
@@ -299,6 +303,8 @@ pub trait Backend {
     /// Empty sections when the cell is gone or has no breakdown.
     fn breakdown_view(&mut self, cell: &CellRef) -> anyhow::Result<BreakdownView>;
     fn tree_link_view(&mut self) -> anyhow::Result<String>;
+    /// The short link a finished PoEURL shrink produced, or `None` once taken (R20).
+    fn short_tree_link_view(&mut self) -> anyhow::Result<Option<String>>;
     /// Hands back the memory the last busy stretch left behind. The loop calls it once it has
     /// been idle for a while after work, never between a background job's steps.
     fn release_memory(&mut self);
@@ -535,6 +541,17 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
     }
     if flags.link {
         emit(seq, send, backend.tree_link_view(), Snapshot::TreeLink);
+    }
+    if flags.short_link {
+        match backend.short_tree_link_view() {
+            Ok(Some(link)) => emit(seq, send, Ok(link), Snapshot::TreeLink),
+            // already taken: nothing to send
+            Ok(None) => {}
+            Err(e) => send(Event::Error {
+                seq,
+                message: format!("{e:#}"),
+            }),
+        }
     }
     if flags.requests {
         emit(seq, send, backend.requests_view(), Snapshot::Requests);
@@ -1950,6 +1967,33 @@ mod tests {
         };
         assert_eq!(kinds(true), ["stats", "requests"]);
         assert_eq!(kinds(false), ["requests"]);
+    }
+
+    #[test]
+    fn short_link_is_sent_once_as_a_tree_link() {
+        let (mut fake, _log) = Fake::new();
+        fake.short_link = Some("http://poeurl.com/gAtE".into());
+        let flags = Affected {
+            short_link: true,
+            ..Affected::default()
+        };
+        let mut sent = Vec::new();
+        for _ in 0..2 {
+            let events = RefCell::new(Vec::new());
+            send_snapshots(&mut fake, 1, flags.clone(), &|e| {
+                events.borrow_mut().push(e)
+            });
+            sent.push(
+                snapshots(&events.into_inner())
+                    .iter()
+                    .filter_map(|(_, s)| match s {
+                        Snapshot::TreeLink(link) => Some(link.to_string()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+            );
+        }
+        assert_eq!(sent, [vec!["http://poeurl.com/gAtE".to_string()], vec![]]);
     }
 
     #[test]

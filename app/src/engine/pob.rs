@@ -324,6 +324,7 @@ impl PobBackend {
             Affected::default()
         };
         affected.requests = true;
+        affected.short_link = self.call("short_link_ready", ())?;
         Ok(affected)
     }
 
@@ -494,6 +495,8 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::CopySocketGroup { .. }
             | Command::PreviewNode { .. }
             | Command::ExportTreeLink
+            // a shrink only reads the tree and asks the network (R20)
+            | Command::ShrinkTreeLink
             // the tree search's debounce can land after a node-replacement open: it changes
             // neither the item nor the build
             | Command::SetTreeSearch { .. }
@@ -672,6 +675,10 @@ impl PobBackend {
                 link: true,
                 ..Affected::default()
             }),
+            Command::ShrinkTreeLink => {
+                self.call::<_, u64>("shrink_tree_link", ())?;
+                self.network_affected()
+            }
             Command::SetTreeSearch { text } => {
                 self.call::<_, ()>("set_tree_search", text)?;
                 Ok(Affected {
@@ -798,8 +805,12 @@ impl PobBackend {
                 self.spec_edited(true)
             }
             Command::ImportTreeLink { title, url } => {
-                self.call::<_, ()>("import_tree_link", (title, url))?;
-                self.spec_edited(true)
+                // a PoEURL link is a request; the tree is added when its step runs (R20)
+                let request: Option<u64> = self.call("import_tree_link", (title, url))?;
+                match request {
+                    Some(_) => self.network_affected(),
+                    None => self.spec_edited(true),
+                }
             }
             Command::Undo(Tab::Tree) => {
                 self.call::<_, ()>("tree_undo", ())?;
@@ -1729,6 +1740,10 @@ impl Backend for PobBackend {
 
     fn tree_link_view(&mut self) -> Result<String> {
         self.call("tree_link", ())
+    }
+
+    fn short_tree_link_view(&mut self) -> Result<Option<String>> {
+        self.call("take_short_link", ())
     }
 
     fn requests_view(&mut self) -> Result<RequestsView> {

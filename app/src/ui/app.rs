@@ -1053,6 +1053,11 @@ mod tests {
                     link: true,
                     ..Affected::default()
                 }),
+                Command::ShrinkTreeLink => Ok(Affected {
+                    short_link: true,
+                    requests: true,
+                    ..Affected::default()
+                }),
                 Command::NewBuild => {
                     self.layout_sent = true;
                     self.path = None;
@@ -1365,6 +1370,10 @@ mod tests {
 
         fn tree_link_view(&mut self) -> anyhow::Result<String> {
             Ok("https://example.test/tree".into())
+        }
+
+        fn short_tree_link_view(&mut self) -> anyhow::Result<Option<String>> {
+            Ok(None)
         }
 
         fn requests_view(&mut self) -> anyhow::Result<crate::engine::RequestsView> {

@@ -194,12 +194,17 @@ end
 local function guarded(req, open, fn, ...)
 	local popups = main().popups
 	local depth = #popups
+	local args = { n = select("#", ...), ... }
+	local inits_before = inits
+	-- taken before the owned popup goes on the stack, and not allowed to raise: a failure here
+	-- must leave neither the popup nor the request's bookkeeping behind
+	local marked, marks = pcall(edit_marks)
+	if not marked then
+		marks = nil
+	end
 	if req.popup then
 		table.insert(popups, 1, req.popup)
 	end
-	local args = { n = select("#", ...), ... }
-	local inits_before = inits
-	local marks = edit_marks()
 	local results
 	local ok, err = in_scope(req, open, function()
 		results = { pcall(fn, unpack(args, 1, args.n)) }
@@ -246,11 +251,19 @@ local function remove_pending(id)
 end
 
 local function finish(req)
-	-- an owned popup still open at the end shows why in its `msg` label (R11)
+	-- an owned popup still open at the end shows why in its `msg` label (R11), unless the
+	-- subscript itself failed: PoB drops a CUSTOM subscript's error without calling back, so
+	-- the label still shows what it showed when the press began ("Resolving PoEURL link...")
 	if req.popup then
+		if req.opts.done and not req.cancelled then
+			local ok, err = pcall(req.opts.done, req)
+			if not ok then
+				record_error(req, err)
+			end
+		end
 		local msg = req.popup.controls and req.popup.controls.msg
 		local text = msg and label_of(msg)
-		if text and text:match("%S") then
+		if text and text:match("%S") and not req.last_error then
 			record_error(req, text)
 		end
 		req.popup = nil
@@ -284,7 +297,8 @@ end
 -- Begins a request labelled `label` (R10) and runs `fn`, the user's press, inside it.
 -- `opts.confirmed`: confirms PoB's confirm popups; `opts.popup`: a detached PopupDialog the
 -- request owns (taken out of `main.popups` if it is on top); `opts.scope`: "build" (default) or
--- "list". Returns the request id, or nil plus PoB's message when nothing was launched.
+-- "list"; `opts.done(req)`: called when the request ends with its owned popup still open (not
+-- when cancelled), before `req.error` is read from the popup. Returns the request id, or nil plus PoB's message when nothing was launched.
 -- An error `fn` raises before launching anything is raised.
 function glue.net_begin(label, opts, fn)
 	opts = opts or {}
@@ -335,6 +349,11 @@ function glue.net_dispatch(kind, id, ...)
 		return
 	end
 	if kind == "call" then
+		-- A subscript's ConPrintf is dropped, not logged: DownloadPage logs the page it
+		-- fetches, and a URL can carry an account name (R21).
+		if (...) == "ConPrintf" then
+			return
+		end
 		local results = { guarded(req, true, function(...)
 			return runCallback("OnSubCall", ...)
 		end, ...) }

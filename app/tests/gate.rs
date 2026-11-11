@@ -2654,13 +2654,6 @@ fn spec_command_errors() {
         ),
         (
             Command::ImportTreeLink {
-                title: "Short".into(),
-                url: "http://poeurl.com/dABz".into(),
-            },
-            "short links need the network; paste the full link",
-        ),
-        (
-            Command::ImportTreeLink {
                 title: "Bad".into(),
                 url: "https://www.pathofexile.com/passive-skill-tree/3.29.0/abc".into(),
             },

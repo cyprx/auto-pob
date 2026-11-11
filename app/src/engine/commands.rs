@@ -86,6 +86,9 @@ pub enum Command {
     },
     /// Ask for the active tree's link.
     ExportTreeLink,
+    /// Shrinks the active tree's link with PoEURL (a network request). The short link comes
+    /// as `Snapshot::TreeLink` when the request finishes (R20).
+    ShrinkTreeLink,
 
     /// Allocates the node and the path to it (an ascendancy node switches ascendancy first).
     AllocNode {

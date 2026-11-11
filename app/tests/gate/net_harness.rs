@@ -2,7 +2,9 @@
 //! settling of requests. Included from `gate.rs`, shared by the network tests.
 
 use super::{fixture_xml, pob_dir};
+use auto_pob::engine::net::{Dispatch, NetHandle};
 use auto_pob::engine::pob::PobBackend;
+use auto_pob::engine::upstream::{load_xml, upstream_lua_with_net};
 use auto_pob::engine::{Affected, Backend, BackgroundTask, RequestsView};
 use auto_pob::game::Game;
 use pob_runtime::net::{CannedWeb, NetConfig, Transport};
@@ -148,4 +150,55 @@ pub(crate) fn begin_fetch(lua: &mlua::Lua, url: &str) -> Option<u64> {
     .set_name("=begin fetch")
     .call(url)
     .expect("net_begin")
+}
+
+/// Unmodified upstream PoB over the canned web: its subscripts run through our natives and are
+/// delivered to PoB's own `launch:OnSub*` by [`pump`](UpstreamNet::pump).
+pub(crate) struct UpstreamNet {
+    pub lua: mlua::Lua,
+    pub net: NetHandle,
+}
+
+impl UpstreamNet {
+    /// Starts upstream with `xml` loaded when given, and `tree_lib.lua` plus `net_lib.lua`.
+    pub(crate) fn new(web: &Arc<CannedWeb>, xml: Option<&str>) -> UpstreamNet {
+        let (lua, net) =
+            upstream_lua_with_net(&pob_dir(), canned(web)).expect("starting upstream PoB");
+        if let Some(xml) = xml {
+            load_xml(&lua, xml, "net").expect("loading the build");
+        }
+        super::load_tree_lib(&lua);
+        let lib = fs::read_to_string(super::fixtures_dir().join("net_lib.lua")).unwrap();
+        lua.load(lib)
+            .set_name("=net_lib")
+            .exec()
+            .expect("net_lib.lua");
+        UpstreamNet { lua, net }
+    }
+
+    pub(crate) fn eval<T: mlua::FromLuaMulti>(&self, code: &str) -> T {
+        self.lua
+            .load(code)
+            .set_name("=upstream net")
+            .eval()
+            .unwrap_or_else(|e| panic!("{code}: {e}"))
+    }
+
+    /// Delivers subscript results and calls to PoB, as its frame loop does, until no subscript
+    /// runs any more (a callback may start the next one).
+    pub(crate) fn pump(&self, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if self.net.has_ready() {
+                self.net
+                    .service(&self.lua, Dispatch::Launch)
+                    .expect("delivering to upstream");
+            } else if self.net.running_ids().is_empty() {
+                return;
+            } else {
+                assert!(Instant::now() < deadline, "upstream subscripts still run");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
 }

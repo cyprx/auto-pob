@@ -1,7 +1,7 @@
 //! SP6 network gate tests: our engine's requests over the canned web.
 
 use super::net_harness::{
-    EXPIRED_TOKEN_SETTINGS, begin_fetch, canned, canned_web, net_session, net_user,
+    EXPIRED_TOKEN_SETTINGS, UpstreamNet, begin_fetch, canned, canned_web, net_session, net_user,
 };
 use super::{lock, pob_dir, set};
 use auto_pob::engine::pob::PobBackend;
@@ -182,8 +182,9 @@ fn requests_cancel_fail_and_stay_responsive() {
     // ---- Unasked requests (R2, R4): a stored, expired sign-in is never refreshed unasked ----
     let mut net = canned(&web);
     net.timeout = Some(Duration::from_millis(200));
-    let mut s = net_session("direct", net, Some(EXPIRED_TOKEN_SETTINGS));
+    // taken before the engine starts, so a launch made during startup is counted too
     let asked = web.requests().len();
+    let mut s = net_session("direct", net, Some(EXPIRED_TOKEN_SETTINGS));
     let unasked = |s: &super::net_harness::NetSession, when: &str| {
         let urls: Vec<String> = web.requests()[asked..]
             .iter()
@@ -455,6 +456,309 @@ fn requests_cancel_fail_and_stay_responsive() {
     assert!(web.unrouted().is_empty(), "unrouted: {:?}", web.unrouted());
     eprintln!(
         "requests_cancel_fail_and_stay_responsive took {:?}",
+        started.elapsed()
+    );
+}
+
+/// Log lines captured while a test runs, to see what reaches `log` (R21).
+static LOGGED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+struct Capture;
+
+impl log::Log for Capture {
+    fn enabled(&self, _: &log::Metadata) -> bool {
+        true
+    }
+
+    fn log(&self, record: &log::Record) {
+        LOGGED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(format!("{}", record.args()));
+    }
+
+    fn flush(&self) {}
+}
+
+fn capture_logs() {
+    // another logger may be set already; then the lines don't arrive and the test says so
+    let _ = log::set_logger(&Capture);
+    log::set_max_level(log::LevelFilter::Trace);
+}
+
+fn logged() -> Vec<String> {
+    LOGGED.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn downloads_log_no_url_and_guards_restore_popups() {
+    let _guard = lock();
+    capture_logs();
+    let web = canned_web();
+    web.route("GET", PAGE, Canned::ok("Fetched page"));
+    let mut s = net_session("log-guard", canned(&web), None);
+    s.open_fixture("new");
+
+    // ---- M3: PoB's DownloadPage logs "Downloading page at: <url>" from its subscript; the
+    // URL (it can name an account) must not reach the log (R21) ----
+    let id = begin_fetch(&s.backend.lua, PAGE).expect("launched");
+    assert!(
+        s.settle_net(Duration::from_secs(5))
+            .iter()
+            .all(Result::is_ok)
+    );
+    let view = s.requests();
+    assert_eq!(finished(&view, id).and_then(|f| f.error.clone()), None);
+    // the download ran, so DownloadPage's subscript did log
+    assert_eq!(
+        s.eval::<String>("return pob.build.buildName"),
+        "Fetched page"
+    );
+    let lines = logged();
+    assert!(
+        !lines.is_empty(),
+        "the test logger saw nothing; it is not installed"
+    );
+    let leaked: Vec<&String> = lines
+        .iter()
+        .filter(|l| l.contains("example.test"))
+        .collect();
+    assert!(leaked.is_empty(), "a URL reached the log: {leaked:?}");
+    s.assert_clean("download");
+
+    // ---- M4: a failure while taking stock of the build must leave neither the owned popup on
+    // the stack nor the request half made ----
+    let id: u64 = s
+        .backend
+        .lua
+        .load(
+            r#"local url = ...
+            pob.build.treeTab:OpenImportPopup()
+            local popup = pob.main.main.popups[1]
+            local real = glue.build_loaded
+            glue.build_loaded = function() error("forced", 0) end
+            local ok, id = pcall(glue.net_begin, "Guard", { popup = popup }, function()
+                launch:DownloadPage(url, function() end)
+            end)
+            glue.build_loaded = real
+            if not ok then error(id, 0) end
+            return id"#,
+        )
+        .call(PAGE)
+        .expect("net_begin must survive a failing edit check");
+    assert_eq!(
+        s.eval::<usize>("return #pob.main.main.popups"),
+        0,
+        "the owned popup stayed on the stack"
+    );
+    assert!(
+        s.settle_net(Duration::from_secs(5))
+            .iter()
+            .all(Result::is_ok)
+    );
+    let view = s.requests();
+    assert_eq!(finished(&view, id).and_then(|f| f.error.clone()), None);
+    s.assert_clean("guard");
+    assert!(web.unrouted().is_empty(), "unrouted: {:?}", web.unrouted());
+}
+
+/// The state of the tree tab in the shape of upstream's `treeDump()`, plus whether it can undo.
+fn our_tree(s: &mut super::net_harness::NetSession) -> (super::Checkpoint, bool) {
+    let state = s.backend.tree_state_view().expect("tree state");
+    let mut allocated = state.allocated;
+    allocated.sort_unstable();
+    let checkpoint = super::Checkpoint {
+        allocated,
+        tree_version: state.version,
+        spec_titles: state.specs.iter().map(|e| e.title.clone()).collect(),
+        active_spec: state.active_spec,
+        compare: state.compare,
+        sidebar: None,
+        tattoos: None,
+    };
+    (checkpoint, state.can_undo)
+}
+
+fn upstream_tree(up: &UpstreamNet) -> (super::Checkpoint, bool) {
+    use mlua::LuaSerdeExt;
+    let value: mlua::Value = up.eval("return treeDump()");
+    let checkpoint = up.lua.from_value(value).expect("upstream's tree state");
+    (checkpoint, up.eval("return treeCanUndo()"))
+}
+
+/// Runs the Network steps until the request ends, then the one request's entry.
+fn finish_request(s: &mut super::net_harness::NetSession) -> FinishedRequest {
+    let steps = s.settle_net(Duration::from_secs(15));
+    assert!(steps.iter().all(Result::is_ok), "a step failed");
+    let mut view = s.requests();
+    assert_eq!(view.finished.len(), 1, "{view:?}");
+    view.finished.remove(0)
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tree_links_over_network_match_pob() {
+    let _guard = lock();
+    let started = Instant::now();
+    let attack_url = super::upstream_link("attack");
+    let web = canned_web();
+    web.route(
+        "GET",
+        "http://poeurl.com/gAtE",
+        Canned::status(302, "").header("Location", &attack_url),
+    );
+    web.route(
+        "GET",
+        "http://poeurl.com/dead",
+        Canned::status(302, "").header("Location", "http://poeurl.com/"),
+    );
+    let new_xml = std::fs::read_to_string(super::fixture_xml("new")).unwrap();
+    let mut s = net_session("tree-links", canned(&web), None);
+    s.open_fixture("new");
+    let up = UpstreamNet::new(&web, Some(&new_xml));
+    let before = our_tree(&mut s);
+    assert_eq!(before, upstream_tree(&up));
+    assert_eq!(before.0.spec_titles.len(), 1);
+
+    // ---- A short link resolves and adds the tree ----
+    up.eval::<()>("act.tree_import('http://poeurl.com/gAtE', 'Short')");
+    let affected = s
+        .backend
+        .apply(
+            Command::ImportTreeLink {
+                title: "Short".into(),
+                url: "http://poeurl.com/gAtE".into(),
+            },
+            &|_| {},
+        )
+        .expect("import");
+    // it returns at once: the request is out, the tree not yet there
+    assert!(affected.requests && !affected.build, "{affected:?}");
+    assert_eq!(our_tree(&mut s).0.spec_titles.len(), 1);
+    assert_eq!(s.requests().pending.len(), 1);
+    assert_eq!(s.requests().pending[0].id, 1);
+    let steps = s.settle_net(Duration::from_secs(15));
+    assert!(
+        steps
+            .iter()
+            .any(|a| a.as_ref().is_ok_and(|a| a.build && a.tree && a.recalc)),
+        "the step that added the tree didn't answer for it"
+    );
+    s.backend.recalculate().unwrap();
+    up.pump(Duration::from_secs(15));
+    let (ours, ours_undo) = our_tree(&mut s);
+    let (theirs, theirs_undo) = upstream_tree(&up);
+    assert_eq!(ours, theirs);
+    assert_eq!(ours.spec_titles, ["Default", "Short"]);
+    assert_eq!(ours.active_spec, 1);
+    assert!(ours.allocated.len() > 10, "the tree is not the attack tree");
+    // a new tree has one undo state, so neither side can undo yet (the brief expected true)
+    assert_eq!(ours_undo, theirs_undo);
+    assert_eq!(up.eval::<usize>("return #main.popups"), 0);
+    let entry = s.requests().finished;
+    assert_eq!(entry.len(), 1);
+    assert_eq!(entry[0].label, "Resolving PoEURL link");
+    assert_eq!(entry[0].error, None);
+    s.assert_clean("short import");
+
+    // ---- Shrinking the active tree's link ----
+    let long: String = up.eval("return exportLink()");
+    web.route(
+        "GET",
+        &format!("http://poeurl.com/shrink.php?url={long}"),
+        Canned::ok("gAtE"),
+    );
+    up.eval::<()>("act.tree_shrink()");
+    up.pump(Duration::from_secs(15));
+    let theirs: String = up.eval("return shrunkLink()");
+    assert_eq!(theirs, "http://poeurl.com/gAtE");
+    up.eval::<()>("closePopups()");
+    let affected = s
+        .backend
+        .apply(Command::ShrinkTreeLink, &|_| {})
+        .expect("shrink");
+    assert!(affected.requests && !affected.short_link, "{affected:?}");
+    let steps = s.settle_net(Duration::from_secs(15));
+    assert!(
+        steps.iter().any(|a| a.as_ref().is_ok_and(|a| a.short_link)),
+        "no step announced the short link"
+    );
+    assert_eq!(
+        s.backend.short_tree_link_view().unwrap().as_deref(),
+        Some(theirs.as_str())
+    );
+    assert_eq!(s.backend.short_tree_link_view().unwrap(), None);
+    let entry = s.requests().finished;
+    assert_eq!(entry[0].label, "Shrinking tree link");
+    assert_eq!(entry[0].error, None);
+    s.assert_clean("shrink");
+
+    // ---- A link PoEURL can't resolve: PoB's message, and no tree ----
+    let count = our_tree(&mut s).0.spec_titles.len();
+    up.eval::<()>("act.tree_import('http://poeurl.com/dead', 'Dead')");
+    up.pump(Duration::from_secs(15));
+    let theirs: String = up.eval("return popupMessage()");
+    assert_eq!(theirs, "Failed to resolve PoEURL link");
+    up.eval::<()>("closePopups()");
+    s.backend
+        .apply(
+            Command::ImportTreeLink {
+                title: "Dead".into(),
+                url: "http://poeurl.com/dead".into(),
+            },
+            &|_| {},
+        )
+        .expect("import");
+    let entry = finish_request(&mut s);
+    assert_eq!(entry.error.as_deref(), Some(theirs.as_str()));
+    assert!(!entry.cancelled && !entry.new_build);
+    assert_eq!(our_tree(&mut s).0.spec_titles.len(), count);
+    assert_eq!(upstream_tree(&up).0, our_tree(&mut s).0);
+    s.assert_clean("dead link");
+
+    // ---- A shrink PoEURL fails: PoB's message, and no short link ----
+    web.route(
+        "GET",
+        &format!("http://poeurl.com/shrink.php?url={long}"),
+        Canned::status(500, ""),
+    );
+    up.eval::<()>("act.tree_shrink()");
+    up.pump(Duration::from_secs(15));
+    let theirs: String = up.eval("return popupMessage()");
+    assert_eq!(theirs, "Failed to get PoEURL link. Try again later.");
+    up.eval::<()>("closePopups()");
+    s.backend.apply(Command::ShrinkTreeLink, &|_| {}).unwrap();
+    let entry = finish_request(&mut s);
+    assert_eq!(entry.error.as_deref(), Some(theirs.as_str()));
+    assert_eq!(s.backend.short_tree_link_view().unwrap(), None);
+    s.assert_clean("shrink failure");
+
+    // ---- PoB drops a CUSTOM subscript's error without calling back (Launch.lua:198-220), so
+    // its flags stay as they were. The request ends anyway, with the subscript's own error
+    // and not the popup's stale "Resolving..." label ----
+    let id: u64 = s
+        .backend
+        .lua
+        .load(
+            r#"called = false
+            local popup = { controls = { msg = { label = "Resolving PoEURL link..." } } }
+            return glue.net_begin("Custom", { popup = popup }, function()
+                local id = LaunchSubScript("error('boom', 0)", "", "")
+                launch:RegisterSubScript(id, function() called = true end)
+            end)"#,
+        )
+        .eval()
+        .expect("net_begin");
+    let entry = finish_request(&mut s);
+    assert_eq!(entry.id, id);
+    assert_eq!(entry.error.as_deref(), Some("boom"));
+    assert!(!s.eval::<bool>("return called"), "PoB called back");
+    s.assert_clean("custom error");
+
+    assert!(web.unrouted().is_empty(), "unrouted: {:?}", web.unrouted());
+    eprintln!(
+        "tree_links_over_network_match_pob took {:?}",
         started.elapsed()
     );
 }

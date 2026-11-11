@@ -89,6 +89,8 @@ pub struct Fake {
     pub pending: Vec<(u64, &'static str)>,
     /// The waker the engine gave
     pub waker: Option<Waker>,
+    /// The short link `short_tree_link_view` answers once
+    pub short_link: Option<String>,
 }
 
 impl Fake {
@@ -117,6 +119,7 @@ impl Fake {
                 net_ready: Arc::default(),
                 pending: Vec::new(),
                 waker: None,
+                short_link: None,
             },
             log,
         )
@@ -204,6 +207,11 @@ impl Fake {
             }),
             Command::ExportTreeLink => Ok(Affected {
                 link: true,
+                ..Affected::default()
+            }),
+            Command::ShrinkTreeLink => Ok(Affected {
+                short_link: true,
+                requests: true,
                 ..Affected::default()
             }),
             _ => Ok(Affected::default()),
@@ -553,6 +561,10 @@ impl Backend for Fake {
 
     fn tree_link_view(&mut self) -> anyhow::Result<String> {
         Ok("https://example.test/tree".into())
+    }
+
+    fn short_tree_link_view(&mut self) -> anyhow::Result<Option<String>> {
+        Ok(self.short_link.take())
     }
 
     fn requests_view(&mut self) -> anyhow::Result<RequestsView> {

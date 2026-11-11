@@ -1783,66 +1783,76 @@ fn a_conditional_cancel_only_cancels_the_item_it_names() {
     );
 }
 
-#[test]
-#[ignore = "needs the pinned PoB install"]
-fn items_round_trip() {
+/// One recipe saved, reloaded by upstream and compared with the recipe's result and ours.
+fn items_round_trip(name: &str) {
     let _guard = lock();
-    for name in [
-        "paste_equip",
-        "sets",
-        "display_edits",
-        "flasks_jewels",
-        "variants",
-        "delete_sort",
-    ] {
-        let (recipe, mut s) = run_items_recipe(name);
-        s.run(Command::Save).unwrap();
-        let saved = s.backend.build_view().unwrap().path.expect("a saved build");
-        // what upstream PoB makes of the file we wrote
-        let lua = upstream_with_items_lib(&saved, &recipe.base);
-        let reloaded = upstream_json(&lua);
-        // the undo history and what the list shows are not saved
-        // `flasks_jewels` leaves the live slots apart from the saved file's: PoB's undo
-        // restores only the sets' flask copies (R12), and a socket whose node went is
-        // labelled from the live tree. Its slots are not compared; the saved sets' flasks are,
-        // below, and the jewels and item texts as for every recipe.
-        let live_slots = name != "flasks_jewels";
-        let saved_part = |mut value: serde_json::Value| {
-            for key in ["can_undo", "can_redo", "list_filter"] {
-                value.as_object_mut().unwrap().remove(key);
-            }
-            if !live_slots {
-                value.as_object_mut().unwrap().remove("slots");
-            }
-            value
-        };
-        let ours = saved_part(json(&s.backend.items_view().unwrap()));
-        let expected = saved_part(recipe.result.clone());
-        let reloaded = saved_part(reloaded);
-        assert_same(&reloaded, &expected, &format!("{name}: reloaded vs recipe"));
-        assert_same(&ours, &reloaded, &format!("{name}: ours vs reloaded"));
-        let (raws, jewels) = raws_and_jewels(&lua, "build");
-        assert_eq!(raws, recipe.raws, "{name}: item text after reload");
-        assert_eq!(jewels, recipe.jewels, "{name}: jewels after reload");
-        let (ours_raws, ours_jewels) = raws_and_jewels(&s.backend.lua, "pob.build");
-        assert_eq!(ours_raws, raws, "{name}: our item text");
-        assert_eq!(ours_jewels, jewels, "{name}: our jewels");
-        assert!(!raws.is_empty(), "{name}: no items");
-        // the flasks that are on, by set (an untouched set holds no slot entries yet)
-        let flasks = |lua: &mlua::Lua, build: &str| -> BTreeMap<String, bool> {
-            lua_value(
-                lua,
-                &format!(
-                    "local out = {{}} for id, set in pairs({build}.itemsTab.itemSets) do for slot, entry in pairs(set) do if type(entry) == 'table' and entry.active then out[id .. '/' .. slot] = true end end end return out"
-                ),
-            )
-        };
-        assert_eq!(
-            flasks(&s.backend.lua, "pob.build"),
-            flasks(&lua, "build"),
-            "{name}: the saved sets' flasks"
-        );
-    }
+    let (recipe, mut s) = run_items_recipe(name);
+    s.run(Command::Save).unwrap();
+    let saved = s.backend.build_view().unwrap().path.expect("a saved build");
+    // what upstream PoB makes of the file we wrote
+    let lua = upstream_with_items_lib(&saved, &recipe.base);
+    let reloaded = upstream_json(&lua);
+    // the undo history and what the list shows are not saved
+    // `flasks_jewels` leaves the live slots apart from the saved file's: PoB's undo
+    // restores only the sets' flask copies (R12), and a socket whose node went is
+    // labelled from the live tree. Its slots are not compared; the saved sets' flasks are,
+    // below, and the jewels and item texts as for every recipe.
+    let live_slots = name != "flasks_jewels";
+    let saved_part = |mut value: serde_json::Value| {
+        for key in ["can_undo", "can_redo", "list_filter"] {
+            value.as_object_mut().unwrap().remove(key);
+        }
+        if !live_slots {
+            value.as_object_mut().unwrap().remove("slots");
+        }
+        value
+    };
+    let ours = saved_part(json(&s.backend.items_view().unwrap()));
+    let expected = saved_part(recipe.result.clone());
+    let reloaded = saved_part(reloaded);
+    assert_same(&reloaded, &expected, &format!("{name}: reloaded vs recipe"));
+    assert_same(&ours, &reloaded, &format!("{name}: ours vs reloaded"));
+    let (raws, jewels) = raws_and_jewels(&lua, "build");
+    assert_eq!(raws, recipe.raws, "{name}: item text after reload");
+    assert_eq!(jewels, recipe.jewels, "{name}: jewels after reload");
+    let (ours_raws, ours_jewels) = raws_and_jewels(&s.backend.lua, "pob.build");
+    assert_eq!(ours_raws, raws, "{name}: our item text");
+    assert_eq!(ours_jewels, jewels, "{name}: our jewels");
+    assert!(!raws.is_empty(), "{name}: no items");
+    // the flasks that are on, by set (an untouched set holds no slot entries yet)
+    let flasks = |lua: &mlua::Lua, build: &str| -> BTreeMap<String, bool> {
+        lua_value(
+            lua,
+            &format!(
+                "local out = {{}} for id, set in pairs({build}.itemsTab.itemSets) do for slot, entry in pairs(set) do if type(entry) == 'table' and entry.active then out[id .. '/' .. slot] = true end end end return out"
+            ),
+        )
+    };
+    assert_eq!(
+        flasks(&s.backend.lua, "pob.build"),
+        flasks(&lua, "build"),
+        "{name}: the saved sets' flasks"
+    );
+}
+
+// One test per recipe, so the gate runner can spread the slowest one (72 s as a single test).
+macro_rules! round_trip_tests {
+    ($($test:ident: $recipe:literal,)*) => {$(
+        #[test]
+        #[ignore = "needs the pinned PoB install"]
+        fn $test() {
+            items_round_trip($recipe);
+        }
+    )*};
+}
+
+round_trip_tests! {
+    items_round_trip_paste_equip: "paste_equip",
+    items_round_trip_sets: "sets",
+    items_round_trip_display_edits: "display_edits",
+    items_round_trip_flasks_jewels: "flasks_jewels",
+    items_round_trip_variants: "variants",
+    items_round_trip_delete_sort: "delete_sort",
 }
 
 #[test]

@@ -39,8 +39,29 @@ mod tattoos;
 /// PoB loads files relative to the process working directory, so only one test may run it.
 static CWD: Mutex<()> = Mutex::new(());
 
-fn lock() -> std::sync::MutexGuard<'static, ()> {
-    CWD.lock().unwrap_or_else(|e| e.into_inner())
+/// Holds the process-wide lock and prints `gate-time <test> <secs>` to stderr when dropped,
+/// so `scripts/gate.sh` and a plain serial run both show which tests are slow.
+struct GateGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    began: std::time::Instant,
+}
+
+impl Drop for GateGuard {
+    fn drop(&mut self) {
+        let thread = std::thread::current();
+        eprintln!(
+            "gate-time {} {:.1}",
+            thread.name().unwrap_or("?"),
+            self.began.elapsed().as_secs_f64()
+        );
+    }
+}
+
+fn lock() -> GateGuard {
+    GateGuard {
+        _lock: CWD.lock().unwrap_or_else(|e| e.into_inner()),
+        began: std::time::Instant::now(),
+    }
 }
 
 fn pob_dir() -> PathBuf {

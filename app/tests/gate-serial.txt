@@ -1,0 +1,7 @@
+# Gate tests that must not overlap with any other test process. scripts/gate.sh runs these one
+# at a time after the parallel batch. One full test name per line; `#` starts a comment.
+
+# PoB's sign-in listener binds the machine-wide ports 49082-49084 and the test holds some of
+# them on purpose, so no other test may sign in while it runs.
+network::oauth_flow_matches_pob
+network::no_silent_writes_network

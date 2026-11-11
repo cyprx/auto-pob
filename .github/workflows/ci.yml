@@ -55,7 +55,8 @@ jobs:
         if: steps.pob-cache.outputs.cache-hit != 'true'
         run: cargo run -p auto-pob --example fetch_pob -- ~/pob
 
-      # CI is unset on purpose: GitHub sets CI=true, which makes upstream's HeadlessWrapper
-      # skip ModCache and can change the golden values.
+      # scripts/gate.sh unsets CI itself: GitHub sets CI=true, which makes upstream's
+      # HeadlessWrapper skip ModCache and can change the golden values. -j2 suits the 2-core
+      # 7 GB hosted runner (each test process can peak near 1 GB).
       - name: Gate tests
-        run: env -u CI AUTO_POB_POB_DIR=$HOME/pob cargo test -p auto-pob --test gate -- --ignored --test-threads=1
+        run: AUTO_POB_POB_DIR=$HOME/pob scripts/gate.sh -j2

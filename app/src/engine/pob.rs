@@ -6,10 +6,10 @@ use super::commands::{
 };
 use super::run::{Affected, Backend, BackgroundTask, Engine, Event};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, GemRow, GemSearchView,
-    GemTooltipView, GroupTooltipView, ItemText, ItemTooltip, ItemTooltipView, ItemsView, NodePower,
-    NodeTooltip, NotesView, PowerReport, SkillsView, SocketGroupText, StatsView, TooltipLine,
-    TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, DisplayItemView,
+    GemRow, GemSearchView, GemTooltipView, GroupTooltipView, ItemText, ItemTooltip,
+    ItemTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, PowerReport, SkillsView,
+    SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -244,6 +244,14 @@ fn items_listed() -> Affected {
     Affected {
         build: true,
         items: true,
+        ..Affected::default()
+    }
+}
+
+/// A change to the display item only: PoB counts none of it as an edit of the build (R10).
+fn display_changed() -> Affected {
+    Affected {
+        display_item: true,
         ..Affected::default()
     }
 }
@@ -824,6 +832,38 @@ impl PobBackend {
                 }
                 Ok(items_listed())
             }
+            Command::PasteItem { text } => {
+                self.call::<_, ()>("display_paste", text)?;
+                Ok(display_changed())
+            }
+            Command::EditItem { id } => {
+                self.call::<_, ()>("display_edit", id)?;
+                Ok(display_changed())
+            }
+            Command::SetDisplayItemText { rarity, text } => {
+                self.call::<_, ()>("display_set_text", (rarity, text))?;
+                Ok(display_changed())
+            }
+            Command::CancelDisplayItem => {
+                self.call::<_, ()>("display_cancel", ())?;
+                Ok(display_changed())
+            }
+            Command::SaveDisplayItem => {
+                self.call::<_, ()>("display_save", ())?;
+                Ok(Affected {
+                    display_item: true,
+                    ..self.items_edited()?
+                })
+            }
+            Command::SetShowStatDifferences { on } => {
+                let changed: bool = self.call("display_show_differences", on)?;
+                Ok(Affected {
+                    items: true,
+                    display_item: true,
+                    recalc: changed,
+                    ..Affected::default()
+                })
+            }
             Command::Undo(Tab::Items) => {
                 self.call::<_, ()>("items_undo", ())?;
                 self.items_edited()
@@ -904,6 +944,10 @@ impl Backend for PobBackend {
 
     fn items_view(&mut self) -> Result<ItemsView> {
         self.view("items_view", ())
+    }
+
+    fn display_item_view(&mut self) -> Result<Option<DisplayItemView>> {
+        self.view("display_item_view", ())
     }
 
     fn socket_group_text(&mut self, group: usize) -> Result<SocketGroupText> {

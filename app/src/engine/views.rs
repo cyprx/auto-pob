@@ -1125,3 +1125,63 @@ pub struct ItemText {
     pub id: u32,
     pub text: String,
 }
+
+/// The item on the display panel (PoB's `displayItem`) with the controls PoB shows for it.
+/// Each optional part is present only while PoB shows its control.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DisplayItemView {
+    /// The item's id in the build; none for an item that isn't in the build yet
+    pub id: Option<u32>,
+    pub name: String,
+    pub base: String,
+    /// PoB's rarity name ("RARE")
+    pub rarity: String,
+    /// What PoB's "Edit..." popup opens with: the rarity dropdown (0 Normal ... 4 Relic) and
+    /// the item text without its Rarity line
+    pub edit_rarity: usize,
+    pub edit_text: String,
+    /// "Save" for an item in the build, "Add to build" for a new one
+    pub save_label: String,
+    pub version: Option<DropList>,
+    #[serde(default)]
+    pub variants: Vec<VariantView>,
+    #[serde(default)]
+    pub sockets: Vec<SocketView>,
+    pub can_add_socket: bool,
+    /// The two influence dropdowns, or none
+    #[serde(default)]
+    pub influences: Vec<DropList>,
+    pub quality: Option<String>,
+    pub catalyst: Option<DropList>,
+    pub catalyst_quality: Option<String>,
+    #[serde(default)]
+    pub range_lines: Vec<RangeLineView>,
+    pub tooltip: ItemTooltip,
+}
+
+/// One of the six variant dropdowns
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct VariantView {
+    /// 0..=5
+    pub control: usize,
+    pub list: DropList,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SocketView {
+    /// "R", "G", "B" or "W"
+    pub colour: String,
+    pub shown: bool,
+    /// Linked to the next socket; none for the last one
+    pub linked: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RangeLineView {
+    pub label: String,
+    pub range: Option<f64>,
+    pub slider: bool,
+    /// A Foulborn box next to the line
+    pub mutable: bool,
+    pub mutated: bool,
+}

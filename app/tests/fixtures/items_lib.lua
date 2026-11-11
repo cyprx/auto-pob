@@ -108,6 +108,92 @@ function tooltipDump(tt)
 	return out
 end
 
+-- ---- The display item ----
+
+local rarityIndex = { NORMAL = 0, MAGIC = 1, RARE = 2, UNIQUE = 3, RELIC = 4 }
+
+-- The kinds of mod line a tooltip line can toggle, by the item's list
+local modLineLists = {
+	{ "enchant", "enchantModLines" }, { "scourge", "scourgeModLines" },
+	{ "implicit", "implicitModLines" }, { "explicit", "explicitModLines" },
+	{ "crucible", "crucibleModLines" },
+}
+
+local function modLineRef(item, modLine)
+	for _, entry in ipairs(modLineLists) do
+		for i = 1, #item[entry[2]] do
+			if item[entry[2]][i] == modLine then return { list = entry[1], index = i - 1 } end
+		end
+	end
+end
+
+local function dropDump(control)
+	local labels = {}
+	for i, entry in ipairs(control.list) do
+		labels[i] = type(entry) == "table" and entry.label or entry
+	end
+	return { labels = labels, selected = control.selIndex - 1, enabled = control:IsEnabled() and true or false }
+end
+
+-- The display panel as plain tables, or nil without a displayed item. The tooltip is rebuilt
+-- first, as PoB does when an item is edited (R4); the sockets are read from their controls
+-- after the update PoB makes when it displays an item.
+function displayDump()
+	local t = tab()
+	local item = t.displayItem
+	if not item then return nil end
+	t:UpdateDisplayItemTooltip()
+	t:UpdateSocketControls()
+	local c = t.controls
+	local out = {
+		id = item.id,
+		name = item.name,
+		base = item.baseName or "",
+		rarity = item.rarity,
+		edit_rarity = rarityIndex[item.rarity],
+		edit_text = (item:BuildRaw():gsub("Rarity: %w+\n", "")),
+		save_label = t.items[item.id] and "Save" or "Add to build",
+		variants = {}, sockets = {}, influences = {}, range_lines = {},
+	}
+	if c.displayItemVersion:IsShown() then out.version = dropDump(c.displayItemVersion) end
+	for i, name in ipairs({ "displayItemVariant", "displayItemAltVariant", "displayItemAltVariant2",
+		"displayItemAltVariant3", "displayItemAltVariant4", "displayItemAltVariant5" }) do
+		if c[name]:IsShown() then
+			table.insert(out.variants, { control = i - 1, list = dropDump(c[name]) })
+		end
+	end
+	local count = #item.sockets - item.abyssalSocketCount
+	for i = 1, math.min(count, 6) do
+		local drop = c["displayItemSocket" .. i]
+		local link = c["displayItemLink" .. i]
+		local linked
+		if count > i then linked = link.state and true or false end
+		out.sockets[i] = {
+			colour = drop.list[drop.selIndex].color,
+			shown = drop:IsShown() and true or false,
+			linked = linked,
+		}
+	end
+	out.can_add_socket = c.displayItemAddSocket:IsShown() and true or false
+	if c.displayItemInfluence:IsShown() then
+		out.influences = { dropDump(c.displayItemInfluence), dropDump(c.displayItemInfluence2) }
+	end
+	if c.displayItemQualityEdit:IsShown() then out.quality = c.displayItemQualityEdit.buf end
+	if c.displayItemCatalyst:IsShown() then out.catalyst = dropDump(c.displayItemCatalyst) end
+	if c.displayItemCatalystQualityEdit:IsShown() then out.catalyst_quality = c.displayItemCatalystQualityEdit.buf end
+	for i, modLine in ipairs(item.rangeLineList) do
+		out.range_lines[i] = {
+			label = modLine.line, range = modLine.range, slider = modLine.showSlider and true or false,
+			mutable = (modLine.modId and modLine.newModId) and true or false, mutated = modLine.mutated and true or false,
+		}
+	end
+	out.tooltip = tooltipDump(t.displayItemTooltip)
+	for i, line in ipairs(t.displayItemTooltip.lines) do
+		if line.modLine then out.tooltip.lines[i].mod_line = modLineRef(item, line.modLine) end
+	end
+	return out
+end
+
 -- Hovering a row of the item list: its own tooltip hook, on a fresh Tooltip
 function listTooltip(id)
 	local list = tab().controls.itemList
@@ -448,6 +534,61 @@ function act.move_set(from, to)
 	record({ cmd = "MoveItemSet", from = from, to = to })
 end
 
+-- ---- The display item ----
+
+-- Ctrl+V's body (ItemsTab.lua:1454-1458); the text is the clipboard
+function act.paste(text)
+	tab():CreateDisplayItemFromRaw(text, true)
+	record({ cmd = "PasteItem", text = text })
+end
+
+-- The list's double click (ItemListControl.lua:315-321)
+function act.edit(id)
+	local list = itemList()
+	local found
+	for i, listed in ipairs(list.list) do
+		if listed == id then found = i end
+	end
+	assert(found, "item " .. tostring(id) .. " is not listed")
+	list:OnSelClick(found, id, true)
+	record({ cmd = "EditItem", id = id })
+end
+
+-- The "Edit..." popup: the rarity dropdown, the text box, Save (ItemsTab.lua:2606-2659)
+function act.edit_text(rarity, text)
+	local depth = #main.popups
+	tab():EditDisplayItemText()
+	local popup = main.popups[1]
+	popup.controls.rarity:SetSel(rarity + 1)
+	popup.controls.edit:SetText(text)
+	assert(popup.controls.save:IsEnabled(), "Save is disabled")
+	popup.controls.save.onClick()
+	while #main.popups > depth do main:ClosePopup() end
+	record({ cmd = "SetDisplayItemText", rarity = rarity, text = text })
+end
+
+-- The panel's Save / Add to build button
+function act.save()
+	tab():UpdateSockets()
+	tab().controls.addDisplayItem.onClick()
+	record({ cmd = "SaveDisplayItem" })
+end
+
+-- The panel's Cancel button
+function act.cancel()
+	tab().controls.removeDisplayItem.onClick()
+	record({ cmd = "CancelDisplayItem" })
+end
+
+-- Ctrl+D's body (ItemsTab.lua:1481-1483); nothing happens when the toggle is already there
+function act.stat_differences(on)
+	if (tab().showStatDifferences and true or false) ~= on then
+		tab().showStatDifferences = on
+		build.buildFlag = true
+	end
+	record({ cmd = "SetShowStatDifferences", on = on })
+end
+
 -- Ctrl+Z and Ctrl+Y on the tab (ItemsTab.lua:1458-1465)
 function act.undo()
 	tab():Undo()
@@ -468,5 +609,5 @@ function checkpoint()
 	for node, id in pairs(build.spec.jewels) do
 		if id ~= 0 then jewels[node] = id end
 	end
-	table.insert(actions, { check = { items = itemsDump(), jewels = jewels, sidebar = sidebar_lines(), main_group = build.mainSocketGroup } })
+	table.insert(actions, { check = { items = itemsDump(), jewels = jewels, sidebar = sidebar_lines(), display = displayDump(), main_group = build.mainSocketGroup } })
 end

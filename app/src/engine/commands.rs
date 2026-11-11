@@ -347,6 +347,31 @@ pub enum Command {
         second: bool,
     },
 
+    /// Ctrl+V on the Items tab (R10): the text becomes the display item, like PoB's
+    /// `CreateDisplayItemFromRaw`. Text with no item base is `PoB couldn't read that item`.
+    PasteItem {
+        text: String,
+    },
+    /// The item list's double click: the item goes to the display panel for editing.
+    EditItem {
+        id: u32,
+    },
+    /// PoB's "Edit..." / "Create custom..." popup: `rarity` is its dropdown (0 Normal ... 4
+    /// Relic), `text` the item without its Rarity line. Refused like a paste when PoB's Save
+    /// is disabled.
+    SetDisplayItemText {
+        rarity: usize,
+        text: String,
+    },
+    /// The panel's Save / Add to build button.
+    SaveDisplayItem,
+    /// The panel's Cancel button.
+    CancelDisplayItem,
+    /// Ctrl+D (R13): saved with the build, not undoable, not unsaved.
+    SetShowStatDifferences {
+        on: bool,
+    },
+
     /// Picks the item set in PoB's set dropdown, by PoB's id.
     SelectItemSet {
         id: u32,

@@ -7,7 +7,7 @@ use super::{
 };
 use auto_pob::engine::upstream::{SidebarLine, golden_of};
 use auto_pob::engine::{
-    Backend, Command, ItemTooltipLine, ItemTooltipQuery, ItemsView, SlotKind, Tab,
+    Backend, Command, DisplayItemView, ItemTooltipLine, ItemTooltipQuery, ItemsView, SlotKind, Tab,
 };
 use auto_pob::game::Game;
 use mlua::LuaSerdeExt;
@@ -59,6 +59,8 @@ fn first_difference(path: &str, a: &serde_json::Value, b: &serde_json::Value) ->
             .zip(y)
             .enumerate()
             .find_map(|(i, (p, q))| first_difference(&format!("{path}[{i}]"), p, q)),
+        // Lua has one number type: 1 and 1.0 are the same value
+        (Value::Number(x), Value::Number(y)) if x.as_f64() == y.as_f64() => None,
         _ if a == b => None,
         _ => Some(format!("{path}: {a} vs {b}")),
     }
@@ -299,12 +301,10 @@ fn items_view_is_pure() {
 
 // ---- Tooltips and copy ----
 
-/// Items on top of the `gear` build, added at model level on both sides with the same code: a
-/// multi-variant unique and a unique flask from PoB's data (as the Items tab's database adds
-/// them), a rare weapon, a rare jewel and a rare abyss jewel. Nothing is equipped, so each is
-/// compared against what is in the slots it could go in.
-const EXTRA_ITEMS: &str = r#"
-    local t = BUILD.itemsTab
+/// The text of items to add on top of the `gear` build: a multi-variant unique and a unique
+/// flask from PoB's data (as the Items tab's database adds them), a rare weapon, a rare jewel
+/// and a rare abyss jewel, and rings and a body armour with each header field.
+const EXTRA_TEXTS: &str = r#"
     local function unique(name)
         for _, list in pairs(data.uniques) do
             for _, text in ipairs(list) do
@@ -327,12 +327,22 @@ const EXTRA_ITEMS: &str = r#"
         "Rarity: UNIQUE\nFoil Heart\nGlorious Plate\nFoil Unique (Gold)\nImplicits: 0\n+101 to maximum Life",
         "Rarity: RARE\nMemory Loop\nIron Ring\nMemory Strands: 40\nImplicits: 0\n+34 to maximum Life",
     }
-    for _, text in ipairs(texts) do
-        local item = new("Item", text)
-        t:AddItem(item, true)
-    end
-    t:PopulateSlots()
+    return texts
 "#;
+
+/// `EXTRA_TEXTS`, then each added to the build at model level (`BUILD` is the build).
+fn extra_items_code() -> String {
+    format!(
+        r#"
+        local texts = (function() {EXTRA_TEXTS} end)()
+        local t = BUILD.itemsTab
+        for _, text in ipairs(texts) do
+            t:AddItem(new("Item", text), true)
+        end
+        t:PopulateSlots()
+        "#
+    )
+}
 
 fn json_of<T: serde::Serialize>(value: &T) -> serde_json::Value {
     strip_nulls(serde_json::to_value(value).unwrap())
@@ -427,7 +437,15 @@ fn compare_tooltips(s: &mut Session, lua: &mlua::Lua, what: &str) -> Seen {
 fn item_tooltips_match_pob() {
     let _guard = lock();
     let (mut s, lua) = gear_sessions("items-tooltips");
-    on_both(&s, &lua, EXTRA_ITEMS);
+    // the items are added as the Items tab adds them: pasted, then saved (which equips what
+    // fits an empty slot), on both sides
+    let texts: Vec<String> = lua_value(&lua, EXTRA_TEXTS);
+    for text in &texts {
+        s.run(Command::PasteItem { text: text.clone() }).unwrap();
+        s.run(Command::SaveDisplayItem).unwrap();
+        lua.globals().set("pasted", text.as_str()).unwrap();
+        lua.load("act.paste(pasted) act.save()").exec().unwrap();
+    }
     let view = s.backend.items_view().unwrap();
     for name in [
         "The Anvil",
@@ -458,7 +476,9 @@ fn item_tooltips_match_pob() {
     assert!(on.background > 0, "no tooltip has a line background");
 
     // PoB's Ctrl+D body: the toggle only
-    on_both(&s, &lua, "BUILD.itemsTab.showStatDifferences = false");
+    s.run(Command::SetShowStatDifferences { on: false })
+        .unwrap();
+    lua.load("act.stat_differences(false)").exec().unwrap();
     let off = compare_tooltips(&mut s, &lua, "stat differences off");
     let equipping_off = off.equipping;
     assert!(off.compared > 40);
@@ -587,7 +607,7 @@ fn tooltip_of_the_unique_jewel() {
 fn copy_item_matches_pob() {
     let _guard = lock();
     let (mut s, lua) = gear_sessions("items-copy");
-    on_both(&s, &lua, EXTRA_ITEMS);
+    on_both(&s, &lua, &extra_items_code());
     s.backend.lua.load("saved_copy = Copy").exec().unwrap();
     let copy_is_saved = |s: &Session| -> bool {
         s.backend
@@ -691,6 +711,21 @@ enum ItemsAction {
         from: usize,
         to: usize,
     },
+    PasteItem {
+        text: String,
+    },
+    EditItem {
+        id: u32,
+    },
+    SetDisplayItemText {
+        rarity: usize,
+        text: String,
+    },
+    SaveDisplayItem,
+    CancelDisplayItem,
+    SetShowStatDifferences {
+        on: bool,
+    },
     Undo,
     Redo,
     /// Built from the recorded checkpoint table
@@ -723,6 +758,14 @@ impl ItemsAction {
             ItemsAction::CopyItemSet { id, title } => Command::CopyItemSet { id, title },
             ItemsAction::DeleteItemSet { id } => Command::DeleteItemSet { id },
             ItemsAction::MoveItemSet { from, to } => Command::MoveItemSet { from, to },
+            ItemsAction::PasteItem { text } => Command::PasteItem { text },
+            ItemsAction::EditItem { id } => Command::EditItem { id },
+            ItemsAction::SetDisplayItemText { rarity, text } => {
+                Command::SetDisplayItemText { rarity, text }
+            }
+            ItemsAction::SaveDisplayItem => Command::SaveDisplayItem,
+            ItemsAction::CancelDisplayItem => Command::CancelDisplayItem,
+            ItemsAction::SetShowStatDifferences { on } => Command::SetShowStatDifferences { on },
             ItemsAction::Undo => Command::Undo(Tab::Items),
             ItemsAction::Redo => Command::Redo(Tab::Items),
             ItemsAction::Check { .. } => return None,
@@ -735,7 +778,7 @@ impl ItemsAction {
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 struct ItemsCheckpoint {
     items: serde_json::Value,
-    /// The display item; always `None` until the display panel exists (Task 5)
+    /// The display panel (`displayDump()`); none while nothing is displayed
     #[serde(default)]
     display: Option<serde_json::Value>,
     /// `spec.jewels` without the empty sockets
@@ -793,6 +836,7 @@ fn upstream_items_recipe(name: &str) -> ItemsRecipe {
                     .from_value(mlua::Value::Table(check))
                     .unwrap_or_else(|e| panic!("{name}: checkpoint: {e}"));
                 check.items = strip_nulls(check.items);
+                check.display = check.display.map(strip_nulls);
                 return ItemsAction::Check {
                     check: Box::new(check),
                 };
@@ -835,7 +879,11 @@ fn our_items_checkpoint(s: &mut Session) -> ItemsCheckpoint {
         .unwrap();
     ItemsCheckpoint {
         items: json(&view),
-        display: None,
+        display: s
+            .backend
+            .display_item_view()
+            .expect("display item view")
+            .map(|view| json_of(&view)),
         jewels: jewels.into_iter().filter(|(_, id)| *id != 0).collect(),
         sidebar,
         main_group: s
@@ -874,6 +922,9 @@ fn check_items_recipe(name: &str) -> ItemsRecipe {
             Some(command) => {
                 s.run(command)
                     .unwrap_or_else(|e| panic!("{name}: {action:?}: {e}"));
+                // the loop sends the display item after each batch, which is what fills the
+                // tooltip PoB would otherwise rebuild only on an edit (R4)
+                s.backend.display_item_view().expect("display item view");
             }
             None => {
                 let ItemsAction::Check { check } = action else {
@@ -885,7 +936,16 @@ fn check_items_recipe(name: &str) -> ItemsRecipe {
                     &check.items,
                     &format!("{name}: checkpoint {checked}"),
                 );
-                assert_eq!(ours.display, check.display, "{name}: checkpoint {checked}");
+                match (&ours.display, &check.display) {
+                    (Some(ours), Some(theirs)) => assert_same(
+                        ours,
+                        theirs,
+                        &format!("{name}: checkpoint {checked} display"),
+                    ),
+                    (ours, theirs) => {
+                        assert_eq!(ours, theirs, "{name}: checkpoint {checked} display")
+                    }
+                }
                 assert_eq!(
                     ours.jewels, check.jewels,
                     "{name}: checkpoint {checked} jewels"
@@ -1411,4 +1471,224 @@ fn item_set_errors() {
         Command::DeleteItemSet { id: first },
         "last item set",
     );
+}
+
+// ---- The display item ----
+
+const RING: &str = "Rarity: RARE\nDoom Loop\nIron Ring\nImplicits: 0\n+30 to maximum Life";
+
+fn display(s: &mut Session) -> Option<DisplayItemView> {
+    s.backend.display_item_view().expect("display item view")
+}
+
+/// `unsaved` as PoB's next frame sees it (Build.lua:1303)
+fn unsaved_after_frame(s: &mut Session) -> bool {
+    s.backend.lua.load("glue.frame()").exec().unwrap();
+    s.backend.build_view().unwrap().unsaved
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn display_recipe_matches_pob() {
+    let _guard = lock();
+    let recipe = check_items_recipe("paste_equip");
+    let checks = checkpoints(&recipe);
+    assert_eq!(checks.len(), 6);
+    let display = |i: usize| checks[i].display.as_ref();
+    // a new item: no id, "Add to build"
+    let pasted = display(0).expect("the pasted ring is displayed");
+    assert_eq!(pasted["save_label"], "Add to build");
+    assert!(pasted.get("id").is_none(), "{pasted}");
+    // the equipped armour was replaced and nothing is displayed
+    assert!(display(1).is_none());
+    // an edited item: its id and "Save"
+    let edited = display(2).expect("the ring is displayed for editing");
+    assert_eq!(edited["save_label"], "Save");
+    assert!(edited["id"].is_u64(), "{edited}");
+    assert!(
+        edited["edit_text"]
+            .as_str()
+            .unwrap()
+            .contains("+15 to maximum Mana")
+    );
+    // saved in place: the order is unchanged and nothing is displayed
+    assert!(display(3).is_none());
+    let order = |i: usize| -> Vec<u64> {
+        checks[i].items["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_u64().unwrap())
+            .collect()
+    };
+    assert_eq!(order(2), order(3));
+    // the item displayed again while another ring is equipped, then cancelled
+    assert!(display(4).is_some());
+    assert!(display(5).is_none());
+    // the display tooltip follows the outputs: equipping a ring while it is shown changes
+    // its comparison (R4)
+    assert_ne!(
+        display(2).unwrap()["tooltip"],
+        display(4).unwrap()["tooltip"],
+        "the comparison didn't follow the new outputs"
+    );
+    assert_eq!(checks[5].items["show_stat_differences"], false);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn bad_item_text_is_an_error() {
+    let _guard = lock();
+    let (mut s, _lua) = gear_sessions("display-bad-text");
+    let refuse = |s: &mut Session, command: Command| {
+        let before = (display(s), s.backend.items_view().unwrap());
+        let error = s.run(command.clone()).expect_err(&format!("{command:?}"));
+        assert!(
+            error.to_string().contains("PoB couldn't read that item"),
+            "{command:?}: {error}"
+        );
+        assert_eq!((display(s), s.backend.items_view().unwrap()), before);
+        assert_eq!(open_popups(s), 0, "{command:?}: a popup was left open");
+    };
+    // nothing displayed
+    refuse(
+        &mut s,
+        Command::PasteItem {
+            text: "hello".into(),
+        },
+    );
+    refuse(
+        &mut s,
+        Command::SetDisplayItemText {
+            rarity: 2,
+            text: "hello".into(),
+        },
+    );
+    assert!(display(&mut s).is_none());
+    // an item being edited stays as it is
+    s.run(Command::PasteItem { text: RING.into() }).unwrap();
+    let shown = display(&mut s).expect("the ring");
+    assert_eq!(shown.name, "Doom Loop, Iron Ring");
+    refuse(
+        &mut s,
+        Command::PasteItem {
+            text: "hello".into(),
+        },
+    );
+    refuse(
+        &mut s,
+        Command::SetDisplayItemText {
+            rarity: 2,
+            text: "hello".into(),
+        },
+    );
+    // a rarity PoB doesn't list
+    let error = s
+        .run(Command::SetDisplayItemText {
+            rarity: 5,
+            text: RING.into(),
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("no such rarity"), "{error}");
+    assert_eq!(display(&mut s), Some(shown));
+    // no item: Save and Cancel are refused
+    s.run(Command::CancelDisplayItem).unwrap();
+    for command in [Command::SaveDisplayItem, Command::CancelDisplayItem] {
+        let error = s.run(command).unwrap_err();
+        assert!(
+            error.to_string().contains("no item is being viewed"),
+            "{error}"
+        );
+    }
+    let error = s.run(Command::EditItem { id: 9999 }).unwrap_err();
+    assert!(error.to_string().contains("no such item"), "{error}");
+}
+
+/// The `showStatDifferences` attribute of the `<Items>` element the build was saved with
+fn saved_differences(s: &Session, name: &str) -> String {
+    let xml = fs::read_to_string(s.builds_dir().join(format!("{name}.xml"))).unwrap();
+    let items = &xml[xml.find("<Items").expect("an Items element")..];
+    let tag = &items[..items.find('>').unwrap()];
+    let key = "showStatDifferences=\"";
+    let at = tag
+        .find(key)
+        .unwrap_or_else(|| panic!("no showStatDifferences in {tag}"));
+    tag[at + key.len()..].split('"').next().unwrap().to_string()
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn display_edits_are_not_unsaved() {
+    let _guard = lock();
+    let (mut s, _lua) = gear_sessions("display-unsaved");
+    s.run(Command::Save).unwrap();
+    assert!(!unsaved_after_frame(&mut s));
+    let undo_depth =
+        |s: &Session| -> u32 { lua_value(&s.backend.lua, "return #pob.build.itemsTab.undo") };
+    let depth = undo_depth(&s);
+    // paste and cancel
+    s.run(Command::PasteItem { text: RING.into() }).unwrap();
+    assert!(display(&mut s).is_some());
+    assert!(!unsaved_after_frame(&mut s), "a paste is not an edit");
+    s.run(Command::SetDisplayItemText {
+        rarity: 2,
+        text: format!("{RING}\n+9 to maximum Mana").replace("Rarity: RARE\n", ""),
+    })
+    .unwrap();
+    assert!(
+        !unsaved_after_frame(&mut s),
+        "editing the text is not an edit"
+    );
+    s.run(Command::CancelDisplayItem).unwrap();
+    assert!(display(&mut s).is_none());
+    assert!(!unsaved_after_frame(&mut s), "cancel is not an edit");
+    // Ctrl+D is saved with the build but doesn't mark it
+    assert_eq!(saved_differences(&s, "gear"), "true");
+    let affected = s
+        .run(Command::SetShowStatDifferences { on: false })
+        .unwrap();
+    assert!(affected.items && affected.display_item && affected.recalc);
+    assert!(!unsaved_after_frame(&mut s));
+    assert!(!s.backend.items_view().unwrap().show_stat_differences);
+    s.run(Command::Save).unwrap();
+    assert_eq!(saved_differences(&s, "gear"), "false");
+    // already off: nothing to recalculate
+    let affected = s
+        .run(Command::SetShowStatDifferences { on: false })
+        .unwrap();
+    assert!(!affected.recalc);
+    s.run(Command::SetShowStatDifferences { on: true }).unwrap();
+    assert!(!unsaved_after_frame(&mut s));
+    s.run(Command::Save).unwrap();
+    assert_eq!(saved_differences(&s, "gear"), "true");
+    assert_eq!(undo_depth(&s), depth, "display edits add no undo state");
+    // Saving the item is an edit
+    s.run(Command::PasteItem { text: RING.into() }).unwrap();
+    s.run(Command::SaveDisplayItem).unwrap();
+    assert!(unsaved_after_frame(&mut s), "adding an item is an edit");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn display_item_view_is_pure() {
+    let _guard = lock();
+    let (mut s, _lua) = gear_sessions("display-pure");
+    s.run(Command::PasteItem { text: RING.into() }).unwrap();
+    let state = |s: &mut Session| (pure_state(s), unsaved_after_frame(s));
+    let before = state(&mut s);
+    let first = display(&mut s).expect("displayed");
+    let second = display(&mut s).expect("displayed");
+    assert_eq!(first, second);
+    assert_eq!(state(&mut s), before);
+    assert_eq!(open_popups(&s), 0);
+    // what the view reads from PoB's Edit popup is the item
+    assert_eq!(first.edit_rarity, 2);
+    assert!(first.edit_text.contains("+30 to maximum Life"));
+    assert!(!first.edit_text.contains("Rarity:"));
+    // the same for an item being edited
+    let id = s.backend.items_view().unwrap().items[0].id;
+    s.run(Command::EditItem { id }).unwrap();
+    let before = state(&mut s);
+    assert_eq!(display(&mut s), display(&mut s));
+    assert_eq!(state(&mut s), before);
 }

@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex};
 use super::commands::{Command, GemSearchQuery, GemTooltipQuery, ItemTooltipQuery};
 use super::run::{Affected, Backend, BackgroundTask, Event};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, GemSearchView,
-    GemTooltipView, GroupTooltipView, ItemText, ItemTooltip, ItemTooltipView, ItemsView, NodePower,
-    NodeTooltip, NotesView, Points, PowerReport, SkillsView, SocketGroupText, StatsView,
-    TooltipLine, TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, DisplayItemView,
+    GemSearchView, GemTooltipView, GroupTooltipView, ItemText, ItemTooltip, ItemTooltipView,
+    ItemsView, NodePower, NodeTooltip, NotesView, Points, PowerReport, SkillsView, SocketGroupText,
+    StatsView, TooltipLine, TreeLayout, TreeState,
 };
 
 #[derive(Default, Debug)]
@@ -131,6 +131,10 @@ impl Fake {
                 item_text: Some(id),
                 ..Affected::default()
             }),
+            Command::CancelDisplayItem => Ok(Affected {
+                display_item: true,
+                ..Affected::default()
+            }),
             Command::ExportTreeLink => Ok(Affected {
                 link: true,
                 ..Affected::default()
@@ -213,6 +217,10 @@ impl Backend for Fake {
 
     fn items_view(&mut self) -> anyhow::Result<ItemsView> {
         Ok(ItemsView::default())
+    }
+
+    fn display_item_view(&mut self) -> anyhow::Result<Option<DisplayItemView>> {
+        Ok(None)
     }
 
     fn socket_group_text(&mut self, group: usize) -> anyhow::Result<SocketGroupText> {

@@ -110,8 +110,27 @@ end
 
 -- A PoB `Tooltip` as data. PoB's own `AddSeparator` already dropped back-to-back separators, so
 -- every line of `tt.lines` is sent as it is; a line without text is a separator.
--- `mod_line` is only set for the display item's tooltip (never here).
-local function read_tooltip(tt)
+-- With the displayed `item`, a line that toggles a mod (PoB's `modLine`, found by identity in the
+-- item's lists) carries `mod_line` (R4); the item list's tooltips never pass one.
+local mod_line_lists = {
+	{ "enchant", "enchantModLines" },
+	{ "scourge", "scourgeModLines" },
+	{ "implicit", "implicitModLines" },
+	{ "explicit", "explicitModLines" },
+	{ "crucible", "crucibleModLines" },
+}
+
+local function mod_line_ref(item, mod_line)
+	for _, entry in ipairs(mod_line_lists) do
+		for i, candidate in ipairs(item[entry[2]]) do
+			if candidate == mod_line then
+				return { list = entry[1], index = i - 1 }
+			end
+		end
+	end
+end
+
+local function read_tooltip(tt, item)
 	local out = { influences = {}, lines = {} }
 	if tt.tooltipHeader then
 		out.header = tostring(tt.tooltipHeader)
@@ -136,6 +155,7 @@ local function read_tooltip(tt)
 				font = line.font,
 				center = line.center and true or false,
 				background = type(line.background) == "string" and line.background or nil,
+				mod_line = item and line.modLine and mod_line_ref(item, line.modLine) or nil,
 			}
 		else
 			out.lines[i] = { separator = line.size }
@@ -485,4 +505,217 @@ function glue.items_move_set(from, to)
 		list.selIndex = nil
 	end)
 	glue.frame()
+end
+
+-- ---- The display item (R4, R10, R16, R23) ----
+
+-- PoB builds the display tooltip only when the item is edited, so after a recalculation or a
+-- Ctrl+D its comparison is stale. The key it was last built for is kept here and dropped
+-- when another item is displayed.
+local tooltip_key
+
+local function fresh_display_tooltip(tab)
+	local key = { item = tab.displayItem, revision = pob.build.outputRevision, diff = tab.showStatDifferences }
+	if not (tooltip_key
+		and tooltip_key.item == key.item
+		and tooltip_key.revision == key.revision
+		and tooltip_key.diff == key.diff) then
+		tab:UpdateDisplayItemTooltip()
+		tooltip_key = key
+	end
+end
+
+-- A dropdown as the panel shows it; `enabled` is the control's own, which can be a function
+local function drop_view(control)
+	local view = glue.drop_list(control)
+	view.enabled = control:IsEnabled() and true or false
+	return view
+end
+
+-- The readers of the panel's parts, each `function(tab, item, out)`. SP5b adds its sections
+-- (affixes, cluster jewels, custom mods) to this list.
+local display_sections = {}
+
+-- the header, and what PoB's Edit popup opens with: read from the popup, which is closed again
+table.insert(display_sections, function(tab, item, out)
+	out.id = item.id
+	out.name = item.name
+	out.base = item.baseName or ""
+	out.rarity = item.rarity
+	out.save_label = tab.controls.addDisplayItem:GetProperty("label")
+	glue.in_popups(function()
+		tab:EditDisplayItemText()
+		local popup = pob.main.main.popups[1]
+		out.edit_rarity = popup.controls.rarity.selIndex - 1
+		out.edit_text = popup.controls.edit.buf
+	end)
+end)
+
+-- the version and the shown variant dropdowns
+table.insert(display_sections, function(tab, item, out)
+	local c = tab.controls
+	if c.displayItemVersion:IsShown() then
+		out.version = drop_view(c.displayItemVersion)
+	end
+	out.variants = {}
+	local names = {
+		"displayItemVariant", "displayItemAltVariant", "displayItemAltVariant2",
+		"displayItemAltVariant3", "displayItemAltVariant4", "displayItemAltVariant5",
+	}
+	for i, name in ipairs(names) do
+		if c[name]:IsShown() then
+			table.insert(out.variants, { control = i - 1, list = drop_view(c[name]) })
+		end
+	end
+end)
+
+-- the sockets, from the model, and whether PoB shows each one's control
+table.insert(display_sections, function(tab, item, out)
+	out.sockets = {}
+	local count = #item.sockets - item.abyssalSocketCount
+	for i = 1, count do
+		local control = tab.controls["displayItemSocket" .. i]
+		if not control then
+			break
+		end
+		local socket = item.sockets[i]
+		local linked
+		if i < count then
+			linked = item.sockets[i + 1].group == socket.group
+		end
+		out.sockets[i] = {
+			colour = socket.color,
+			shown = control:IsShown() and true or false,
+			linked = linked,
+		}
+	end
+	out.can_add_socket = tab.controls.displayItemAddSocket:IsShown() and true or false
+end)
+
+-- influence, quality and catalyst: only while PoB shows the control
+table.insert(display_sections, function(tab, item, out)
+	local c = tab.controls
+	out.influences = {}
+	if c.displayItemInfluence:IsShown() then
+		out.influences = { drop_view(c.displayItemInfluence), drop_view(c.displayItemInfluence2) }
+	end
+	if c.displayItemQualityEdit:IsShown() then
+		out.quality = c.displayItemQualityEdit.buf
+	end
+	if c.displayItemCatalyst:IsShown() then
+		out.catalyst = drop_view(c.displayItemCatalyst)
+	end
+	if c.displayItemCatalystQualityEdit:IsShown() then
+		out.catalyst_quality = c.displayItemCatalystQualityEdit.buf
+	end
+end)
+
+-- the lines with a range slider or a Foulborn box
+table.insert(display_sections, function(tab, item, out)
+	out.range_lines = {}
+	for i, mod_line in ipairs(item.rangeLineList) do
+		out.range_lines[i] = {
+			label = mod_line.line,
+			range = mod_line.range,
+			slider = mod_line.showSlider and true or false,
+			mutable = (mod_line.modId and mod_line.newModId) and true or false,
+			mutated = mod_line.mutated and true or false,
+		}
+	end
+end)
+
+-- PoB's own tooltip for the item (R4)
+table.insert(display_sections, function(tab, item, out)
+	fresh_display_tooltip(tab)
+	out.tooltip = read_tooltip(tab.displayItemTooltip, item)
+end)
+
+-- The display panel, or nil when no item is displayed
+function glue.display_item_view()
+	local tab = items_tab()
+	local item = tab.displayItem
+	if not item then
+		tooltip_key = nil
+		return nil
+	end
+	local view = {}
+	for _, read in ipairs(display_sections) do
+		read(tab, item, view)
+	end
+	return view
+end
+
+-- Ctrl+V's body (ItemsTab.lua:1454-1458). PoB ignores text with no item base; that is an error
+-- here, and the display item stays as it was.
+function glue.display_paste(text)
+	local tab = items_tab()
+	local before = tab.displayItem
+	tab:CreateDisplayItemFromRaw(text, true)
+	-- every item PoB displays is a new object
+	if tab.displayItem == before then
+		error("PoB couldn't read that item", 0)
+	end
+end
+
+-- The list's double click (ItemListControl:OnSelClick)
+function glue.display_edit(id)
+	local tab = items_tab()
+	local list = synced_list()
+	local index = position(tab.itemOrderList, id)
+	if not index then
+		error("no such item", 0)
+	end
+	list:OnSelClick(index, id, true)
+end
+
+-- The "Edit..." / "Create custom..." popup: pick the rarity, paste the text, press Save when
+-- PoB's Save is enabled (EditDisplayItemText, ItemsTab.lua:2606)
+function glue.display_set_text(rarity, text)
+	local tab = items_tab()
+	if rarity > 4 then
+		error("no such rarity", 0)
+	end
+	synced_list()
+	glue.in_popups(function()
+		tab:EditDisplayItemText()
+		local popup = pob.main.main.popups[1]
+		popup.controls.rarity:SetSel(rarity + 1)
+		local pasted = glue.paste_into(popup.controls.edit, text)
+		local save = popup.controls.save
+		if not (pasted and save:IsEnabled()) then
+			error("PoB couldn't read that item", 0)
+		end
+		save.onClick()
+	end)
+end
+
+-- The panel's Save / Add to build button
+function glue.display_save()
+	local tab = items_tab()
+	if not tab.displayItem then
+		error("no item is being viewed", 0)
+	end
+	-- auto-equip looks at which slots are shown
+	synced_list()
+	tab.controls.addDisplayItem.onClick()
+end
+
+-- The panel's Cancel button
+function glue.display_cancel()
+	local tab = items_tab()
+	if not tab.displayItem then
+		error("no item is being viewed", 0)
+	end
+	tab.controls.removeDisplayItem.onClick()
+end
+
+-- Ctrl+D's body (ItemsTab.lua:1481-1483); false when nothing changed
+function glue.display_show_differences(on)
+	local tab = items_tab()
+	if (tab.showStatDifferences and true or false) == on then
+		return false
+	end
+	tab.showStatDifferences = on
+	pob.build.buildFlag = true
+	return true
 end

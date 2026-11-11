@@ -9,9 +9,10 @@ use crate::pob_files::DownloadProgress;
 
 use super::commands::{Command, GemTooltipQuery, ItemTooltipQuery};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, GemSearchView,
-    GemTooltipView, GroupTooltipView, ItemText, ItemTooltipView, ItemsView, NodePower, NodeTooltip,
-    NotesView, PowerReport, SkillsView, SocketGroupText, StatsView, TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, DisplayItemView,
+    GemSearchView, GemTooltipView, GroupTooltipView, ItemText, ItemTooltipView, ItemsView,
+    NodePower, NodeTooltip, NotesView, PowerReport, SkillsView, SocketGroupText, StatsView,
+    TreeLayout, TreeState,
 };
 
 #[derive(Debug, Clone)]
@@ -30,6 +31,8 @@ pub enum Snapshot {
     Calcs(Arc<CalcsView>),
     Skills(Arc<SkillsView>),
     Items(Arc<ItemsView>),
+    /// The display item; `None` while nothing is displayed
+    DisplayItem(Option<Arc<DisplayItemView>>),
     SocketGroupText(Arc<SocketGroupText>),
     GroupTooltip(Arc<GroupTooltipView>),
     GemSearch(Arc<GemSearchView>),
@@ -91,6 +94,8 @@ pub struct Affected {
     pub skills: bool,
     /// The Items tab changed
     pub items: bool,
+    /// The Items tab's display item changed
+    pub display_item: bool,
     /// The build's notes changed
     pub notes: bool,
     /// Node power changed (a background step ran)
@@ -129,6 +134,7 @@ impl Affected {
         calcs: true,
         skills: true,
         items: true,
+        display_item: true,
         notes: true,
         power: false,
         gem_search: false,
@@ -154,6 +160,7 @@ impl Affected {
         self.calcs |= other.calcs;
         self.skills |= other.skills;
         self.items |= other.items;
+        self.display_item |= other.display_item;
         self.notes |= other.notes;
         self.power |= other.power;
         self.gem_search |= other.gem_search;
@@ -187,6 +194,8 @@ pub trait Backend {
     fn calcs_view(&mut self) -> anyhow::Result<CalcsView>;
     fn skills_view(&mut self) -> anyhow::Result<SkillsView>;
     fn items_view(&mut self) -> anyhow::Result<ItemsView>;
+    /// The item on the display panel, or none
+    fn display_item_view(&mut self) -> anyhow::Result<Option<DisplayItemView>>;
     fn notes_view(&mut self) -> anyhow::Result<NotesView>;
     /// What copying this socket group writes; an error for a group that doesn't exist or can't be copied.
     fn socket_group_text(&mut self, group: usize) -> anyhow::Result<SocketGroupText>;
@@ -265,6 +274,19 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
     }
     if flags.items {
         emit(seq, send, backend.items_view(), Snapshot::Items);
+    }
+    // unlike the gem search, "nothing displayed" is an answer too
+    if flags.display_item {
+        match backend.display_item_view() {
+            Ok(view) => send(Event::Snapshot {
+                seq,
+                snapshot: Snapshot::DisplayItem(view.map(Arc::new)),
+            }),
+            Err(e) => send(Event::Error {
+                seq,
+                message: format!("{e:#}"),
+            }),
+        }
     }
     if flags.notes {
         emit(seq, send, backend.notes_view(), Snapshot::Notes);
@@ -449,6 +471,7 @@ pub fn run_loop(
             affected.calcs = true;
             affected.skills = true;
             affected.items = true;
+            affected.display_item = true;
         }
         send_snapshots(backend, last_seq, affected, send);
         if shutdown {
@@ -607,6 +630,32 @@ mod tests {
     }
 
     #[test]
+    fn recalc_sends_display_item() {
+        let (mut fake, _log) = Fake::new();
+        let events = run_queued(&mut fake, vec![set_config()]);
+        let shown = snapshots(&events)
+            .into_iter()
+            .filter(|(_, s)| matches!(s, Snapshot::DisplayItem(_)))
+            .count();
+        assert_eq!(shown, 1);
+    }
+
+    #[test]
+    fn display_item_none_is_sent() {
+        // unlike the gem search, "nothing is displayed" is an answer (R10)
+        let (mut fake, _log) = Fake::new();
+        let events = run_queued(&mut fake, vec![Command::CancelDisplayItem]);
+        let shown: Vec<_> = snapshots(&events)
+            .into_iter()
+            .filter_map(|(_, s)| match s {
+                Snapshot::DisplayItem(view) => Some(view.is_none()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(shown, [true]);
+    }
+
+    #[test]
     fn queued_commands_share_one_recalculation() {
         let (mut fake, log) = Fake::new();
         let events = run_queued(&mut fake, (0..5).map(|_| set_config()).collect());
@@ -656,6 +705,7 @@ mod tests {
                     Snapshot::Calcs(_) => "calcs",
                     Snapshot::Skills(_) => "skills",
                     Snapshot::Items(_) => "items",
+                    Snapshot::DisplayItem(_) => "display_item",
                     Snapshot::Notes(_) => "notes",
                     other => panic!("unexpected {other:?}"),
                 }
@@ -665,7 +715,16 @@ mod tests {
         assert_eq!(
             kinds,
             [
-                "build", "list", "stats", "config", "tree", "calcs", "skills", "items", "notes"
+                "build",
+                "list",
+                "stats",
+                "config",
+                "tree",
+                "calcs",
+                "skills",
+                "items",
+                "display_item",
+                "notes"
             ]
         );
     }
@@ -697,13 +756,14 @@ mod tests {
         assert_eq!(log.lock().unwrap().set_configs, 1);
         // The command before Shutdown still produced its snapshots, tagged with Shutdown's seq.
         let snaps = snapshots(&events);
-        assert_eq!(snaps.len(), 6);
+        assert_eq!(snaps.len(), 7);
         assert!(matches!(snaps[0], (2, Snapshot::Stats(_))));
         assert!(matches!(snaps[1], (2, Snapshot::Config(_))));
         assert!(matches!(snaps[2], (2, Snapshot::Tree(_))));
         assert!(matches!(snaps[3], (2, Snapshot::Calcs(_))));
         assert!(matches!(snaps[4], (2, Snapshot::Skills(_))));
         assert!(matches!(snaps[5], (2, Snapshot::Items(_))));
+        assert!(matches!(snaps[6], (2, Snapshot::DisplayItem(_))));
     }
 
     #[test]
@@ -749,9 +809,9 @@ mod tests {
         assert_eq!(stats_seq, Some(3));
         assert_eq!(config_seq, Some(3));
         assert_eq!(log.lock().unwrap().set_configs, 2);
-        // Ready + 10 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items; the channel disconnect means the
+        // Ready + 11 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items + DisplayItem; the channel disconnect means the
         // thread (and so every wake) is finished.
-        assert_eq!(wakes.load(Ordering::SeqCst), 17);
+        assert_eq!(wakes.load(Ordering::SeqCst), 19);
     }
 
     #[test]

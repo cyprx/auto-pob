@@ -228,7 +228,10 @@ impl AutoPobApp {
                     | Snapshot::GemSearch(_)
                     | Snapshot::GemTooltip(_) => self.skills.on_snapshot(&snapshot),
                     // the Items tab's UI comes later
-                    Snapshot::Items(_) | Snapshot::ItemTooltip(_) | Snapshot::ItemText(_) => {}
+                    Snapshot::Items(_)
+                    | Snapshot::DisplayItem(_)
+                    | Snapshot::ItemTooltip(_)
+                    | Snapshot::ItemText(_) => {}
                     Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
@@ -1058,6 +1061,10 @@ mod tests {
 
         fn items_view(&mut self) -> anyhow::Result<crate::engine::ItemsView> {
             Ok(crate::engine::ItemsView::default())
+        }
+
+        fn display_item_view(&mut self) -> anyhow::Result<Option<crate::engine::DisplayItemView>> {
+            Ok(None)
         }
 
         fn socket_group_text(

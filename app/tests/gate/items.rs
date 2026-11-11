@@ -605,7 +605,7 @@ fn copy_item_matches_pob() {
     // the error comes out
     s.backend
         .lua
-        .load(&format!(
+        .load(format!(
             "pob.build.itemsTab.items[{}].BuildRaw = function() error('boom', 0) end",
             view.items[0].id
         ))

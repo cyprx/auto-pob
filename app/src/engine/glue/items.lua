@@ -840,10 +840,12 @@ local function stacked(tab)
 	return pob.main.main.showAllItemAffixes and tab.displayItem.rarity == "UNIQUE"
 end
 
--- The slider and the Foulborn box of range line `line` (1-based), after selecting the line in
--- the range line dropdown as the user would
-local function range_controls(tab, line)
-	if not tab.displayItem.rangeLineList[line] then
+-- The slider (`want` "slider") or the Foulborn box ("box") of range line `line` (1-based), after
+-- selecting the line in the range line dropdown as the user would. Whether PoB shows the control
+-- is read from the line before anything moves, so a refusal leaves the selection as it was.
+local function range_controls(tab, line, want)
+	local mod_line = tab.displayItem.rangeLineList[line]
+	if not mod_line then
 		error("no such range line", 0)
 	end
 	local c = tab.controls
@@ -852,7 +854,13 @@ local function range_controls(tab, line)
 	end
 	local drop = c.displayItemRangeLine
 	require_shown(drop)
-	if line > #drop.list then
+	local present
+	if want == "slider" then
+		present = mod_line.showSlider
+	else
+		present = mod_line.modId and mod_line.newModId
+	end
+	if not present or line > #drop.list then
 		error(NOT_SHOWN, 0)
 	end
 	if drop.selIndex ~= line then
@@ -865,7 +873,7 @@ end
 -- in Draw (ItemsTab.lua:1076-1088), so IsShown runs first.
 function glue.display_range(line, value)
 	local tab = display_tab()
-	local slider = range_controls(tab, line)
+	local slider = range_controls(tab, line, "slider")
 	require_shown(slider)
 	slider:SetVal(value)
 end
@@ -873,7 +881,7 @@ end
 -- The box's state is likewise synced in `shown`; its click flips the line
 function glue.display_mutated(line, on)
 	local tab = display_tab()
-	local _, box = range_controls(tab, line)
+	local _, box = range_controls(tab, line, "box")
 	require_shown(box)
 	if (box.state and true or false) ~= on then
 		glue.press_check(box, on)

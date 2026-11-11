@@ -2001,7 +2001,7 @@ fn display_edit_recipes_match_pob() {
     assert!(checks[4].display.is_none());
     let edits = check_items_recipe("display_edits");
     let checks = checkpoints(&edits);
-    assert_eq!(checks.len(), 6);
+    assert_eq!(checks.len(), 8);
     let display = |i: usize| checks[i].display.as_ref().expect("a displayed item");
     // the amulet
     let amulet = display(0);
@@ -2017,20 +2017,24 @@ fn display_edit_recipes_match_pob() {
     assert_eq!(sockets[0]["colour"], "G");
     assert_eq!(sockets[1]["linked"], false);
     assert_eq!(sockets[0]["linked"], true);
-    // the unique: the first line at 1.0 though its slider held a stale 1.0, then a mutated line
-    // and a mod line off
+    // the unique: the second line at 0.25, which the re-paste then drops
     let range = |d: &serde_json::Value, i: usize| d["range_lines"][i]["range"].as_f64();
-    assert_eq!(range(display(3), 0), Some(1.0));
-    assert!(
-        display(4)["range_lines"]
+    assert_eq!(range(display(3), 1), Some(0.25));
+    // the first line at 1.0 on the re-pasted item, though its slider held a stale 1.0
+    assert_eq!(range(display(4), 0), Some(1.0));
+    assert_ne!(range(display(4), 1), Some(0.25));
+    // a mutated line, then a mod line off
+    let mutated = |d: &serde_json::Value| {
+        d["range_lines"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|l| l["mutated"] == true),
-        "no line mutated"
-    );
-    assert_ne!(display(3)["tooltip"], display(4)["tooltip"]);
-    assert!(checks[5].display.is_none());
+            .any(|l| l["mutated"] == true)
+    };
+    assert!(!mutated(display(4)));
+    assert!(mutated(display(5)), "no line mutated");
+    assert_ne!(display(5)["tooltip"], display(6)["tooltip"]);
+    assert!(checks[7].display.is_none());
     // the other layout of the range controls
     range_dropdown_matches_pob();
 }
@@ -2062,6 +2066,9 @@ for _, title in ipairs(titles) do
 end
 error("no such unique")
 "#;
+
+/// Variant groups and versions; group 1 has the one variant, so its dropdown is disabled.
+const GROUPED: &str = "Rarity: UNIQUE\nGrouped Charm\nPrismatic Ring\nVariant: A\nVariant: B\nVariant: C\nVersion: Old\nVersion: New\nImplicits: 0\n{version:1,2}{variant:1}{group:1}+10 to maximum Life\n{version:1,2}{variant:2}{group:2}+20 to maximum Mana\n{version:1,2}{variant:3}{group:2}+30 to maximum Mana";
 
 #[derive(serde::Deserialize)]
 struct NoSlider {
@@ -2246,6 +2253,27 @@ fn display_edit_errors() {
         hidden,
     );
 
+    // a dropdown PoB shows but disables: group 1 has one variant to pick from
+    s.run(Command::PasteItem {
+        text: GROUPED.into(),
+    })
+    .unwrap();
+    let shown = display(&mut s).unwrap();
+    assert!(shown.version.is_some());
+    assert_eq!(shown.variants[0].control, 0);
+    assert!(!shown.variants[0].list.enabled, "group 1 is not disabled");
+    assert!(shown.variants[1].list.enabled);
+    refuse(
+        &mut s,
+        Command::SetItemVariant {
+            control: 0,
+            index: 0,
+        },
+        hidden,
+    );
+    // the version dropdown beside it takes a pick
+    s.run(Command::SetItemVersion { index: 0 }).unwrap();
+
     // and with the item gone again
     s.run(Command::CancelDisplayItem).unwrap();
     every_command(&mut s);
@@ -2304,6 +2332,7 @@ fn no_silent_writes_items() {
     let amulet = "Rarity: RARE\nDoom Pendant\nOnyx Amulet\nQuality: 0\nImplicits: 1\n{tags:attribute}+12 to all Attributes\n{tags:life}+70 to maximum Life\n{tags:resistance}+30% to Fire Resistance";
     let armour = "Rarity: RARE\nDoom Plate\nGlorious Plate\nSockets: R-R-R-R\nImplicits: 0\n+50 to maximum Life";
     let versioned = "Rarity: UNIQUE\nVeil of Versions\nPrismatic Ring\nVersion: Old\nVersion: New\nImplicits: 0\n{version:1}+20 to maximum Life\n{version:2}+60 to maximum Life";
+    let variant = "Rarity: UNIQUE\nTester's Charm\nIron Ring\nVariant: Old\nVariant: New\nImplicits: 0\n{variant:1}+10 to maximum Life\n{variant:2}+20 to maximum Mana";
     let commands = vec![
         // the list and the slots (Tasks 3-4)
         Command::SetItemListFilter { index: 1 },
@@ -2374,6 +2403,13 @@ fn no_silent_writes_items() {
             text: armour.replace("Rarity: RARE\n", ""),
         },
         Command::CancelDisplayItem,
+        Command::PasteItem {
+            text: variant.into(),
+        },
+        Command::SetItemVariant {
+            control: 0,
+            index: 0,
+        },
         Command::PasteItem {
             text: versioned.into(),
         },
@@ -2459,6 +2495,18 @@ fn range_dropdown_matches_pob() {
         assert_same(&ours, &strip_nulls(theirs), what);
     };
     compare(&mut s, "pasted");
+    // PoB's selection of the range line dropdown and its slider's value, through Lua
+    let selection = |s: &Session| -> (u32, Option<f64>) {
+        lua_value::<(u32, Option<f64>)>(
+            &s.backend.lua,
+            "local c = pob.build.itemsTab.controls return {c.displayItemRangeLine.selIndex, c.displayItemRangeSlider.val}",
+        )
+    };
+    let refuse_untouched = |s: &mut Session, command: Command| {
+        let at = selection(s);
+        s.run(command.clone()).expect_err(&format!("{command:?}"));
+        assert_eq!(selection(s), at, "{command:?} moved PoB's selection");
+    };
     for (what, command, code) in [
         (
             "slider",
@@ -2482,5 +2530,44 @@ fn range_dropdown_matches_pob() {
         lua.load(code).exec().unwrap();
         compare(&mut s, what);
         assert_ne!(display(&mut s), before, "{what}: nothing changed");
+        if what == "slider" {
+            // the selection is on the slider line now; a refused line leaves it there
+            assert_eq!(selection(&s).0 as usize, found.plain + 1);
+            refuse_untouched(
+                &mut s,
+                Command::SetRangeLine {
+                    line: found.bare,
+                    value: 0.75,
+                },
+            );
+            refuse_untouched(
+                &mut s,
+                Command::SetRangeLine {
+                    line: 99,
+                    value: 0.75,
+                },
+            );
+        }
     }
+    // the box line is selected now; the line that can't mutate is refused without moving it
+    assert_eq!(selection(&s).0 as usize, found.bare + 1);
+    refuse_untouched(
+        &mut s,
+        Command::SetRangeLineMutated {
+            line: found.plain,
+            on: true,
+        },
+    );
+    // a second slider line after the first, when the item has one
+    let before = display(&mut s);
+    s.run(Command::SetRangeLine {
+        line: found.plain,
+        value: 0.75,
+    })
+    .unwrap();
+    lua.load(format!("act.range({}, 0.75)", found.plain))
+        .exec()
+        .unwrap();
+    compare(&mut s, "slider again");
+    assert_ne!(display(&mut s), before);
 }

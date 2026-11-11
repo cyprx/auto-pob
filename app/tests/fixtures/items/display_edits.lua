@@ -78,6 +78,7 @@ function recipe()
 	act.paste(text)
 	local item = tab.displayItem
 	act.range(1, 0.25)
+	checkpoint()
 	act.range(0, 1.0)
 	-- the same unique again: its first slider still holds 1.0 from the last item, and PoB syncs
 	-- it to the new line only when the slider asks if it is shown
@@ -90,7 +91,9 @@ function recipe()
 	assert(item.rangeLineList[1].range == 1.0, "the range didn't change")
 	checkpoint()
 	act.mutated(mutable, true)
+	checkpoint()
 	act.toggle_mod("explicit", 0)
+	assert(tab.displayItem.explicitModLines[1].disabled, "the first explicit line is not off")
 	checkpoint()
 	act.save()
 	-- Foulborn renames the item, so look for the title inside the name

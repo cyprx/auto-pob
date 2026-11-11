@@ -60,6 +60,7 @@ function recipe()
 	-- variant groups: the second group's control to its second choice
 	act.paste(itemText("Zana's Ingenuity"))
 	assert(tab.displayItem.usesVariantGroups, "Zana's Ingenuity has no variant groups")
+	assert(tab.controls.displayItemAltVariant.selIndex ~= 2, "the second group already holds its second choice")
 	act.variant(1, 1)
 	checkpoint()
 

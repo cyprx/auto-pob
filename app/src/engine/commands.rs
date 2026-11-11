@@ -347,6 +347,34 @@ pub enum Command {
         second: bool,
     },
 
+    /// Picks the item set in PoB's set dropdown, by PoB's id.
+    SelectItemSet {
+        id: u32,
+    },
+    /// The set manager's New button and the name popup. A blank title is refused.
+    NewItemSet {
+        title: String,
+    },
+    /// The set manager's Rename button.
+    RenameItemSet {
+        id: u32,
+        title: String,
+    },
+    /// The set manager's Copy button, which asks for the copy's title.
+    CopyItemSet {
+        id: u32,
+        title: String,
+    },
+    /// The set manager's Delete button, confirmed; the last set can't go.
+    DeleteItemSet {
+        id: u32,
+    },
+    /// Positions are 0-based in `ItemsView.sets`; `to` is the set's final position.
+    MoveItemSet {
+        from: usize,
+        to: usize,
+    },
+
     /// Opens or replaces the gem picker's search (R9); the latest one in a batch is answered
     /// as a `GemSearch`. While it is open PoB's DPS sort runs in the background.
     SearchGems(GemSearchQuery),

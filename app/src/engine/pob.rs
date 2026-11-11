@@ -792,6 +792,30 @@ impl PobBackend {
                 self.call::<_, ()>("items_select_weapon_set", second)?;
                 self.items_edited()
             }
+            Command::SelectItemSet { id } => {
+                self.call::<_, ()>("items_select_set", id)?;
+                self.items_edited()
+            }
+            Command::NewItemSet { title } => {
+                self.call::<_, ()>("items_new_set", title)?;
+                self.items_edited()
+            }
+            Command::CopyItemSet { id, title } => {
+                self.call::<_, ()>("items_copy_set", (id, title))?;
+                self.items_edited()
+            }
+            Command::DeleteItemSet { id } => {
+                self.call::<_, ()>("items_delete_set", id)?;
+                self.items_edited()
+            }
+            Command::RenameItemSet { id, title } => {
+                self.call::<_, ()>("items_rename_set", (id, title))?;
+                Ok(items_listed())
+            }
+            Command::MoveItemSet { from, to } => {
+                self.call::<_, ()>("items_move_set", (from + 1, to + 1))?;
+                Ok(items_listed())
+            }
             Command::Undo(Tab::Items) => {
                 self.call::<_, ()>("items_undo", ())?;
                 self.items_edited()

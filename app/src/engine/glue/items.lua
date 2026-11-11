@@ -359,3 +359,130 @@ function glue.items_redo()
 	items_tab():Redo()
 	pob.build.buildFlag = true
 end
+
+-- ---- Item sets (R9) ----
+
+local function set_position(id)
+	local position_of = position(items_tab().itemSetOrderList, id)
+	if not position_of then
+		error("no such item set", 0)
+	end
+	return position_of
+end
+
+-- Opens the Manage Item Sets popup (ItemsTab.lua:2506), calls `fn(list)` with its
+-- ItemSetListControl and closes what is left open. The shared list beside it is built too.
+local function with_set_list(fn)
+	glue.in_popups(function()
+		items_tab():OpenItemSetManagePopup()
+		local list = pob.main.main.popups[1].controls.setList
+		if not list then
+			error("couldn't open the item set list", 0)
+		end
+		return fn(list)
+	end)
+end
+
+local function check_title(title)
+	if not title:gsub("\r", ""):match("%S") then
+		error("the item set needs a name", 0)
+	end
+end
+
+-- Types the title into the name popup `RenameSet` opened and presses Save (it stays disabled
+-- until the name has a visible character). When that fails, Cancel is pressed, which drops a
+-- set that New or Copy had already made.
+local function save_name(title)
+	local popup = pob.main.main.popups[1]
+	local ok, applied = pcall(glue.type_into, popup.controls.edit, title)
+	if ok and applied and popup.controls.save.enabled then
+		popup.controls.save.onClick()
+		return
+	end
+	popup.controls.cancel.onClick()
+	if not ok then
+		error(applied, 0)
+	end
+	check_title("")
+end
+
+-- Draw's sync of the set dropdown (ItemsTab.lua:1508-1516), then the user's pick
+function glue.items_select_set(id)
+	local tab = items_tab()
+	local index = set_position(id)
+	local select = tab.controls.setSelect
+	local titles = {}
+	for i, set_id in ipairs(tab.itemSetOrderList) do
+		titles[i] = tab.itemSets[set_id].title or "Default"
+		if set_id == tab.activeItemSetId then
+			select.selIndex = i
+		end
+	end
+	select:SetList(titles)
+	select:SetSel(index)
+end
+
+-- The New button and the name popup
+function glue.items_new_set(title)
+	check_title(title)
+	with_set_list(function(list)
+		list.controls.new.onClick()
+		save_name(title)
+	end)
+end
+
+-- The Rename button and the name popup
+function glue.items_rename_set(id, title)
+	set_position(id)
+	check_title(title)
+	with_set_list(function(list)
+		list:RenameSet(items_tab().itemSets[id])
+		save_name(title)
+	end)
+	glue.frame()
+end
+
+-- The Copy button and the name popup
+function glue.items_copy_set(id, title)
+	local index = set_position(id)
+	check_title(title)
+	with_set_list(function(list)
+		list.selIndex, list.selValue = index, id
+		list.controls.copy.onClick()
+		save_name(title)
+	end)
+end
+
+-- OnSelDelete and its confirmation
+function glue.items_delete_set(id)
+	local index = set_position(id)
+	if #items_tab().itemSetOrderList <= 1 then
+		error("the last item set can't be deleted", 0)
+	end
+	with_set_list(function(list)
+		list.selIndex, list.selValue = index, id
+		list:OnSelDelete(index, id)
+		glue.confirm_popup("delete the item set")
+	end)
+end
+
+-- ListControl's drop, then OnOrderChange (ItemSetListControl.lua:108); `to` is the final place
+function glue.items_move_set(from, to)
+	local tab = items_tab()
+	local id = tab.itemSetOrderList[from]
+	if not (id and tab.itemSetOrderList[to]) then
+		error("no such item set", 0)
+	end
+	if from == to then
+		return
+	end
+	with_set_list(function(list)
+		list.selIndex, list.selValue = from, id
+		table.remove(list.list, from)
+		table.insert(list.list, to, id)
+		list:OnOrderChange(from, to)
+		list.selValue = nil
+		list.selIndex = nil
+	end)
+	glue.frame()
+end

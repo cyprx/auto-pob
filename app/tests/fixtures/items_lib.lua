@@ -332,6 +332,117 @@ function act.group_slot(index, slotName)
 	record({ cmd = "SetGroupSlot", group = index, slot = slotName })
 end
 
+-- ---- Item sets ----
+
+-- Opens the Manage Item Sets popup (ItemsTab.lua:2506), calls `fn(list)` with its
+-- ItemSetListControl and closes what is left open.
+local function withSetList(fn)
+	local depth = #main.popups
+	tab():OpenItemSetManagePopup()
+	fn(main.popups[1].controls.setList)
+	while #main.popups > depth do main:ClosePopup() end
+end
+
+local function setIndex(id)
+	for i, setId in ipairs(tab().itemSetOrderList) do
+		if setId == id then return i end
+	end
+	error("no item set " .. tostring(id))
+end
+
+-- Types the title into the name popup on top and presses Save (ItemSetListControl.lua:44-70)
+local function saveName(title)
+	local popup = main.popups[1]
+	popup.controls.edit:SetText(title, true)
+	assert(popup.controls.save.enabled, "Save is disabled")
+	popup.controls.save.onClick()
+end
+
+-- The New button and the name popup; returns the new set's id
+function act.new_set(title)
+	local before = {}
+	for _, id in ipairs(tab().itemSetOrderList) do before[id] = true end
+	withSetList(function(list)
+		list.controls.new.onClick()
+		saveName(title)
+	end)
+	local made
+	for _, id in ipairs(tab().itemSetOrderList) do
+		if not before[id] then made = id end
+	end
+	record({ cmd = "NewItemSet", title = title })
+	return made
+end
+
+-- The Copy button and the name popup; returns the copy's id
+function act.copy_set(id, title)
+	local before = {}
+	for _, listed in ipairs(tab().itemSetOrderList) do before[listed] = true end
+	withSetList(function(list)
+		list.selIndex, list.selValue = setIndex(id), id
+		list.controls.copy.onClick()
+		saveName(title)
+	end)
+	local made
+	for _, listed in ipairs(tab().itemSetOrderList) do
+		if not before[listed] then made = listed end
+	end
+	record({ cmd = "CopyItemSet", id = id, title = title })
+	return made
+end
+
+-- The Rename button and the name popup
+function act.rename_set(id, title)
+	setIndex(id)
+	withSetList(function(list)
+		list.selIndex, list.selValue = setIndex(id), id
+		list.controls.rename.onClick()
+		saveName(title)
+	end)
+	record({ cmd = "RenameItemSet", id = id, title = title })
+end
+
+-- The Delete button and its confirmation
+function act.delete_set(id)
+	withSetList(function(list)
+		list.selIndex, list.selValue = setIndex(id), id
+		list.controls.delete.onClick()
+		confirm()
+	end)
+	record({ cmd = "DeleteItemSet", id = id })
+end
+
+-- The set dropdown (ItemsTab.lua:99-102), after Draw has put the titles in it
+function act.select_set(id)
+	local t = tab()
+	local select = t.controls.setSelect
+	local titles = {}
+	for i, setId in ipairs(t.itemSetOrderList) do
+		titles[i] = t.itemSets[setId].title or "Default"
+		if setId == t.activeItemSetId then select.selIndex = i end
+	end
+	select:SetList(titles)
+	select:SetSel(setIndex(id))
+	record({ cmd = "SelectItemSet", id = id })
+end
+
+-- Dragging the set to a new place in the manager's list and dropping it; `to` is the final
+-- position, which a drop expresses as the row it lands before (ListControl.lua:426-436).
+function act.move_set(from, to)
+	withSetList(function(list)
+		list.selIndex, list.selValue = from + 1, list.list[from + 1]
+		local dragIndex = to > from and to + 2 or to + 1
+		table.remove(list.list, list.selIndex)
+		if dragIndex > list.selIndex then
+			dragIndex = dragIndex - 1
+		end
+		table.insert(list.list, dragIndex, list.selValue)
+		list:OnOrderChange(list.selIndex, dragIndex)
+		list.selValue = nil
+	end)
+	record({ cmd = "MoveItemSet", from = from, to = to })
+end
+
 -- Ctrl+Z and Ctrl+Y on the tab (ItemsTab.lua:1458-1465)
 function act.undo()
 	tab():Undo()

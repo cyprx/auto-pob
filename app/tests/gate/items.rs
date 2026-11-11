@@ -670,6 +670,27 @@ enum ItemsAction {
     DeallocNode {
         id: u32,
     },
+    SelectItemSet {
+        id: u32,
+    },
+    NewItemSet {
+        title: String,
+    },
+    RenameItemSet {
+        id: u32,
+        title: String,
+    },
+    CopyItemSet {
+        id: u32,
+        title: String,
+    },
+    DeleteItemSet {
+        id: u32,
+    },
+    MoveItemSet {
+        from: usize,
+        to: usize,
+    },
     Undo,
     Redo,
     /// Built from the recorded checkpoint table
@@ -696,6 +717,12 @@ impl ItemsAction {
             ItemsAction::SelectWeaponSet { second } => Command::SelectWeaponSet { second },
             ItemsAction::AllocNode { id } => Command::AllocNode { id },
             ItemsAction::DeallocNode { id } => Command::DeallocNode { id },
+            ItemsAction::SelectItemSet { id } => Command::SelectItemSet { id },
+            ItemsAction::NewItemSet { title } => Command::NewItemSet { title },
+            ItemsAction::RenameItemSet { id, title } => Command::RenameItemSet { id, title },
+            ItemsAction::CopyItemSet { id, title } => Command::CopyItemSet { id, title },
+            ItemsAction::DeleteItemSet { id } => Command::DeleteItemSet { id },
+            ItemsAction::MoveItemSet { from, to } => Command::MoveItemSet { from, to },
             ItemsAction::Undo => Command::Undo(Tab::Items),
             ItemsAction::Redo => Command::Redo(Tab::Items),
             ItemsAction::Check { .. } => return None,
@@ -1191,4 +1218,122 @@ fn item_slot_errors() {
     s.run(Command::DeleteUnusedItems).unwrap();
     s.run(Command::DeleteAllItems).unwrap();
     assert_eq!(state(&mut s), before);
+}
+
+// ---- Item sets ----
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn set_recipe_matches_pob() {
+    let _guard = lock();
+    let recipe = check_items_recipe("sets");
+    let checks = checkpoints(&recipe);
+    let titles = |c: &ItemsCheckpoint| -> Vec<String> {
+        c.items["sets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["title"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let t0 = titles(checks[0]);
+    assert_eq!(&t0[2..], ["Mapping", "Bossing"]);
+    // renamed and moved to the front, with no undo state (R9)
+    let t2 = titles(checks[2]);
+    assert_eq!(t2[0], "Clear");
+    assert_eq!(t2.len(), 4);
+    assert!(!t2.contains(&"Mapping".to_string()));
+    // the second weapon set of the new set is on at checkpoint 1
+    assert_eq!(checks[1].items["second_weapon_set"], true);
+}
+
+/// The number of entries in PoB's `itemSets` (orphans from a refused name show here)
+fn item_set_count(s: &Session) -> u32 {
+    lua_value(
+        &s.backend.lua,
+        "local n = 0 for _ in pairs(pob.build.itemsTab.itemSets) do n = n + 1 end return n",
+    )
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn item_set_errors() {
+    let _guard = lock();
+    let (mut s, _lua) = gear_sessions("item-set-errors");
+    let view = s.backend.items_view().unwrap();
+    let first = view.sets[0].id;
+    let second = view.sets[1].id;
+    let refuse = |s: &mut Session, command: Command, message: &str| {
+        let before = (s.backend.items_view().unwrap(), item_set_count(s));
+        let error = s.run(command.clone()).expect_err(&format!("{command:?}"));
+        assert!(
+            error.to_string().contains(message),
+            "{command:?}: {error} (wanted {message})"
+        );
+        let after = (s.backend.items_view().unwrap(), item_set_count(s));
+        assert_eq!(after, before, "{command:?} changed something");
+    };
+    let long = "x".repeat(101);
+    for title in ["", "   ", long.as_str()] {
+        let message = if title.len() > 100 {
+            "too long"
+        } else {
+            "needs a name"
+        };
+        refuse(
+            &mut s,
+            Command::NewItemSet {
+                title: title.into(),
+            },
+            message,
+        );
+        refuse(
+            &mut s,
+            Command::CopyItemSet {
+                id: first,
+                title: title.into(),
+            },
+            message,
+        );
+        refuse(
+            &mut s,
+            Command::RenameItemSet {
+                id: first,
+                title: title.into(),
+            },
+            message,
+        );
+    }
+    for command in [
+        Command::SelectItemSet { id: 999 },
+        Command::CopyItemSet {
+            id: 999,
+            title: "A".into(),
+        },
+        Command::RenameItemSet {
+            id: 999,
+            title: "A".into(),
+        },
+        Command::DeleteItemSet { id: 999 },
+    ] {
+        refuse(&mut s, command, "no such item set");
+    }
+    refuse(
+        &mut s,
+        Command::MoveItemSet { from: 0, to: 9 },
+        "no such item set",
+    );
+    refuse(
+        &mut s,
+        Command::MoveItemSet { from: 9, to: 0 },
+        "no such item set",
+    );
+    // the last set stays
+    s.run(Command::DeleteItemSet { id: second }).unwrap();
+    assert_eq!(item_set_count(&s), 1);
+    refuse(
+        &mut s,
+        Command::DeleteItemSet { id: first },
+        "last item set",
+    );
 }

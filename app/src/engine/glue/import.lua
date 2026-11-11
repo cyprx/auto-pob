@@ -314,6 +314,54 @@ local STAGES = {
 
 local REALMS = { PC = "Pc", XBOX = "Xbox", SONY = "Sony" }
 
+-- PoB's sign-in, as its section shows it (R18, R21). The status is the label's own text: the
+-- label function is called first, as Draw does, since it clears an expired login timer and a
+-- passed rate limit. No token is read here, only whether there is one.
+local function oauth_view(tab)
+	local controls = tab.controls
+	local label = controls.charImportStatusLabel.label
+	local status = StripEscapes(type(label) == "function" and label() or label or "")
+	status = status:gsub("^Character import status: ", "")
+	local realm = controls.accountRealm:GetSelValue()
+	local code = realm.realmCode
+	local list = tab.characterList[code]
+	local view = {
+		signed_in = tab.isAuthorized() and true or false,
+		signing_in = tab.oauthTimer ~= nil,
+		realm = REALMS[realm.id] or "Pc",
+		fetched = list ~= nil,
+		leagues = {},
+		characters = {},
+		status = status,
+		error = tab.oauthErrCode and StripEscapes(tostring(tab.oauthErrCode)) or nil,
+		retry_at = tab.rateLimitEndTime,
+		busy = tab.oauthLoading and true or false,
+	}
+	if tab.oauthTimer then
+		view.login_deadline = tab.oauthTimer + 60
+		local sign_in = glue.net_sign_in()
+		view.auth_url = sign_in and sign_in.auth_url or nil
+	end
+	for _, league in ipairs(controls.charSelectLeague.list or {}) do
+		view.leagues[#view.leagues + 1] = tostring(league)
+	end
+	-- every character of the realm, as `BuildCharacterList` filters and sorts them for "Any"
+	for _, char in ipairs(list or {}) do
+		if char.realm == code then
+			view.characters[#view.characters + 1] = {
+				name = tostring(char.name or "?"),
+				class = tostring(char.class or "?"),
+				level = math.floor(tonumber(char.level) or 0),
+				league = tostring(char.league or "?"),
+			}
+		end
+	end
+	table.sort(view.characters, function(a, b)
+		return a.name:lower() < b.name:lower()
+	end)
+	return view
+end
+
 -- The account import of the open build, as the tab shows it. The characters are all of the
 -- account's, in the order PoB sorts a character list (by lowercase name), so a league can be
 -- picked from them; `ImportPublicCharacter` selects the league itself.
@@ -322,7 +370,7 @@ function glue.account_view()
 	local controls = tab.controls
 	local stage = STAGES[tab.charImportMode] or "EnterAccount"
 	local view = {
-		oauth = { signed_in = false },
+		oauth = oauth_view(tab),
 		public = {
 			account = controls.siteAccountName.buf,
 			realm = REALMS[controls.siteAccountRealm:GetSelValue().id] or "Pc",
@@ -485,4 +533,161 @@ function glue.close_public_characters()
 		error(OFFERED, 0)
 	end
 	close.onClick()
+end
+
+-- ---- Sign in with Path of Exile (R1, R18, R21) ----
+--
+-- PoB's own buttons drive PoB's PoEAPI: Authorize starts LaunchServer.lua's listener, whose
+-- `OpenURL` the glue keeps as the sign-in link (net.lua), and the redirect into it fetches the
+-- token, which PoB saves in Settings.xml and nowhere else.
+
+-- PoB's text for a body it can't read (PoEAPI.lua:48)
+local MALFORMED = "Malformed response"
+-- No `OpenURL` came: LaunchServer.lua got none of its three ports. PoB's own error is nil
+-- (its `assert` on the `or` chain), shown as "nil".
+local NO_PORT = "couldn't listen on localhost ports 49082-49084 for the sign-in"
+
+-- Puts right what a raising PoB callback leaves behind, and makes PoB's message the request's
+-- error when the request changed it. `before` is `oauthErrCode` when the press began.
+local function oauth_after(tab, before, sign_in)
+	return function(req)
+		local stuck
+		if sign_in and not req.auth_url and not tab.isAuthorized() then
+			-- the listener never started
+			tab.oauthTimer = nil
+			stuck = NO_PORT
+		elseif sign_in and tab.oauthTimer then
+			-- the token's callback raised on a body it couldn't read
+			tab.oauthTimer = nil
+			stuck = MALFORMED
+		end
+		if tab.oauthLoading then
+			-- a list's callback raised on a body it couldn't read
+			tab.oauthLoading = false
+			stuck = stuck or MALFORMED
+		end
+		if stuck then
+			tab.oauthErrCode = stuck
+			req.error = stuck
+		elseif tab.oauthErrCode and tab.oauthErrCode ~= before then
+			req.error = StripEscapes(tostring(tab.oauthErrCode))
+		end
+	end
+end
+
+local function authorized_tab()
+	local tab = import_tab()
+	if not tab.isAuthorized() then
+		error("sign in first", 0)
+	end
+	return tab
+end
+
+-- Selects realm `realm_id` in the drop-down, as a user's pick (its callback lists the leagues)
+local function select_realm(controls, realm_id)
+	local index
+	for i, realm in ipairs(controls.accountRealm.list) do
+		if realm.id == realm_id then
+			index = i
+		end
+	end
+	if not index then
+		error("no such realm", 0)
+	end
+	controls.accountRealm:SetSel(index)
+end
+
+-- "Authorize with Path of Exile" (shown only when signed out). The link comes in the view.
+function glue.sign_in()
+	local tab = import_tab()
+	local button = tab.controls.authenticateButton
+	if not button:IsShown() or not button:IsEnabled() then
+		error(OFFERED, 0)
+	end
+	-- PoB would start a second listener on the next port
+	if glue.net_sign_in() then
+		error("already signing in", 0)
+	end
+	local id, message = glue.net_begin("Signing in", { after = oauth_after(tab, tab.oauthErrCode, true) }, button.onClick)
+	if not id then
+		error(message or "couldn't start the request", 0)
+	end
+	return id
+end
+
+-- "Logout from Path of Exile API": PoB forgets the tokens and saves its settings
+function glue.sign_out()
+	local button = import_tab().controls.logoutApiButton
+	if not button:IsShown() or not button:IsEnabled() then
+		error("sign in first", 0)
+	end
+	button.onClick()
+end
+
+-- The realm drop-down, and Fetch when PoB offers it (once per realm and tab). Returns the
+-- request, or nil when nothing was fetched: the realm's list is there already, or PoB's rate
+-- limiter answered at once (the view says so).
+function glue.list_characters(realm_id)
+	local tab = authorized_tab()
+	local controls = tab.controls
+	select_realm(controls, realm_id)
+	local fetch = controls.accountRealmFetchButton
+	if not fetch:IsEnabled() then
+		return nil
+	end
+	local id = glue.net_begin("Fetching characters", { after = oauth_after(tab, tab.oauthErrCode) }, fetch.onClick)
+	return id
+end
+
+-- The realm, the league (nil is PoB's "Any"), the character, the part's options and its
+-- button (ImportTab.lua:259-333). The tree's confirm is pressed, because the UI asked first.
+-- Returns the request, or nil when PoB's rate limiter answered at once.
+function glue.import_character(realm_id, league, name, kind, a, b, c)
+	local tab = authorized_tab()
+	local controls = tab.controls
+	select_realm(controls, realm_id)
+	local wanted = league or "Any"
+	local index
+	for i, entry in ipairs(controls.charSelectLeague.list or {}) do
+		if entry == wanted and index == nil then
+			index = i
+		end
+	end
+	if not index then
+		error("no such character", 0)
+	end
+	controls.charSelectLeague:SetSel(index)
+	local at
+	for i, entry in ipairs(controls.charSelect.list or {}) do
+		if entry.label == name and at == nil then
+			at = i
+		end
+	end
+	if not at then
+		error("no such character", 0)
+	end
+	controls.charSelect:SetSel(at)
+	local function option(box, on)
+		if box.state ~= on then
+			box.state = on
+			if box.changeFunc then
+				box.changeFunc(on)
+			end
+		end
+	end
+	local button, label
+	if kind == "tree" then
+		option(controls.charImportTreeClearJewels, a)
+		button, label = controls.charImportTree, "Importing passive tree"
+	else
+		option(controls.charImportItemsClearItems, a)
+		option(controls.charImportItemsClearSkills, b)
+		option(controls.charImportItemsIgnoreWeaponSwap, c)
+		button, label = controls.charImportItems, "Importing items and skills"
+	end
+	if not button:IsShown() or not button:IsEnabled() then
+		error(OFFERED, 0)
+	end
+	local id = glue.net_begin(label, { confirmed = true, after = oauth_after(tab, tab.oauthErrCode) }, button.onClick)
+	return id
 end

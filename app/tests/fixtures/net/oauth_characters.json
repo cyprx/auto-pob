@@ -1,0 +1,59 @@
+{
+  "characters": [
+    {
+      "id": "c0ffee01",
+      "name": "GateOne",
+      "realm": "pc",
+      "class": "Juggernaut",
+      "league": "Mirage Gate",
+      "level": 90,
+      "experience": 2427633571,
+      "current": true
+    },
+    {
+      "id": "c0ffee02",
+      "name": "GateTwo",
+      "realm": "pc",
+      "class": "Berserker",
+      "league": "Standard",
+      "level": 78,
+      "experience": 598423124
+    },
+    {
+      "id": "c0ffee03",
+      "name": "gateThree",
+      "realm": "pc",
+      "class": "Marauder",
+      "league": "Standard",
+      "level": 12,
+      "experience": 40120
+    },
+    {
+      "id": "c0ffee04",
+      "name": "alphaGate",
+      "realm": "pc",
+      "class": "Marauder",
+      "league": "Hardcore Mirage Gate",
+      "level": 31,
+      "experience": 2000000
+    },
+    {
+      "id": "c0ffee05",
+      "name": "XboxOne",
+      "realm": "xbox",
+      "class": "Juggernaut",
+      "league": "Standard",
+      "level": 60,
+      "experience": 300000
+    },
+    {
+      "id": "c0ffee06",
+      "name": "aSonyOne",
+      "realm": "sony",
+      "class": "Chieftain",
+      "league": "Standard",
+      "level": 70,
+      "experience": 400000
+    }
+  ]
+}

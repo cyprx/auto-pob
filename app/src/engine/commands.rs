@@ -100,6 +100,24 @@ pub enum Command {
     },
     /// PoB's Close button: back to the account box (R19)
     ClosePublicCharacters,
+    /// PoB's "Authorize with Path of Exile" (shown only when signed out): a request whose
+    /// sign-in link comes in `OAuthView.auth_url`, for the UI to open (R1).
+    SignIn,
+    /// PoB's "Logout from Path of Exile API": PoB forgets the tokens and saves its settings.
+    SignOut,
+    /// Selects the realm and presses Fetch when PoB offers it, once per realm (R18). A request,
+    /// unless the realm's list is there already or PoB's rate limiter answers at once.
+    ListCharacters {
+        realm: Realm,
+    },
+    /// Imports a part of a signed-in account's character (R18): a request, unless PoB's rate
+    /// limiter answers at once. `league` `None` is PoB's "Any".
+    ImportCharacter {
+        realm: Realm,
+        league: Option<String>,
+        name: String,
+        part: CharacterPart,
+    },
     /// Ask for the build's share code: PoB's Generate button, no network (R17).
     ExportShareCode,
     Save,

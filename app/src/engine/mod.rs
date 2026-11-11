@@ -18,6 +18,7 @@ pub use commands::{
 };
 pub use run::{
     Affected, Backend, BackgroundTask, DbSnapshot, Engine, Event, Liveness, Snapshot, run_loop,
+    send_snapshots,
 };
 pub use views::{
     AccountView, AscendancyChoice, BreakdownColumn, BreakdownRow, BreakdownSection, BreakdownView,

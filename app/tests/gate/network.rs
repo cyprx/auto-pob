@@ -8,8 +8,9 @@ use super::{assert_sidebar, lock, pob_dir, set};
 use auto_pob::engine::pob::PobBackend;
 use auto_pob::engine::upstream::golden_of;
 use auto_pob::engine::{
-    Backend, CharacterEntry, CharacterPart, Command, ConfigValue, Engine, Event, FinishedRequest,
-    ImportMode, PublicStage, PublicView, Realm, RequestsView, Snapshot,
+    Affected, Backend, BackgroundTask, CharacterEntry, CharacterPart, Command, ConfigValue, Engine,
+    Event, FinishedRequest, ImportMode, OAuthView, PublicStage, PublicView, Realm, RequestsView,
+    Snapshot, send_snapshots,
 };
 use auto_pob::game::Game;
 use pob_runtime::net::Canned;
@@ -2114,4 +2115,924 @@ fn public_import_matches_pob() {
     let took = started.elapsed();
     eprintln!("public_import_matches_pob took {took:?}");
     assert!(took < Duration::from_secs(20), "over its budget: {took:?}");
+}
+
+// ---- Sign in with Path of Exile (Task 7) ----
+
+const TOKEN_URL: &str = "https://www.pathofexile.com/oauth/token";
+const API: &str = "https://api.pathofexile.com/character";
+const SIGN_IN_GRANT: &str = "client_id=pob&grant_type=authorization_code";
+const REFRESH_GRANT: &str = "client_id=pob&grant_type=refresh_token";
+const AUTH_PREFIX: &str = "https://www.pathofexile.com/oauth/authorize?client_id=pob";
+const MALFORMED: &str = "Malformed response";
+
+/// Everything the session sent towards a UI, as the loop would send it: each event's `{:?}`
+/// (R21's check reads them) and the finished requests, which a `Requests` snapshot takes.
+#[derive(Default)]
+struct Recorder {
+    shown: std::cell::RefCell<Vec<String>>,
+    finished: std::cell::RefCell<Vec<FinishedRequest>>,
+}
+
+impl Recorder {
+    fn send(&self, event: Event) {
+        if let Event::Snapshot {
+            snapshot: Snapshot::Requests(view),
+            ..
+        } = &event
+        {
+            self.finished
+                .borrow_mut()
+                .extend(view.finished.iter().cloned());
+        }
+        self.shown.borrow_mut().push(format!("{event:?}"));
+    }
+
+    fn take_finished(&self) -> Vec<FinishedRequest> {
+        std::mem::take(&mut *self.finished.borrow_mut())
+    }
+}
+
+/// Applies `command` as the loop does: the command, then the snapshots it asks for (an error
+/// is an `Error` event and every view).
+fn run(s: &mut NetSession, rec: &Recorder, command: Command) -> Result<(), String> {
+    let send = |event: Event| rec.send(event);
+    let (flags, result) = match s.backend.apply(command, &send) {
+        Ok(mut flags) => {
+            if flags.recalc {
+                s.backend.recalculate().expect("recalculating");
+                flags.merge_views();
+            }
+            (flags, Ok(()))
+        }
+        Err(e) => {
+            let message = format!("{e:#}");
+            send(Event::Error {
+                seq: 0,
+                message: message.clone(),
+            });
+            (Affected::ALL_VIEWS, Err(message))
+        }
+    };
+    send_snapshots(&mut s.backend, 0, flags, &send);
+    result
+}
+
+trait MergeViews {
+    fn merge_views(&mut self);
+}
+
+impl MergeViews for Affected {
+    /// What the loop refreshes after a recalculation
+    fn merge_views(&mut self) {
+        self.stats = true;
+        self.config = true;
+        self.tree = true;
+        self.calcs = true;
+        self.skills = true;
+        self.items = true;
+        self.display_item = true;
+    }
+}
+
+/// One Network step, as the loop runs it, when a subscript is ready.
+fn net_step(s: &mut NetSession, rec: &Recorder) -> bool {
+    if s.backend.next_background() != Some(BackgroundTask::Network) {
+        return false;
+    }
+    let send = |event: Event| rec.send(event);
+    let mut flags = s
+        .backend
+        .background_step(BackgroundTask::Network, &send)
+        .expect("a network step");
+    if flags.recalc {
+        s.backend.recalculate().expect("recalculating");
+        flags.merge_views();
+    }
+    send_snapshots(&mut s.backend, 0, flags, &send);
+    true
+}
+
+/// Network steps until no request is pending.
+fn settle(s: &mut NetSession, rec: &Recorder) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if net_step(s, rec) {
+            continue;
+        }
+        if s.eval::<usize>("return glue.net_pending()") == 0 {
+            return;
+        }
+        assert!(Instant::now() < deadline, "a request still runs");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// The one request that ended since the last look.
+fn ended(s: &mut NetSession, rec: &Recorder) -> FinishedRequest {
+    settle(s, rec);
+    let mut finished = rec.take_finished();
+    assert_eq!(finished.len(), 1, "{finished:?}");
+    finished.remove(0)
+}
+
+fn oauth(s: &mut NetSession, rec: &Recorder) -> OAuthView {
+    let view = s.backend.account_view().expect("account view");
+    rec.shown.borrow_mut().push(format!("{view:?}"));
+    view.oauth
+}
+
+/// Steps until PoB's listener asked to open the sign-in link, and returns it.
+fn wait_for_link(s: &mut NetSession, rec: &Recorder) -> String {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        net_step(s, rec);
+        if let Some(url) = oauth(s, rec).auth_url {
+            return url;
+        }
+        assert!(Instant::now() < deadline, "no sign-in link");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// The link's `state` and the listener's port, from its `redirect_uri`.
+fn link_parts(url: &str) -> (String, u16) {
+    let state = url
+        .split(['?', '&'])
+        .find_map(|part| part.strip_prefix("state="))
+        .expect("a state")
+        .to_string();
+    let port = url
+        .rsplit_once("&redirect_uri=http://localhost:")
+        .expect("a redirect_uri")
+        .1
+        .parse()
+        .expect("a port");
+    (state, port)
+}
+
+/// The browser's redirect into PoB's listener; returns the page it answers.
+fn redirect(port: u16, query: &str) -> String {
+    use std::io::{Read, Write};
+    let mut stream =
+        std::net::TcpStream::connect(("127.0.0.1", port)).expect("PoB's sign-in listener");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(stream, "GET /?{query} HTTP/1.1\r\n").unwrap();
+    let mut page = String::new();
+    let _ = stream.read_to_string(&mut page);
+    page
+}
+
+/// Sign in, the redirect with `state` (the link's own when `None`), and the request's end.
+fn sign_in(s: &mut NetSession, rec: &Recorder, state: Option<&str>) -> (FinishedRequest, String) {
+    run(s, rec, Command::SignIn).expect("sign in");
+    let link = wait_for_link(s, rec);
+    let (own, port) = link_parts(&link);
+    let page = redirect(
+        port,
+        &format!("code=gatecode&state={}", state.unwrap_or(&own)),
+    );
+    assert!(page.contains("Authentication Successful"), "{page}");
+    (ended(s, rec), link)
+}
+
+/// Settings.xml's `<Accounts>` element.
+fn accounts(s: &NetSession) -> String {
+    let xml = s.settings_xml();
+    let start = xml.find("<Accounts").expect("an Accounts element");
+    let end = start + xml[start..].find('>').unwrap() + 1;
+    xml[start..end].to_string()
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct UpOAuth {
+    leagues: Vec<String>,
+    characters: Vec<CharacterEntry>,
+}
+
+fn import_oauth(realm: Realm, league: Option<&str>, name: &str, part: CharacterPart) -> Command {
+    Command::ImportCharacter {
+        realm,
+        league: league.map(str::to_owned),
+        name: name.into(),
+        part,
+    }
+}
+
+fn tree_part() -> CharacterPart {
+    CharacterPart::Tree {
+        delete_jewels: true,
+    }
+}
+
+fn items_part() -> CharacterPart {
+    CharacterPart::ItemsAndSkills {
+        clear_items: true,
+        clear_skills: true,
+        ignore_weapon_swap: false,
+    }
+}
+
+/// Settles the canned web's character routes for the sign-in flow.
+fn route_oauth(web: &pob_runtime::net::CannedWeb) {
+    web.route_post(
+        TOKEN_URL,
+        SIGN_IN_GRANT,
+        Canned::ok(net_fixture("token.json")),
+    );
+    web.route_post(
+        TOKEN_URL,
+        REFRESH_GRANT,
+        Canned::ok(net_fixture("token_refreshed.json")),
+    );
+    web.route("GET", API, Canned::ok(net_fixture("oauth_characters.json")));
+    web.route(
+        "GET",
+        &format!("{API}/GateOne"),
+        Canned::ok(net_fixture("oauth_character.json")),
+    );
+}
+
+/// The headers of a 429 that make PoB's limiter hold the next fetch (Step 0, check 7).
+fn rate_limited() -> Canned {
+    let mut reply = Canned::status(429, "");
+    for line in net_fixture("rate_limited_headers.txt").lines() {
+        let (name, value) = line.split_once(": ").expect("a header line");
+        reply = reply.header(name, value);
+    }
+    reply
+}
+
+/// The facts a character import sets beyond the tabs: level and the quest choices.
+fn quest_facts(lua: &mlua::Lua, build: &str) -> (u32, String, String, String) {
+    lua.load(format!(
+        "local b = {build} return b.characterLevel, b.configTab.input.bandit, \
+         b.configTab.input.pantheonMajorGod, b.configTab.input.pantheonMinorGod"
+    ))
+    .eval()
+    .unwrap()
+}
+
+fn requests_to(web: &pob_runtime::net::CannedWeb, method: &str, url: &str) -> usize {
+    web.requests()
+        .iter()
+        .filter(|r| r.method == method && r.url == url)
+        .count()
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn oauth_flow_matches_pob() {
+    let _guard = lock();
+    capture_logs();
+    LOGGED.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    let started = Instant::now();
+    let web = canned_web();
+    route_oauth(&web);
+    let new_xml = std::fs::read_to_string(super::fixture_xml("new")).unwrap();
+    let mut s = net_session("oauth", canned(&web), None);
+    s.open_fixture("new");
+    let up = UpstreamNet::new(&web, Some(&new_xml));
+    load_dump_libs(&up);
+    up.eval::<()>("launch.devMode = false");
+    let rec = Recorder::default();
+
+    // ---- Signed out: PoB's status, and our refusals ----
+    let out = oauth(&mut s, &rec);
+    assert!(!out.signed_in && !out.signing_in && !out.busy, "{out:?}");
+    assert_eq!(out.status, "Not authenticated");
+    assert_eq!(
+        (out.realm, out.auth_url, out.error),
+        (Realm::Pc, None, None)
+    );
+    for command in [
+        Command::SignOut,
+        Command::ListCharacters { realm: Realm::Pc },
+        import_oauth(Realm::Pc, None, "GateOne", tree_part()),
+    ] {
+        assert_eq!(run(&mut s, &rec, command), Err("sign in first".into()));
+    }
+
+    // ---- 1. Sign in: the link, with 49082 taken so PoB falls back to the next port ----
+    let held = std::net::TcpListener::bind(("127.0.0.1", 49082)).ok();
+    run(&mut s, &rec, Command::SignIn).expect("sign in");
+    let pending = s.requests().pending;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].label, "Signing in");
+    let link = wait_for_link(&mut s, &rec);
+    drop(held);
+    assert!(link.starts_with(AUTH_PREFIX), "{link}");
+    let (state, port) = link_parts(&link);
+    assert!(
+        link.ends_with(&format!("&redirect_uri=http://localhost:{port}")),
+        "{link}"
+    );
+    assert!(port == 49083 || port == 49084, "port {port}");
+    let waiting = oauth(&mut s, &rec);
+    assert!(waiting.signing_in && !waiting.signed_in, "{waiting:?}");
+    let now = s.eval::<i64>("return os.time()");
+    let deadline = waiting.login_deadline.expect("a deadline");
+    assert!(
+        (now + 58..=now + 60).contains(&deadline),
+        "{deadline} vs {now}"
+    );
+    assert!(
+        waiting.status.starts_with("Logging in..."),
+        "{}",
+        waiting.status
+    );
+    assert_eq!(
+        run(&mut s, &rec, Command::SignIn),
+        Err("already signing in".into())
+    );
+    // R1: any other URL the listener asks to open is dropped
+    s.eval::<()>(
+        r#"for id in pairs(pob.main.subScripts) do
+            glue.net_dispatch("call", id, "OpenURL", "https://evil.test/")
+            glue.net_dispatch("call", id, "Copy", "https://evil.test/")
+        end"#,
+    );
+    assert_eq!(oauth(&mut s, &rec).auth_url.as_deref(), Some(link.as_str()));
+
+    // ---- 2-3. The redirect; PoB fetches the token, then the characters ----
+    let page = redirect(port, &format!("code=gatecode&state={state}"));
+    assert!(page.contains("Authentication Successful"), "{page}");
+    let entry = ended(&mut s, &rec);
+    assert_eq!(
+        (
+            entry.label.as_str(),
+            entry.error.as_deref(),
+            entry.cancelled
+        ),
+        ("Signing in", None, false)
+    );
+    let signed = oauth(&mut s, &rec);
+    assert!(
+        signed.signed_in && !signed.signing_in && !signed.busy,
+        "{signed:?}"
+    );
+    assert_eq!(signed.auth_url, None);
+    assert!(signed.fetched);
+    assert_eq!(signed.status, "Authenticated");
+    let theirs: UpOAuth = {
+        use mlua::LuaSerdeExt;
+        up.lua
+            .globals()
+            .set("characters", net_fixture("oauth_characters.json"))
+            .unwrap();
+        let value: mlua::Value = up.eval("return oauthDump(characters, 'pc')");
+        up.lua.from_value(value).unwrap()
+    };
+    assert_eq!(signed.characters, theirs.characters);
+    assert_eq!(signed.leagues, theirs.leagues);
+    let names: Vec<&str> = signed.characters.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["alphaGate", "GateOne", "gateThree", "GateTwo"]);
+    assert_eq!(
+        signed.leagues,
+        ["Hardcore Mirage Gate", "Mirage Gate", "Standard", "Any"]
+    );
+    // the token went to PoB's Settings.xml, and the exchange carried the code and the port
+    let saved = accounts(&s);
+    assert!(
+        saved.contains(r#"lastToken="FAKE-ACCESS-1""#),
+        "no token saved"
+    );
+    assert!(saved.contains(r#"lastRefreshToken="FAKE-REFRESH-1""#));
+    let exchange = web
+        .requests()
+        .into_iter()
+        .find(|r| r.url == TOKEN_URL)
+        .expect("the token exchange");
+    let body = String::from_utf8(exchange.body).unwrap();
+    assert!(
+        body.starts_with(&format!(
+            "{SIGN_IN_GRANT}&code=gatecode&redirect_uri=http://localhost:{port}&"
+        )),
+        "the exchange's body"
+    );
+    let list = web
+        .requests()
+        .into_iter()
+        .find(|r| r.url == API)
+        .expect("the list");
+    assert!(
+        list.headers
+            .iter()
+            .any(|h| h == "Authorization: Bearer FAKE-ACCESS-1"),
+        "the list went without the token"
+    );
+    s.assert_clean("sign in");
+
+    // ---- 4. Both parts of GateOne. Step 0 check 7: a second press before the first answer
+    // meets PoB's limiter (no limits known yet); after it, with no rate headers, it goes ----
+    run(
+        &mut s,
+        &rec,
+        import_oauth(Realm::Pc, Some("Mirage Gate"), "GateOne", tree_part()),
+    )
+    .expect("tree import");
+    assert_eq!(s.requests().pending[0].label, "Importing passive tree");
+    assert!(oauth(&mut s, &rec).busy);
+    run(
+        &mut s,
+        &rec,
+        import_oauth(Realm::Pc, Some("Mirage Gate"), "GateOne", items_part()),
+    )
+    .expect("an items import the limiter holds");
+    let held_back = oauth(&mut s, &rec);
+    assert_eq!(
+        held_back.error.as_deref(),
+        Some("Could not import: Response code: 429")
+    );
+    assert_eq!(s.requests().pending.len(), 1, "the limiter let it go");
+    let entry = ended(&mut s, &rec);
+    assert_eq!((entry.error, entry.cancelled), (None, false));
+    up.lua
+        .globals()
+        .set("character", net_fixture("oauth_character.json"))
+        .unwrap();
+    up.eval::<()>("oauthImport(character, 'tree')");
+    assert_imported_equal(&mut s, &up, "oauth tree");
+    run(
+        &mut s,
+        &rec,
+        import_oauth(Realm::Pc, Some("Mirage Gate"), "GateOne", items_part()),
+    )
+    .expect("items import");
+    let entry = ended(&mut s, &rec);
+    assert_eq!((entry.error, entry.cancelled), (None, false));
+    up.eval::<()>("oauthImport(character, 'items')");
+    assert_imported_equal(&mut s, &up, "oauth items");
+    let ours = quest_facts(&s.backend.lua, "pob.build");
+    assert_eq!(ours, quest_facts(&up.lua, "build"));
+    assert_eq!(
+        ours,
+        (90, "Alira".into(), "Lunaris".into(), "Shakari".into())
+    );
+    assert_eq!(requests_to(&web, "GET", &format!("{API}/GateOne")), 2);
+    let imported = oauth(&mut s, &rec);
+    assert_eq!((imported.error, imported.busy), (None, false));
+    assert!(s.backend.build_view().unwrap().unsaved);
+    s.assert_clean("imports");
+
+    // ---- 5. An expired token is refreshed inside the user's import ----
+    s.eval::<()>("pob.main.main.api.tokenExpiry = 1");
+    run(
+        &mut s,
+        &rec,
+        import_oauth(Realm::Pc, None, "GateOne", items_part()),
+    )
+    .expect("import with a refresh");
+    let entry = ended(&mut s, &rec);
+    assert_eq!(entry.error, None);
+    let refresh = web
+        .requests()
+        .into_iter()
+        .filter(|r| r.url == TOKEN_URL)
+        .nth(1)
+        .expect("a refresh");
+    assert!(
+        refresh
+            .body
+            .starts_with(format!("{REFRESH_GRANT}&refresh_token=FAKE-REFRESH-1").as_bytes()),
+        "the refresh's body"
+    );
+    assert!(accounts(&s).contains(r#"lastToken="FAKE-ACCESS-2""#));
+    // every view while signed in, for the check at the end (R21)
+    send_snapshots(&mut s.backend, 0, Affected::ALL_VIEWS, &|e| rec.send(e));
+    let last = web.requests().pop().unwrap();
+    assert!(
+        last.headers
+            .iter()
+            .any(|h| h == "Authorization: Bearer FAKE-ACCESS-2")
+    );
+    s.assert_clean("refresh");
+
+    // ---- Review Focus 2: the list and the character failing, then a good retry ----
+    let sony = format!("{API}/sony");
+    for (reply, wanted) in [
+        (Canned::status(500, "oops"), "Response code: 500"),
+        (Canned::ok("{"), MALFORMED),
+        (
+            Canned::fail("Couldn't resolve host name"),
+            "Couldn't resolve host name",
+        ),
+    ] {
+        web.route("GET", &sony, reply);
+        run(&mut s, &rec, Command::ListCharacters { realm: Realm::Sony }).unwrap();
+        assert!(oauth(&mut s, &rec).busy);
+        let entry = ended(&mut s, &rec);
+        assert_eq!(entry.error.as_deref(), Some(wanted), "list: {wanted}");
+        let view = oauth(&mut s, &rec);
+        assert_eq!(view.error.as_deref(), Some(wanted));
+        assert!(!view.busy && !view.fetched && view.signed_in, "{view:?}");
+        assert_eq!(view.realm, Realm::Sony);
+        s.assert_clean(wanted);
+    }
+    web.route(
+        "GET",
+        &sony,
+        Canned::ok(net_fixture("oauth_characters.json")),
+    );
+    run(&mut s, &rec, Command::ListCharacters { realm: Realm::Sony }).unwrap();
+    assert_eq!(ended(&mut s, &rec).error, None);
+    let listed = oauth(&mut s, &rec);
+    assert!(listed.fetched && listed.error.is_none(), "{listed:?}");
+    let names: Vec<&str> = listed.characters.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["aSonyOne"]);
+    // a fetched realm isn't fetched again (PoB's button says "Fetched")
+    let before = web.requests().len();
+    run(&mut s, &rec, Command::ListCharacters { realm: Realm::Pc }).unwrap();
+    assert_eq!(s.requests().pending.len(), 0);
+    assert_eq!(web.requests().len(), before);
+    assert_eq!(oauth(&mut s, &rec).realm, Realm::Pc);
+    let gate_one = format!("{API}/GateOne");
+    for (reply, wanted) in [
+        (
+            Canned::status(500, "oops"),
+            "Could not import: Response code: 500",
+        ),
+        (Canned::ok("{"), "Could not import character"),
+        (
+            Canned::fail("Couldn't resolve host name"),
+            "Could not import: Couldn't resolve host name",
+        ),
+    ] {
+        web.route("GET", &gate_one, reply);
+        run(
+            &mut s,
+            &rec,
+            import_oauth(Realm::Pc, None, "GateOne", items_part()),
+        )
+        .unwrap();
+        let entry = ended(&mut s, &rec);
+        assert_eq!(entry.error.as_deref(), Some(wanted));
+        let view = oauth(&mut s, &rec);
+        assert_eq!(view.error.as_deref(), Some(wanted));
+        assert!(!view.busy && view.signed_in, "{view:?}");
+        s.assert_clean(wanted);
+    }
+    web.route(
+        "GET",
+        &gate_one,
+        Canned::ok(net_fixture("oauth_character.json")),
+    );
+    run(
+        &mut s,
+        &rec,
+        import_oauth(Realm::Pc, None, "GateOne", items_part()),
+    )
+    .unwrap();
+    assert_eq!(ended(&mut s, &rec).error, None);
+    assert_eq!(oauth(&mut s, &rec).error, None);
+    // our refusals
+    for command in [
+        import_oauth(Realm::Pc, Some("Nowhere"), "GateOne", tree_part()),
+        import_oauth(Realm::Pc, None, "Nobody", tree_part()),
+        import_oauth(Realm::Xbox, None, "XboxOne", tree_part()),
+    ] {
+        assert_eq!(run(&mut s, &rec, command), Err("no such character".into()));
+    }
+
+    // ---- 7. A 429 with GGG's rate headers: the next fetch is held, PoB counts down ----
+    let xbox = format!("{API}/xbox");
+    web.route("GET", &xbox, rate_limited());
+    run(&mut s, &rec, Command::ListCharacters { realm: Realm::Xbox }).unwrap();
+    let entry = ended(&mut s, &rec);
+    assert_eq!(entry.error.as_deref(), Some("Response code: 429"));
+    run(&mut s, &rec, Command::ListCharacters { realm: Realm::Xbox }).unwrap();
+    assert_eq!(s.requests().pending.len(), 0, "the limiter let it go");
+    assert_eq!(requests_to(&web, "GET", &xbox), 1);
+    let limited = oauth(&mut s, &rec);
+    let now = s.eval::<i64>("return os.time()");
+    let retry_at = limited.retry_at.expect("a retry time");
+    assert!(
+        retry_at > now && retry_at <= now + 62,
+        "{retry_at} vs {now}"
+    );
+    assert!(limited.status.contains("too fast"), "{}", limited.status);
+    assert!(!limited.busy);
+    s.assert_clean("429");
+
+    // ---- 8. Sign out: PoB forgets the tokens ----
+    run(&mut s, &rec, Command::SignOut).unwrap();
+    let out = oauth(&mut s, &rec);
+    assert!(!out.signed_in, "{out:?}");
+    let saved = accounts(&s);
+    eprintln!("after sign-out: {}", saved.replace("FAKE-", "<token>"));
+    assert!(!saved.contains("lastToken="), "the token stayed");
+    assert!(!saved.contains("lastRefreshToken="));
+    // PoB writes `tostring(nil)` (Main.lua:725)
+    assert!(saved.contains(r#"tokenExpiry="nil""#), "{saved}");
+    assert_eq!(
+        run(&mut s, &rec, Command::SignOut),
+        Err("sign in first".into())
+    );
+
+    // ---- Review Focus 2: the token exchange failing, then a good sign-in ----
+    for (reply, wanted) in [
+        (Canned::status(500, "oops"), "Response code: 500"),
+        (Canned::ok("{"), MALFORMED),
+        (
+            Canned::fail("Couldn't resolve host name"),
+            "Couldn't resolve host name",
+        ),
+    ] {
+        web.route_post(TOKEN_URL, SIGN_IN_GRANT, reply);
+        let (entry, _) = sign_in(&mut s, &rec, None);
+        assert_eq!(entry.error.as_deref(), Some(wanted), "token: {wanted}");
+        let view = oauth(&mut s, &rec);
+        assert_eq!(view.error.as_deref(), Some(wanted));
+        assert!(
+            !view.signed_in && !view.signing_in && !view.busy,
+            "{view:?}"
+        );
+        assert!(!accounts(&s).contains("lastToken="));
+        s.assert_clean(wanted);
+    }
+    web.route_post(
+        TOKEN_URL,
+        SIGN_IN_GRANT,
+        Canned::ok(net_fixture("token.json")),
+    );
+
+    // ---- 9. Sign in, cancel, sign in again at once: the listener's port is free again ----
+    run(&mut s, &rec, Command::SignIn).unwrap();
+    let first = link_parts(&wait_for_link(&mut s, &rec)).1;
+    let id = s.requests().pending[0].id;
+    run(&mut s, &rec, Command::CancelRequest { id }).unwrap();
+    let cancelled = rec.take_finished();
+    assert_eq!(cancelled.len(), 1, "{cancelled:?}");
+    assert!(cancelled[0].cancelled);
+    assert_eq!(cancelled[0].error.as_deref(), Some("Cancelled"));
+    let view = oauth(&mut s, &rec);
+    assert!(!view.signing_in && !view.signed_in, "{view:?}");
+    let again = Instant::now();
+    let (entry, link) = sign_in(&mut s, &rec, None);
+    assert!(
+        again.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        again.elapsed()
+    );
+    eprintln!(
+        "sign-in after a cancel: port {first}, then {}",
+        link_parts(&link).1
+    );
+    assert_eq!(entry.error, None);
+    assert!(oauth(&mut s, &rec).signed_in);
+    assert!(accounts(&s).contains(r#"lastToken="FAKE-ACCESS-1""#));
+    // the cancelled listener let its port go, as the finished one did
+    for port in [first, link_parts(&link).1] {
+        let freed = Instant::now() + Duration::from_secs(1);
+        while std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+            assert!(Instant::now() < freed, "port {port} is still held");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    // ---- 6. A 401 the refresh can't cure signs PoB out ----
+    web.route("GET", &gate_one, Canned::status(401, ""));
+    web.route_post(TOKEN_URL, REFRESH_GRANT, Canned::status(401, ""));
+    run(
+        &mut s,
+        &rec,
+        import_oauth(Realm::Pc, None, "GateOne", tree_part()),
+    )
+    .unwrap();
+    let entry = ended(&mut s, &rec);
+    let wanted = "Could not import: Response code: 401";
+    assert_eq!(entry.error.as_deref(), Some(wanted));
+    let view = oauth(&mut s, &rec);
+    assert_eq!(view.error.as_deref(), Some(wanted));
+    assert!(!view.signed_in && !view.busy, "{view:?}");
+    assert!(!accounts(&s).contains("lastToken="));
+    s.assert_clean("401");
+
+    // ---- 10. A redirect with another state is refused ----
+    let (entry, _) = sign_in(&mut s, &rec, Some("0123456789abcdef"));
+    assert_eq!(entry.error.as_deref(), Some("OAuth state mismatch"));
+    let view = oauth(&mut s, &rec);
+    assert_eq!(view.error.as_deref(), Some("OAuth state mismatch"));
+    assert!(!view.signed_in && !view.signing_in, "{view:?}");
+
+    // ---- PoB's three ports all taken: the sign-in ends at once, with our text for PoB's nil ----
+    let held: Vec<_> = (49082..=49084)
+        .map(|port| std::net::TcpListener::bind(("127.0.0.1", port)).ok())
+        .collect();
+    run(&mut s, &rec, Command::SignIn).unwrap();
+    let entry = ended(&mut s, &rec);
+    drop(held);
+    let no_port = "couldn't listen on localhost ports 49082-49084 for the sign-in";
+    assert_eq!(entry.error.as_deref(), Some(no_port));
+    let view = oauth(&mut s, &rec);
+    assert_eq!(view.error.as_deref(), Some(no_port));
+    assert!(!view.signing_in && !view.signed_in, "{view:?}");
+    s.assert_clean("ports taken");
+
+    // ---- 11. No token left Settings.xml (R21), with positive controls ----
+    send_snapshots(&mut s.backend, 0, Affected::ALL_VIEWS, &|e| rec.send(e));
+    let lines = logged();
+    assert!(!lines.is_empty(), "the test logger saw nothing");
+    let leaked: Vec<&String> = lines.iter().filter(|l| l.contains("FAKE-")).collect();
+    assert!(leaked.is_empty(), "a token reached the log: {leaked:?}");
+    let named = lines.iter().filter(|l| l.contains("GateOne")).count();
+    eprintln!("log lines naming a character: {named} of {}", lines.len());
+    let shown = rec.shown.borrow();
+    assert!(shown.len() > 50, "only {} events", shown.len());
+    assert!(
+        shown.iter().any(|e| e.contains("aSonyOne")),
+        "the recorder missed the account views"
+    );
+    let leaked: Vec<&String> = shown.iter().filter(|e| e.contains("FAKE-")).collect();
+    assert!(
+        leaked.is_empty(),
+        "a token reached a view or event: {} of them",
+        leaked.len()
+    );
+    assert!(
+        !pob_dir().join("poe_api_response.json").exists(),
+        "PoB's dev dump was written"
+    );
+
+    // ---- 12. Clean ----
+    s.assert_clean("end");
+    assert!(web.unrouted().is_empty(), "unrouted: {:?}", web.unrouted());
+    let took = started.elapsed();
+    eprintln!("oauth_flow_matches_pob took {took:?}");
+    assert!(took < Duration::from_secs(30), "over its budget: {took:?}");
+}
+
+/// `xml` without its `<elem>` element.
+fn without_element(xml: &str, elem: &str) -> String {
+    let Some(start) = xml.find(&format!("<{elem}")) else {
+        return xml.to_string();
+    };
+    let open_end = start + xml[start..].find('>').unwrap();
+    let end = if xml.as_bytes()[open_end - 1] == b'/' {
+        open_end + 1
+    } else {
+        let close = format!("</{elem}>");
+        start + xml[start..].find(&close).unwrap() + close.len()
+    };
+    format!("{}{}", &xml[..start], &xml[end..])
+}
+
+/// Every SP6 command once, with the canned web: only Save writes the build, and PoB's settings
+/// change only in the sign-in's `<Accounts>` and the `<Mode>` of the open build.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn no_silent_writes_network() {
+    let _guard = lock();
+    let started = Instant::now();
+    let web = canned_web();
+    route_oauth(&web);
+    let mut s = net_session("no-writes-net", canned(&web), None);
+    s.open_fixture("attack");
+    // the baseline is PoB's own file: every save rewrites all of it
+    s.eval::<()>("pob.main.main:SaveSettings()");
+    let settings_before = s.settings_xml();
+    assert!(settings_before.contains("<Misc"), "{settings_before}");
+    let dir = s.user.join("Path of Building/Builds");
+    let before = super::snapshot_dir(&dir);
+    assert!(!before.is_empty());
+    let rec = Recorder::default();
+
+    // routes: the share site, PoEURL both ways, the public account, the signed-in account
+    let (download, post): (String, String) = s.eval(
+        r#"for _, site in ipairs(buildSites.websiteList) do
+            if site.id == "POBBin" then return site.downloadURL, site.postUrl end
+        end"#,
+    );
+    let code = s.backend.share_code().expect("share code");
+    web.route(
+        "GET",
+        &format!(
+            "https://{}",
+            download.replace("%1", "gate").replace("%.", ".")
+        ),
+        Canned::ok(code.clone()),
+    );
+    web.route("POST", &post, Canned::ok("gate-POBBin"));
+    let long: String =
+        s.eval("return pob.build.spec:EncodeURL(treeVersions[pob.build.spec.treeVersion].url)");
+    web.route(
+        "GET",
+        &format!("http://poeurl.com/shrink.php?url={long}"),
+        Canned::ok("gAtE"),
+    );
+    web.route(
+        "GET",
+        "http://poeurl.com/gAtE",
+        Canned::status(302, "").header("Location", &long),
+    );
+    web.route(
+        "GET",
+        CHARACTERS_URL,
+        Canned::ok(net_fixture("public_characters.json")),
+    );
+    web.route(
+        "GET",
+        PROFILE_URL,
+        Canned::ok(net_fixture("public_profile.html")),
+    );
+    for part in ["passive-skills", "items"] {
+        let body = if part == "items" {
+            "public_items.json"
+        } else {
+            "public_passives.json"
+        };
+        web.route(
+            "GET",
+            &character_url(part, "GateOne"),
+            Canned::ok(net_fixture(body)),
+        );
+    }
+    web.route(
+        "GET",
+        &format!("{API}/sony"),
+        Canned::ok(net_fixture("oauth_characters.json")),
+    );
+
+    let mut each = |command: Command| {
+        let shown = format!("{command:?}");
+        run(&mut s, &rec, command).unwrap_or_else(|e| panic!("{shown}: {e}"));
+        settle(&mut s, &rec);
+        for entry in rec.take_finished() {
+            assert_eq!(entry.error, None, "{shown}: {entry:?}");
+        }
+    };
+    each(Command::ExportShareCode);
+    each(Command::SetImportCode { text: code });
+    each(Command::ShrinkTreeLink);
+    each(Command::ShareBuild {
+        site: "POBBin".into(),
+    });
+    each(Command::ImportTreeLink {
+        title: "Short".into(),
+        url: "http://poeurl.com/gAtE".into(),
+    });
+    each(list_command(ACCOUNT));
+    each(import_character(None, "GateOne", tree_part()));
+    each(import_character(None, "GateOne", items_part()));
+    each(Command::ClosePublicCharacters);
+    drop(each);
+    let (entry, _) = sign_in(&mut s, &rec, None);
+    assert_eq!(entry.error, None);
+    let mut each = |command: Command| {
+        let shown = format!("{command:?}");
+        run(&mut s, &rec, command).unwrap_or_else(|e| panic!("{shown}: {e}"));
+        settle(&mut s, &rec);
+        for entry in rec.take_finished() {
+            assert_eq!(entry.error, None, "{shown}: {entry:?}");
+        }
+    };
+    each(Command::ListCharacters { realm: Realm::Sony });
+    each(import_oauth(Realm::Pc, None, "GateOne", tree_part()));
+    each(import_oauth(Realm::Pc, None, "GateOne", items_part()));
+    each(Command::SignOut);
+    drop(each);
+    run(&mut s, &rec, Command::SignIn).unwrap();
+    wait_for_link(&mut s, &rec);
+    let id = s.requests().pending[0].id;
+    run(&mut s, &rec, Command::CancelRequest { id }).unwrap();
+    assert!(rec.take_finished()[0].cancelled);
+    run(
+        &mut s,
+        &rec,
+        Command::ImportFromUrl {
+            url: "https://pobb.in/gate".into(),
+            mode: ImportMode::ThisBuild,
+        },
+    )
+    .unwrap();
+    settle(&mut s, &rec);
+    let entry = rec.take_finished().remove(0);
+    assert_eq!((entry.error, entry.new_build), (None, true));
+    assert!(web.unrouted().is_empty(), "unrouted: {:?}", web.unrouted());
+    s.assert_clean("commands");
+
+    // nothing written but PoB's settings, and those only where the user asked
+    assert!(
+        super::snapshot_dir(&dir) == before,
+        "a build file was written before Save"
+    );
+    let settings_after = s.settings_xml();
+    assert_ne!(settings_after, settings_before, "the sign-in saved nothing");
+    let rest = |xml: &str| without_element(&without_element(xml, "Accounts"), "Mode");
+    assert_eq!(
+        rest(&settings_after),
+        rest(&settings_before),
+        "Settings.xml changed outside <Accounts> and <Mode>"
+    );
+    // only an explicit Save writes
+    run(&mut s, &rec, Command::Save).unwrap();
+    assert!(
+        super::snapshot_dir(&dir) != before,
+        "Save didn't write the build"
+    );
+    let took = started.elapsed();
+    eprintln!("no_silent_writes_network took {took:?}");
+    assert!(took < Duration::from_secs(10), "over its budget: {took:?}");
 }

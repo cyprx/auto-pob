@@ -7,7 +7,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use mlua::{Integer as LuaInteger, Lua, Result as LuaResult, Table, UserData, UserDataMethods};
+use mlua::{
+    Integer as LuaInteger, Lua, MultiValue, Result as LuaResult, Table, UserData, UserDataMethods,
+    Value,
+};
 
 use crate::net::CancelFlag;
 
@@ -36,6 +39,31 @@ pub fn create_module(lua: &Lua) -> LuaResult<Table> {
     Ok(exports)
 }
 
+/// luasocket's success value
+fn success(_lua: &Lua) -> LuaResult<MultiValue> {
+    Ok(MultiValue::from_vec(vec![Value::Integer(1)]))
+}
+
+/// luasocket's failure: `nil, message` (it raises only for bad arguments)
+fn failure(lua: &Lua, message: &str) -> LuaResult<MultiValue> {
+    Ok(MultiValue::from_vec(vec![
+        Value::Nil,
+        Value::String(lua.create_string(message)?),
+    ]))
+}
+
+/// luasocket's wording for the errors PoB's listener can meet
+fn io_message(error: &io::Error) -> String {
+    match error.kind() {
+        io::ErrorKind::AddrInUse => "address already in use".into(),
+        io::ErrorKind::AddrNotAvailable => "cannot assign requested address".into(),
+        io::ErrorKind::PermissionDenied => "permission denied".into(),
+        io::ErrorKind::ConnectionReset => "connection reset by peer".into(),
+        io::ErrorKind::BrokenPipe | io::ErrorKind::UnexpectedEof => "closed".into(),
+        _ => error.to_string(),
+    }
+}
+
 /// Helper for constructing a `mlua::Error::BadArgument`
 fn bad_argument(to: impl Into<String>, pos: usize, cause: mlua::Error) -> mlua::Error {
     #[allow(clippy::arc_with_non_send_sync)]
@@ -59,29 +87,31 @@ struct LuaTcpClient {
 
 impl UserData for LuaTcpIp4Server {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method_mut("bind", |_, this, (host, port): (String, u16)| {
-            let addr = (host.as_str(), port)
-                .to_socket_addrs()?
-                .find(|a| a.is_ipv4());
-
+        // luasocket's contract: failures return `nil, message`, so PoB's
+        // `bind(49082) or bind(49083) or bind(49084)` falls through to the next port
+        methods.add_method_mut("bind", |lua, this, (host, port): (String, u16)| {
+            let addr = match (host.as_str(), port).to_socket_addrs() {
+                Ok(mut addrs) => addrs.find(|a| a.is_ipv4()),
+                Err(_) => None,
+            };
             let Some(addr) = addr else {
-                return Err(mlua::Error::external("no IPv4 address found"));
+                return failure(lua, "host not found");
             };
 
             match TcpListener::bind(addr) {
                 Ok(listener) => {
                     this.listener = Some(listener);
-                    Ok(1)
+                    success(lua)
                 }
-                Err(e) => Err(mlua::Error::external(e)),
+                Err(e) => failure(lua, &io_message(&e)),
             }
         });
 
         // `TcpListener::bind` handles the binding and immediately starts listening.
         // `listen` can therefore be a no-op if `bind` succeeded.
-        methods.add_method("listen", |_, this, _backlog: u32| match &this.listener {
-            Some(_) => Ok(1),
-            None => Err(mlua::Error::external("socket is not bound")),
+        methods.add_method("listen", |lua, this, _backlog: u32| match &this.listener {
+            Some(_) => success(lua),
+            None => failure(lua, "socket is not bound"),
         });
 
         methods.add_method_mut("close", |_, this, ()| {
@@ -89,12 +119,18 @@ impl UserData for LuaTcpIp4Server {
             Ok(1)
         });
 
-        methods.add_method("getsockname", |_, this, ()| match &this.listener {
-            Some(listener) => {
-                let addr = listener.local_addr()?;
-                Ok((addr.ip().to_string(), addr.port()))
+        methods.add_method("getsockname", |lua, this, ()| {
+            let addr = match &this.listener {
+                Some(listener) => listener.local_addr(),
+                None => return failure(lua, "socket is not bound"),
+            };
+            match addr {
+                Ok(addr) => Ok(MultiValue::from_vec(vec![
+                    Value::String(lua.create_string(addr.ip().to_string())?),
+                    Value::Integer(LuaInteger::from(addr.port())),
+                ])),
+                Err(e) => failure(lua, &io_message(&e)),
             }
-            None => Err(mlua::Error::external("socket is not bound")),
         });
 
         methods.add_method_mut("settimeout", |_, this, seconds: f64| {
@@ -126,14 +162,16 @@ impl UserData for LuaTcpIp4Server {
 
         methods.add_method_mut("accept", |lua, this, ()| {
             let Some(listener) = &this.listener else {
-                return Err(mlua::Error::external("socket is not bound"));
+                return failure(lua, "socket is not bound");
             };
 
             // the listener blocks indefinitely until a connection is established.
             // in order to set a timeout, we move it into nonblocking mode and repeatedly call
             // `accept`. if it returns `WouldBlock`, return if the deadline is reached or try again
             // after a short sleep.
-            listener.set_nonblocking(true)?;
+            if let Err(e) = listener.set_nonblocking(true) {
+                return failure(lua, &io_message(&e));
+            }
             let deadline = this.timeout.map(|t| Instant::now() + t);
 
             loop {
@@ -145,20 +183,22 @@ impl UserData for LuaTcpIp4Server {
                         };
 
                         let userdata = lua.create_userdata(client)?;
-                        return Ok(userdata);
+                        return Ok(MultiValue::from_vec(vec![Value::UserData(userdata)]));
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        // an abort ends the script (it raises): returning nil would keep
+                        // LaunchServer's loop, and its port, for the rest of its 60 seconds
                         if cancelled(lua) {
                             return Err(mlua::Error::external("aborted"));
                         }
                         if deadline.is_some_and(|d| Instant::now() >= d) {
-                            return Err(mlua::Error::external("timeout"));
+                            return failure(lua, "timeout");
                         }
 
                         thread::sleep(Duration::from_millis(20));
                     }
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(e) => return Err(mlua::Error::external(e)),
+                    Err(e) => return failure(lua, &io_message(&e)),
                 }
             }
         });
@@ -226,7 +266,7 @@ impl UserData for LuaTcpClient {
 
                         match result {
                             // EOF after part of a line: that part is the answer
-                            Ok(0) if line.is_empty() => Err(mlua::Error::external("closed")),
+                            Ok(0) if line.is_empty() => failure(lua, "closed"),
                             Ok(_) => {
                                 this.reader.get_ref().set_read_timeout(this.timeout)?;
                                 if line.last() == Some(&b'\n') {
@@ -236,7 +276,9 @@ impl UserData for LuaTcpClient {
                                     line.pop();
                                 }
 
-                                Ok(String::from_utf8_lossy(&line).into_owned())
+                                Ok(MultiValue::from_vec(vec![Value::String(
+                                    lua.create_string(&line)?,
+                                )]))
                             }
                             Err(e)
                                 if matches!(
@@ -244,9 +286,9 @@ impl UserData for LuaTcpClient {
                                     io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
                                 ) =>
                             {
-                                Err(mlua::Error::external("timeout"))
+                                failure(lua, "timeout")
                             }
-                            Err(e) => Err(mlua::Error::external(e)),
+                            Err(e) => failure(lua, &io_message(&e)),
                         }
                     }
                     "*a" => {
@@ -271,14 +313,16 @@ impl UserData for LuaTcpClient {
         // TODO: on error, return index of the last byte (within [i, j]) sent
         methods.add_method_mut(
             "send",
-            |_, this, (data, i, j): (String, Option<LuaInteger>, Option<LuaInteger>)| {
+            |lua, this, (data, i, j): (String, Option<LuaInteger>, Option<LuaInteger>)| {
                 if i.is_some() || j.is_some() {
                     unimplemented!()
                 }
 
                 match this.reader.get_mut().write_all(data.as_bytes()) {
-                    Ok(()) => Ok(data.len()),
-                    Err(e) => Err(mlua::Error::external(e)),
+                    Ok(()) => Ok(MultiValue::from_vec(vec![Value::Integer(
+                        data.len() as LuaInteger
+                    )])),
+                    Err(e) => failure(lua, &io_message(&e)),
                 }
             },
         );

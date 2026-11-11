@@ -1431,11 +1431,63 @@ pub struct AccountView {
     pub public: PublicView,
 }
 
-/// The sign-in half of the account import; Task 7 fills it.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+/// PoB's sign-in with Path of Exile, as its section shows it (R18). It never holds a token
+/// (R21): only whether there is one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OAuthView {
     #[serde(default)]
     pub signed_in: bool,
+    /// PoB's login timer runs (`oauthTimer`)
+    #[serde(default)]
+    pub signing_in: bool,
+    /// The sign-in link PoB asked to open, while it waits for the redirect (R1)
+    #[serde(default)]
+    pub auth_url: Option<String>,
+    /// When PoB gives up waiting for the redirect (epoch seconds)
+    #[serde(default)]
+    pub login_deadline: Option<i64>,
+    /// The realm drop-down
+    pub realm: Realm,
+    /// The realm's characters have been fetched (PoB's Fetch button then says "Fetched")
+    #[serde(default)]
+    pub fetched: bool,
+    /// The league drop-down in PoB's order, ending in "Any" (`league: None`)
+    #[serde(default)]
+    pub leagues: Vec<String>,
+    /// The realm's characters, in PoB's order (lowercase name)
+    #[serde(default)]
+    pub characters: Vec<CharacterEntry>,
+    /// PoB's "Character import status", with colour codes stripped
+    #[serde(default)]
+    pub status: String,
+    /// PoB's error line (`oauthErrCode`)
+    #[serde(default)]
+    pub error: Option<String>,
+    /// When PoB's rate limiter lets the next fetch go (epoch seconds)
+    #[serde(default)]
+    pub retry_at: Option<i64>,
+    /// A fetch or import runs (`oauthLoading`)
+    #[serde(default)]
+    pub busy: bool,
+}
+
+impl Default for OAuthView {
+    fn default() -> Self {
+        OAuthView {
+            signed_in: false,
+            signing_in: false,
+            auth_url: None,
+            login_deadline: None,
+            realm: Realm::Pc,
+            fetched: false,
+            leagues: Vec::new(),
+            characters: Vec::new(),
+            status: String::new(),
+            error: None,
+            retry_at: None,
+            busy: false,
+        }
+    }
 }
 
 /// PoB's import by account name: the box, its history and the characters it listed.

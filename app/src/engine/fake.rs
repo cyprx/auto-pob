@@ -231,14 +231,16 @@ impl Fake {
                 requests: true,
                 ..Affected::default()
             }),
-            Command::ListPublicCharacters { .. } | Command::ImportPublicCharacter { .. } => {
-                Ok(Affected {
-                    account: true,
-                    requests: true,
-                    ..Affected::default()
-                })
-            }
-            Command::ClosePublicCharacters => Ok(Affected {
+            Command::ListPublicCharacters { .. }
+            | Command::ImportPublicCharacter { .. }
+            | Command::SignIn
+            | Command::ListCharacters { .. }
+            | Command::ImportCharacter { .. } => Ok(Affected {
+                account: true,
+                requests: true,
+                ..Affected::default()
+            }),
+            Command::ClosePublicCharacters | Command::SignOut => Ok(Affected {
                 account: true,
                 ..Affected::default()
             }),

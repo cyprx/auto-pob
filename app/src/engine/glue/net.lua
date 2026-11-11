@@ -22,6 +22,8 @@ local pending = {}
 local by_sub = {}
 -- finished entries not yet sent
 local finished = {}
+-- the request whose press or callback is running (`guarded`)
+local current
 local next_id = 1
 -- Build:Init runs so far (the wrapper below counts them)
 local inits = 0
@@ -213,6 +215,8 @@ local function guarded(req, open, fn, ...)
 	if req.popup then
 		table.insert(popups, 1, req.popup)
 	end
+	local outer = current
+	current = req
 	local results
 	local ok, err = in_scope(req, open, function()
 		results = { pcall(fn, unpack(args, 1, args.n)) }
@@ -225,6 +229,7 @@ local function guarded(req, open, fn, ...)
 			req.popup = nil
 		end
 	end)
+	current = outer
 	if not ok then
 		record_error(req, err)
 	end
@@ -483,6 +488,31 @@ function glue.requests_view()
 		finished = {}
 	end
 	return view
+end
+
+-- ---- The sign-in link (R1) ----
+
+local SIGNING_IN = "Signing in"
+local AUTH_URL = "^https://www%.pathofexile%.com/oauth/authorize%?"
+
+-- `OpenURL`, as bootstrap.lua hands it over: the engine never opens a browser. PoB's sign-in
+-- link is kept for the UI, and only while a "Signing in" request runs the call; any other URL
+-- is dropped.
+function glue.on_open_url(url)
+	local req = current
+	if req and requests[req.id] and req.label == SIGNING_IN and type(url) == "string" and url:match(AUTH_URL) then
+		req.auth_url = url
+	end
+end
+
+-- The pending sign-in, if any: { id, auth_url }
+function glue.net_sign_in()
+	for _, id in ipairs(pending) do
+		local req = requests[id]
+		if req.label == SIGNING_IN then
+			return { id = id, auth_url = req.auth_url }
+		end
+	end
 end
 
 -- What the dispatches since the last call did to the build (R14).

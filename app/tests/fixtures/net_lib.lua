@@ -234,3 +234,42 @@ function importedFacts()
 		config_mod = build.configTab.modFlag and true or false,
 	}
 end
+
+-- ---- Import from a signed-in account (ImportTab.lua:24-334) ----
+-- Upstream never runs PoEAPI: its devMode would write poe_api_response.json into the PoB folder.
+-- PoB's own functions take the canned JSON instead.
+
+local dkjson = require("dkjson")
+
+-- What the section shows for `realm`'s list `json` (the character list endpoint's body): the
+-- realm drop-down's own callback lists the leagues, `BuildCharacterList` the characters of
+-- "Any" (its realm filter and its sort)
+function oauthDump(json, realm)
+	local tab = build.importTab
+	local controls = tab.controls
+	local list = dkjson.decode(json).characters
+	controls.accountRealm:SelByValue(realm, "realmCode")
+	tab.characterList[realm] = list
+	controls.accountRealm.selFunc()
+	local out = { leagues = {}, characters = {} }
+	for _, league in ipairs(controls.charSelectLeague.list) do out.leagues[#out.leagues + 1] = league end
+	local scratch = { list = {} }
+	tab:BuildCharacterList(realm, nil, list, scratch)
+	for _, entry in ipairs(scratch.list) do
+		local char = entry.char
+		out.characters[#out.characters + 1] = { name = char.name, class = char.class, level = char.level, league = char.league }
+	end
+	return out
+end
+
+-- A part of the character endpoint's body `json`, imported as the account import's buttons do
+-- with their default boxes
+function oauthImport(json, part)
+	local character = dkjson.decode(json).character
+	if part == "tree" then
+		build.importTab:ImportPassiveTreeAndJewels(character, true)
+	else
+		build.importTab:ImportItemsAndSkills(character, true, true, false)
+	end
+	frame()
+end

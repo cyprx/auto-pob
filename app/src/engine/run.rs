@@ -162,7 +162,7 @@ pub struct Affected {
 }
 
 impl Affected {
-    pub(crate) const ALL_VIEWS: Affected = Affected {
+    pub const ALL_VIEWS: Affected = Affected {
         build: true,
         list: true,
         stats: true,
@@ -340,7 +340,9 @@ pub trait Backend {
     fn set_waker(&mut self, _wake: Waker) {}
 }
 
-fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &dyn Fn(Event)) {
+/// Sends the snapshots `flags` asks for, as the loop does after a command or a background
+/// step (the gate also reads them, to check what reaches the UI).
+pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &dyn Fn(Event)) {
     fn emit<T>(
         seq: u64,
         send: &dyn Fn(Event),

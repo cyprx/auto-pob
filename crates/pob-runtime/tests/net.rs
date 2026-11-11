@@ -668,3 +668,112 @@ fn default_config_keeps_the_classic_behaviour() {
     assert_eq!(count.load(Ordering::SeqCst), 0);
     manager.abort(id);
 }
+
+/// PoB's `LaunchServer.lua` up to its listener (lines 1-21, verbatim), returning the port it
+/// got. Its `bind(49082) or bind(49083) or bind(49084)` needs luasocket's `nil, err` contract.
+const LAUNCH_SERVER_BIND: &str = r#"
+local luaSocket = require("socket")
+local server = luaSocket.tcp4()
+local function bindSocket()
+	local res, err
+	res, err = server:bind("localhost", 49082) or server:bind("localhost", 49083) or server:bind("localhost", 49084)
+	if not res then
+		server:close()
+	else
+		res, err = server:listen(1)
+		if not res then
+			server:close()
+		else
+			return server
+		end
+	end
+	return nil, err
+end
+assert(bindSocket())
+local host, port = server:getsockname()
+server:close()
+return port
+"#;
+
+/// Holds `port` on 127.0.0.1; `None` when something else already holds it (it is held either
+/// way).
+fn hold(port: u16) -> Option<TcpListener> {
+    TcpListener::bind(("127.0.0.1", port)).ok()
+}
+
+/// PoB's three OAuth ports are machine-wide, so both cases run in one test, holding them only
+/// as long as each case needs.
+#[test]
+fn launch_server_falls_back_to_the_next_port() {
+    // 49082 held: PoB takes the next free one
+    let first = hold(49082);
+    let mut manager = SubscriptManager::default();
+    launch(&mut manager, LAUNCH_SERVER_BIND, &[]);
+    let out = wait_outcome(&mut manager, Duration::from_secs(3)).expect("no outcome");
+    drop(first);
+    let values = out.result.expect("bind failed with 49082 held");
+    let port = match values[0] {
+        NativeValue::Integer(p) => p,
+        NativeValue::Number(p) => p as i64,
+        ref other => panic!("port: {other:?}"),
+    };
+    assert!(port == 49083 || port == 49084, "port {port}");
+
+    // all three held: a clean script error, no panic and no hang. The `or` chain keeps one
+    // value, so `err` is nil and LuaJIT's `assert(nil, nil)` raises nil itself
+
+    let held: Vec<_> = (49082..=49084).map(hold).collect();
+    let mut manager = SubscriptManager::default();
+    launch(&mut manager, LAUNCH_SERVER_BIND, &[]);
+    let out = wait_outcome(&mut manager, Duration::from_secs(3)).expect("no outcome");
+    drop(held);
+    let error = out.result.expect_err("bound with every port held");
+    assert!(error.starts_with("runtime error: nil\n"), "{error}");
+}
+
+/// luasocket's failures are `nil, message`: a bind on a held port, a listen without a bind,
+/// an accept and a receive that time out. (No host name: that would ask a resolver.)
+#[test]
+fn socket_failures_return_nil_and_a_message() {
+    let held = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = held.local_addr().unwrap().port();
+    let mut manager = SubscriptManager::default();
+    launch(
+        &mut manager,
+        &format!(
+            r#"
+            local socket = require("socket")
+            local out = {{}}
+            local s = socket.tcp4()
+            local ok, err = s:bind("127.0.0.1", {port})
+            out[#out + 1] = tostring(ok) .. " " .. tostring(err)
+            ok, err = s:listen(1)
+            out[#out + 1] = tostring(ok) .. " " .. tostring(err)
+            assert(s:bind("127.0.0.1", 0))
+            s:settimeout(0.05)
+            local c
+            c, err = s:accept()
+            out[#out + 1] = tostring(c) .. " " .. tostring(err)
+            local _, p = s:getsockname()
+            Port(p)
+            s:settimeout(5)
+            c = assert(s:accept())
+            c:settimeout(0.05)
+            local line
+            line, err = c:receive("*l")
+            out[#out + 1] = tostring(line) .. " " .. tostring(err)
+            c:close()
+            return table.concat(out, "|")
+            "#
+        ),
+        &["Port"],
+    );
+    let listening = take_port(&mut manager);
+    let _client = TcpStream::connect(("127.0.0.1", listening)).unwrap();
+    let out = wait_outcome(&mut manager, Duration::from_secs(5)).expect("no outcome");
+    let values = out.result.expect("a socket call raised");
+    assert_eq!(
+        text(&values[0]).unwrap(),
+        "nil address already in use|nil socket is not bound|nil timeout|nil timeout"
+    );
+}

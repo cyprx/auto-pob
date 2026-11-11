@@ -521,6 +521,10 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::ListPublicCharacters { .. }
             | Command::ImportPublicCharacter { .. }
             | Command::ClosePublicCharacters
+            | Command::SignIn
+            | Command::SignOut
+            | Command::ListCharacters { .. }
+            | Command::ImportCharacter { .. }
             // the tree search's debounce can land after a node-replacement open: it changes
             // neither the item nor the build
             | Command::SetTreeSearch { .. }
@@ -529,6 +533,18 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::Wake
             | Command::Shutdown
     )
+}
+
+/// A part of a character import as the glue takes it: the button and its options.
+fn part_args(part: &CharacterPart) -> (&'static str, bool, bool, bool) {
+    match *part {
+        CharacterPart::Tree { delete_jewels } => ("tree", delete_jewels, false, false),
+        CharacterPart::ItemsAndSkills {
+            clear_items,
+            clear_skills,
+            ignore_weapon_swap,
+        } => ("items", clear_items, clear_skills, ignore_weapon_swap),
+    }
 }
 
 /// What `glue.popup_press` reports.
@@ -695,14 +711,7 @@ impl PobBackend {
                 self.account_affected()
             }
             Command::ImportPublicCharacter { league, name, part } => {
-                let (kind, a, b, c) = match part {
-                    CharacterPart::Tree { delete_jewels } => ("tree", delete_jewels, false, false),
-                    CharacterPart::ItemsAndSkills {
-                        clear_items,
-                        clear_skills,
-                        ignore_weapon_swap,
-                    } => ("items", clear_items, clear_skills, ignore_weapon_swap),
-                };
+                let (kind, a, b, c) = part_args(&part);
                 self.call::<_, u64>("import_public_character", (league, name, kind, a, b, c))?;
                 self.account_affected()
             }
@@ -712,6 +721,35 @@ impl PobBackend {
                     account: true,
                     ..Affected::default()
                 })
+            }
+            Command::SignIn => {
+                self.call::<_, u64>("sign_in", ())?;
+                self.account_affected()
+            }
+            Command::SignOut => {
+                self.call::<_, ()>("sign_out", ())?;
+                Ok(Affected {
+                    account: true,
+                    ..Affected::default()
+                })
+            }
+            // nothing may be fetched (the list is there, or PoB's limiter answered at once)
+            Command::ListCharacters { realm } => {
+                self.call::<_, Option<u64>>("list_characters", realm.pob_id())?;
+                self.account_affected()
+            }
+            Command::ImportCharacter {
+                realm,
+                league,
+                name,
+                part,
+            } => {
+                let (kind, a, b, c) = part_args(&part);
+                self.call::<_, Option<u64>>(
+                    "import_character",
+                    (realm.pob_id(), league, name, kind, a, b, c),
+                )?;
+                self.account_affected()
             }
             Command::Save => {
                 self.call::<_, ()>("save", ())?;
@@ -2045,7 +2083,7 @@ mod tests {
     }
 
     #[test]
-    fn public_import_commands_neither_cancel_nor_leave_the_build() {
+    fn account_import_commands_neither_cancel_nor_leave_the_build() {
         use crate::engine::{CharacterPart, Realm};
         let commands = [
             Command::ListPublicCharacters {
@@ -2060,6 +2098,19 @@ mod tests {
                 },
             },
             Command::ClosePublicCharacters,
+            Command::SignIn,
+            Command::SignOut,
+            Command::ListCharacters { realm: Realm::Xbox },
+            Command::ImportCharacter {
+                realm: Realm::Pc,
+                league: Some("Standard".into()),
+                name: "A".into(),
+                part: CharacterPart::ItemsAndSkills {
+                    clear_items: true,
+                    clear_skills: true,
+                    ignore_weapon_swap: false,
+                },
+            },
         ];
         for command in commands {
             assert_eq!(cancels_requests(&command), None, "{command:?}");

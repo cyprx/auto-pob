@@ -3349,12 +3349,12 @@ gap = "Task 14"
 note = "arrow keys step a focused dropdown"
 
 [keys."DropDownControl.WHEELDOWN"]
-ruled_out = "R13"
-note = "egui sliders and combos ignore the wheel; PoB's scroll options have no effect here"
+gap = "Task 14"
+note = "controller ruling: the wheel changes a hovered dropdown or slider, as PoB (read the scroll delta while hovered)"
 
 [keys."DropDownControl.WHEELUP"]
-ruled_out = "R13"
-note = "egui sliders and combos ignore the wheel; PoB's scroll options have no effect here"
+gap = "Task 14"
+note = "controller ruling: the wheel changes a hovered dropdown or slider, as PoB (read the scroll delta while hovered)"
 
 [keys."EditControl.+"]
 gap = "Task 13"
@@ -3674,12 +3674,12 @@ ported = "app/src/ui"
 note = "egui's own widget behaviour"
 
 [keys."SliderControl.WHEELDOWN"]
-ruled_out = "R13"
-note = "egui sliders and combos ignore the wheel; PoB's scroll options have no effect here"
+gap = "Task 14"
+note = "controller ruling: the wheel changes a hovered dropdown or slider, as PoB (read the scroll delta while hovered)"
 
 [keys."SliderControl.WHEELUP"]
-ruled_out = "R13"
-note = "egui sliders and combos ignore the wheel; PoB's scroll options have no effect here"
+gap = "Task 14"
+note = "controller ruling: the wheel changes a hovered dropdown or slider, as PoB (read the scroll delta while hovered)"
 
 [keys."TextListControl.WHEELDOWN"]
 ported = "app/src/ui"

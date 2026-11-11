@@ -1,13 +1,15 @@
 //! Starts Path of Building's Lua with our own bootstrap.
 
 use super::commands::{
-    Command, ConfigValue, GemSearchQuery, GemTarget, GemToggle, GemTooltipQuery, SkillOption, Tab,
+    Command, ConfigValue, GemSearchQuery, GemTarget, GemToggle, GemTooltipQuery, ItemTooltipQuery,
+    SkillOption, Tab,
 };
 use super::run::{Affected, Backend, BackgroundTask, Engine, Event};
 use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, GemRow, GemSearchView,
-    GemTooltipView, GroupTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, PowerReport,
-    SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
+    GemTooltipView, GroupTooltipView, ItemText, ItemTooltip, ItemTooltipView, ItemsView, NodePower,
+    NodeTooltip, NotesView, PowerReport, SkillsView, SocketGroupText, StatsView, TooltipLine,
+    TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -298,6 +300,14 @@ impl PobBackend {
             }
             // ended above
             Command::CloseGemSearch => Ok(Affected::default()),
+            Command::ItemTooltip(query) => Ok(Affected {
+                item_tooltip: Some(query),
+                ..Affected::default()
+            }),
+            Command::CopyItem { id } => Ok(Affected {
+                item_text: Some(id),
+                ..Affected::default()
+            }),
             Command::GemTooltip(query) => Ok(Affected {
                 gem_tooltip: Some(query),
                 ..Affected::default()
@@ -927,6 +937,20 @@ impl Backend for PobBackend {
             query: query.clone(),
             lines: found.lines,
         })
+    }
+
+    fn item_tooltip_view(&mut self, query: &ItemTooltipQuery) -> Result<Option<ItemTooltipView>> {
+        let found: Option<ItemTooltip> =
+            self.view("item_tooltip", (query.id, query.slot.clone()))?;
+        Ok(found.map(|tooltip| ItemTooltipView {
+            query: query.clone(),
+            tooltip,
+        }))
+    }
+
+    fn item_text(&mut self, id: u32) -> Result<ItemText> {
+        let text: String = self.call("item_copy", id)?;
+        Ok(ItemText { id, text })
     }
 
     fn node_power_view(&mut self) -> Result<NodePower> {

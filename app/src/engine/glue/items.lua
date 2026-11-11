@@ -105,3 +105,98 @@ function glue.items_view()
 	end
 	return view
 end
+
+-- ---- Item tooltips (R1, R3) ----
+
+-- A PoB `Tooltip` as data. PoB's own `AddSeparator` already dropped back-to-back separators, so
+-- every line of `tt.lines` is sent as it is; a line without text is a separator.
+-- `mod_line` is only set for the display item's tooltip (never here).
+local function read_tooltip(tt)
+	local out = { influences = {}, lines = {} }
+	if tt.tooltipHeader then
+		out.header = tostring(tt.tooltipHeader)
+	end
+	for _, name in ipairs({ "influenceHeader1", "influenceHeader2" }) do
+		if tt[name] then
+			table.insert(out.influences, tostring(tt[name]))
+		end
+	end
+	if tt.foilType then
+		out.foil = tostring(tt.foilType)
+	end
+	-- a string colour code; PoB's default is an {r, g, b} table, which only an empty tooltip has
+	if type(tt.color) == "string" then
+		out.colour = tt.color
+	end
+	for i, line in ipairs(tt.lines) do
+		if line.text then
+			out.lines[i] = {
+				size = line.size,
+				text = line.text,
+				font = line.font,
+				center = line.center and true or false,
+				background = type(line.background) == "string" and line.background or nil,
+			}
+		else
+			out.lines[i] = { separator = line.size }
+		end
+	end
+	return out
+end
+
+local function index_of(list, id)
+	for i, value in ipairs(list) do
+		if value == id then
+			return i
+		end
+	end
+end
+
+-- What hovering an item shows: in the item list when `slot_name` is nil, else over the slot or
+-- one of its dropdown entries. Nil when the item, the slot or the entry is gone.
+function glue.item_tooltip(id, slot_name)
+	local tab = items_tab()
+	local list = tab.controls.itemList
+	-- the updates the tab's Draw runs before a hover can happen (R16)
+	list:UpdateList()
+	tab:UpdateSockets()
+	if not tab.items[id] then
+		return nil
+	end
+	local tooltip = new("Tooltip")
+	if slot_name == nil then
+		local index = index_of(list.list, id)
+		if not index then
+			return nil
+		end
+		list:AddValueTooltip(tooltip, index, id)
+	else
+		local slot = tab.slots[slot_name]
+		local index = slot and index_of(slot.items, id)
+		if not index then
+			return nil
+		end
+		slot.tooltipFunc(tooltip, "HOVER", index, id)
+	end
+	return read_tooltip(tooltip)
+end
+
+-- The Copy button: ItemListControl:OnSelCopy (ItemListControl.lua:326). The global `Copy` is
+-- swapped for a capture during the call and always put back (R14).
+function glue.item_copy(id)
+	local tab = items_tab()
+	if not tab.items[id] then
+		error("no such item", 0)
+	end
+	local list = tab.controls.itemList
+	local saved, text = Copy, nil
+	Copy = function(copied)
+		text = copied
+	end
+	local ok, err = pcall(list.OnSelCopy, list, index_of(tab.itemOrderList, id), id)
+	Copy = saved
+	if not ok then
+		error(err, 0)
+	end
+	return text or ""
+end

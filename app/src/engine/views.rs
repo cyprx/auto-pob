@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::commands::{GemSearchQuery, GemTooltipQuery};
+use super::commands::{GemSearchQuery, GemTooltipQuery, ItemTooltipQuery};
 
 use serde::{Deserialize, Serialize};
 
@@ -1053,4 +1053,75 @@ mod tests {
         assert_eq!(view.level, 90);
         assert!(view.can_redo);
     }
+}
+
+/// PoB's tooltip for an item (`AddItemTooltip` on a `Tooltip`), as data.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemTooltip {
+    /// The rarity, as PoB's `tooltipHeader`
+    #[serde(default)]
+    pub header: Option<String>,
+    /// PoB's `influenceHeader1` and `influenceHeader2`, where set
+    #[serde(default)]
+    pub influences: Vec<String>,
+    /// PoB's `foilType`
+    #[serde(default)]
+    pub foil: Option<String>,
+    /// The border colour code
+    #[serde(default)]
+    pub colour: Option<String>,
+    #[serde(default)]
+    pub lines: Vec<ItemTooltipLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ItemTooltipLine {
+    Line {
+        size: u32,
+        text: String,
+        #[serde(default)]
+        font: Option<String>,
+        #[serde(default)]
+        center: bool,
+        #[serde(default)]
+        background: Option<String>,
+        /// The mod line a click on this line toggles (the display item only)
+        #[serde(default)]
+        mod_line: Option<ModLineRef>,
+    },
+    Separator {
+        separator: u32,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ModLineList {
+    Enchant,
+    Scourge,
+    Implicit,
+    Explicit,
+    Crucible,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModLineRef {
+    pub list: ModLineList,
+    /// 0-based
+    pub index: usize,
+}
+
+/// The answer to an `ItemTooltip` query.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemTooltipView {
+    pub query: ItemTooltipQuery,
+    pub tooltip: ItemTooltip,
+}
+
+/// The answer to a `CopyItem` query: the text PoB copies, with its `\r\n` line ends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemText {
+    pub id: u32,
+    pub text: String,
 }

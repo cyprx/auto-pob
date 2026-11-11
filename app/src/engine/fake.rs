@@ -3,12 +3,13 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use super::commands::{Command, GemSearchQuery, GemTooltipQuery};
+use super::commands::{Command, GemSearchQuery, GemTooltipQuery, ItemTooltipQuery};
 use super::run::{Affected, Backend, BackgroundTask, Event};
 use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, GemSearchView,
-    GemTooltipView, GroupTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, Points,
-    PowerReport, SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
+    GemTooltipView, GroupTooltipView, ItemText, ItemTooltip, ItemTooltipView, ItemsView, NodePower,
+    NodeTooltip, NotesView, Points, PowerReport, SkillsView, SocketGroupText, StatsView,
+    TooltipLine, TreeLayout, TreeState,
 };
 
 #[derive(Default, Debug)]
@@ -26,6 +27,7 @@ pub struct Log {
     pub breakdowns: Vec<CellRef>,
     pub copies: Vec<usize>,
     pub tooltips: Vec<usize>,
+    pub item_tooltips: Vec<ItemTooltipQuery>,
 }
 
 /// One scripted background step: what it affects, or the error it fails with.
@@ -46,6 +48,8 @@ pub struct Fake {
     pub on_step: Option<Box<dyn FnMut(usize) + Send>>,
     /// `node_tooltip_view` answers `None`, as for a node that no longer exists.
     pub tooltip_vanished: bool,
+    /// `item_tooltip_view` answers `None`, as for an item that no longer exists.
+    pub item_vanished: bool,
     /// `breakdown_view` fails with this message.
     pub fail_breakdown: Option<String>,
 }
@@ -63,6 +67,7 @@ impl Fake {
                 restart_on_build: Vec::new(),
                 on_step: None,
                 tooltip_vanished: false,
+                item_vanished: false,
                 fail_breakdown: None,
             },
             log,
@@ -116,6 +121,14 @@ impl Fake {
             }
             Command::GemTooltip(query) => Ok(Affected {
                 gem_tooltip: Some(query),
+                ..Affected::default()
+            }),
+            Command::ItemTooltip(query) => Ok(Affected {
+                item_tooltip: Some(query),
+                ..Affected::default()
+            }),
+            Command::CopyItem { id } => Ok(Affected {
+                item_text: Some(id),
                 ..Affected::default()
             }),
             Command::ExportTreeLink => Ok(Affected {
@@ -286,6 +299,27 @@ impl Backend for Fake {
         Ok(GemTooltipView {
             query: query.clone(),
             lines: vec![],
+        })
+    }
+
+    fn item_tooltip_view(
+        &mut self,
+        query: &ItemTooltipQuery,
+    ) -> anyhow::Result<Option<ItemTooltipView>> {
+        self.log.lock().unwrap().item_tooltips.push(query.clone());
+        if self.item_vanished {
+            return Ok(None);
+        }
+        Ok(Some(ItemTooltipView {
+            query: query.clone(),
+            tooltip: ItemTooltip::default(),
+        }))
+    }
+
+    fn item_text(&mut self, id: u32) -> anyhow::Result<ItemText> {
+        Ok(ItemText {
+            id,
+            text: String::new(),
         })
     }
 

@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 use super::views::CellRef;
 
 #[derive(Debug, Clone)]
@@ -300,6 +302,15 @@ pub enum Command {
         group: usize,
     },
 
+    /// A query: what hovering an item shows (R3), answered as an `ItemTooltip`; the latest one
+    /// in a batch is answered. A vanished item or slot sends nothing.
+    ItemTooltip(ItemTooltipQuery),
+    /// A query: the text PoB copies for the item (R14), answered as an `ItemText`; the latest
+    /// one in a batch is answered. The engine never touches the system clipboard.
+    CopyItem {
+        id: u32,
+    },
+
     /// Opens or replaces the gem picker's search (R9); the latest one in a batch is answered
     /// as a `GemSearch`. While it is open PoB's DPS sort runs in the background.
     SearchGems(GemSearchQuery),
@@ -382,6 +393,14 @@ pub struct GemTooltipQuery {
     pub group: usize,
     pub target: GemTarget,
     pub gem_id: Option<String>,
+}
+
+/// An item tooltip: `slot: None` is a hover in the item list, `Some(name)` a hover over that
+/// slot or one of its dropdown entries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemTooltipQuery {
+    pub id: u32,
+    pub slot: Option<String>,
 }
 
 /// A Vaal gem's two "Enable <skill>" toggles.

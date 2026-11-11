@@ -228,7 +228,7 @@ impl AutoPobApp {
                     | Snapshot::GemSearch(_)
                     | Snapshot::GemTooltip(_) => self.skills.on_snapshot(&snapshot),
                     // the Items tab's UI comes later
-                    Snapshot::Items(_) => {}
+                    Snapshot::Items(_) | Snapshot::ItemTooltip(_) | Snapshot::ItemText(_) => {}
                     Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
@@ -1146,6 +1146,23 @@ mod tests {
             Ok(crate::engine::GemTooltipView {
                 query: query.clone(),
                 lines: vec![],
+            })
+        }
+
+        fn item_tooltip_view(
+            &mut self,
+            query: &crate::engine::ItemTooltipQuery,
+        ) -> anyhow::Result<Option<crate::engine::ItemTooltipView>> {
+            Ok(Some(crate::engine::ItemTooltipView {
+                query: query.clone(),
+                tooltip: crate::engine::ItemTooltip::default(),
+            }))
+        }
+
+        fn item_text(&mut self, id: u32) -> anyhow::Result<crate::engine::ItemText> {
+            Ok(crate::engine::ItemText {
+                id,
+                text: String::new(),
             })
         }
 

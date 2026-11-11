@@ -5,7 +5,7 @@ use super::{
     Session, fixtures, fixtures_dir, load_tree_lib, load_xml, lock, lua_value, pob_dir,
     recipe_setting, upstream_lua,
 };
-use auto_pob::engine::{Backend, ItemsView, SlotKind};
+use auto_pob::engine::{Backend, ItemTooltipLine, ItemTooltipQuery, ItemsView, SlotKind};
 use mlua::LuaSerdeExt;
 use std::fs;
 
@@ -285,4 +285,265 @@ fn items_view_is_pure() {
     let json = serde_json::to_string(&s.backend.items_view().unwrap()).unwrap();
     eprintln!("items_view median {:?}, {} bytes", times[10], json.len());
     assert!(times[10] < std::time::Duration::from_millis(100));
+}
+
+// ---- Tooltips and copy ----
+
+/// Items on top of the `gear` build, added at model level on both sides with the same code: a
+/// multi-variant unique and a unique flask from PoB's data (as the Items tab's database adds
+/// them), a rare weapon, a rare jewel and a rare abyss jewel. Nothing is equipped, so each is
+/// compared against what is in the slots it could go in.
+const EXTRA_ITEMS: &str = r#"
+    local t = BUILD.itemsTab
+    local function unique(name)
+        for _, list in pairs(data.uniques) do
+            for _, text in ipairs(list) do
+                if text:match("^" .. name .. "\n") then return "Rarity: UNIQUE\n" .. text end
+            end
+        end
+        error("no unique " .. name)
+    end
+    local texts = {
+        unique("The Anvil"),
+        unique("Blood of the Karui"),
+        "Rarity: RARE\nGrim Bow\nCrude Bow\nImplicits: 0\nAdds 3 to 9 Physical Damage\n+22 to maximum Life",
+        "Rarity: RARE\nDoom Ward\nCobalt Jewel\nImplicits: 0\n+7 to Intelligence\n+9 to maximum Life",
+        "Rarity: RARE\nSoul Eye\nGhastly Eye Jewel\nImplicits: 0\n+9 to maximum Life",
+    }
+    for _, text in ipairs(texts) do
+        local item = new("Item", text)
+        t:AddItem(item, true)
+    end
+    t:PopulateSlots()
+"#;
+
+fn json_of<T: serde::Serialize>(value: &T) -> serde_json::Value {
+    strip_nulls(serde_json::to_value(value).unwrap())
+}
+
+/// Upstream's answer from `listTooltip` or `slotTooltip`; `None` for a nil.
+fn upstream_tooltip(lua: &mlua::Lua, code: &str) -> Option<serde_json::Value> {
+    let value: mlua::Value = lua.load(code).eval().unwrap();
+    match value {
+        mlua::Value::Nil => None,
+        value => Some(strip_nulls(lua.from_value(value).unwrap())),
+    }
+}
+
+/// Compares every item's list tooltip and the tooltip of every slot that lists it. Returns how
+/// many were compared, how many had an "Equipping this item in" line, and the largest one.
+fn compare_tooltips(
+    s: &mut Session,
+    lua: &mlua::Lua,
+    what: &str,
+) -> (usize, usize, Vec<ItemTooltipLine>) {
+    let view = s.backend.items_view().unwrap();
+    let (mut compared, mut equipping, mut longest) = (0, 0, Vec::new());
+    for item in &view.items {
+        let mut queries = vec![(None, format!("listTooltip({})", item.id))];
+        for slot in view
+            .slots
+            .iter()
+            .filter(|slot| slot.choices.contains(&item.id))
+        {
+            queries.push((
+                Some(slot.name.clone()),
+                format!("slotTooltip({:?}, {})", slot.name, item.id),
+            ));
+        }
+        for (slot, code) in queries {
+            let query = ItemTooltipQuery { id: item.id, slot };
+            let ours = s.backend.item_tooltip_view(&query).unwrap();
+            let theirs = upstream_tooltip(lua, &format!("return {code}"));
+            let label = format!("{what}: {} {:?}", item.name, query.slot);
+            match (ours, theirs) {
+                (Some(ours), Some(theirs)) => {
+                    assert_eq!(ours.query, query);
+                    assert_same(&json_of(&ours.tooltip), &theirs, &label);
+                    let lines = &ours.tooltip.lines;
+                    assert!(
+                        !lines.windows(2).any(|pair| matches!(
+                            pair,
+                            [
+                                ItemTooltipLine::Separator { .. },
+                                ItemTooltipLine::Separator { .. }
+                            ]
+                        )),
+                        "{label}: two separators in a row"
+                    );
+                    let has_equipping = lines.iter().any(|line| {
+                        matches!(line, ItemTooltipLine::Line { text, .. }
+                            if text.contains("Equipping this item in"))
+                    });
+                    equipping += usize::from(has_equipping);
+                    if lines.len() > longest.len() {
+                        longest = lines.clone();
+                    }
+                    compared += 1;
+                }
+                (None, None) => {}
+                (ours, theirs) => panic!("{label}: ours {ours:?}, upstream {theirs:?}"),
+            }
+        }
+    }
+    (compared, equipping, longest)
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn item_tooltips_match_pob() {
+    let _guard = lock();
+    let (mut s, lua) = gear_sessions("items-tooltips");
+    on_both(&s, &lua, EXTRA_ITEMS);
+    let view = s.backend.items_view().unwrap();
+    for name in [
+        "The Anvil",
+        "Blood of the Karui",
+        "Grim Bow",
+        "Doom Ward",
+        "Soul Eye",
+    ] {
+        assert!(
+            view.items.iter().any(|item| item.name.starts_with(name)),
+            "no {name}"
+        );
+    }
+
+    let started = std::time::Instant::now();
+    let (compared, equipping, _) = compare_tooltips(&mut s, &lua, "stat differences on");
+    eprintln!("{compared} tooltips compared in {:?}", started.elapsed());
+    assert!(compared > 40, "only {compared} tooltips");
+    assert!(equipping > 0, "no tooltip compares with the equipped item");
+
+    // PoB's Ctrl+D body: the toggle only
+    on_both(&s, &lua, "BUILD.itemsTab.showStatDifferences = false");
+    let (compared, equipping_off, _) = compare_tooltips(&mut s, &lua, "stat differences off");
+    assert!(compared > 40);
+    assert!(
+        equipping_off < equipping,
+        "the comparison should go with the toggle"
+    );
+
+    // a vanished item, slot or entry sends nothing; so does an item the filter hides
+    let ask = |s: &mut Session, id: u32, slot: Option<&str>| {
+        s.backend
+            .item_tooltip_view(&ItemTooltipQuery {
+                id,
+                slot: slot.map(str::to_string),
+            })
+            .unwrap()
+    };
+    assert!(ask(&mut s, 9999, None).is_none());
+    assert!(ask(&mut s, view.items[0].id, Some("No Such Slot")).is_none());
+    // a body armour is not in Ring 1's list
+    let kaom = view
+        .items
+        .iter()
+        .find(|i| i.name.starts_with("Kaom"))
+        .unwrap()
+        .id;
+    assert!(ask(&mut s, kaom, Some("Ring 1")).is_none());
+    assert!(ask(&mut s, kaom, Some("Body Armour")).is_some());
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tooltip_of_the_unique_jewel() {
+    // the measurement of Task 2: one comparison tooltip for the unique jewel
+    let _guard = lock();
+    let (mut s, lua) = gear_sessions("items-jewel-tooltip");
+    let view = s.backend.items_view().unwrap();
+    let jewel = view
+        .items
+        .iter()
+        .find(|i| i.name.starts_with("Eldritch"))
+        .unwrap();
+    let sockets: Vec<_> = view
+        .slots
+        .iter()
+        .filter(|slot| slot.kind == SlotKind::Jewel && slot.choices.contains(&jewel.id))
+        .collect();
+    assert!(!sockets.is_empty());
+    let (mut times, mut compared) = (Vec::new(), 0);
+    for slot in sockets {
+        let query = ItemTooltipQuery {
+            id: jewel.id,
+            slot: Some(slot.name.clone()),
+        };
+        let start = std::time::Instant::now();
+        let ours = s
+            .backend
+            .item_tooltip_view(&query)
+            .unwrap()
+            .expect("tooltip");
+        times.push(start.elapsed());
+        let theirs = upstream_tooltip(
+            &lua,
+            &format!("return slotTooltip({:?}, {})", slot.name, jewel.id),
+        );
+        assert_same(&json_of(&ours.tooltip), &theirs.unwrap(), &slot.name);
+        let text: Vec<String> = ours
+            .tooltip
+            .lines
+            .iter()
+            .map(|line| match line {
+                ItemTooltipLine::Line { text, .. } => text.clone(),
+                ItemTooltipLine::Separator { .. } => "----".into(),
+            })
+            .collect();
+        if !text
+            .iter()
+            .any(|line| line.contains("Equipping this item in"))
+        {
+            continue;
+        }
+        compared += 1;
+        let bytes = serde_json::to_string(&ours).unwrap().len();
+        eprintln!(
+            "{} ({} lines, {bytes} bytes, {:?}):\n{}",
+            slot.name,
+            text.len(),
+            times.last().unwrap(),
+            text.join("\n")
+        );
+    }
+    assert_eq!(compared, 1, "exactly the allocated socket compares");
+    eprintln!(
+        "{} sockets queried, {:?} each at most",
+        times.len(),
+        times.iter().max().unwrap()
+    );
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn copy_item_matches_pob() {
+    let _guard = lock();
+    let (mut s, lua) = gear_sessions("items-copy");
+    on_both(&s, &lua, EXTRA_ITEMS);
+    s.backend.lua.load("saved_copy = Copy").exec().unwrap();
+    let copy_is_saved = |s: &Session| -> bool {
+        s.backend
+            .lua
+            .load("return rawequal(Copy, saved_copy)")
+            .eval()
+            .unwrap()
+    };
+    let view = s.backend.items_view().unwrap();
+    assert!(view.items.len() > 10);
+    let copy_item: mlua::Function = lua.globals().get("copyItem").unwrap();
+    for item in &view.items {
+        let ours = s.backend.item_text(item.id).unwrap();
+        assert_eq!(ours.id, item.id);
+        let theirs: Option<String> = copy_item.call(item.id).unwrap();
+        let theirs = theirs.unwrap_or_else(|| panic!("upstream copied nothing for {}", item.name));
+        assert!(theirs.contains("\r\n"), "{}", item.name);
+        assert_eq!(ours.text, theirs, "{}", item.name);
+        assert!(copy_is_saved(&s), "Copy not restored after {}", item.name);
+    }
+    // a failure puts Copy back too
+    assert!(s.backend.item_text(9999).is_err());
+    assert!(copy_is_saved(&s), "Copy not restored after an unknown id");
+    // and the item list is untouched by copying
+    assert_eq!(s.backend.items_view().unwrap(), view);
 }

@@ -104,6 +104,9 @@ fn requests_cancel_fail_and_stay_responsive() {
         || {},
     );
     let initial = wait_for(&engine, "the first requests view", requests_of);
+    // measured from here, not from before the backend started: a loaded machine can spend
+    // seconds on the first snapshots, which says nothing about the waker
+    let first_view = Instant::now();
     let pending: Vec<&str> = initial.pending.iter().map(|p| p.label.as_str()).collect();
     assert_eq!(pending, ["Test fetch", "Test fetch"]);
     let (slow, hold) = (initial.pending[0].id, initial.pending[1].id);
@@ -130,10 +133,11 @@ fn requests_cancel_fail_and_stay_responsive() {
         requests_of(event).filter(|view| finished(view, slow).is_some())
     });
     // the subscript woke the loop: it didn't wait for the idle timer or a command
-    let took = begun.lock().unwrap().unwrap().elapsed();
+    assert!(begun.lock().unwrap().is_some());
+    let took = first_view.elapsed();
     assert!(
         took < SLOW_DELAY + Duration::from_millis(500),
-        "delivered {took:?} after it began"
+        "delivered {took:?} after the first view"
     );
     assert_eq!(
         finished(&done, slow),
@@ -265,13 +269,13 @@ fn requests_cancel_fail_and_stay_responsive() {
     assert_eq!(s.eval::<String>("return pob.build.buildName"), name);
     assert_eq!(s.eval::<usize>("return glue.net_pending()"), 0);
     s.assert_clean("cancel");
-    assert_eq!(
-        s.backend
-            .apply(Command::CancelRequest { id }, &|_| {})
-            .unwrap_err()
-            .to_string(),
-        "no such request"
-    );
+    // a cancel that raced the request's end finds nothing to cancel, and is no error
+    let affected = s
+        .backend
+        .apply(Command::CancelRequest { id }, &|_| {})
+        .expect("a stale cancel is not an error");
+    assert!(affected.requests);
+    assert!(s.requests().finished.is_empty(), "nothing was cancelled");
 
     // ---- Failures finish the request with the reason, never as a step error (R25) ----
     let failures = [
@@ -1545,13 +1549,18 @@ fn build_sites_match_pob() {
     let build = list.backend.build_view().unwrap();
     assert_eq!(
         (build.name.as_str(), build.path.as_deref()),
-        ("Imported build", None)
+        ("Imported Build", None)
     );
     assert_golden(&mut list, "attack", "from the list");
     // the link is stored as Main.lua does: what the download fetched (Main.lua:70-77)
     up.eval::<()>("act.arg_import('pob://pobbin/gate')");
     up.pump(Duration::from_secs(15));
     up.eval::<()>("runCallback('OnFrame')");
+    // Main.lua:75 names it "Imported Build"; ours must match upstream's own build
+    assert_eq!(
+        up.eval::<String>("return build.buildName"),
+        "Imported Build"
+    );
     let theirs = saved_import_link(&up.eval::<String>("return build:SaveDB('code')"));
     assert_eq!(theirs.as_deref(), Some(get.as_str()));
     assert_eq!(saved_import_link(&our_saved_xml(&list)), theirs);
@@ -2303,9 +2312,14 @@ fn sign_in(s: &mut NetSession, rec: &Recorder, state: Option<&str>) -> (Finished
 fn wait_for_oauth_ports() {
     let free =
         || (49082..=49084).all(|port| std::net::TcpListener::bind(("127.0.0.1", port)).is_ok());
-    if !free() {
-        std::thread::sleep(Duration::from_secs(1));
-        assert!(free(), "another process holds PoB's ports 49082-49084");
+    // another gate run, or a real sign-in, may hold them for a while: wait, then give up
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !free() {
+        assert!(
+            Instant::now() < deadline,
+            "another process holds PoB's ports 49082-49084"
+        );
+        std::thread::sleep(Duration::from_millis(250));
     }
 }
 
@@ -2925,6 +2939,18 @@ fn oauth_flow_matches_pob() {
     assert!(!view.signed_in && !view.signing_in, "{view:?}");
     s.assert_clean("denied");
 
+    // ---- A redirect with neither a code nor an error: PoB's listener raises on it; the sign-in
+    // ends as one with no code does, not with a Lua error ----
+    run(&mut s, &rec, Command::SignIn).unwrap();
+    let (_, port) = link_parts(&wait_for_link(&mut s, &rec));
+    redirect(port, "state=abc");
+    let entry = ended(&mut s, &rec);
+    assert_eq!(entry.error.as_deref(), Some("No auth token"));
+    let view = oauth(&mut s, &rec);
+    assert_eq!(view.error.as_deref(), Some("No auth token"));
+    assert!(!view.signed_in && !view.signing_in, "{view:?}");
+    s.assert_clean("empty redirect");
+
     // ---- PoB's three ports all taken: the sign-in ends at once, with our text for PoB's nil ----
     let held: Vec<_> = (49082..=49084)
         .map(|port| std::net::TcpListener::bind(("127.0.0.1", port)).ok())
@@ -3278,4 +3304,238 @@ fn oauth_limits_never_lock_the_account() {
     let took = started.elapsed();
     eprintln!("oauth_limits_never_lock_the_account took {took:?}");
     assert!(took < Duration::from_secs(8), "over its budget: {took:?}");
+}
+
+// ---- The final wave ----
+
+const LINK: &str = "https://pobb.in/gate";
+const LINK_DOWNLOAD: &str = "https://pobb.in/pob/gate";
+const SETTINGS_LIST_WITH_TOKEN: &str = "<PathOfBuilding>\n\t<Mode mode=\"LIST\"/>\n\t<Accounts lastToken=\"FAKE-ACCESS-0\" lastRefreshToken=\"FAKE-REFRESH-0\" tokenExpiry=\"1\"/>\n</PathOfBuilding>\n";
+
+fn item_count_and_has(s: &NetSession, name: &str) -> (usize, bool) {
+    s.eval(&format!(
+        "local n, has = 0, false for _, item in pairs(pob.build.itemsTab.items) do n = n + 1 if item.name == '{name}' then has = true end end return n, has"
+    ))
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_replaced_build_cancels_the_other_requests() {
+    let _guard = lock();
+    let started = Instant::now();
+    let web = canned_web();
+    web.route(
+        "GET",
+        CHARACTERS_URL,
+        Canned::ok(net_fixture("public_characters.json")),
+    );
+    web.route(
+        "GET",
+        PROFILE_URL,
+        Canned::ok(net_fixture("public_profile.html")),
+    );
+    // the character's downloads take far longer than the link's
+    for part in ["passive-skills", "items"] {
+        let body = if part == "items" {
+            "public_items.json"
+        } else {
+            "public_passives.json"
+        };
+        web.route(
+            "GET",
+            &character_url(part, "GateOne"),
+            Canned::ok(net_fixture(body)).delayed(Duration::from_secs(8)),
+        );
+    }
+    let mut s = net_session("replaced-cancels", canned(&web), None);
+    s.open_fixture("attack");
+    let attack_code = s.backend.share_code().expect("share code");
+    web.route(
+        "GET",
+        LINK_DOWNLOAD,
+        Canned::ok(attack_code).delayed(Duration::from_millis(400)),
+    );
+    // the build the link replaces has no items; the link's has one, the character's has five
+    s.open_fixture("new");
+    assert_eq!(item_count_and_has(&s, "Doom Shell"), (0, false));
+    s.backend
+        .apply(list_command(ACCOUNT), &|_| {})
+        .expect("list");
+    s.settle_net(Duration::from_secs(15));
+    assert_eq!(our_public(&mut s).stage, PublicStage::SelectCharacter);
+    s.requests();
+
+    // a "Replace this build" import, then an account import while it is pending
+    s.backend
+        .apply(import_command(LINK, ImportMode::ThisBuild), &|_| {})
+        .expect("link import");
+    s.backend
+        .apply(
+            import_character(
+                None,
+                "GateOne",
+                CharacterPart::ItemsAndSkills {
+                    clear_items: true,
+                    clear_skills: true,
+                    ignore_weapon_swap: false,
+                },
+            ),
+            &|_| {},
+        )
+        .expect("character import");
+    let labels: Vec<String> = s.requests().pending.into_iter().map(|p| p.label).collect();
+    assert_eq!(
+        labels,
+        ["Fetching build from pobb.in", "Importing items and skills"]
+    );
+
+    let steps = s.settle_net(Duration::from_secs(15));
+    assert!(
+        steps.iter().all(Result::is_ok),
+        "a network step failed: {steps:?}"
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|a| a.as_ref().is_ok_and(|a| a.requests && a.build)),
+        "no step announced the new build"
+    );
+    let view = s.requests();
+    assert!(view.pending.is_empty());
+    let mut finished = view.finished;
+    finished.sort_by_key(|f| f.id);
+    assert_eq!(finished.len(), 2, "{finished:?}");
+    let (link, character) = (&finished[0], &finished[1]);
+    assert_eq!(
+        (link.error.clone(), link.new_build, link.cancelled),
+        (None, true, false)
+    );
+    assert_eq!(
+        (
+            character.label.as_str(),
+            character.error.as_deref(),
+            character.cancelled,
+            character.new_build
+        ),
+        ("Importing items and skills", Some("Cancelled"), true, false)
+    );
+    // the late result never reached the new build: it has the link's one item only
+    assert_eq!(item_count_and_has(&s, "Doom Shell"), (1, false));
+    s.assert_clean("replaced");
+    assert!(
+        started.elapsed() < Duration::from_secs(7),
+        "the cancelled download was waited for"
+    );
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_failed_link_keeps_the_build_and_runs_the_validator_once() {
+    let _guard = lock();
+    let web = canned_web();
+    web.route("GET", LINK_DOWNLOAD, Canned::status(404, "nope"));
+    let mut s = net_session("failed-link", canned(&web), None);
+    s.open_fixture("attack");
+    // the gem picker is open on the build
+    let affected = s
+        .backend
+        .apply(
+            Command::SearchGems(auto_pob::engine::GemSearchQuery {
+                group: 0,
+                target: auto_pob::engine::GemTarget::Slot(0),
+                text: String::new(),
+                filter: auto_pob::engine::GemFilter::All,
+            }),
+            &|_| {},
+        )
+        .expect("search");
+    assert!(affected.gem_search);
+    // PoB's validator runs once for a press, not once for the check and again for the press
+    s.eval::<()>(
+        "local box = pob.build.importTab.controls.importCodeIn local f = box.changeFunc validated = 0 box.changeFunc = function(...) validated = validated + 1 return f(...) end",
+    );
+    let affected = s
+        .backend
+        .apply(import_command(LINK, ImportMode::ThisBuild), &|_| {})
+        .expect("link import");
+    assert_eq!(s.eval::<u32>("return validated"), 1);
+    // a link replaces nothing until it arrives: the picker stays up
+    assert!(!affected.gem_search, "the picker was closed at once");
+    assert!(s.backend.gem_search_view().unwrap().is_some());
+    s.settle_net(Duration::from_secs(5));
+    let view = s.requests();
+    assert_eq!(view.finished.len(), 1, "{view:?}");
+    assert_eq!(
+        view.finished[0].error.as_deref(),
+        Some("Response code: 404")
+    );
+    assert!(!view.finished[0].new_build);
+    assert!(
+        s.backend.gem_search_view().unwrap().is_some(),
+        "a failed fetch closed the picker"
+    );
+    s.assert_clean("failed link");
+
+    // a link that arrives replaces the build, and then the picker goes (control)
+    web.route(
+        "GET",
+        "https://pobb.in/pob/gate2",
+        Canned::ok(s.backend.share_code().expect("share code")),
+    );
+    s.backend
+        .apply(
+            import_command("https://pobb.in/gate2", ImportMode::ThisBuild),
+            &|_| {},
+        )
+        .expect("link import");
+    let steps = s.settle_net(Duration::from_secs(5));
+    assert!(
+        steps.iter().any(|a| a.as_ref().is_ok_and(|a| a.gem_search)),
+        "the new build didn't end the picker"
+    );
+    // the picker is told it ended
+    assert!(
+        s.backend
+            .gem_search_view()
+            .unwrap()
+            .is_some_and(|v| v.ended)
+    );
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn the_validator_probe_launches_nothing_with_a_stored_token() {
+    let _guard = lock();
+    let web = canned_web();
+    let mut s = net_session("probe-token", canned(&web), Some(SETTINGS_LIST_WITH_TOKEN));
+    assert!(!s.backend.build_loaded().unwrap());
+    let before = s.settings_xml();
+    web.route("GET", LINK_DOWNLOAD, Canned::ok("not a build"));
+    // PoB's validator runs on a throwaway tab, whose constructor would refresh the expired token
+    s.backend
+        .apply(import_command(LINK, ImportMode::NewBuild), &|_| {})
+        .expect("link import");
+    s.settle_net(Duration::from_secs(5));
+    let asked: Vec<String> = web.requests().into_iter().map(|r| r.url).collect();
+    assert_eq!(asked, [LINK_DOWNLOAD], "{asked:?}");
+    assert!(web.unrouted().is_empty(), "{:?}", web.unrouted());
+    assert_eq!(s.settings_xml(), before, "the stored token changed");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn the_plain_gate_session_is_offline() {
+    let _guard = lock();
+    let mut s = super::Session::start("plain-offline");
+    s.run(import_command(LINK, ImportMode::NewBuild))
+        .expect("link import");
+    settle_net_of(&mut s);
+    let view = s.backend.requests_view().unwrap();
+    assert_eq!(view.finished.len(), 1, "{view:?}");
+    let error = view.finished[0].error.clone().unwrap_or_default();
+    assert!(error.contains("no canned response"), "{error}");
+}
+
+fn settle_net_of(s: &mut super::Session) {
+    super::net_harness::settle_net(&mut s.backend, Duration::from_secs(10));
 }

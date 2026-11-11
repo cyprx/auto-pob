@@ -379,7 +379,7 @@ impl ImportUi {
         self.code_dirty = Some(now);
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, _busy: bool, now_epoch: i64) -> ImportOutput {
+    pub fn show(&mut self, ui: &mut egui::Ui, now_epoch: i64) -> ImportOutput {
         let mut out = ImportOutput {
             open_url: self.open_ready.take(),
             copy: self.copy_ready.take(),
@@ -566,7 +566,7 @@ impl ImportUi {
                         hint: Some("Account name#1234"),
                         ..EditBoxOptions::default()
                     };
-                    let (r, entered) =
+                    let (r, _) =
                         self.account_box
                             .show(ui, self.account_id, &public.account, false, &opts);
                     mark(ui, "account_name", &r);
@@ -576,7 +576,6 @@ impl ImportUi {
                     // Only Start, or Enter in the box, asks for the list. Leaving the box with
                     // the text (`entered`) is no request: nothing goes out the user didn't ask for.
                     let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    let _ = entered;
                     if start.clicked() || (enter && !name.is_empty()) {
                         out.commands.push(Command::ListPublicCharacters {
                             account: name,
@@ -594,12 +593,11 @@ impl ImportUi {
             }
             PublicStage::SelectCharacter => {
                 Self::status_lines(ui, &public.status, None);
-                let importing = false;
                 self.character_list(
                     ui,
                     &public.leagues,
                     &public.characters,
-                    importing,
+                    false,
                     out,
                     |league, name, part| Command::ImportPublicCharacter { league, name, part },
                 );
@@ -955,7 +953,7 @@ pub(crate) mod tests {
             };
             let mut out = ImportOutput::default();
             let full = self.ctx.run_ui(input, |ui| {
-                out = self.ui.show(ui, false, self.now);
+                out = self.ui.show(ui, self.now);
             });
             self.drawn = texts(&full.shapes);
             full.drop_without_applying_deltas();

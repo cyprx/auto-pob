@@ -58,6 +58,8 @@ enum ConfirmThen {
     Cancel(u64),
     /// Go on with an action that cancels a running OAuth import
     Leave(Pending),
+    /// Ask the usual questions (OAuth import, unsaved changes), then act
+    Request(Pending),
 }
 
 /// A `Save` or `SaveAs` whose outcome we are waiting for.
@@ -111,6 +113,8 @@ pub struct AutoPobApp {
     confirm: Option<AppConfirm>,
     /// The `ImportFromUrl` whose immediate answer replaces the build
     import_seq: Option<u64>,
+    /// The confirm dialog's identity, so its modal layer keeps its state across frames
+    confirm_id: egui::Id,
     config_ui: ConfigUi,
     list_ui: BuildListUi,
     /// A `pob://` link from the command line, asked about once the engine is ready (R4)
@@ -169,6 +173,7 @@ impl AutoPobApp {
             requests: RequestsView::default(),
             confirm: None,
             import_seq: None,
+            confirm_id: egui::Id::unique("confirm_dialog"),
             config_ui: ConfigUi::default(),
             list_ui: BuildListUi::default(),
             startup_link: None,
@@ -306,6 +311,13 @@ impl AutoPobApp {
                 if matches!(snapshot, Snapshot::Build(_)) && self.import_seq == Some(seq) {
                     self.import_seq = None;
                     self.reset_for_new_build();
+                }
+                // a link's answer is its request, with no new build yet: the import is over as
+                // far as the reset goes (a code's has no request left, every one was cancelled)
+                if self.import_seq == Some(seq)
+                    && matches!(&snapshot, Snapshot::Requests(view) if !view.pending.is_empty())
+                {
+                    self.import_seq = None;
                 }
                 self.import_ui.on_snapshot(&snapshot, seq);
                 match snapshot {
@@ -704,10 +716,9 @@ impl AutoPobApp {
                 message: format!("Import the build from this link?\n{link}"),
                 yes: "Yes",
                 no: "No",
-                then: ConfirmThen::Send(Command::ImportFromUrl {
-                    url: link,
-                    mode: ImportMode::NewBuild,
-                }),
+                // it replaces the build shown by the time the answer comes, so the answer
+                // goes through the same questions as the Import tab's new-build import
+                then: ConfirmThen::Request(Pending::ImportNew(link)),
             });
         }
     }
@@ -938,7 +949,7 @@ impl AutoPobApp {
                 }
                 BuildTab::Import => {
                     let now = epoch_now();
-                    import_out = self.import_ui.show(ui, behind, now);
+                    import_out = self.import_ui.show(ui, now);
                 }
                 BuildTab::Config => match &config {
                     Some(config) => {
@@ -1099,15 +1110,24 @@ impl AutoPobApp {
     }
 
     fn confirm_dialog(&mut self, ctx: &egui::Context) {
+        // a cancel whose request ended while the question was open has nothing left to ask
+        if let Some(AppConfirm {
+            then: ConfirmThen::Cancel(id),
+            ..
+        }) = &self.confirm
+            && !self.requests.pending.iter().any(|p| p.id == *id)
+        {
+            self.confirm = None;
+        }
         let Some(confirm) = &self.confirm else {
             return;
         };
         let mut choice = None;
-        egui::Window::new("Are you sure?")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
+        // modal: the screen behind can't be used while the question is open, so the answer
+        // is about the state the question was asked in
+        egui::Modal::new(self.confirm_id).show(ctx, |ui| {
+            ui.heading("Are you sure?");
+            {
                 ui.label(&confirm.message);
                 ui.horizontal(|ui| {
                     let yes = ui.add(theme::primary_button(confirm.yes));
@@ -1121,10 +1141,15 @@ impl AutoPobApp {
                         choice = Some(false);
                     }
                 });
-            });
-        let Some(yes) = choice else {
-            return;
-        };
+            }
+        });
+        if let Some(yes) = choice {
+            self.answer_confirm(yes);
+        }
+    }
+
+    /// Carries out the answer to the open question.
+    fn answer_confirm(&mut self, yes: bool) {
         let Some(confirm) = self.confirm.take() else {
             return;
         };
@@ -1133,6 +1158,7 @@ impl AutoPobApp {
         }
         match confirm.then {
             ConfirmThen::Leave(action) => self.request_checked(action),
+            ConfirmThen::Request(action) => self.request(action),
             ConfirmThen::Plan(plan) => {
                 self.flush_edits();
                 let command = self.import_ui.begin(plan);
@@ -4811,6 +4837,150 @@ mod tests {
                 .filter(|c| c.contains("ImportFromUrl"))
                 .collect::<Vec<_>>(),
             [r#"ImportFromUrl { url: "pob://pobbin/abc", mode: NewBuild }"#]
+        );
+    }
+
+    #[test]
+    fn startup_link_yes_asks_about_unsaved_changes_first() {
+        // the dialog stays up while the user opens a build and edits it
+        let (mut app, ctx) = import_app();
+        app = app.with_startup_link(Some("pob://pobbin/abc".into()));
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.confirm.is_some());
+        app.build = Some(Arc::new(BuildView {
+            unsaved: true,
+            ..(**app.build.as_ref().unwrap()).clone()
+        }));
+        let before = app.sent_full.len();
+        click_mark(&mut app, &ctx, "confirm_yes");
+        assert_eq!(
+            app.prompt,
+            Some(Pending::ImportNew("pob://pobbin/abc".into()))
+        );
+        assert!(
+            sent_since(&app, before)
+                .iter()
+                .all(|c| !c.contains("ImportFromUrl")),
+            "the edited build was replaced with no question: {:?}",
+            sent_since(&app, before)
+        );
+    }
+
+    #[test]
+    fn the_confirm_dialog_blocks_the_screen_behind_it() {
+        let (mut app, ctx) = fake_app();
+        app = app.with_startup_link(Some("pob://pobbin/abc".into()));
+        pump_until(&mut app, &ctx, "list", |a| a.ready && a.list.is_some());
+        app.import = Some("https://pobb.in/abc".into());
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.confirm.is_some());
+        let before = app.sent_full.len();
+        // the list's own button, under the dialog's backdrop
+        click_mark(&mut app, &ctx, "list_import");
+        assert!(
+            sent_since(&app, before).is_empty(),
+            "a click went through the dialog: {:?}",
+            sent_since(&app, before)
+        );
+        assert!(app.confirm.is_some(), "the click closed the question");
+    }
+
+    #[test]
+    fn a_cancel_question_goes_when_its_request_ended() {
+        let (mut app, ctx) = import_app();
+        deliver(
+            &mut app,
+            Snapshot::Account(Arc::new(AccountView {
+                oauth: OAuthView {
+                    signed_in: true,
+                    busy: true,
+                    ..OAuthView::default()
+                },
+                ..AccountView::default()
+            })),
+        );
+        deliver(
+            &mut app,
+            requests_snapshot(&[(5, "Importing passive tree")], vec![]),
+        );
+        frame(&mut app, &ctx, vec![]);
+        click_mark(&mut app, &ctx, "cancel:5");
+        assert!(app.confirm.is_some());
+        // the request ends while the question is up
+        deliver(&mut app, requests_snapshot(&[], vec![]));
+        let before = app.sent_full.len();
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.confirm.is_none());
+        assert!(sent_since(&app, before).is_empty());
+    }
+
+    #[test]
+    fn a_links_request_ends_the_import_reset_but_a_cancelled_code_import_does_not() {
+        // a link: its answer is a Requests view with the request pending
+        let (mut app, ctx) = import_app();
+        deliver(&mut app, valid_share());
+        frame(&mut app, &ctx, vec![]);
+        click_mark(&mut app, &ctx, "mode:this");
+        click_mark(&mut app, &ctx, "import_code");
+        click_mark(&mut app, &ctx, "confirm_yes");
+        let seq = app.last_sent;
+        assert_eq!(app.import_seq, Some(seq));
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: requests_snapshot(&[(7, "Fetching build from pobb.in")], vec![]),
+        });
+        assert_eq!(app.import_seq, None);
+        // a later view of the same seq (an edit another request made) is no new build
+        app.tab = BuildTab::Import;
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::Build(Arc::new((**app.build.as_ref().unwrap()).clone())),
+        });
+        assert_eq!(app.tab, BuildTab::Import);
+
+        // a code: the cancelled requests come first, with nothing pending
+        let (mut app, ctx) = import_app();
+        deliver(&mut app, valid_share());
+        frame(&mut app, &ctx, vec![]);
+        click_mark(&mut app, &ctx, "mode:this");
+        click_mark(&mut app, &ctx, "import_code");
+        click_mark(&mut app, &ctx, "confirm_yes");
+        let seq = app.last_sent;
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: requests_snapshot(&[], vec![]),
+        });
+        assert_eq!(app.import_seq, Some(seq));
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::Build(Arc::new((**app.build.as_ref().unwrap()).clone())),
+        });
+        assert_eq!(app.tab, BuildTab::Tree);
+    }
+
+    #[test]
+    fn pending_edits_flush_before_a_confirmed_import() {
+        // a stage count still being typed (the sidebar shows on every tab)
+        let (mut app, _ctx, _) = stages_app();
+        assert!(app.sidebar.has_pending());
+        app.confirm = Some(AppConfirm {
+            message: "Importing to the current build will erase ALL existing data for this build."
+                .into(),
+            yes: "Import",
+            no: "Cancel",
+            then: ConfirmThen::Send(Command::ImportFromUrl {
+                url: "https://pobb.in/abc".into(),
+                mode: ImportMode::ThisBuild,
+            }),
+        });
+        let before = app.sent_full.len();
+        app.answer_confirm(true);
+        let sent = sent_since(&app, before);
+        let edit = sent.iter().position(|c| c.contains("SetMainSkillCount"));
+        let import = sent.iter().position(|c| c.contains("ImportFromUrl"));
+        assert!(
+            edit.is_some() && import.is_some() && edit < import,
+            "{sent:?}"
         );
     }
 

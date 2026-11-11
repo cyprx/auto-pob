@@ -305,6 +305,9 @@ impl PobBackend {
             rebuilt: bool,
             edited: bool,
         }
+        // a callback that made a new build cancels every other request first (R13), so no late
+        // result lands on it; the cancelled entries go out with this step's requests view
+        self.call::<_, ()>("net_cancel_replaced", ())?;
         let effects: Effects = self.view("net_take_effects", ())?;
         let mut affected = if effects.rebuilt {
             let mut affected = self.left_build()?;
@@ -330,14 +333,6 @@ impl PobBackend {
         // a request of the account import ends with PoB's status and stage changed
         affected.account = true;
         affected.short_link = self.call("short_link_ready", ())?;
-        Ok(affected)
-    }
-
-    /// A press of the account import began a request (R10): the request, the account view, and
-    /// whatever the press did to the build.
-    fn account_affected(&mut self) -> Result<Affected> {
-        let mut affected = self.network_affected()?;
-        affected.account = true;
         Ok(affected)
     }
 
@@ -433,6 +428,14 @@ pub(crate) fn cancels_requests(command: &Command) -> Option<CancelScope> {
     }
 }
 
+/// The import mode as the glue spells it.
+fn mode_name(mode: ImportMode) -> &'static str {
+    match mode {
+        ImportMode::ThisBuild => "this",
+        ImportMode::NewBuild => "new",
+    }
+}
+
 /// Commands that leave or replace the build (R14).
 fn leaves_build(command: &Command) -> bool {
     matches!(
@@ -441,7 +444,6 @@ fn leaves_build(command: &Command) -> bool {
             | Command::NewBuild
             | Command::OpenBuild { .. }
             | Command::ImportShareCode { .. }
-            | Command::ImportFromUrl { .. }
     )
 }
 
@@ -454,7 +456,6 @@ pub(crate) fn ends_item_db(command: &Command) -> bool {
             | Command::NewBuild
             | Command::OpenBuild { .. }
             | Command::ImportShareCode { .. }
-            | Command::ImportFromUrl { .. }
     )
 }
 
@@ -487,7 +488,6 @@ fn ends_gem_search(command: &Command) -> bool {
             | Command::NewBuild
             | Command::OpenBuild { .. }
             | Command::ImportShareCode { .. }
-            | Command::ImportFromUrl { .. }
             | Command::CloseGemSearch
     )
 }
@@ -517,6 +517,9 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             // sharing reads the build and asks the network; the import box is PoB's own (R16, R17)
             | Command::SetImportCode { .. }
             | Command::ShareBuild { .. }
+            // a link replaces the build only when it arrives, and a code ends the session
+            // itself (`left_build`)
+            | Command::ImportFromUrl { .. }
             | Command::ExportShareCode
             | Command::ListPublicCharacters { .. }
             | Command::ImportPublicCharacter { .. }
@@ -681,15 +684,18 @@ impl PobBackend {
                 })
             }
             Command::ImportFromUrl { url, mode } => {
-                let mode = match mode {
-                    ImportMode::ThisBuild => "this",
-                    ImportMode::NewBuild => "new",
-                };
+                let mode = mode_name(mode);
                 // a link is a request, finished by a later Network step; a code imports at once
                 let request: Option<u64> = self.call("import_from_url", (url, mode))?;
                 let mut affected = match request {
                     Some(_) => self.network_affected()?,
-                    None => self.all_views()?,
+                    // a code replaced the build at once; a link does so only when its request
+                    // ends (`network_affected`), and a failed fetch keeps the build as it was
+                    None => {
+                        let mut affected = self.left_build()?;
+                        affected.merge(self.all_views()?);
+                        affected
+                    }
                 };
                 affected.share = true;
                 Ok(affected)
@@ -708,12 +714,12 @@ impl PobBackend {
             }),
             Command::ListPublicCharacters { account, realm } => {
                 self.call::<_, u64>("list_public_characters", (account, realm.pob_id()))?;
-                self.account_affected()
+                self.network_affected()
             }
             Command::ImportPublicCharacter { league, name, part } => {
                 let (kind, a, b, c) = part_args(&part);
                 self.call::<_, u64>("import_public_character", (league, name, kind, a, b, c))?;
-                self.account_affected()
+                self.network_affected()
             }
             Command::ClosePublicCharacters => {
                 self.call::<_, ()>("close_public_characters", ())?;
@@ -724,7 +730,7 @@ impl PobBackend {
             }
             Command::SignIn => {
                 self.call::<_, u64>("sign_in", ())?;
-                self.account_affected()
+                self.network_affected()
             }
             Command::SignOut => {
                 self.call::<_, ()>("sign_out", ())?;
@@ -736,7 +742,7 @@ impl PobBackend {
             // nothing may be fetched (the list is there, or PoB's limiter answered at once)
             Command::ListCharacters { realm } => {
                 self.call::<_, Option<u64>>("list_characters", realm.pob_id())?;
-                self.account_affected()
+                self.network_affected()
             }
             Command::ImportCharacter {
                 realm,
@@ -749,7 +755,7 @@ impl PobBackend {
                     "import_character",
                     (realm.pob_id(), league, name, kind, a, b, c),
                 )?;
-                self.account_affected()
+                self.network_affected()
             }
             Command::Save => {
                 self.call::<_, ()>("save", ())?;
@@ -1456,10 +1462,7 @@ impl Backend for PobBackend {
         // with the command's views
         // text PoB's box rejects changes nothing, so it cancels nothing either (R13)
         if let Command::ImportFromUrl { url, mode } = &command {
-            let mode = match mode {
-                ImportMode::ThisBuild => "this",
-                ImportMode::NewBuild => "new",
-            };
+            let mode = mode_name(*mode);
             self.call::<_, ()>("import_check", (url.clone(), mode))?;
         }
         let cancelled = match cancels_requests(&command) {
@@ -2068,8 +2071,9 @@ mod tests {
             );
             assert!(fake.pending.is_empty());
         }
-        // it leaves the build like the other commands that replace it
-        assert!(leaves_build(&Command::ImportFromUrl {
+        // it leaves the build only once something replaced it (a code at once, a link when its
+        // request ends), not when the command is applied
+        assert!(!leaves_build(&Command::ImportFromUrl {
             url: String::new(),
             mode: ImportMode::NewBuild
         }));

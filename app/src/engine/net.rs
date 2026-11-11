@@ -30,7 +30,7 @@ struct Gate {
     /// Open request scopes; launches need at least one
     scope: Cell<i32>,
     /// A `Build:Init` is running; its `ImportTab` would validate a stored token
-    in_init: Cell<bool>,
+    in_init: Cell<i32>,
     /// Launches refused so far
     refused: Cell<usize>,
 }
@@ -77,7 +77,7 @@ pub fn register(lua: &Lua, pob_dir: &Path, net: NetConfig) -> mlua::Result<NetHa
         "LaunchSubScript",
         lua.create_function(
             move |_, (script, blocking, nonblocking, args): (String, String, String, MultiValue)| {
-                if gate.scope.get() <= 0 || gate.in_init.get() {
+                if gate.scope.get() <= 0 || gate.in_init.get() > 0 {
                     gate.refused.set(gate.refused.get() + 1);
                     log::warn!("{REFUSED}");
                     return Ok(None);
@@ -123,7 +123,9 @@ pub fn register(lua: &Lua, pob_dir: &Path, net: NetConfig) -> mlua::Result<NetHa
     g.set(
         "__net_in_init",
         lua.create_function(move |_, on: bool| {
-            gate.in_init.set(on);
+            // a depth, not a flag: a nested pair must not reopen the gate for the outer one
+            gate.in_init
+                .set((gate.in_init.get() + if on { 1 } else { -1 }).max(0));
             Ok(())
         })?,
     )?;
@@ -248,10 +250,9 @@ fn dispatch_glue(lua: &Lua, event: SubscriptEvent) {
         }
     };
     if let Some(message) = failure {
-        log::warn!(
-            "network callback failed: {}",
-            super::native::redact(&message)
-        );
+        // the message becomes the request's error, which the UI shows: no URL or name in it
+        let message = super::native::redact(&message);
+        log::warn!("network callback failed: {message}");
         if let Err(e) = call_glue(lua, "net_fail", (id, message)) {
             log::warn!(
                 "ending the request failed too: {}",
@@ -329,6 +330,35 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_callback_ends_its_request_with_a_redacted_message() {
+        let (lua, _net) = state();
+        exec(
+            &lua,
+            r#"glue = {
+                net_dispatch = function()
+                    error("bad reply from https://pobb.in/abc for /character/Bob", 0)
+                end,
+                net_fail = function(id, message) failed = { id = id, message = message } end,
+            }"#,
+        );
+        dispatch_glue(
+            &lua,
+            SubscriptEvent::Error {
+                id: 7,
+                error: "boom".into(),
+            },
+        );
+        let (id, message): (u64, String) =
+            lua.load("return failed.id, failed.message").eval().unwrap();
+        assert_eq!(id, 7);
+        assert!(
+            !message.contains("pobb.in") && !message.contains("Bob"),
+            "{message}"
+        );
+        assert!(message.contains("<redacted>"), "{message}");
+    }
+
+    #[test]
     fn launches_only_inside_a_scope_and_outside_init() {
         let (lua, net) = state();
         assert_eq!(launch(&lua, "return 1"), None, "launched outside a scope");
@@ -337,11 +367,18 @@ mod tests {
         assert!(launch(&lua, "return 1").is_some());
         exec(&lua, "__net_in_init(true)");
         assert_eq!(launch(&lua, "return 1"), None, "launched during Build:Init");
+        exec(&lua, "__net_in_init(true)");
+        exec(&lua, "__net_in_init(false)");
+        assert_eq!(
+            launch(&lua, "return 1"),
+            None,
+            "a nested pair reopened the gate"
+        );
         exec(&lua, "__net_in_init(false)");
         assert!(launch(&lua, "return 1").is_some());
         exec(&lua, "__net_scope(-1)");
         assert_eq!(launch(&lua, "return 1"), None);
-        assert_eq!(net.refused(), 3);
+        assert_eq!(net.refused(), 4);
     }
 
     #[test]

@@ -478,6 +478,9 @@ fn an_unconfigured_lua_state_is_refused_not_sent_to_curl() {
     );
 }
 
+// Filling a listener's backlog to make connects hang is how Linux behaves; other kernels
+// refuse or accept differently.
+#[cfg(target_os = "linux")]
 #[test]
 fn real_curl_connect_timeout_applies() {
     // fill the listener's backlog so that further connects hang instead of completing

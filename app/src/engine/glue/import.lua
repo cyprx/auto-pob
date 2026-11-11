@@ -92,6 +92,17 @@ function glue.share_code()
 	return code
 end
 
+-- Sets a check box as a click would; the boxes may have no callback (PoB's
+-- CheckBoxControl:Click skips a missing one too)
+local function option(box, on)
+	if box.state ~= on then
+		box.state = on
+		if box.changeFunc then
+			box.changeFunc(on)
+		end
+	end
+end
+
 -- ---- The import box ----
 
 function glue.set_import_code(text)
@@ -124,13 +135,31 @@ local function import_into_new_build(link, site)
 			end
 			-- Main.lua:70-77 stores the callback's third argument (the URL it fetched), which
 			-- shadows the parsed protocol link
-			glue.enter_build(false, "Imported build", xml, false, importLink)
+			glue.enter_build(false, "Imported Build", xml, false, importLink)
 		end)
 	end)
 	if not id then
 		error(message or "couldn't start the request", 0)
 	end
 	return id
+end
+
+-- What `glue.import_check` just put through PoB's validator, so the press that follows
+-- doesn't run it a second time on the same text: { tab, url, buf, epoch }
+local checked
+
+-- Puts `url` in the box as pasting it does (PoB's validator runs), unless `glue.import_check`
+-- just did with the same text and nothing was cancelled since (a cancel runs PoB's failure
+-- paths, which may touch the box's verdict).
+local function put_text(tab, url)
+	local box = tab.controls.importCodeIn
+	local last = checked
+	checked = nil
+	if last and last.tab == tab and last.url == url and last.buf == box.buf
+		and last.epoch == glue.net_epoch() and tab.importCodeValid then
+		return
+	end
+	box:SetText(url, true)
 end
 
 -- With a build open: the box takes the text, the mode drop-down the target, Go does the rest.
@@ -140,7 +169,7 @@ local function import_through_tab(url, mode)
 	if mode == "this" and not pob.build.dbFileName then
 		error("this build has no file yet; import into a new build", 0)
 	end
-	controls.importCodeIn:SetText(url, true)
+	put_text(tab, url)
 	if not tab.importCodeValid then
 		error(not_imported(tab), 0)
 	end
@@ -228,10 +257,12 @@ end
 function glue.import_check(url, mode)
 	url = normalise(url, mode)
 	local tab = validator_tab()
+	checked = nil
 	tab.controls.importCodeIn:SetText(url, true)
 	if not tab.importCodeValid then
 		error(not_imported(tab), 0)
 	end
+	checked = { tab = tab, url = url, buf = tab.controls.importCodeIn.buf, epoch = glue.net_epoch() }
 end
 
 -- Imports a link, a `pob://` link or a share code (R15, R16). Returns the request's id for a
@@ -243,7 +274,7 @@ function glue.import_from_url(url, mode)
 	end
 	-- no build: PoB's validator on a throwaway tab, then the download as Main:Init does it
 	local tab = validator_tab()
-	tab.controls.importCodeIn:SetText(url, true)
+	put_text(tab, url)
 	if not tab.importCodeValid then
 		error(not_imported(tab), 0)
 	end
@@ -497,15 +528,6 @@ function glue.import_public_character(league, name, kind, a, b, c)
 	end
 	controls.siteCharSelect:SetSel(at)
 	local button, label
-	-- these boxes have no callback (PoB's CheckBoxControl:Click skips a missing one too)
-	local function option(box, on)
-		if box.state ~= on then
-			box.state = on
-			if box.changeFunc then
-				box.changeFunc(on)
-			end
-		end
-	end
 	if kind == "tree" then
 		option(controls.siteCharImportTreeClearJewels, a)
 		button, label = controls.siteCharImportTree, "Importing passive tree"
@@ -679,14 +701,6 @@ function glue.import_character(realm_id, league, name, kind, a, b, c)
 		error("no such character", 0)
 	end
 	controls.charSelect:SetSel(at)
-	local function option(box, on)
-		if box.state ~= on then
-			box.state = on
-			if box.changeFunc then
-				box.changeFunc(on)
-			end
-		end
-	end
 	local button, label
 	if kind == "tree" then
 		option(controls.charImportTreeClearJewels, a)

@@ -54,6 +54,8 @@ do
 	end
 end
 
+local SIGNING_IN = "Signing in"
+
 -- ---- Errors ----
 
 local function first_line(message)
@@ -401,9 +403,12 @@ function glue.net_dispatch(kind, id, ...)
 		return
 	end
 	local entry = launch.subScripts[id]
-	-- the refresh limit: PoB's next 401 ends the chain itself (see REFRESH_LIMIT)
-	if req.last_leg and req.last_leg[id] and main().api then
-		main().api.retries = 1
+	-- the refresh limit: PoB's next 401 ends the chain itself (see REFRESH_LIMIT); only a
+	-- subscript PoB still knows is delivered, so only then does PoB's state change
+	local function limit_refresh()
+		if req.last_leg and req.last_leg[id] and main().api then
+			main().api.retries = 1
+		end
 	end
 	if kind == "finished" then
 		-- a download hands its callback (body, errMsg, header)
@@ -414,17 +419,28 @@ function glue.net_dispatch(kind, id, ...)
 			req.last_error = nil
 		end
 		if entry then
+			limit_refresh()
 			guarded(req, true, function(...)
 				runCallback("OnSubFinished", id, ...)
 			end, ...)
 		end
 	elseif kind == "error" then
 		local message = first_line(...)
+		-- PoB's listener (LaunchServer.lua:162) concatenates the redirect's `error` and
+		-- `error_description`, and raises on a redirect that carries neither them nor a code.
+		-- The sign-in ends as PoB ends one with no code (PoEAPI.lua:112): "No auth token"
+		-- (nil here makes PoB's callback say it).
+		local reply = message
+		if req.label == SIGNING_IN and entry and entry.type == "DOWNLOAD" and message:find("attempt to concatenate", 1, true) then
+			reply = nil
+			message = "No auth token"
+		end
 		req.last_error = message
 		-- PoB drops a CUSTOM subscript's error without calling back; the request ends anyway
 		if entry then
+			limit_refresh()
 			guarded(req, true, function()
-				runCallback("OnSubError", id, message)
+				runCallback("OnSubError", id, reply)
 			end)
 		end
 	end
@@ -457,20 +473,40 @@ function glue.net_fail(id, message)
 	end
 end
 
+-- How many requests were cancelled so far
+local cancels = 0
+
+function glue.net_epoch()
+	return cancels
+end
+
 -- The running subscripts of request `id`, which is marked cancelled; the caller aborts them
 -- and ends each with `net_fail(sub, "Cancelled")`.
 function glue.net_live_ids(id)
 	local req = requests[id]
 	if not req then
-		error("no such request", 0)
+		-- it ended while the cancel was on its way: nothing is left to cancel
+		return {}
 	end
 	req.cancelled = true
+	cancels = cancels + 1
 	local ids = {}
 	for sub in pairs(req.subs) do
 		ids[#ids + 1] = sub
 	end
 	table.sort(ids)
 	return ids
+end
+
+local function cancel_ids(ids)
+	for _, id in ipairs(ids) do
+		if requests[id] then
+			for _, sub in ipairs(glue.net_live_ids(id)) do
+				AbortSubScript(sub)
+				glue.net_fail(sub, "Cancelled")
+			end
+		end
+	end
 end
 
 -- Cancels every pending request, or only those of `scope` (R13).
@@ -481,14 +517,23 @@ function glue.net_cancel_all(scope)
 			ids[#ids + 1] = id
 		end
 	end
-	for _, id in ipairs(ids) do
-		if requests[id] then
-			for _, sub in ipairs(glue.net_live_ids(id)) do
-				AbortSubScript(sub)
-				glue.net_fail(sub, "Cancelled")
-			end
+	cancel_ids(ids)
+end
+
+-- A callback made a new build (R13): every other pending request is cancelled, as a command
+-- that replaces the build does, so no late result lands on the new build. The request that
+-- made the build goes on.
+function glue.net_cancel_replaced()
+	if not effects.rebuilt then
+		return
+	end
+	local ids = {}
+	for _, id in ipairs(pending) do
+		if id ~= effects.new_build_req then
+			ids[#ids + 1] = id
 		end
 	end
+	cancel_ids(ids)
 end
 
 function glue.net_pending()
@@ -513,7 +558,6 @@ end
 
 -- ---- The sign-in link (R1) ----
 
-local SIGNING_IN = "Signing in"
 local AUTH_URL = "^https://www%.pathofexile%.com/oauth/authorize%?"
 
 -- `OpenURL`, as bootstrap.lua hands it over: the engine never opens a browser. PoB's sign-in

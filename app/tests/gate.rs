@@ -225,7 +225,11 @@ impl Session {
         let user =
             std::env::temp_dir().join(format!("auto-pob-gate-{test}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&user);
-        let backend = PobBackend::start(Game::Poe1, &pob_dir(), &user).expect("starting PoB");
+        // an empty canned web: a request a test did not mean to make fails with
+        // `no canned response` instead of reaching the internet
+        let net = net_harness::canned(&net_harness::canned_web());
+        let backend =
+            PobBackend::start_with(Game::Poe1, &pob_dir(), &user, net).expect("starting PoB");
         Session { backend, user }
     }
 

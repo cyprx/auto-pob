@@ -317,18 +317,138 @@ fn requests_cancel_fail_and_stay_responsive() {
     );
     s.assert_clean("raising callback");
 
+    // ---- A callback that makes a new build: Build:Init launches nothing, even in a request
+    // (R4), and the step answers for the new build (R14) ----
+    let id: u64 = s
+        .backend
+        .lua
+        .load(
+            r#"local url = ...
+            return glue.net_begin("Test fetch", {}, function()
+                launch:DownloadPage(url, function()
+                    pob.main.main:SetMode("BUILD", false, "Net build")
+                    glue.frame()
+                end)
+            end)"#,
+        )
+        .call(PAGE)
+        .expect("net_begin");
+    let steps = s.settle_net(Duration::from_secs(10));
+    let rebuilt = steps
+        .iter()
+        .map(|step| step.as_ref().expect("a step failed"))
+        .find(|a| a.requests && a.build && a.stats && a.list && a.tree && a.items && a.popup)
+        .is_some();
+    assert!(rebuilt, "the step didn't answer for the new build");
+    let view = s.requests();
+    let entry = finished(&view, id).expect("finished");
+    assert!(entry.new_build, "{entry:?}");
+    assert_eq!(entry.error, None);
+    assert_eq!(s.eval::<String>("return pob.build.buildName"), "Net build");
+    assert!(
+        !web.requests().iter().any(|r| r.url.contains("pathofexile")),
+        "the new build's ImportTab refreshed the token"
+    );
+    assert!(s.settings_xml().contains("lastToken=\"FAKE-ACCESS-0\""));
+    s.assert_clean("new build");
+
+    // ---- A callback that edits the build asks for a recalculation (R14) ----
+    let id: u64 = s
+        .backend
+        .lua
+        .load(
+            r#"local url = ...
+            return glue.net_begin("Test fetch", {}, function()
+                launch:DownloadPage(url, function() pob.build.buildFlag = true end)
+            end)"#,
+        )
+        .call(PAGE)
+        .expect("net_begin");
+    let steps = s.settle_net(Duration::from_secs(5));
+    assert!(
+        steps.iter().any(|step| step
+            .as_ref()
+            .is_ok_and(|a| a.recalc && a.build && a.requests)),
+        "the edit asked for no recalculation"
+    );
+    let view = s.requests();
+    assert!(!finished(&view, id).expect("finished").new_build);
+    s.backend.recalculate().unwrap();
+
+    // ---- Leaving for the list cancels the build's requests only; opening a build cancels
+    // every one (R13) ----
+    let in_flight = |s: &super::net_harness::NetSession, url: &str, count: usize| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while web.requests().iter().filter(|r| r.url == url).count() < count {
+            assert!(Instant::now() < deadline, "{url} never went out");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let _ = s;
+    };
+    let late_sent = web.requests().iter().filter(|r| r.url == LATE).count();
+    let list_id: u64 = s
+        .backend
+        .lua
+        .load(
+            r#"local url = ...
+            return glue.net_begin("Test fetch", { scope = "list" }, function()
+                launch:DownloadPage(url, function() end)
+            end)"#,
+        )
+        .call(LATE)
+        .expect("net_begin");
+    let build_id = begin_fetch(&s.backend.lua, LATE).expect("launched");
+    in_flight(&s, LATE, late_sent + 2);
+    let affected = s
+        .backend
+        .apply(
+            Command::ListBuilds {
+                folder: String::new(),
+            },
+            &|_| {},
+        )
+        .expect("list");
+    assert!(affected.requests, "the cancel isn't sent");
+    let view = s.requests();
+    assert_eq!(
+        finished(&view, build_id).map(|f| (f.cancelled, f.error.clone())),
+        Some((true, Some("Cancelled".to_string())))
+    );
+    assert_eq!(
+        view.pending.iter().map(|p| p.id).collect::<Vec<_>>(),
+        [list_id]
+    );
+    // the list's own request is still out
+    assert_eq!(s.eval::<usize>("return #pob.main.main.popups"), 0);
+    let late_id = begin_fetch(&s.backend.lua, LATE).expect("launched");
+    in_flight(&s, LATE, late_sent + 3);
     // ---- Nothing above left a scope open: still no unasked request ----
-    s.open_fixture("dot");
+    let dest = s.user.join("Path of Building/Builds/dot.xml");
+    std::fs::copy(super::fixture_xml("dot"), &dest).unwrap();
+    let affected = s
+        .backend
+        .apply(Command::OpenBuild { path: dest }, &|_| {})
+        .expect("open");
+    assert!(affected.requests);
+    let view = s.requests();
+    for id in [list_id, late_id] {
+        assert_eq!(
+            finished(&view, id).map(|f| f.cancelled),
+            Some(true),
+            "{id}: {view:?}"
+        );
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(s.settle_net(Duration::from_secs(1)).is_empty());
+    assert_eq!(s.eval::<String>("return pob.build.buildName"), "dot");
+    s.assert_clean("open");
     s.eval::<()>("pob.main.lastUpdateCheck = -1e9 glue.frame()");
     let urls: Vec<String> = web.requests()[asked..]
         .iter()
         .map(|r| r.url.clone())
+        .filter(|url| !url.starts_with("https://example.test/"))
         .collect();
-    assert_eq!(
-        urls,
-        [PAGE, LATE, SLOW_SERVER, MISSING, OFFLINE, PAGE],
-        "only the test's own requests went out"
-    );
+    assert!(urls.is_empty(), "unasked requests: {urls:?}");
     assert!(s.settings_xml().contains("lastToken=\"FAKE-ACCESS-0\""));
     assert!(s.settings_xml().contains("tokenExpiry=\"1\""));
 

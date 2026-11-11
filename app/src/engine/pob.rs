@@ -1323,11 +1323,19 @@ impl Backend for PobBackend {
         let ends_popup = ends_popup_session(&command);
         let ends_db = ends_item_db(&command);
         let leaves = leaves_build(&command);
-        // a late result must never land on another build (R13)
-        if let Some(scope) = cancels_requests(&command) {
-            self.cancel_all_requests(scope)?;
-        }
+        // a late result must never land on another build (R13); the cancelled entries go out
+        // with the command's views
+        let cancelled = match cancels_requests(&command) {
+            Some(scope) => {
+                self.cancel_all_requests(scope)?;
+                Some(self.network_affected()?)
+            }
+            None => None,
+        };
         let mut affected = self.apply_command(command, send)?;
+        if let Some(cancelled) = cancelled {
+            affected.merge(cancelled);
+        }
         if leaves {
             affected.merge(self.left_build()?);
             return Ok(affected);

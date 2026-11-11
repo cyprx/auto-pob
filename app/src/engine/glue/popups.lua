@@ -110,7 +110,11 @@ local function with_session(fn)
 end
 
 -- Ends the session; true when one was open (the engine then sends `Popup(None)`)
-function glue.popup_end()
+function glue.popup_end(keep_main)
+	-- a main-owned session survives a build change (R19)
+	if keep_main and session ~= nil and session.owner == "main" then
+		return false
+	end
 	-- not `live()`: the command that just ran may itself have replaced the item (R4)
 	local was = session ~= nil
 	-- an Options window that goes away unanswered is cancelled, so PoB's half-edited values
@@ -120,6 +124,29 @@ function glue.popup_end()
 	end
 	session = nil
 	return was
+end
+
+-- Whether a save PoB made by itself cancelled the Options window since the last call
+local lost = false
+function glue.popup_take_lost()
+	local was = lost
+	lost = false
+	return was
+end
+
+-- Whether the Options window's own button is being pressed (its Save writes the settings)
+function glue.popup_options_pressing()
+	return session ~= nil and session.kind == "Options" and session.pressing == true
+end
+
+-- A save PoB makes by itself while Options is open (a token, Shutdown) would write the window's
+-- unsaved edits: the window is cancelled first (R29)
+function glue.popup_cancel_for_save()
+	if glue.popup_is_options() and not glue.popup_options_pressing() then
+		glue.popup_cancel_options()
+		session = nil
+		lost = true
+	end
 end
 
 -- Whether the open session is PoB's Options window
@@ -184,6 +211,12 @@ end
 function glue.popup_open(kind, arg)
 	local open
 	if kind == "options" then
+		-- a window opened over another Options window would take its edits as the state to
+		-- go back to
+		glue.popup_cancel_options()
+		-- PoB's Save writes `main.connectionProtocol` into `launch`, but only the window's
+		-- dropdown ever sets it: start from what is stored, on every open
+		main().connectionProtocol = pob.main.connectionProtocol or 0
 		-- PoB's own opener; the window needs no build (R13)
 		local popups = main().popups
 		local depth = #popups
@@ -225,6 +258,7 @@ function glue.popup_open(kind, arg)
 		end
 		open = control.onClick
 	end
+	glue.popup_cancel_options()
 	local tab = items_tab()
 	local popups = main().popups
 	local depth = #popups
@@ -472,7 +506,9 @@ end
 function glue.popup_press(name)
 	require_session()
 	local flag_before = pob.build.buildFlag and true or false
-	local ended = with_session(function()
+	local options = session.kind == "Options"
+	session.pressing = true
+	local ok, ended = pcall(with_session, function()
 		local control, kind = find(name)
 		if kind ~= "Button" then
 			error("no such control", 0)
@@ -480,6 +516,16 @@ function glue.popup_press(name)
 		require_usable(control)
 		control.onClick()
 	end)
+	if session then
+		session.pressing = nil
+	end
+	if not ok then
+		error(ended, 0)
+	end
+	if options then
+		-- a Cancel put the shared values back over an override
+		glue.settings_reapply()
+	end
 	return { ended = ended, build_flag = (pob.build.buildFlag and not flag_before) and true or false }
 end
 
@@ -494,6 +540,8 @@ function glue.popup_cancel_options()
 			cancel.onClick()
 		end)
 	end
+	-- Cancel puts back what the window opened with, an override included
+	glue.settings_reapply()
 end
 
 -- Cancel and Escape: PoB only closes the popup. Escape on Options is PoB's `cancel` button.

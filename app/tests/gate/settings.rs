@@ -477,3 +477,128 @@ fn settings_shared_and_overridden() {
     );
     assert_eq!(s.open_popups(), 0);
 }
+
+fn misc(s: &LongtailSession) -> BTreeMap<String, String> {
+    misc_attributes(&String::from_utf8(s.settings_bytes()).unwrap())
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn options_cancel_sessions_and_unsaved_edits() {
+    let _guard = lock();
+    let seed = Mutex::new(BTreeMap::new());
+    let mut s = LongtailSession::start("options-cancel", &|user| {
+        let attributes = seed_attributes(user);
+        let xml = settings_xml(&attributes);
+        *seed.lock().unwrap() = attributes;
+        xml
+    });
+    let seed = seed.into_inner().unwrap();
+    let seeded_bytes = s.settings_bytes();
+
+    // ---- I1: Cancel after the protocol dropdown leaves the stored protocol alone ----
+    let popup = open_options(&mut s);
+    let protocol = control(&popup, "connectionProtocol");
+    assert_eq!(
+        protocol.choices[protocol.selected], "IPv6",
+        "the seed stores 2"
+    );
+    set(
+        &mut s,
+        "connectionProtocol",
+        PopupInput::Choice {
+            index: 1,
+            label: "IPv4".into(),
+        },
+    );
+    s.run(Command::ClosePopup).unwrap();
+    assert!(
+        s.eval::<bool>("return pob.main.connectionProtocol == 2"),
+        "live value"
+    );
+    assert_eq!(row(&s.settings(), "connectionProtocol").value, "2");
+    // a later untouched Save must not write the abandoned pick
+    open_options(&mut s);
+    press(&mut s, "save");
+    assert_eq!(misc(&s)["connectionProtocol"], "2");
+    assert_eq!(misc(&s), seed, "an untouched Save changes nothing");
+
+    // ---- I3: an override set while the window is open survives its Cancel ----
+    open_options(&mut s);
+    s.run(Command::SetOverrides {
+        values: [("defaultCharLevel".to_string(), "77".to_string())].into(),
+    })
+    .unwrap();
+    assert!(s.popup().is_some(), "SetOverrides keeps the session");
+    press(&mut s, "cancel");
+    assert!(s.popup().is_none());
+    let view = s.settings();
+    assert!(row(&view, "defaultCharLevel").overridden);
+    assert_eq!(row(&view, "defaultCharLevel").value, "77");
+    assert!(view.saved_overrides.is_empty());
+    s.eval::<()>("pob.main.main:SaveSettings()");
+    assert_eq!(misc(&s), seed, "the override stayed out of the file");
+    assert!(
+        s.settings().saved_overrides.is_empty(),
+        "and was not taken for an edit"
+    );
+
+    // ---- I2: a build change leaves the Options window open (R19) ----
+    open_options(&mut s);
+    set(&mut s, "defaultGemQuality", PopupInput::Text("5".into()));
+    s.run(Command::NewBuild).unwrap();
+    assert_eq!(
+        s.popup().expect("Options survives NewBuild").kind,
+        PopupKind::Options
+    );
+    assert_eq!(s.open_popups(), 0);
+    assert!(
+        s.eval::<bool>("return pob.main.main.defaultGemQuality == 5"),
+        "edit still live"
+    );
+
+    // ---- I4: a save PoB makes by itself never writes the window's edits (R29) ----
+    set(&mut s, "showWarnings", PopupInput::Check(true));
+    s.eval::<()>("pob.main.main:SaveSettings()");
+    assert_eq!(misc(&s), seed, "an unsaved edit reached Settings.xml");
+    assert!(s.popup().is_none(), "the window was cancelled");
+    assert!(s.eval::<bool>("return glue.popup_take_lost()"));
+    assert!(
+        s.eval::<bool>("return pob.main.main.defaultGemQuality == 20"),
+        "cancelled"
+    );
+    assert!(
+        s.eval::<bool>("return pob.main.main.showWarnings == false"),
+        "cancelled"
+    );
+    // Shutdown saves too
+    open_options(&mut s);
+    set(&mut s, "defaultGemQuality", PopupInput::Text("6".into()));
+    s.eval::<()>("pob.main.main:Shutdown()");
+    assert_eq!(misc(&s), seed, "Shutdown wrote an unsaved edit");
+    assert!(s.popup().is_none());
+    // an overridden row edited in the window: the save neither writes it nor adopts it
+    s.run(Command::SetOverrides {
+        values: [("showWarnings".to_string(), "true".to_string())].into(),
+    })
+    .unwrap();
+    open_options(&mut s);
+    set(&mut s, "showWarnings", PopupInput::Check(false));
+    s.eval::<()>("pob.main.main:SaveSettings()");
+    assert_eq!(misc(&s), seed);
+    let view = s.settings();
+    assert!(
+        view.saved_overrides.is_empty(),
+        "{:?}",
+        view.saved_overrides
+    );
+    assert_eq!(row(&view, "showWarnings").value, "true");
+    // opening Options over Options cancels the first window
+    open_options(&mut s);
+    set(&mut s, "defaultGemQuality", PopupInput::Text("7".into()));
+    open_options(&mut s);
+    s.run(Command::ClosePopup).unwrap();
+    assert!(s.eval::<bool>("return pob.main.main.defaultGemQuality == 20"));
+    assert_eq!(s.open_popups(), 0);
+    let _ = seeded_bytes;
+}

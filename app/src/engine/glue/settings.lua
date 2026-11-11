@@ -131,10 +131,6 @@ end
 local function write(spec, text)
 	local value = parse(spec, text)
 	holder(spec)[spec.key] = value
-	if spec.key == "connectionProtocol" then
-		-- the Options Save copies this field into `launch` (see `settings_init`)
-		main().connectionProtocol = value
-	end
 	if spec.after and value ~= nil then
 		spec.after(value)
 	end
@@ -146,14 +142,13 @@ end
 
 -- Records `shared` after PoB's `LoadSettings` and wraps `main:SaveSettings` (R12)
 function glue.settings_init()
-	-- The Options popup reads the protocol from `launch` but its Save writes `main`'s copy
-	-- back, which PoB never loads: an untouched Save would reset a stored protocol to Auto.
-	main().connectionProtocol = launch().connectionProtocol or main().connectionProtocol
 	for _, spec in ipairs(SPEC) do
 		shared[spec.key] = read(spec)
 	end
 	local original = main().SaveSettings
 	main().SaveSettings = function(self, ...)
+		-- the window's unsaved edits are never written (R29)
+		glue.popup_cancel_for_save()
 		-- a changed overridden setting was edited by the user: the override takes it
 		for key, text in pairs(overrides) do
 			local now = read(BY_KEY[key])
@@ -167,10 +162,12 @@ function glue.settings_init()
 				shared[spec.key] = read(spec)
 			end
 		end
-		for key in pairs(overrides) do
-			write(BY_KEY[key], shared[key])
-		end
-		local ok, result = pcall(original, self, ...)
+		local ok, result = pcall(function(...)
+			for key in pairs(overrides) do
+				write(BY_KEY[key], shared[key])
+			end
+			return original(self, ...)
+		end, ...)
 		for key, text in pairs(overrides) do
 			write(BY_KEY[key], text)
 		end
@@ -178,6 +175,13 @@ function glue.settings_init()
 			error(result, 0)
 		end
 		return result
+	end
+end
+
+-- Puts every override back in PoB (after a Cancel restored the window's snapshot)
+function glue.settings_reapply()
+	for key, text in pairs(overrides) do
+		write(BY_KEY[key], text)
 	end
 end
 

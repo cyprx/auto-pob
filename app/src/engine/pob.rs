@@ -262,8 +262,10 @@ impl PobBackend {
     fn left_build(&mut self) -> Result<Affected> {
         let mut affected = Affected::default();
         self.reset_heatmap();
-        if self.call::<_, bool>("popup_end", ())? {
+        // an Options window survives a build change (R19)
+        if self.call::<_, bool>("popup_end", true)? {
             affected.popup = true;
+            affected.settings = true;
         }
         if self.item_db.take().is_some() {
             self.item_db_failed = false;
@@ -338,6 +340,10 @@ impl PobBackend {
         // a request of the account import ends with PoB's status and stage changed
         affected.account = true;
         affected.short_link = self.call("short_link_ready", ())?;
+        if self.call::<_, bool>("popup_take_lost", ())? {
+            affected.popup = true;
+            affected.settings = true;
+        }
         Ok(affected)
     }
 
@@ -1507,8 +1513,15 @@ impl Backend for PobBackend {
         }
         // any other command may change what the popup is about, so it ends the session once
         // it went through, and the window is told (R4); a failed one changed nothing
-        if ends_popup && self.call::<_, bool>("popup_end", ())? {
+        if ends_popup && self.call::<_, bool>("popup_end", false)? {
             affected.popup = true;
+            // an Options window that ends is cancelled, which puts the settings back
+            affected.settings = true;
+        }
+        // a save PoB made by itself cancelled an open Options window first
+        if self.call::<_, bool>("popup_take_lost", ())? {
+            affected.popup = true;
+            affected.settings = true;
         }
         // the panel is told once that its database closed (R21)
         if ends_db && self.item_db.take().is_some() {

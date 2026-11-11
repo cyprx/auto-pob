@@ -323,6 +323,8 @@ impl Backend for Fake {
         Ok(BuildListView {
             folder: String::new(),
             entries: vec![],
+            sort: Default::default(),
+            filter: String::new(),
         })
     }
 

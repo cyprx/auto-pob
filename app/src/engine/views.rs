@@ -30,6 +30,38 @@ pub struct BuildListView {
     pub folder: String,
     #[serde(default)]
     pub entries: Vec<BuildListEntry>,
+    /// PoB's `buildSortMode`, which orders `entries`
+    #[serde(default)]
+    pub sort: BuildSort,
+    /// PoB's `main.filterBuildList`: the search text the list is filtered by
+    #[serde(default)]
+    pub filter: String,
+}
+
+/// PoB's four build list sorts (`sortMode` ids NAME, CLASS, EDITED, LEVEL)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+pub enum BuildSort {
+    #[default]
+    #[serde(rename = "NAME")]
+    Name,
+    #[serde(rename = "CLASS")]
+    Class,
+    #[serde(rename = "EDITED")]
+    Edited,
+    #[serde(rename = "LEVEL")]
+    Level,
+}
+
+impl BuildSort {
+    /// PoB's id for the sort
+    pub fn id(self) -> &'static str {
+        match self {
+            BuildSort::Name => "NAME",
+            BuildSort::Class => "CLASS",
+            BuildSort::Edited => "EDITED",
+            BuildSort::Level => "LEVEL",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -43,6 +75,10 @@ pub struct BuildListEntry {
     pub ascendancy: Option<String>,
     #[serde(default)]
     pub level: Option<u32>,
+    /// PoB's confirm text for a delete of this entry, shown by the UI before it sends
+    /// `DeleteBuild`. Empty when PoB deletes without asking (an empty folder).
+    #[serde(default)]
+    pub delete_prompt: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]

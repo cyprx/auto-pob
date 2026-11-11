@@ -200,6 +200,7 @@ mod tests {
             class: Some("Witch".into()),
             ascendancy: None,
             level,
+            delete_prompt: String::new(),
         }
     }
 
@@ -219,6 +220,8 @@ mod tests {
                 entry("Beta", true, None),
                 entry("alpha", false, Some(10)),
             ],
+            sort: Default::default(),
+            filter: String::new(),
         };
         let names = |sort| {
             ordered(&view, sort)

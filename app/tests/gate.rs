@@ -17,6 +17,8 @@ use std::{
     sync::Mutex,
 };
 
+#[path = "gate/build_list.rs"]
+mod build_list;
 #[path = "gate/calcs.rs"]
 mod calcs;
 #[path = "gate/crafting.rs"]

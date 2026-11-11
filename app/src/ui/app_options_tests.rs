@@ -277,6 +277,8 @@ fn options_button_opens_the_window_from_the_list() {
     app.list = Some(Arc::new(BuildListView {
         folder: String::new(),
         entries: vec![],
+        sort: Default::default(),
+        filter: String::new(),
     }));
     frame(&mut app, &ctx, vec![]);
     assert!(!app.options.window.is_blocking());

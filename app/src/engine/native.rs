@@ -72,17 +72,33 @@ pub fn register(lua: &Lua, pob_dir: &Path, user_dir: &Path) -> mlua::Result<()> 
     )?;
     g.set(
         "MakeDir",
+        // true when this call made the folder; nil and the reason otherwise, also for one that
+        // is there already, so a move or a copy never merges into a folder
         lua.create_function(|_, path: String| {
-            // PoB ignores the result; true means this call created the folder
-            let existed = std::path::Path::new(&path).exists();
-            let _ = fs::create_dir_all(&path);
-            Ok(!existed && std::path::Path::new(&path).is_dir())
+            if Path::new(&path).exists() {
+                return Ok((None, Some("File exists".to_string())));
+            }
+            Ok(match fs::create_dir_all(&path) {
+                Ok(()) => (Some(true), None),
+                Err(e) => (None, Some(e.to_string())),
+            })
         })?,
     )?;
     g.set(
         "RemoveDir",
-        // only an empty folder goes; anything else is left alone
-        lua.create_function(|_, path: String| Ok(fs::remove_dir(path).is_ok()))?,
+        // a folder, and with `recursive` everything in it (PoB asks first, BuildListControl.lua
+        // :154); the folder's own symlinks are removed, not followed
+        lua.create_function(|_, (path, recursive): (String, Option<bool>)| {
+            let removed = if recursive.unwrap_or(false) {
+                fs::remove_dir_all(path)
+            } else {
+                fs::remove_dir(path)
+            };
+            Ok(match removed {
+                Ok(()) => (Some(true), None),
+                Err(e) => (None, Some(e.to_string())),
+            })
+        })?,
     )?;
     // Whole milliseconds since registration. A constant clock would stop PoB's
     // power coroutine from ever yielding (CalcsTab.lua:648).
@@ -364,6 +380,46 @@ mod tests {
             .unwrap();
         lua.load("MakeDir(p)").exec().unwrap();
         assert!(nested.is_dir());
+    }
+
+    #[test]
+    fn make_dir_says_why_it_did_not() {
+        let lua = lua();
+        let tmp = TempDir::new("mkdir-result");
+        lua.globals()
+            .set("p", tmp.0.join("new").to_string_lossy().into_owned())
+            .unwrap();
+        let first: (Option<bool>, Option<String>) = lua.load("return MakeDir(p)").eval().unwrap();
+        assert_eq!(first, (Some(true), None));
+        let again: (Option<bool>, Option<String>) = lua.load("return MakeDir(p)").eval().unwrap();
+        assert_eq!(again, (None, Some("File exists".to_string())));
+    }
+
+    #[test]
+    fn remove_dir_is_recursive_only_when_asked() {
+        let lua = lua();
+        let tmp = TempDir::new("rmdir");
+        let full = tmp.0.join("full");
+        fs::create_dir_all(full.join("inner")).unwrap();
+        fs::write(full.join("inner/a.xml"), "a").unwrap();
+        lua.globals()
+            .set("p", full.to_string_lossy().into_owned())
+            .unwrap();
+        let plain: (Option<bool>, Option<String>) = lua.load("return RemoveDir(p)").eval().unwrap();
+        assert_eq!(plain.0, None);
+        assert!(plain.1.is_some());
+        assert!(full.is_dir(), "a folder with things in it stays");
+        let all: (Option<bool>, Option<String>) =
+            lua.load("return RemoveDir(p, true)").eval().unwrap();
+        assert_eq!(all, (Some(true), None));
+        assert!(!full.exists());
+    }
+
+    #[test]
+    fn file_search_lists_dot_folders() {
+        let dir = TempDir::new("dotdir");
+        fs::create_dir_all(dir.0.join(".trash")).unwrap();
+        assert_eq!(names(&lua(), &dir.0, "*", true).unwrap(), [".trash"]);
     }
 
     #[test]

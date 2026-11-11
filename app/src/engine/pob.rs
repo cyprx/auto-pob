@@ -1,5 +1,6 @@
 //! Starts Path of Building's Lua with our own bootstrap.
 
+use super::buildpaths;
 use super::commands::{
     CharacterPart, Command, ConfigValue, ControlTooltipQuery, GemSearchQuery, GemTarget, GemToggle,
     GemTooltipQuery, ImportMode, ItemDb, ItemDbQuery, ItemTooltipQuery, PopupInput, PopupKind,
@@ -125,6 +126,7 @@ impl PobBackend {
             .context("Starting Path of Building")?;
         for (name, source) in [
             ("@glue/builds.lua", include_str!("glue/builds.lua")),
+            ("@glue/buildlist.lua", include_str!("glue/buildlist.lua")),
             ("@glue/stats.lua", include_str!("glue/stats.lua")),
             ("@glue/tooltip.lua", include_str!("glue/tooltip.lua")),
             ("@glue/config.lua", include_str!("glue/config.lua")),
@@ -176,6 +178,16 @@ impl PobBackend {
     /// The subscripts and launch gate of this PoB (for the gate harness).
     pub fn net_handle(&self) -> &NetHandle {
         &self.net
+    }
+
+    /// The Builds folder as PoB holds it (`main.buildPath`).
+    fn build_root(&self) -> Result<String> {
+        self.call("build_root", ())
+    }
+
+    /// `path` as PoB spells an entry of the Builds folder, or why it is refused (R16).
+    fn build_entry(&self, path: &Path, walks: bool) -> Result<String> {
+        buildpaths::entry(&self.build_root()?, path, walks)
     }
 
     /// Calls `glue.<name>(args)`, keeping only the error message.
@@ -359,6 +371,14 @@ impl PobBackend {
 
 /// A config change touches the build and the config tab, and needs a recalculation (after
 /// which the loop also refreshes the stats).
+/// A build list command changed the list and nothing else.
+fn list_changed() -> Affected {
+    Affected {
+        list: true,
+        ..Affected::default()
+    }
+}
+
 fn config_changed() -> Affected {
     Affected {
         build: true,
@@ -664,15 +684,49 @@ impl PobBackend {
                 if folder.contains("..") || folder.starts_with('/') {
                     anyhow::bail!("that isn't a valid folder");
                 }
-                self.folder = if folder.is_empty() || folder.ends_with('/') {
-                    folder
-                } else {
-                    format!("{folder}/")
-                };
+                self.folder = buildpaths::folder(&self.build_root()?, &folder, false)?;
                 Ok(Affected {
                     list: true,
                     ..Affected::default()
                 })
+            }
+            Command::RenameBuild { path, name } => {
+                let path = self.build_entry(&path, false)?;
+                self.call::<_, ()>("rename_build", (path, name))?;
+                Ok(list_changed())
+            }
+            Command::CopyBuild { path, name } => {
+                let path = self.build_entry(&path, true)?;
+                self.call::<_, ()>("copy_build", (path, name))?;
+                Ok(list_changed())
+            }
+            Command::DeleteBuild { path } => {
+                let path = self.build_entry(&path, false)?;
+                self.call::<_, ()>("delete_build", path)?;
+                Ok(list_changed())
+            }
+            Command::MoveBuild { path, folder } => {
+                let path = self.build_entry(&path, true)?;
+                let folder = buildpaths::folder(&self.build_root()?, &folder, true)?;
+                self.call::<_, ()>("move_build", (path, folder))?;
+                Ok(list_changed())
+            }
+            Command::NewFolder { name } => {
+                let folder = buildpaths::folder(&self.build_root()?, &self.folder, true)?;
+                self.call::<_, ()>("new_folder", (folder, name))?;
+                Ok(list_changed())
+            }
+            Command::SetBuildSort { sort } => {
+                self.call::<_, ()>("set_build_sort", sort.id())?;
+                // the sort is a setting too (R12)
+                Ok(Affected {
+                    settings: true,
+                    ..list_changed()
+                })
+            }
+            Command::SetBuildFilter { text } => {
+                self.call::<_, ()>("set_build_filter", text)?;
+                Ok(list_changed())
             }
             Command::NewBuild => {
                 self.reset_heatmap();

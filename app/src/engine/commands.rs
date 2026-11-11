@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::views::{CellRef, ModLineRef};
+use super::views::{BuildSort, CellRef, ModLineRef};
 
 /// A socket's colour on the display item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +64,39 @@ pub enum Command {
         folder: String,
     },
     NewBuild,
+    /// PoB's Rename button on a build or a folder of the Builds folder (R16). `name` is the new
+    /// name without `.xml`. Refuses the open build (or a folder holding it).
+    RenameBuild {
+        path: PathBuf,
+        name: String,
+    },
+    /// PoB's Copy button: the entry copied under `name` in its own folder (R16)
+    CopyBuild {
+        path: PathBuf,
+        name: String,
+    },
+    /// PoB's permanent delete (R16). The UI asks first, with `BuildListEntry::delete_prompt`;
+    /// a folder goes with everything in it. Refuses the open build (or a folder holding it).
+    DeleteBuild {
+        path: PathBuf,
+    },
+    /// PoB's Ctrl+X, Ctrl+V into `folder`, a sub-path of the Builds folder ("" is the root)
+    MoveBuild {
+        path: PathBuf,
+        folder: String,
+    },
+    /// PoB's New Folder in the listed folder
+    NewFolder {
+        name: String,
+    },
+    /// PoB's sort dropdown; the choice is saved to `Settings.xml` at once (R16)
+    SetBuildSort {
+        sort: BuildSort,
+    },
+    /// Types into PoB's build list search box; not saved (R16)
+    SetBuildFilter {
+        text: String,
+    },
     OpenBuild {
         path: PathBuf,
     },

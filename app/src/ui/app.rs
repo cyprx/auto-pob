@@ -1710,10 +1710,13 @@ mod tests {
                 class: Some("Witch".into()),
                 ascendancy: None,
                 level: Some(90),
+                delete_prompt: String::new(),
             };
             Ok(BuildListView {
                 folder: self.folder.clone(),
                 entries: vec![entry("sub", true), entry("one", false), entry("bad", false)],
+                sort: Default::default(),
+                filter: String::new(),
             })
         }
 

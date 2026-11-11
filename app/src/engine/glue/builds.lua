@@ -112,37 +112,7 @@ local function normalise_folder(folder)
 	if folder ~= "" and folder:sub(-1) ~= "/" then folder = folder .. "/" end
 	return folder
 end
-
-function glue.list_builds(subPath)
-	subPath = normalise_folder(subPath)
-	local helpers = LoadModule("Modules/BuildListHelpers")
-	local index = helpers.ScanFolder(subPath)
-	local list = helpers.FilterList(index, subPath, "")
-	helpers.SortList(list, "NAME")
-	local entries = {}
-	for _, item in ipairs(list) do
-		if item.folderName then
-			entries[#entries + 1] = {
-				name = item.folderName,
-				is_folder = true,
-				path = item.fullFileName,
-			}
-		else
-			entries[#entries + 1] = {
-				name = item.buildName,
-				is_folder = false,
-				path = item.fullFileName,
-				class = item.className,
-				ascendancy = item.ascendClassName,
-				level = item.level,
-			}
-		end
-	end
-	local result = { folder = subPath }
-	-- an empty Lua table is ambiguous to serde, so leave it out
-	if #entries > 0 then result.entries = entries end
-	return result
-end
+glue.normalise_folder = normalise_folder
 
 -- For the import glue: switches mode and runs a frame, as opening a build does.
 glue.enter_build = enter_build

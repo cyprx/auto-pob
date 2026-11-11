@@ -69,8 +69,34 @@ numbers are PoB's numbers.
       against PoB.
     - PoB's first Undo on this tab after you load a build also removes the jewels socketed in
       the tree; equip them again. This is how PoB itself behaves.
-    - Crafting, the unique and rare item databases, custom and implicit mods, enchants,
-      anointing, corruption and cluster jewel editing are not here yet.
+- **Crafting, databases and tattoos** (on the Items and Tree tabs): PoB's own windows and
+  controls, so the items they make are PoB's items.
+  - With no item displayed, "Craft item..." opens PoB's crafter: pick a base and rarity, and
+    create it. On a crafted rare the panel shows the prefix and suffix dropdowns with their
+    tier sliders, and PoB's modifier sorting; cluster jewels get the skill and node count.
+  - The panel's other buttons open PoB's windows: enchant, anoint, corrupt (including the
+    implicit and roll range pages), add modifier, add implicit and add crucible modifier.
+    Their dropdowns, sliders, lists and tooltips are PoB's, including the stat sorts that
+    rank enchants and anoints by their effect on your build. Custom modifiers show in the
+    panel and can be removed there.
+  - The unique and rare item databases sit beside the item list. Filter by slot, type,
+    league, requirements and source, search by name or modifier, and sort by name or by a
+    stat. A stat sort runs in the background and the UI stays usable while it counts down.
+    Hover a row for its tooltip, double-click to look at the item, and Ctrl+click to add
+    it to the build and equip it, as in PoB.
+  - Tattoos: right-click an eligible allocated node on the Tree tab to replace it with a
+    tattoo, and "Remove all tattoos" clears them. Right-clicking an unallocated mastery also
+    opens node replacement, as it does in PoB; an allocated mastery still opens the effect
+    picker.
+  - Limits:
+    - There is no Ctrl+Shift add into a second slot, and no dragging from a database. Equip
+      into the second ring through its slot dropdown.
+    - Stat sorts inside the crafting and Add modifier windows run synchronously, as in PoB.
+      The bench and essence sorts in Add modifier pause the app for 0.6 to 0.9 s.
+    - PoB 2.67.2 itself raises an error when you pick "Prefix" or "Suffix" as the Add
+      modifier window's source. The app shows PoB's error and leaves the window as PoB leaves
+      it, with that source selected and the list empty; pick another source to carry on.
+    - "Remove all tattoos" can't be undone.
 - **Calcs tab**: PoB's own calculation breakdown, in sections.
   - Pick the skill, part, minion skill and calculation mode at the top, as in PoB, and show
     the minion's numbers instead of the player's.

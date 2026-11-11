@@ -8,7 +8,7 @@ pub mod power_report;
 pub mod toolbar;
 
 use crate::engine::{
-    Command, NodePower, NodeTooltip, PowerReport, Snapshot, TreeLayout, TreeState,
+    Command, NodePower, NodeTooltip, PopupKind, PowerReport, Snapshot, TreeLayout, TreeState,
 };
 use canvas::CanvasAction;
 use eframe::egui::{self, TextureHandle};
@@ -51,6 +51,8 @@ pub struct TreeOutput {
     pub commands: Vec<Command>,
     /// Questions about the hovered node; the app may send only the latest of them.
     pub queries: Vec<Command>,
+    /// The user right-clicked an allocated jewel socket: show its slot on the Items tab
+    pub jump_to_socket: Option<u32>,
 }
 
 /// Lookups over [`TreeState`], built once per snapshot rather than once per frame.
@@ -119,6 +121,8 @@ pub struct TreeTab {
     pub(super) tooltip: Option<Arc<NodeTooltip>>,
     /// The mastery whose effect picker is open
     picker: Option<u32>,
+    /// The jewel sockets whose item slot PoB lets the user use (from the Items tab)
+    pub(super) sockets: HashSet<u32>,
     /// Node power progress, while it is being calculated
     pub(super) progress: Option<u32>,
     pub(super) busy: bool,
@@ -174,6 +178,11 @@ impl TreeTab {
             stat: None,
             max_depth: state.max_depth,
         })
+    }
+
+    /// The jewel sockets whose slot the Items tab lets the user use.
+    pub fn set_enabled_sockets(&mut self, sockets: impl IntoIterator<Item = u32>) {
+        self.sockets = sockets.into_iter().collect();
     }
 
     /// The undo and redo buttons' enablement.
@@ -311,6 +320,10 @@ impl TreeTab {
                 CanvasAction::Alloc(id) => out.commands.push(Command::AllocNode { id }),
                 CanvasAction::Dealloc(id) => out.commands.push(Command::DeallocNode { id }),
                 CanvasAction::PickMastery(id) => self.picker = Some(id),
+                CanvasAction::ReplaceNode(node) => out
+                    .commands
+                    .push(Command::OpenPopup(PopupKind::NodeReplacement { node })),
+                CanvasAction::JumpToSocket(node) => out.jump_to_socket = Some(node),
                 CanvasAction::Hover(id) => {
                     self.hover = id;
                     self.hover_since = now;
@@ -404,11 +417,13 @@ mod tests {
     /// 1 is allocated; 2 is reachable through 1; 3 is a mastery with two effects; 4 can't be
     /// reached.
     fn sample() -> (Arc<TreeLayout>, Arc<TreeState>) {
+        let mut mastery = node(3, [0.0, 600.0], "Mastery");
+        mastery.mastery_effects = true;
         let layout = layout(
             vec![
                 node(1, [0.0, 0.0], "Normal"),
                 node(2, [600.0, 0.0], "Normal"),
-                node(3, [0.0, 600.0], "Mastery"),
+                mastery,
                 node(4, [600.0, 600.0], "Normal"),
             ],
             vec![(0, 1)],
@@ -460,6 +475,7 @@ mod tests {
                     let o = self.tab.show(ui, false);
                     out.commands.extend(o.commands);
                     out.queries.extend(o.queries);
+                    out.jump_to_socket = out.jump_to_socket.or(o.jump_to_socket);
                 })
                 .drop_without_applying_deltas();
             out
@@ -493,6 +509,7 @@ mod tests {
                 let o = self.frame(events);
                 all.commands.extend(o.commands);
                 all.queries.extend(o.queries);
+                all.jump_to_socket = all.jump_to_socket.or(o.jump_to_socket);
             }
             all
         }
@@ -559,14 +576,114 @@ mod tests {
 
     #[test]
     fn right_click_on_a_mastery_opens_the_picker() {
-        for mut h in [allocated_mastery(), {
-            let (l, s) = sample();
-            Harness::new(l, s)
-        }] {
-            let out = h.click_with(h.screen_of(3), PointerButton::Secondary);
-            assert!(out.commands.is_empty(), "{:?}", out.commands);
-            assert_eq!(h.tab.picker, Some(3));
-        }
+        // R19: only an allocated mastery opens the picker; an unallocated one is node
+        // replacement (`right_click_routes_like_pob`)
+        let mut h = allocated_mastery();
+        let out = h.click_with(h.screen_of(3), PointerButton::Secondary);
+        assert!(out.commands.is_empty(), "{:?}", out.commands);
+        assert_eq!(h.tab.picker, Some(3));
+    }
+
+    /// 1 allocated plain passive, 2 a replaceable small attribute, 3 an unallocated mastery
+    /// with effects, 4 an allocated socket, 5 an unallocated socket, 6 an allocated socket
+    /// whose slot PoB doesn't enable, 7 an allocated mastery.
+    fn routing() -> Harness {
+        let mut replaceable = node(2, [600.0, 0.0], "Normal");
+        replaceable.replaceable = true;
+        let mut mastery = node(3, [0.0, 600.0], "Mastery");
+        mastery.mastery_effects = true;
+        let mut allocated_mastery = node(7, [1200.0, 600.0], "Mastery");
+        allocated_mastery.mastery_effects = true;
+        let l = layout(
+            vec![
+                node(1, [0.0, 0.0], "Normal"),
+                replaceable,
+                mastery,
+                node(4, [600.0, 600.0], "Socket"),
+                node(5, [1200.0, 0.0], "Socket"),
+                node(6, [0.0, 1200.0], "Socket"),
+                allocated_mastery,
+            ],
+            vec![],
+        );
+        let (_, s) = sample();
+        let mut state = (*s).clone();
+        state.allocated = vec![1, 4, 6, 7];
+        state.mastery_options = serde_json::from_value(serde_json::json!([
+            { "node": 3, "options": [ { "id": 30, "text": "first" } ] },
+            { "node": 7, "options": [ { "id": 70, "text": "seventh" } ] },
+        ]))
+        .unwrap();
+        let mut h = Harness::new(Arc::new(l), Arc::new(state));
+        h.tab.set_enabled_sockets([4, 5]);
+        h
+    }
+
+    #[test]
+    fn right_click_routes_like_pob() {
+        let right = |h: &mut Harness, id| {
+            h.tab.picker = None;
+            let out = h.click_with(h.screen_of(id), PointerButton::Secondary);
+            (debug(&out.commands), out.jump_to_socket, h.tab.picker)
+        };
+        let mut h = routing();
+        // a replaceable node: node replacement
+        assert_eq!(
+            right(&mut h, 2),
+            (
+                vec!["OpenPopup(NodeReplacement { node: 2 })".into()],
+                None,
+                None
+            )
+        );
+        // an unallocated mastery with effects: node replacement too, not the picker
+        assert_eq!(
+            right(&mut h, 3),
+            (
+                vec!["OpenPopup(NodeReplacement { node: 3 })".into()],
+                None,
+                None
+            )
+        );
+        // an allocated mastery: the picker
+        assert_eq!(right(&mut h, 7), (vec![], None, Some(7)));
+        // an allocated socket whose slot is enabled: jump to it
+        assert_eq!(right(&mut h, 4), (vec![], Some(4), None));
+        // an unallocated socket, a socket whose slot isn't enabled, a plain passive: nothing
+        assert_eq!(right(&mut h, 5), (vec![], None, None));
+        assert_eq!(right(&mut h, 6), (vec![], None, None));
+        assert_eq!(right(&mut h, 1), (vec![], None, None));
+        // a mastery without effects has nothing to offer either way
+        let mut bare = routing();
+        let mut layout = (**bare.tab.layout.as_ref().unwrap()).clone();
+        layout.nodes[2].mastery_effects = false;
+        bare.tab
+            .on_snapshot(&Snapshot::TreeLayout(Arc::new(layout)));
+        assert_eq!(right(&mut bare, 3), (vec![], None, None));
+    }
+
+    fn click_key(h: &mut Harness, key: &str) -> TreeOutput {
+        let pos = h.tab.rects.map[key].center();
+        h.click_at(pos)
+    }
+
+    /// PoB can't undo "Remove All Tattoos", so the first click only asks (Review Focus 5).
+    #[test]
+    fn remove_all_tattoos_asks_first() {
+        let (l, s) = sample();
+        let mut h = Harness::new(l, s);
+        let out = click_key(&mut h, "remove_tattoos");
+        assert!(out.commands.is_empty(), "{:?}", out.commands);
+        assert!(h.tab.has_dialog());
+        // Cancel sends nothing and closes the question
+        let out = click_key(&mut h, "remove_tattoos_no");
+        assert!(out.commands.is_empty(), "{:?}", out.commands);
+        assert!(!h.tab.has_dialog());
+        // asking again and confirming sends the command, once
+        click_key(&mut h, "remove_tattoos");
+        let out = click_key(&mut h, "remove_tattoos_yes");
+        assert_eq!(debug(&out.commands), ["RemoveAllTattoos"]);
+        assert!(!h.tab.has_dialog());
     }
 
     #[test]

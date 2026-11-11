@@ -91,6 +91,33 @@ local function layout_digest(nodes)
 	return table.concat(parts, "\n")
 end
 
+-- Whether PoB's right-click opens the node replacement for this node (PassiveTreeView.lua:519-526):
+-- a tattoo, a small Strength, Dexterity or Intelligence, a "+30 to" attribute notable, or a
+-- keystone, and never an expansion skill. Static: it doesn't depend on what is allocated.
+function glue.node_replaceable(node)
+	if node.expansionSkill then
+		return false
+	end
+	if node.isTattoo or node.type == "Keystone" then
+		return true
+	end
+	if node.type == "Normal" then
+		return node.dn == "Strength" or node.dn == "Dexterity" or node.dn == "Intelligence"
+	end
+	if node.type == "Notable" then
+		local first = node.sd and node.sd[1]
+		return first ~= nil
+			and (first:match("+30 to Dexterity") ~= nil or first:match("+30 to Strength") ~= nil
+				or first:match("+30 to Intelligence") ~= nil)
+	end
+	return false
+end
+
+-- Whether the node is a mastery with effects to choose from (PassiveTreeView.lua:529-532)
+function glue.node_mastery_effects(node)
+	return node.type == "Mastery" and node.masteryEffects ~= nil
+end
+
 function glue.tree_layout_digest()
 	return layout_digest(placed_nodes())
 end
@@ -119,6 +146,8 @@ function glue.tree_layout()
 			group_x = node.group and node.group.x,
 			group_y = node.group and node.group.y,
 			art = nodeArt(node),
+			replaceable = glue.node_replaceable(node),
+			mastery_effects = glue.node_mastery_effects(node),
 		})
 		for _, other in ipairs(node.linked or {}) do
 			-- each connection is listed on both nodes; keep one
@@ -551,6 +580,24 @@ function glue.reset_tree()
 		error("couldn't reset the tree", 0)
 	end
 	popup.controls.reset.onClick()
+end
+
+-- The Reset window's "Remove All Tattoos" (TreeTab.lua:140-148): it adds no undo state.
+function glue.remove_all_tattoos()
+	local build = pob.build
+	local main = main_module()
+	in_popups(function()
+		local popups = #main.popups
+		build.treeTab.controls.reset.onClick()
+		if #main.popups <= popups then
+			error("couldn't remove the tattoos", 0)
+		end
+		local button = main.popups[1].controls.removeTattoo
+		if not (button and button.onClick) then
+			error("couldn't remove the tattoos", 0)
+		end
+		button.onClick()
+	end)
 end
 
 -- SaveMasteryPopup (TreeTab.lua:992): the effect must be one OpenMasteryPopup offers

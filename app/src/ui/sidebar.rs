@@ -4,9 +4,8 @@
 use crate::engine::views::{DropList, MainSkillSelector, StatRow, StatsView};
 use crate::engine::{CalcsControl, CalcsCount, Command};
 use crate::theme;
-use crate::widgets::pob_text;
+use crate::widgets::{EditBoxOptions, EditBoxes, pob_text};
 use eframe::egui;
-use std::collections::HashMap;
 
 /// Where a widget was drawn, so tests can click it. Does nothing outside tests.
 #[cfg(test)]
@@ -18,43 +17,43 @@ fn note(ui: &egui::Ui, key: &str, rect: egui::Rect) {
 #[cfg(not(test))]
 fn note(_ui: &egui::Ui, _key: &str, _rect: egui::Rect) {}
 
-/// A stage or mine count typed into its box and not sent yet.
-struct PendingCount {
-    key: &'static str,
-    control: CalcsCount,
-    text: String,
-}
-
-/// The count boxes' state: what is typed, what was last sent, and the edit still waiting.
-/// Kept by the app so it resets with the build.
+/// The count boxes' state. Kept by the app so it resets with the build.
 #[derive(Default)]
 pub struct SidebarState {
-    /// Text being typed, by box
-    bufs: HashMap<&'static str, String>,
-    /// What each box last sent (or showed)
-    sent: HashMap<&'static str, String>,
-    pending: Option<PendingCount>,
+    counts: EditBoxes<&'static str>,
+}
+
+fn count_command(key: &str, text: String) -> Command {
+    Command::SetMainSkillCount {
+        control: if key == "stages" {
+            CalcsCount::Stages
+        } else {
+            CalcsCount::Mines
+        },
+        text,
+    }
 }
 
 impl SidebarState {
+    #[cfg(test)]
+    pub(crate) fn count_salt(&self) -> egui::Id {
+        self.counts.salt()
+    }
+
     /// A count typed but not sent: the build has changes the engine doesn't know about yet.
     pub fn has_pending(&self) -> bool {
-        self.pending.is_some()
+        self.counts.has_pending()
     }
 
     /// Takes the pending count as the command that sends it.
     pub fn flush(&mut self) -> Option<Command> {
-        let p = self.pending.take()?;
-        self.sent.insert(p.key, p.text.clone());
-        Some(Command::SetMainSkillCount {
-            control: p.control,
-            text: p.text,
-        })
+        let (key, text) = self.counts.take_pending()?;
+        Some(count_command(key, text))
     }
 
     /// Drops the pending count (the user chose not to save).
     pub fn discard(&mut self) {
-        self.pending = None;
+        self.counts.discard();
     }
 }
 
@@ -74,6 +73,7 @@ pub fn show(
     });
     let Some(stats) = stats else {
         ui.label("Calculating…");
+        state.counts.discard_undrawn();
         return out;
     };
     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -85,6 +85,7 @@ pub fn show(
             rows(ui, "minion_stats", &stats.minion);
         }
     });
+    state.counts.discard_undrawn();
     out
 }
 
@@ -124,28 +125,10 @@ fn selector(
                 out,
             );
             if let Some(text) = &sel.stages {
-                count(
-                    ui,
-                    "stages",
-                    "Stages",
-                    CalcsCount::Stages,
-                    text,
-                    behind,
-                    state,
-                    out,
-                );
+                count(ui, "stages", "Stages", text, behind, state, out);
             }
             if let Some(text) = &sel.mines {
-                count(
-                    ui,
-                    "mines",
-                    "Active mines",
-                    CalcsCount::Mines,
-                    text,
-                    behind,
-                    state,
-                    out,
-                );
+                count(ui, "mines", "Active mines", text, behind, state, out);
             }
             dropdown(
                 ui,
@@ -200,65 +183,23 @@ fn dropdown(
 
 /// The stage or mine count: sent on Enter or when the box loses focus; Esc puts back what the
 /// build has. Text typed but not sent sits in `state` so a Save can send it first.
-#[allow(clippy::too_many_arguments)]
 fn count(
     ui: &mut egui::Ui,
     key: &'static str,
     label: &str,
-    control: CalcsCount,
     text: &str,
     behind: bool,
     state: &mut SidebarState,
     out: &mut Vec<Command>,
 ) {
     ui.label(label);
-    let id = ui.make_persistent_id(("sidebar_count", key));
-    let mut buf = state.bufs.remove(key).unwrap_or_else(|| text.to_owned());
-    let focused = ui.memory(|m| m.has_focus(id));
-    if !focused && !behind {
-        buf = text.to_owned();
-        state.sent.insert(key, text.to_owned());
-    }
-    let sent = state
-        .sent
-        .entry(key)
-        .or_insert_with(|| text.to_owned())
-        .clone();
-    let escape = focused && ui.input(|i| i.key_pressed(egui::Key::Escape));
-    let response = ui.add(
-        egui::TextEdit::singleline(&mut buf)
-            .id(id)
-            .desired_width(50.0),
-    );
+    let opts = EditBoxOptions {
+        width: 50.0,
+        ..EditBoxOptions::default()
+    };
+    let (response, sent) = state.counts.show(ui, key, text, behind, &opts);
     note(ui, key, response.rect);
-    let mine = state.pending.as_ref().is_some_and(|p| p.key == key);
-    if escape {
-        buf = sent;
-        if mine {
-            state.pending = None;
-        }
-    } else if response.lost_focus() {
-        // an edit already flushed (a Save while typing) is not sent twice
-        if buf != sent {
-            state.sent.insert(key, buf.clone());
-            out.push(Command::SetMainSkillCount {
-                control,
-                text: buf.clone(),
-            });
-        }
-        if mine {
-            state.pending = None;
-        }
-    } else if response.has_focus() && buf != sent {
-        state.pending = Some(PendingCount {
-            key,
-            control,
-            text: buf.clone(),
-        });
-    } else if mine {
-        state.pending = None;
-    }
-    state.bufs.insert(key, buf);
+    out.extend(sent.map(|text| count_command(key, text)));
     ui.end_row();
 }
 
@@ -461,6 +402,20 @@ mod tests {
         // and a later blur doesn't send the abandoned text either
         sent.extend(h.click("group"));
         assert!(sent.is_empty(), "{sent:?}");
+    }
+
+    #[test]
+    fn a_count_typed_and_then_hidden_is_not_flushed() {
+        let mut h = counted("1");
+        h.click("stages");
+        h.type_text("3");
+        assert!(h.state.has_pending());
+        // the new main skill has no stage count
+        h.stats = view(base());
+        let sent = h.frame(vec![]);
+        assert!(sent.is_empty(), "{sent:?}");
+        assert!(!h.state.has_pending());
+        assert!(h.state.flush().is_none());
     }
 
     #[test]

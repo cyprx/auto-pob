@@ -8,12 +8,12 @@ use std::time::Duration;
 
 use crate::pob_files::DownloadProgress;
 
-use super::commands::{Command, GemTooltipQuery, ItemTooltipQuery};
+use super::commands::{Command, ControlTooltipQuery, GemTooltipQuery, ItemTooltipQuery};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, DisplayItemView,
-    GemSearchView, GemTooltipView, GroupTooltipView, ItemText, ItemTooltipView, ItemsView,
-    NodePower, NodeTooltip, NotesView, PowerReport, SkillsView, SocketGroupText, StatsView,
-    TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, ControlTooltipView,
+    DisplayItemView, GemSearchView, GemTooltipView, GroupTooltipView, ItemDbView, ItemText,
+    ItemTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, PopupView, PowerReport,
+    SkillsView, SocketGroupText, StatsView, TreeLayout, TreeState,
 };
 
 #[derive(Debug, Clone)]
@@ -34,9 +34,14 @@ pub enum Snapshot {
     Items(Arc<ItemsView>),
     /// The display item; `None` while nothing is displayed
     DisplayItem(Option<Arc<DisplayItemView>>),
+    /// The popup session's window; `None` once the session is over
+    Popup(Option<Arc<PopupView>>),
+    ControlTooltip(Arc<ControlTooltipView>),
     SocketGroupText(Arc<SocketGroupText>),
     GroupTooltip(Arc<GroupTooltipView>),
     GemSearch(Arc<GemSearchView>),
+    /// The open item database; `None` once it closed or the build changed (R21)
+    ItemDb(Option<Arc<ItemDbView>>),
     GemTooltip(Arc<GemTooltipView>),
     ItemTooltip(Arc<ItemTooltipView>),
     ItemText(Arc<ItemText>),
@@ -48,6 +53,10 @@ pub enum Snapshot {
 pub enum BackgroundTask {
     /// The gem picker's DPS sort; it goes first whenever it has work (R12)
     GemDps,
+    /// The Anoint window's stat sort; it goes after the gem picker's, before node power (R20)
+    AnointSort,
+    /// The item databases' load and stat sort; after the Anoint sort, before node power (R20)
+    ItemDb,
     NodePower,
 }
 
@@ -97,12 +106,16 @@ pub struct Affected {
     pub items: bool,
     /// The Items tab's display item changed
     pub display_item: bool,
+    /// The popup session changed or ended (R21)
+    pub popup: bool,
     /// The build's notes changed
     pub notes: bool,
     /// Node power changed (a background step ran)
     pub power: bool,
     /// The gem search changed: it opened, its text changed or a DPS step ran
     pub gem_search: bool,
+    /// The open item database changed, or a recalculation restarted its list (R21)
+    pub item_db: bool,
     /// The power report is ready
     pub report: bool,
     /// A tooltip was requested for this node; the latest request wins
@@ -117,6 +130,8 @@ pub struct Affected {
     pub gem_tooltip: Option<GemTooltipQuery>,
     /// This item tooltip was requested; the latest request wins
     pub item_tooltip: Option<ItemTooltipQuery>,
+    /// This control's tooltip was requested; the latest request wins (R6)
+    pub control_tooltip: Option<ControlTooltipQuery>,
     /// The text PoB copies for this item was requested; the latest request wins
     pub item_text: Option<u32>,
     /// The tree link was requested
@@ -136,9 +151,11 @@ impl Affected {
         skills: true,
         items: true,
         display_item: true,
+        popup: true,
         notes: true,
         power: false,
         gem_search: false,
+        item_db: false,
         report: false,
         preview: None,
         breakdown: None,
@@ -146,6 +163,7 @@ impl Affected {
         group_tooltip: None,
         gem_tooltip: None,
         item_tooltip: None,
+        control_tooltip: None,
         item_text: None,
         link: false,
     };
@@ -171,9 +189,11 @@ impl Affected {
         self.skills |= other.skills;
         self.items |= other.items;
         self.display_item |= other.display_item;
+        self.popup |= other.popup;
         self.notes |= other.notes;
         self.power |= other.power;
         self.gem_search |= other.gem_search;
+        self.item_db |= other.item_db;
         self.report |= other.report;
         self.preview = other.preview.or(self.preview);
         if other.breakdown.is_some() {
@@ -187,9 +207,24 @@ impl Affected {
         if other.item_tooltip.is_some() {
             self.item_tooltip = other.item_tooltip;
         }
+        if other.control_tooltip.is_some() {
+            self.control_tooltip = other.control_tooltip;
+        }
         self.item_text = other.item_text.or(self.item_text);
         self.link |= other.link;
     }
+}
+
+/// What `Backend::item_db_view` answers (R21).
+// the view is sent at once, wrapped in an `Arc`; boxing it here would only add a copy
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum DbSnapshot {
+    View(ItemDbView),
+    /// The database closed or the build changed: `ItemDb(None)` is sent, once
+    Ended,
+    /// No database is open: nothing is sent
+    Quiet,
 }
 
 pub trait Backend {
@@ -225,6 +260,8 @@ pub trait Backend {
     ) -> anyhow::Result<Affected>;
     /// The open gem search as it stands; `None` when no search is open.
     fn gem_search_view(&mut self) -> anyhow::Result<Option<GemSearchView>>;
+    /// The open item database as it stands (R21)
+    fn item_db_view(&mut self) -> anyhow::Result<DbSnapshot>;
     /// A gem tooltip. A failure is answered with empty lines (R15).
     fn gem_tooltip_view(&mut self, query: &GemTooltipQuery) -> anyhow::Result<GemTooltipView>;
     /// `None`: the item or slot is gone
@@ -233,6 +270,13 @@ pub trait Backend {
         query: &ItemTooltipQuery,
     ) -> anyhow::Result<Option<ItemTooltipView>>;
     fn item_text(&mut self, id: u32) -> anyhow::Result<ItemText>;
+    /// The popup session's window; `None` when no session is open
+    fn popup_view(&mut self) -> anyhow::Result<Option<PopupView>>;
+    /// `None`: the control or entry is gone
+    fn control_tooltip_view(
+        &mut self,
+        query: &ControlTooltipQuery,
+    ) -> anyhow::Result<Option<ControlTooltipView>>;
     fn node_power_view(&mut self) -> anyhow::Result<NodePower>;
     fn power_report_view(&mut self) -> anyhow::Result<PowerReport>;
     /// `Ok(None)` when the node no longer exists: nothing is sent.
@@ -327,6 +371,19 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
             }),
         }
     }
+    // "no session" is an answer too: it closes the window
+    if flags.popup {
+        match backend.popup_view() {
+            Ok(view) => send(Event::Snapshot {
+                seq,
+                snapshot: Snapshot::Popup(view.map(Arc::new)),
+            }),
+            Err(e) => send(Event::Error {
+                seq,
+                message: format!("{e:#}"),
+            }),
+        }
+    }
     if flags.notes {
         emit(seq, send, backend.notes_view(), Snapshot::Notes);
     }
@@ -402,6 +459,23 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
             }),
         }
     }
+    if flags.item_db {
+        match backend.item_db_view() {
+            Ok(DbSnapshot::View(view)) => send(Event::Snapshot {
+                seq,
+                snapshot: Snapshot::ItemDb(Some(Arc::new(view))),
+            }),
+            Ok(DbSnapshot::Ended) => send(Event::Snapshot {
+                seq,
+                snapshot: Snapshot::ItemDb(None),
+            }),
+            Ok(DbSnapshot::Quiet) => {}
+            Err(e) => send(Event::Error {
+                seq,
+                message: format!("{e:#}"),
+            }),
+        }
+    }
     if let Some(query) = &flags.gem_tooltip {
         let view = backend
             .gem_tooltip_view(query)
@@ -421,6 +495,20 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
                 snapshot: Snapshot::ItemTooltip(Arc::new(view)),
             }),
             // a vanished item or slot sends nothing
+            Ok(None) => {}
+            Err(e) => send(Event::Error {
+                seq,
+                message: format!("{e:#}"),
+            }),
+        }
+    }
+    if let Some(query) = &flags.control_tooltip {
+        match backend.control_tooltip_view(query) {
+            Ok(Some(view)) => send(Event::Snapshot {
+                seq,
+                snapshot: Snapshot::ControlTooltip(Arc::new(view)),
+            }),
+            // a vanished control sends nothing
             Ok(None) => {}
             Err(e) => send(Event::Error {
                 seq,
@@ -542,6 +630,8 @@ fn run_loop_with_delay(
             affected.skills = true;
             affected.items = true;
             affected.display_item = true;
+            // Draw restarts an open list on a new output revision (R14)
+            affected.item_db = true;
         }
         send_snapshots(backend, last_seq, affected, send);
         if shutdown {
@@ -776,6 +866,7 @@ mod tests {
                     Snapshot::Skills(_) => "skills",
                     Snapshot::Items(_) => "items",
                     Snapshot::DisplayItem(_) => "display_item",
+                    Snapshot::Popup(_) => "popup",
                     Snapshot::Notes(_) => "notes",
                     other => panic!("unexpected {other:?}"),
                 }
@@ -794,6 +885,7 @@ mod tests {
                 "skills",
                 "items",
                 "display_item",
+                "popup",
                 "notes"
             ]
         );
@@ -879,9 +971,9 @@ mod tests {
         assert_eq!(stats_seq, Some(3));
         assert_eq!(config_seq, Some(3));
         assert_eq!(log.lock().unwrap().set_configs, 2);
-        // Ready + 11 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items + DisplayItem; the channel disconnect means the
+        // Ready + 12 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items + DisplayItem; the channel disconnect means the
         // thread (and so every wake) is finished.
-        assert_eq!(wakes.load(Ordering::SeqCst), 19);
+        assert_eq!(wakes.load(Ordering::SeqCst), 20);
     }
 
     #[test]
@@ -1197,6 +1289,121 @@ mod tests {
         );
     }
 
+    fn popup_query(control: &str) -> crate::engine::ControlTooltipQuery {
+        crate::engine::ControlTooltipQuery::Popup {
+            control: control.into(),
+            index: Some(0),
+        }
+    }
+
+    fn popups(events: &[Event]) -> Vec<bool> {
+        snapshots(events)
+            .into_iter()
+            .filter_map(|(_, s)| match s {
+                Snapshot::Popup(view) => Some(view.is_some()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn popup_none_is_sent_when_a_session_ends() {
+        let (mut fake, _log) = Fake::new();
+        let open = Command::OpenPopup(crate::engine::PopupKind::Craft);
+        let events = run_queued(&mut fake, vec![open.clone()]);
+        assert_eq!(popups(&events), [true]);
+        // a command that isn't the session's ends it, and the window is told
+        let (mut fake, _log) = Fake::new();
+        let events = run_queued(&mut fake, vec![open, Command::SortItems]);
+        assert_eq!(popups(&events), [false], "{events:?}");
+    }
+
+    #[test]
+    fn a_failing_command_leaves_the_popup_session_open() {
+        let (mut fake, _log) = Fake::new();
+        fake.fail_set_config = Some("boom".into());
+        let events = run_queued(
+            &mut fake,
+            vec![
+                Command::OpenPopup(crate::engine::PopupKind::Craft),
+                set_config(),
+            ],
+        );
+        assert!(events.iter().any(|e| matches!(e, Event::Error { .. })));
+        assert_eq!(popups(&events).last(), Some(&true), "{events:?}");
+    }
+
+    #[test]
+    fn only_latest_control_tooltip_runs() {
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(
+            &mut fake,
+            vec![
+                Command::ControlTooltip(popup_query("one")),
+                Command::ControlTooltip(popup_query("two")),
+            ],
+        );
+        let tooltips: Vec<_> = snapshots(&events)
+            .into_iter()
+            .filter_map(|(_, s)| match s {
+                Snapshot::ControlTooltip(t) => Some(t.query.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tooltips, [popup_query("two")]);
+        assert_eq!(log.lock().unwrap().control_tooltips, [popup_query("two")]);
+    }
+
+    #[test]
+    fn vanished_control_tooltip_sends_nothing() {
+        let (mut fake, log) = Fake::new();
+        fake.control_vanished = true;
+        let events = run_queued(&mut fake, vec![Command::ControlTooltip(popup_query("one"))]);
+        assert_eq!(
+            log.lock().unwrap().control_tooltips.len(),
+            1,
+            "it was asked"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                Event::Snapshot {
+                    snapshot: Snapshot::ControlTooltip(_),
+                    ..
+                } | Event::Error { .. }
+            )),
+            "{events:?}"
+        );
+    }
+
+    #[test]
+    fn crafting_views_masked_without_a_build() {
+        let queries = || {
+            vec![
+                Command::OpenPopup(crate::engine::PopupKind::Craft),
+                Command::ControlTooltip(popup_query("one")),
+            ]
+        };
+        let kinds = |events: &[Event]| {
+            snapshots(events)
+                .into_iter()
+                .filter(|(_, s)| matches!(s, Snapshot::Popup(_) | Snapshot::ControlTooltip(_)))
+                .count()
+        };
+        // with a build both are answered
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(&mut fake, queries());
+        assert_eq!(kinds(&events), 2);
+        assert_eq!(log.lock().unwrap().control_tooltips.len(), 1);
+        // with none, neither reaches the backend
+        let (mut fake, log) = Fake::new();
+        fake.build_loaded = false;
+        let events = run_queued(&mut fake, queries());
+        assert_eq!(kinds(&events), 0);
+        assert!(log.lock().unwrap().control_tooltips.is_empty());
+        assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
+    }
+
     #[test]
     fn only_latest_breakdown_runs() {
         let (mut fake, log) = Fake::new();
@@ -1336,6 +1543,145 @@ mod tests {
         }));
         drop(tx);
         run_live(fake, &rx)
+    }
+
+    fn db_query() -> crate::engine::ItemDbQuery {
+        crate::engine::ItemDbQuery {
+            db: crate::engine::ItemDb::Uniques,
+            slot: 0,
+            kind: 0,
+            league: 0,
+            requirement: 0,
+            obtainable: 0,
+            sort: 0,
+            search: String::new(),
+            search_mode: 0,
+        }
+    }
+
+    fn step_affecting_item_db() -> Result<Affected, String> {
+        Ok(Affected {
+            item_db: true,
+            ..Affected::default()
+        })
+    }
+
+    #[test]
+    fn jobs_run_in_order_gem_anoint_item_db_power() {
+        // R20: the gem picker's sort, the Anoint sort, the item database, then node power
+        let (mut fake, log) = Fake::new();
+        fake.background
+            .lock()
+            .unwrap()
+            .extend((0..2).map(|_| step_affecting_power()));
+        fake.item_db_background
+            .lock()
+            .unwrap()
+            .extend((0..2).map(|_| step_affecting_item_db()));
+        fake.anoint_background
+            .lock()
+            .unwrap()
+            .extend((0..2).map(|_| step_affecting_gems()));
+        fake.gem_background
+            .lock()
+            .unwrap()
+            .extend((0..2).map(|_| step_affecting_gems()));
+        run_until_idle(
+            &mut fake,
+            vec![
+                Command::SearchGems(gem_query("")),
+                Command::SetItemDb(db_query()),
+            ],
+            8,
+        );
+        use BackgroundTask::{AnointSort, GemDps, ItemDb, NodePower};
+        assert_eq!(
+            log.lock().unwrap().step_tasks,
+            [
+                GemDps, GemDps, AnointSort, AnointSort, ItemDb, ItemDb, NodePower, NodePower
+            ]
+        );
+    }
+
+    fn item_db_snapshots(events: &[Event]) -> Vec<Option<Arc<crate::engine::ItemDbView>>> {
+        snapshots(events)
+            .into_iter()
+            .filter_map(|(_, s)| match s {
+                Snapshot::ItemDb(view) => Some(view.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn item_db_closed_sends_none_once() {
+        let (mut fake, _log) = Fake::new();
+        let opened =
+            item_db_snapshots(&run_queued(&mut fake, vec![Command::SetItemDb(db_query())]));
+        assert!(matches!(opened.as_slice(), [Some(_)]));
+        let closed = item_db_snapshots(&run_queued(&mut fake, vec![Command::CloseItemDb]));
+        assert!(matches!(closed.as_slice(), [None]), "{closed:?}");
+        // later batches (a recalculation asks for the view too) say nothing more
+        let later = item_db_snapshots(&run_queued(&mut fake, vec![set_config()]));
+        assert!(later.is_empty(), "{later:?}");
+    }
+
+    #[test]
+    fn leaving_the_build_closes_the_item_db() {
+        let (mut fake, _log) = Fake::new();
+        run_queued(&mut fake, vec![Command::SetItemDb(db_query())]);
+        let events = run_queued(&mut fake, vec![Command::NewBuild]);
+        assert!(matches!(item_db_snapshots(&events).as_slice(), [None]));
+    }
+
+    #[test]
+    fn recalc_resends_open_item_db() {
+        let (mut fake, log) = Fake::new();
+        run_queued(&mut fake, vec![Command::SetItemDb(db_query())]);
+        assert_eq!(log.lock().unwrap().item_dbs.len(), 1, "the open alone");
+        let events = run_queued(&mut fake, vec![set_config()]);
+        assert!(matches!(item_db_snapshots(&events).as_slice(), [Some(_)]));
+        assert_eq!(log.lock().unwrap().item_dbs.len(), 2);
+    }
+
+    #[test]
+    fn item_db_masked_without_a_build() {
+        // with a build the open is answered; with none, nothing reaches the backend
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(&mut fake, vec![Command::SetItemDb(db_query())]);
+        assert_eq!(item_db_snapshots(&events).len(), 1);
+        let (mut fake, log2) = Fake::new();
+        fake.build_loaded = false;
+        let events = run_queued(&mut fake, vec![Command::SetItemDb(db_query())]);
+        assert!(item_db_snapshots(&events).is_empty());
+        assert!(log2.lock().unwrap().item_dbs.is_empty());
+        assert_eq!(log.lock().unwrap().item_dbs.len(), 1);
+    }
+
+    #[test]
+    fn item_db_rows_only_when_finished() {
+        let (mut fake, _log) = Fake::new();
+        fake.item_db_background.lock().unwrap().extend([
+            Ok(Affected::default()),
+            Ok(Affected::default()),
+            step_affecting_item_db(),
+        ]);
+        let events = run_until_idle(&mut fake, vec![Command::SetItemDb(db_query())], 3);
+        let progress = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    Event::Progress {
+                        task: BackgroundTask::ItemDb,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(progress, 3);
+        // the open, and the step that finished; the two before it sent none
+        assert_eq!(item_db_snapshots(&events).len(), 2);
     }
 
     #[test]

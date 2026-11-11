@@ -13,6 +13,7 @@ use crate::ui::calcs::{CalcsOutput, CalcsUi};
 use crate::ui::config::ConfigUi;
 use crate::ui::items::{ItemsOutput, ItemsUi};
 use crate::ui::notes::NotesUi;
+use crate::ui::popup::{self, PopupWindow};
 use crate::ui::skills::{SkillsOutput, SkillsUi};
 use crate::ui::tree::{TreeOutput, TreeTab};
 use crate::ui::unsaved::{Pending, PromptChoice, Resolution, needs_prompt, resolve};
@@ -74,6 +75,10 @@ pub struct AutoPobApp {
     calcs: CalcsUi,
     skills: SkillsUi,
     items: ItemsUi,
+    /// The crafting popup window, whichever tab opened it
+    popup: PopupWindow,
+    /// The tab that opened the popup: leaving it closes the window
+    popup_tab: Option<BuildTab>,
     /// The seq of the raw item text last sent, to keep its window open on an error
     text_seq: Option<u64>,
     sidebar: sidebar::SidebarState,
@@ -122,6 +127,8 @@ impl AutoPobApp {
             calcs: CalcsUi::default(),
             skills: SkillsUi::default(),
             items: ItemsUi::default(),
+            popup: PopupWindow::default(),
+            popup_tab: None,
             text_seq: None,
             sidebar: sidebar::SidebarState::default(),
             notes: NotesUi::default(),
@@ -148,6 +155,11 @@ impl AutoPobApp {
 
     /// Sends a command whose snapshots the UI waits for.
     fn send(&mut self, command: Command) -> u64 {
+        if matches!(command, Command::OpenPopup(_)) {
+            // a late edit would end the new session (R4), so every pending one goes first
+            self.flush_edits();
+            self.popup_tab = Some(self.tab);
+        }
         #[cfg(test)]
         self.sent_full.push(format!("{command:?}"));
         #[cfg(test)]
@@ -159,7 +171,15 @@ impl AutoPobApp {
                 .to_owned(),
         );
         let is_notes = matches!(command, Command::SetNotes { .. });
+        let is_close = matches!(command, Command::ClosePopup);
+        let is_open = matches!(command, Command::OpenPopup(_));
         let seq = self.engine.send(command);
+        if is_open {
+            self.popup.open_sent(seq);
+        }
+        if is_close {
+            self.popup.close_sent(seq);
+        }
         self.last_sent = seq;
         if is_notes {
             self.notes.sent(seq);
@@ -212,6 +232,8 @@ impl AutoPobApp {
                     self.calcs.reset();
                     self.skills.reset();
                     self.items.reset();
+                    self.popup.reset();
+                    self.popup_tab = None;
                     self.sidebar = sidebar::SidebarState::default();
                     self.notes.reset();
                 }
@@ -237,8 +259,16 @@ impl AutoPobApp {
                     Snapshot::Items(_)
                     | Snapshot::DisplayItem(_)
                     | Snapshot::ItemTooltip(_)
-                    | Snapshot::ItemText(_) => self.items.on_snapshot_at(&snapshot, seq),
+                    | Snapshot::ItemText(_)
+                    | Snapshot::ItemDb(_) => self.items.on_snapshot_at(&snapshot, seq),
                     Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
+                    Snapshot::Popup(_) => self.popup.on_snapshot_at(&snapshot, seq),
+                    // the popup window, the display panel and the database panel each keep the
+                    // answers to their own questions
+                    Snapshot::ControlTooltip(_) => {
+                        self.popup.on_snapshot_at(&snapshot, seq);
+                        self.items.on_snapshot_at(&snapshot, seq);
+                    }
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
                     Snapshot::NodePower(_) | Snapshot::PowerReport(_)
@@ -258,6 +288,22 @@ impl AutoPobApp {
                 task: BackgroundTask::GemDps,
                 ..
             } => self.skills.on_gem_failed(),
+            Event::Progress {
+                task: BackgroundTask::AnointSort,
+                percent,
+            } => self.popup.on_progress(percent),
+            Event::BackgroundFailed {
+                task: BackgroundTask::AnointSort,
+                message,
+            } => self.popup.on_failed(message),
+            Event::Progress {
+                task: BackgroundTask::ItemDb,
+                percent,
+            } => self.items.on_db_progress(percent),
+            Event::BackgroundFailed {
+                task: BackgroundTask::ItemDb,
+                message,
+            } => self.items.on_db_failed(message),
             Event::Progress { percent, .. } => self.tree.on_progress(percent),
             Event::BackgroundFailed { message, .. } => {
                 self.tree.power_failed();
@@ -273,6 +319,8 @@ impl AutoPobApp {
     }
 
     fn on_error(&mut self, seq: u64, message: String) {
+        // the window stays open for another try (R4)
+        self.popup.on_error(seq);
         if self.text_seq == Some(seq) {
             self.text_seq = None;
             // the raw-text window stays open for another try
@@ -330,10 +378,16 @@ impl AutoPobApp {
         if let Some(command) = self.sidebar.flush() {
             self.send(command);
         }
+        if let Some(command) = self.calcs.flush() {
+            self.send(command);
+        }
         if let Some(command) = self.skills.flush() {
             self.send(command);
         }
         for command in self.items.flush() {
+            self.send(command);
+        }
+        if let Some(command) = self.popup.flush() {
             self.send(command);
         }
     }
@@ -450,6 +504,10 @@ impl AutoPobApp {
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.prompt = Some(Pending::Close);
+            // the prompt sits under the window's modal layer, so the window goes first
+            if let Some(command) = self.popup.close() {
+                self.send(command);
+            }
         }
 
         for action in std::mem::take(&mut self.ready_actions) {
@@ -564,7 +622,8 @@ impl AutoPobApp {
             || self.import.is_some()
             || self.tree.has_dialog()
             || self.skills.has_dialog()
-            || self.items.has_dialog();
+            || self.items.has_dialog()
+            || self.popup.is_blocking();
         // a focused button or row doesn't take Ctrl+Z from the tab
         let typing = ui.ctx().text_edit_focused();
         let mut action = None;
@@ -622,7 +681,10 @@ impl AutoPobApp {
             build::tab_strip(ui, &mut self.tab);
             ui.separator();
             match self.tab {
-                BuildTab::Tree => tree_out = self.tree.show(ui, behind),
+                BuildTab::Tree => {
+                    self.tree.set_enabled_sockets(self.items.enabled_sockets());
+                    tree_out = self.tree.show(ui, behind);
+                }
                 BuildTab::Skills => {
                     let now = ui.input(|i| i.time);
                     skills_out = self.skills.show(ui, now, behind);
@@ -673,6 +735,28 @@ impl AutoPobApp {
                 self.send(command);
             }
             self.items.close_dialogs();
+            if let Some(command) = self.items.leave() {
+                self.send(command);
+            }
+        }
+        // leaving the tab that opened the window ends its session
+        if self.popup.is_open() && self.popup_tab != Some(self.tab) {
+            for command in self.popup.flush().into_iter().chain(self.popup.close()) {
+                self.send(command);
+            }
+        }
+        let popup_out = if self.popup.is_blocking() {
+            let now = ui.input(|i| i.time);
+            self.popup.show(ui.ctx(), now, behind)
+        } else {
+            popup::PopupOutput::default()
+        };
+        for command in popup_out.commands {
+            self.send(command);
+        }
+        // questions never leave the app waiting
+        for query in popup_out.queries {
+            self.engine.send(query);
         }
         for command in items_out.commands {
             let is_text = matches!(command, Command::SetDisplayItemText { .. });
@@ -695,6 +779,11 @@ impl AutoPobApp {
         }
         for command in tree_out.commands {
             self.send(command);
+        }
+        // PoB's right click on a jewel socket: the Items tab with that slot focused
+        if let Some(node) = tree_out.jump_to_socket {
+            self.tab = BuildTab::Items;
+            self.items.focus_slot(node);
         }
         // questions are answered with snapshots but never leave the app waiting
         for query in tree_out.queries {
@@ -773,6 +862,7 @@ impl AutoPobApp {
                 self.notes.discard();
                 self.skills.discard();
                 self.sidebar.discard();
+                self.calcs.discard();
                 self.ready_actions.push(pending);
             }
             Resolution::Stay => {}
@@ -1089,6 +1179,8 @@ mod tests {
                 group_center: None,
                 art: crate::engine::NodeArt::default(),
                 ascendancy: None,
+                replaceable: false,
+                mastery_effects: false,
             };
             Ok(crate::engine::TreeLayout {
                 version: "3_28".into(),
@@ -1194,6 +1286,10 @@ mod tests {
             Ok(None)
         }
 
+        fn item_db_view(&mut self) -> anyhow::Result<crate::engine::DbSnapshot> {
+            Ok(crate::engine::DbSnapshot::Quiet)
+        }
+
         fn gem_tooltip_view(
             &mut self,
             query: &crate::engine::GemTooltipQuery,
@@ -1212,6 +1308,17 @@ mod tests {
                 query: query.clone(),
                 tooltip: crate::engine::ItemTooltip::default(),
             }))
+        }
+
+        fn popup_view(&mut self) -> anyhow::Result<Option<crate::engine::PopupView>> {
+            Ok(None)
+        }
+
+        fn control_tooltip_view(
+            &mut self,
+            _query: &crate::engine::ControlTooltipQuery,
+        ) -> anyhow::Result<Option<crate::engine::ControlTooltipView>> {
+            Ok(None)
         }
 
         fn item_text(&mut self, id: u32) -> anyhow::Result<crate::engine::ItemText> {
@@ -2846,6 +2953,70 @@ mod tests {
     }
 
     #[test]
+    fn calcs_and_sidebar_counts_do_not_share_ids() {
+        let (app, _ctx) = notes_app();
+        assert_ne!(app.calcs.count_salt(), app.sidebar.count_salt());
+    }
+
+    #[test]
+    fn calcs_count_typed_then_save_is_flushed() {
+        let (mut app, ctx) = notes_app();
+        let mut view = crate::engine::views::CalcsView::default();
+        view.selector.stages = Some("1".into());
+        app.calcs.on_snapshot(&Snapshot::Calcs(Arc::new(view)));
+        app.tab = BuildTab::Calcs;
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        let pos = app.calcs.rects.map["stages"].center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![egui::Event::Text("3".into())],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        let before = app.sent_full.len();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::S, egui::Modifiers::COMMAND),
+        );
+        assert_eq!(
+            sent_since(&app, before),
+            ["SetCalcsCount { control: Stages, text: \"13\" }", "Save"]
+        );
+        // leaving the box doesn't send it again
+        let before = app.sent_full.len();
+        let away = egui::Pos2::new(900.0, 600.0);
+        let press = |pressed| egui::Event::PointerButton {
+            pos: away,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(away)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        let sent = sent_since(&app, before);
+        assert!(
+            !sent.iter().any(|c| c.contains("SetCalcsCount")),
+            "{sent:?}"
+        );
+    }
+
+    #[test]
     fn a_build_switch_clears_a_pending_stage_count() {
         let (mut app, _ctx, _) = stages_app();
         assert!(app.sidebar.has_pending());
@@ -2980,6 +3151,616 @@ mod tests {
         assert_eq!(
             sent_since(&app, before),
             ["SetNotes { text: \"my notes\" }", "Save"]
+        );
+    }
+
+    // ---- the crafting popup window ------------------------------------------------------
+
+    fn corrupt_display() -> crate::engine::DisplayItemView {
+        crate::engine::DisplayItemView {
+            popups: vec![crate::engine::PopupKind::Corrupt],
+            ..display_with_quality()
+        }
+    }
+
+    fn popup_view(kind: crate::engine::PopupKind) -> crate::engine::PopupView {
+        crate::engine::PopupView {
+            kind,
+            title: "Corrupt Item".into(),
+            controls: vec![],
+        }
+    }
+
+    /// The items tab with the display item offering "Corrupt...", and the popup open as the
+    /// engine would report it after the button was pressed.
+    fn pending_popup_app() -> (AutoPobApp, egui::Context) {
+        let (mut app, ctx) = items_app();
+        app.on_event(Event::Snapshot {
+            seq: 91,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(corrupt_display()))),
+        });
+        for _ in 0..4 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        click_item_key(&mut app, &ctx, "open_Corrupt...");
+        assert_eq!(app.sent_log.last().map(String::as_str), Some("OpenPopup"));
+        (app, ctx)
+    }
+
+    fn popup_app() -> (AutoPobApp, egui::Context) {
+        let (mut app, ctx) = pending_popup_app();
+        app.on_event(Event::Snapshot {
+            seq: 92,
+            snapshot: Snapshot::Popup(Some(Arc::new(popup_view(
+                crate::engine::PopupKind::Corrupt,
+            )))),
+        });
+        frame(&mut app, &ctx, vec![]);
+        (app, ctx)
+    }
+
+    #[test]
+    fn popup_window_closes_on_tab_leave() {
+        let (mut app, ctx) = popup_app();
+        assert!(app.popup.is_open());
+        assert_eq!(app.popup_tab, Some(BuildTab::Items));
+        let before = app.sent_full.len();
+        app.tab = BuildTab::Config;
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(sent_since(&app, before), ["ClosePopup"]);
+        assert!(!app.popup.is_open());
+        // a view still on its way from before the close doesn't bring it back
+        app.on_event(Event::Snapshot {
+            seq: app.last_sent,
+            snapshot: Snapshot::Popup(Some(Arc::new(popup_view(
+                crate::engine::PopupKind::Corrupt,
+            )))),
+        });
+        assert!(!app.popup.is_open());
+    }
+
+    #[test]
+    fn popup_window_closes_on_engine_restart() {
+        let (mut app, _ctx) = popup_app();
+        assert!(app.popup.is_open());
+        app.restart();
+        assert!(!app.popup.is_open());
+        assert_eq!(app.popup_tab, None);
+    }
+
+    #[test]
+    fn popup_window_resets_for_another_build() {
+        let (mut app, ctx) = popup_app();
+        app.entering = Some(100);
+        app.on_event(Event::Snapshot {
+            seq: 100,
+            snapshot: Snapshot::Items(Arc::new(crate::ui::items::tests::sample())),
+        });
+        assert!(!app.popup.is_open());
+        frame(&mut app, &ctx, vec![]);
+    }
+
+    #[test]
+    fn open_popup_flushes_pending_edits_first() {
+        let (mut app, ctx) = items_app();
+        app.stats = Some(Arc::new(crate::engine::views::StatsView {
+            main_skill: crate::engine::views::MainSkillSelector {
+                stages: Some("1".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
+        app.on_event(Event::Snapshot {
+            seq: 91,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(corrupt_display()))),
+        });
+        for _ in 0..4 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        let stages: egui::Rect = ctx
+            .data(|d| d.get_temp(egui::Id::NULL.with(("sidebar_rect", "stages".to_owned()))))
+            .expect("the stages box is drawn");
+        let press = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(stages.center())],
+            vec![press(stages.center(), true)],
+            vec![press(stages.center(), false)],
+            vec![egui::Event::Text("2".into())],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        assert!(app.sidebar.has_pending());
+        // whatever opens the window (the button, the tree's right click), the box still holds
+        // its focus and its text when the command goes out
+        let before = app.sent_full.len();
+        app.send(Command::OpenPopup(crate::engine::PopupKind::Corrupt));
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(
+            sent_since(&app, before),
+            [
+                "SetMainSkillCount { control: Stages, text: \"12\" }",
+                "OpenPopup(Corrupt)"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_open_popup_blocks_shortcuts_and_the_tab_behind() {
+        let (mut app, ctx) = popup_app();
+        let before = app.sent_full.len();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::S, egui::Modifiers::COMMAND),
+        );
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Z, egui::Modifiers::COMMAND),
+        );
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        // a click on the panel behind the window would end the session
+        let pos = app.items.rect("cancel").center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        assert!(app.popup.is_open());
+    }
+
+    /// Clicks over a grid of points, so every widget in the region gets pressed.
+    fn click_sweep(
+        app: &mut AutoPobApp,
+        ctx: &egui::Context,
+        xs: std::ops::Range<u32>,
+        ys: std::ops::Range<u32>,
+        step: usize,
+    ) {
+        for y in ys.step_by(step) {
+            for x in xs.clone().step_by(step) {
+                let pos = egui::Pos2::new(x as f32, y as f32);
+                let press = |pressed| egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                for events in [
+                    vec![egui::Event::PointerMoved(pos)],
+                    vec![press(true)],
+                    vec![press(false)],
+                ] {
+                    frame(app, ctx, events);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_open_popup_blocks_the_top_bar_the_tabs_and_the_sidebar() {
+        let (mut app, ctx) = popup_app();
+        let before = app.sent_full.len();
+        // top bar (Back, Save, Save as, undo, redo), the tab strip and the sidebar
+        click_sweep(&mut app, &ctx, 0..700, 0..120, 10);
+        click_sweep(&mut app, &ctx, 0..300, 120..400, 30);
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        assert_eq!(app.tab, BuildTab::Items);
+        assert_eq!(app.screen, Screen::Build);
+        assert!(app.prompt.is_none() && app.save_as.is_none());
+        assert!(app.popup.is_open());
+    }
+
+    #[test]
+    fn the_ui_is_blocked_from_the_opener_press_until_the_view_or_an_error() {
+        let (mut app, ctx) = items_app();
+        app.on_event(Event::Snapshot {
+            seq: 91,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(corrupt_display()))),
+        });
+        for _ in 0..4 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        click_item_key(&mut app, &ctx, "open_Corrupt...");
+        frame(&mut app, &ctx, vec![]);
+        assert!(!app.popup.is_open());
+        assert!(app.popup.is_blocking(), "OpenPopup is pending");
+        // Cancel, behind the pending window, would end the session
+        let before = app.sent_full.len();
+        click_item_key(&mut app, &ctx, "cancel");
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        // an error for the open frees the UI
+        let open_seq = app.last_sent;
+        app.on_event(Event::Error {
+            seq: open_seq,
+            message: "refused".into(),
+        });
+        assert!(!app.popup.is_blocking());
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        click_item_key(&mut app, &ctx, "cancel");
+        assert_eq!(
+            sent_since(&app, before),
+            ["CancelDisplayItem { if_id: None }"]
+        );
+    }
+
+    #[test]
+    fn the_view_frees_a_pending_open() {
+        let (mut app, ctx) = items_app();
+        app.on_event(Event::Snapshot {
+            seq: 91,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(corrupt_display()))),
+        });
+        for _ in 0..4 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        click_item_key(&mut app, &ctx, "open_Corrupt...");
+        // a view older than the open doesn't count
+        app.on_event(Event::Snapshot {
+            seq: 1,
+            snapshot: Snapshot::Popup(None),
+        });
+        assert!(app.popup.is_blocking());
+        app.on_event(Event::Snapshot {
+            seq: app.last_sent,
+            snapshot: Snapshot::Popup(Some(Arc::new(popup_view(
+                crate::engine::PopupKind::Corrupt,
+            )))),
+        });
+        assert!(app.popup.is_open());
+    }
+
+    #[test]
+    fn closing_the_window_with_the_popup_open_closes_it_and_shows_the_prompt() {
+        let (mut app, ctx) = popup_app();
+        app.notes.type_for_test("my notes", 0.0);
+        let before = app.sent_full.len();
+        ctx.run_ui(
+            egui::RawInput {
+                viewports: std::iter::once((
+                    egui::ViewportId::ROOT,
+                    egui::ViewportInfo {
+                        events: vec![egui::ViewportEvent::Close],
+                        ..Default::default()
+                    },
+                ))
+                .collect(),
+                ..Default::default()
+            },
+            |ui| app.show(ui),
+        )
+        .drop_without_applying_deltas();
+        assert_eq!(app.prompt, Some(Pending::Close));
+        assert!(
+            !app.popup.is_open(),
+            "the prompt must not hide under the modal"
+        );
+        assert!(sent_since(&app, before).contains(&"ClosePopup"));
+    }
+
+    #[test]
+    fn closing_the_window_while_the_open_is_pending_closes_the_popup_too() {
+        let (mut app, ctx) = pending_popup_app();
+        assert!(app.popup.is_blocking() && !app.popup.is_open());
+        app.notes.type_for_test("my notes", 0.0);
+        let open_seq = app.last_sent;
+        let before = app.sent_full.len();
+        ctx.run_ui(
+            egui::RawInput {
+                viewports: std::iter::once((
+                    egui::ViewportId::ROOT,
+                    egui::ViewportInfo {
+                        events: vec![egui::ViewportEvent::Close],
+                        ..Default::default()
+                    },
+                ))
+                .collect(),
+                ..Default::default()
+            },
+            |ui| app.show(ui),
+        )
+        .drop_without_applying_deltas();
+        assert_eq!(app.prompt, Some(Pending::Close));
+        assert!(sent_since(&app, before).contains(&"ClosePopup"));
+        // the window the engine opens before it hears of the close never shows
+        app.on_event(Event::Snapshot {
+            seq: open_seq,
+            snapshot: Snapshot::Popup(Some(Arc::new(popup_view(
+                crate::engine::PopupKind::Corrupt,
+            )))),
+        });
+        assert!(!app.popup.is_open());
+        assert!(!app.popup.is_blocking());
+    }
+
+    #[test]
+    fn a_popup_error_is_a_notice_and_keeps_the_window() {
+        let (mut app, ctx) = popup_app();
+        app.on_event(Event::Error {
+            seq: 93,
+            message: "the list changed; pick again".into(),
+        });
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.notices, ["the list changed; pick again"]);
+        assert!(app.popup.is_open());
+    }
+
+    // ---- the database panel and the tree's right click ----------------------------------------
+
+    /// The tree tab with an allocated jewel socket (node 26725), and the items view whose
+    /// "Jewel 5" slot belongs to it. `enabled`: PoB lets the slot be used.
+    fn socket_app(enabled: bool) -> (AutoPobApp, egui::Context) {
+        use crate::engine::{NodeArt, TreeLayout, TreeNode, TreeState};
+        let (mut app, ctx) = tree_app();
+        let layout = TreeLayout {
+            version: "3_28".into(),
+            nodes: vec![TreeNode {
+                id: 26725,
+                pos: [0.0, 0.0],
+                kind: "Socket".into(),
+                name: "Jewel Socket".into(),
+                stats: vec![],
+                orbit: None,
+                group_center: None,
+                art: NodeArt::default(),
+                ascendancy: None,
+                replaceable: false,
+                mastery_effects: false,
+            }],
+            edges: vec![],
+            sheets: vec![],
+            key: "socket".into(),
+        };
+        let state: TreeState = serde_json::from_value(serde_json::json!({
+            "version": "3_28", "version_label": "3.28", "class_id": 0, "ascendancy_id": 0,
+            "points": { "used": 1, "available": 122, "ascendancy_used": 0,
+                        "ascendancy_available": 8 },
+            "allocated": [26725],
+            "active_spec": 0, "can_undo": false, "can_redo": false,
+        }))
+        .unwrap();
+        app.tree
+            .on_snapshot(&Snapshot::TreeLayout(Arc::new(layout)));
+        app.tree.on_snapshot(&Snapshot::Tree(Arc::new(state)));
+        let mut items = crate::ui::items::tests::sample();
+        items.slots[9].node = Some(26725);
+        items.slots[9].enabled = enabled;
+        app.on_event(Event::Snapshot {
+            seq: 90,
+            snapshot: Snapshot::Items(Arc::new(items)),
+        });
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        (app, ctx)
+    }
+
+    fn right_click_socket(app: &mut AutoPobApp, ctx: &egui::Context) {
+        let rect = app.tree.rect.expect("drawn");
+        let pos = app.tree.camera.to_screen(rect, [0.0, 0.0]);
+        let secondary = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![secondary(true)],
+            vec![secondary(false)],
+        ] {
+            frame(app, ctx, events);
+        }
+    }
+
+    #[test]
+    fn jump_to_socket_switches_to_items_and_focuses_slot() {
+        let (mut app, ctx) = socket_app(true);
+        assert_eq!(app.tab, BuildTab::Tree);
+        let before = app.sent_full.len();
+        right_click_socket(&mut app, &ctx);
+        assert_eq!(app.tab, BuildTab::Items);
+        assert_eq!(app.items.focused_slot(), Some("Jewel 5"));
+        // the slot's dropdown is drawn open on the Items tab; the jump sends nothing
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.items.focused_slot(), None);
+        assert!(
+            egui::Popup::is_any_open(&ctx),
+            "the slot's dropdown is open"
+        );
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn a_socket_whose_slot_is_not_enabled_does_not_jump() {
+        let (mut app, ctx) = socket_app(false);
+        right_click_socket(&mut app, &ctx);
+        assert_eq!(app.tab, BuildTab::Tree);
+        assert_eq!(app.items.focused_slot(), None);
+    }
+
+    /// The items tab with the database panel open.
+    fn db_app() -> (AutoPobApp, egui::Context) {
+        let (mut app, ctx) = items_app();
+        for _ in 0..4 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        click_item_key(&mut app, &ctx, "db_header");
+        assert_eq!(app.sent_log.last().map(String::as_str), Some("SetItemDb"));
+        for _ in 0..4 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        (app, ctx)
+    }
+
+    #[test]
+    fn db_closed_on_tab_leave() {
+        let (mut app, ctx) = db_app();
+        let before = app.sent_full.len();
+        app.tab = BuildTab::Config;
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(sent_since(&app, before), ["CloseItemDb"]);
+        // back on the tab, the open panel asks for its database again
+        app.tab = BuildTab::Items;
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(sent_since(&app, before)[1..].len(), 1);
+        assert!(sent_since(&app, before)[1].starts_with("SetItemDb("));
+    }
+
+    #[test]
+    fn db_progress_and_failure_events_reach_the_panel() {
+        let (mut app, ctx) = db_app();
+        let mut sorting = crate::ui::items::tests::db_view_for_app();
+        sorting.sorting = true;
+        sorting.rows.clear();
+        app.on_event(Event::Snapshot {
+            seq: 95,
+            snapshot: Snapshot::ItemDb(Some(Arc::new(sorting))),
+        });
+        app.on_event(Event::Progress {
+            task: BackgroundTask::ItemDb,
+            percent: 40,
+        });
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.items.rect("db_progress").width() > 0.0);
+        app.on_event(Event::BackgroundFailed {
+            task: BackgroundTask::ItemDb,
+            message: "boom".into(),
+        });
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.items.rect("db_retry").width() > 0.0);
+        assert!(app.notices.is_empty(), "the panel shows its own error");
+    }
+
+    /// A pending DB search goes out before `OpenPopup` (M10, R4).
+    #[test]
+    fn open_popup_flushes_the_db_search_first() {
+        let (mut app, ctx) = db_app();
+        click_item_key(&mut app, &ctx, "db_search");
+        frame(&mut app, &ctx, vec![egui::Event::Text("ring".into())]);
+        let before = app.sent_full.len();
+        app.send(Command::OpenPopup(crate::engine::PopupKind::Corrupt));
+        let sent = sent_since(&app, before);
+        assert_eq!(sent.len(), 2, "{sent:?}");
+        assert!(sent[0].starts_with("SetItemDb(") && sent[0].contains("\"ring\""));
+        assert_eq!(sent[1], "OpenPopup(Corrupt)");
+        // once: the box has nothing left to send
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(sent_since(&app, before).len(), 2);
+    }
+
+    /// Keyboard focus a widget under the popup's modal held must not let typing through (M5).
+    #[test]
+    fn typing_while_the_popup_opens_does_not_reach_the_boxes_behind() {
+        let (mut app, ctx) = items_app_typing();
+        assert!(ctx.text_edit_focused(), "the quality box holds the focus");
+        assert_eq!(app.items.quality_text(), "25");
+        let before = app.sent_full.len();
+        app.send(Command::OpenPopup(crate::engine::PopupKind::Corrupt));
+        // the edit that was being typed went out first
+        assert_eq!(sent_since(&app, before), [QUALITY, "OpenPopup(Corrupt)"]);
+        frame(&mut app, &ctx, vec![]);
+        app.on_event(Event::Snapshot {
+            seq: 99,
+            snapshot: Snapshot::Popup(Some(Arc::new(popup_view(
+                crate::engine::PopupKind::Corrupt,
+            )))),
+        });
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.popup.is_open());
+        // egui's modal takes the focus the box behind it held, so keys can't reach it
+        assert!(!ctx.text_edit_focused(), "the focus is gone");
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Backspace, egui::Modifiers::NONE),
+        );
+        frame(&mut app, &ctx, vec![egui::Event::Text("7".into())]);
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Enter, egui::Modifiers::NONE),
+        );
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(
+            sent_since(&app, before),
+            [QUALITY, "OpenPopup(Corrupt)"],
+            "typing under the window sent nothing"
+        );
+    }
+
+    /// The frames while `OpenPopup` is pending are typed into too (the spinner's modal).
+    #[test]
+    fn typing_while_the_popup_is_pending_does_not_reach_the_boxes_behind() {
+        let (mut app, ctx) = items_app_typing();
+        assert!(ctx.text_edit_focused(), "the quality box holds the focus");
+        let before = app.sent_full.len();
+        app.send(Command::OpenPopup(crate::engine::PopupKind::Corrupt));
+        assert!(app.popup.is_blocking() && !app.popup.is_open());
+        for _ in 0..2 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        // the box takes two characters, so a key must free one for the 7 to land
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Backspace, egui::Modifiers::NONE),
+        );
+        frame(&mut app, &ctx, vec![egui::Event::Text("7".into())]);
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Enter, egui::Modifiers::NONE),
+        );
+        frame(&mut app, &ctx, vec![]);
+        assert!(
+            !app.items.quality_text().contains('7'),
+            "the box behind took a key: {}",
+            app.items.quality_text()
+        );
+        assert_eq!(
+            sent_since(&app, before),
+            [QUALITY, "OpenPopup(Corrupt)"],
+            "typing while the open is pending sent nothing"
+        );
+    }
+
+    #[test]
+    fn anoint_sort_events_reach_the_popup() {
+        let (mut app, _ctx) = popup_app();
+        app.on_event(Event::Progress {
+            task: BackgroundTask::AnointSort,
+            percent: 55,
+        });
+        assert_eq!(app.popup.sort_line(), (Some(55), None));
+        app.on_event(Event::BackgroundFailed {
+            task: BackgroundTask::AnointSort,
+            message: "boom".into(),
+        });
+        assert_eq!(app.popup.sort_line(), (None, Some("boom")));
+        assert!(
+            app.notices.is_empty(),
+            "the window shows it: {:?}",
+            app.notices
         );
     }
 }

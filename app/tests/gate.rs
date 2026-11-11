@@ -19,10 +19,18 @@ use std::{
 
 #[path = "gate/calcs.rs"]
 mod calcs;
+#[path = "gate/crafting.rs"]
+mod crafting;
+#[path = "gate/item_db.rs"]
+mod item_db;
 #[path = "gate/items.rs"]
 mod items;
+#[path = "gate/items_harness.rs"]
+mod items_harness;
 #[path = "gate/skills.rs"]
 mod skills;
+#[path = "gate/tattoos.rs"]
+mod tattoos;
 
 /// PoB loads files relative to the process working directory, so only one test may run it.
 static CWD: Mutex<()> = Mutex::new(());
@@ -1945,10 +1953,34 @@ enum TreeAction {
         import: String,
         title: String,
     },
+    /// "Remove All Tattoos" on the Reset window
+    RemoveAllTattoos {
+        remove_all_tattoos: bool,
+    },
+    /// Recorded by popup_lib's `act.tattoo_open`, `act.popup_set`, `act.popup_press` and
+    /// `act.popup_close`
+    Popup(PopupAction),
     /// Not a command: upstream's tree state at this point in the recipe.
     Check {
         check: Checkpoint,
     },
+}
+
+/// A popup step of a tree recipe, as popup_lib records it.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(tag = "cmd")]
+enum PopupAction {
+    OpenPopup {
+        kind: auto_pob::engine::PopupKind,
+    },
+    SetPopupControl {
+        name: String,
+        value: auto_pob::engine::PopupInput,
+    },
+    PressPopupButton {
+        name: String,
+    },
+    ClosePopup,
 }
 
 /// A spec index, or `false` for "stop comparing" (the recipe's `act.compare`).
@@ -1969,6 +2001,59 @@ struct Checkpoint {
     active_spec: usize,
     #[serde(deserialize_with = "colours")]
     compare: Vec<CompareColour>,
+    /// The sidebar, when the recipe asked for it (`checkpoint{ sidebar = true }`)
+    #[serde(default)]
+    sidebar: Option<Vec<auto_pob::engine::upstream::SidebarLine>>,
+    /// The tattoo state, when the recipe asked for it (`checkpoint{ tattoos = true }`)
+    #[serde(default)]
+    tattoos: Option<TattooState>,
+}
+
+/// What `checkpoint{ tattoos = true }` records.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+struct TattooState {
+    /// (node, tattoo name), sorted by node
+    #[serde(deserialize_with = "lua_list")]
+    overrides: Vec<OverrideRecord>,
+    /// The stat lines of the nodes the recipe opened
+    #[serde(deserialize_with = "lua_list")]
+    touched: Vec<TouchedNode>,
+    /// The nodes PoB's right-click offers a replacement for, and the masteries with effects
+    #[serde(deserialize_with = "lua_list")]
+    replaceable: Vec<u32>,
+    #[serde(deserialize_with = "lua_list")]
+    mastery_effects: Vec<u32>,
+    undo_depth: usize,
+    can_undo: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+struct OverrideRecord {
+    id: u32,
+    dn: String,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+struct TouchedNode {
+    id: u32,
+    #[serde(deserialize_with = "lua_list")]
+    sd: Vec<String>,
+}
+
+/// A list from Lua, where an empty one arrives as an empty map.
+fn lua_list<'de, D: serde::Deserializer<'de>, T: serde::Deserialize<'de>>(
+    d: D,
+) -> Result<Vec<T>, D::Error> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum List<T> {
+        Items(Vec<T>),
+        Empty(#[allow(dead_code)] std::collections::BTreeMap<String, ()>),
+    }
+    Ok(match serde::Deserialize::deserialize(d)? {
+        List::Items(items) => items,
+        List::Empty(_) => Vec::new(),
+    })
 }
 
 /// A list from Lua, where an empty one arrives as an empty map.
@@ -2033,6 +2118,18 @@ impl TreeAction {
                 version: convert_all,
             },
             TreeAction::Import { import, title } => Command::ImportTreeLink { title, url: import },
+            TreeAction::RemoveAllTattoos { remove_all_tattoos } => {
+                assert!(remove_all_tattoos);
+                Command::RemoveAllTattoos
+            }
+            TreeAction::Popup(PopupAction::OpenPopup { kind }) => Command::OpenPopup(kind),
+            TreeAction::Popup(PopupAction::SetPopupControl { name, value }) => {
+                Command::SetPopupControl { name, value }
+            }
+            TreeAction::Popup(PopupAction::PressPopupButton { name }) => {
+                Command::PressPopupButton { name }
+            }
+            TreeAction::Popup(PopupAction::ClosePopup) => Command::ClosePopup,
             TreeAction::Check { .. } => return None,
         })
     }
@@ -2055,6 +2152,9 @@ struct TreeResult {
     /// Sorted by node
     compare: Vec<CompareColour>,
     sidebar: Vec<auto_pob::engine::upstream::SidebarLine>,
+    /// Node to the name of the tattoo on it
+    overrides: std::collections::BTreeMap<u32, String>,
+    can_undo: bool,
 }
 
 /// A recipe run in upstream PoB: the steps it took and where they ended.
@@ -2074,6 +2174,22 @@ fn upstream_with_tree_lib(base: &str) -> mlua::Lua {
     let xml = fixtures_dir().join(format!("{base}.xml"));
     load_xml(&lua, &fs::read_to_string(xml).unwrap(), base).unwrap();
     load_tree_lib(&lua);
+    // the popup steps of the tattoo recipe, and the sidebar a checkpoint can record
+    lua.load(fs::read_to_string(fixtures_dir().join("popup_lib.lua")).unwrap())
+        .set_name("=popup_lib")
+        .exec()
+        .expect("popup_lib.lua");
+    lua.globals()
+        .set(
+            "goldenSidebar",
+            lua.create_function(|lua, ()| {
+                let golden = golden_of(lua, Game::Poe1.pob_version())
+                    .map_err(|e| mlua::Error::external(e.to_string()))?;
+                lua.to_value(&golden.sidebar)
+            })
+            .unwrap(),
+        )
+        .unwrap();
     lua
 }
 
@@ -2111,12 +2227,18 @@ fn upstream_result(lua: &mlua::Lua) -> TreeResult {
         compare: Vec<CompareColour>,
         spec_titles: Vec<String>,
         active_spec: usize,
+        #[serde(deserialize_with = "lua_list")]
+        overrides: Vec<OverrideRecord>,
+        can_undo: bool,
     }
     let raw: Raw = lua
         .from_value(
             lua.load(
                 r#"
-                local allocated, masteries, titles = {}, {}, {}
+                local allocated, masteries, titles, overrides = {}, {}, {}, {}
+                for id, node in pairs(build.spec.hashOverrides) do
+                    overrides[#overrides + 1] = { id = id, dn = node.dn }
+                end
                 for id in pairs(build.spec.allocNodes) do allocated[#allocated + 1] = id end
                 table.sort(allocated)
                 for node, effect in pairs(build.spec.masterySelections) do
@@ -2130,6 +2252,7 @@ fn upstream_result(lua: &mlua::Lua) -> TreeResult {
                     ascendancy_id = build.spec.curAscendClassId, masteries = masteries,
                     compare = compareColours(),
                     spec_titles = titles, active_spec = build.treeTab.activeSpec - 1,
+                    overrides = overrides, can_undo = build.spec.undo[2] ~= nil,
                 }
                 "#,
             )
@@ -2148,6 +2271,8 @@ fn upstream_result(lua: &mlua::Lua) -> TreeResult {
         spec_titles: raw.spec_titles,
         active_spec: raw.active_spec,
         sidebar,
+        overrides: raw.overrides.into_iter().map(|o| (o.id, o.dn)).collect(),
+        can_undo: raw.can_undo,
     }
 }
 
@@ -2216,16 +2341,7 @@ fn our_tree_result(s: &mut Session) -> TreeResult {
     let mut masteries: Vec<(u32, u32)> =
         state.masteries.iter().map(|m| (m.node, m.effect)).collect();
     masteries.sort_unstable();
-    let sidebar = s
-        .stats()
-        .stats
-        .iter()
-        .map(|r| auto_pob::engine::upstream::SidebarLine {
-            label: r.label.clone(),
-            text: r.text.clone(),
-            notes: plain_notes(&r.notes),
-        })
-        .collect();
+    let sidebar = sidebar_of(s);
     TreeResult {
         allocated,
         tree_version: state.version.clone(),
@@ -2236,7 +2352,32 @@ fn our_tree_result(s: &mut Session) -> TreeResult {
         active_spec: state.active_spec,
         compare: state.compare,
         sidebar,
+        overrides: our_overrides(s),
+        can_undo: state.can_undo,
     }
+}
+
+/// The tattoos our PoB has on the active tree, node to name.
+fn our_overrides(s: &Session) -> std::collections::BTreeMap<u32, String> {
+    let list: Vec<OverrideRecord> = lua_value(
+        &s.backend.lua,
+        "local list = {} for id, node in pairs(pob.build.spec.hashOverrides) do \
+         list[#list + 1] = { id = id, dn = node.dn } end return list",
+    );
+    list.into_iter().map(|o| (o.id, o.dn)).collect()
+}
+
+/// Our sidebar lines in the shape upstream's golden data has them.
+fn sidebar_of(s: &mut Session) -> Vec<auto_pob::engine::upstream::SidebarLine> {
+    s.stats()
+        .stats
+        .iter()
+        .map(|r| auto_pob::engine::upstream::SidebarLine {
+            label: r.label.clone(),
+            text: r.text.clone(),
+            notes: plain_notes(&r.notes),
+        })
+        .collect()
 }
 
 /// Our tree state in the shape of a recipe's `checkpoint()`.
@@ -2250,6 +2391,8 @@ fn our_checkpoint(s: &mut Session) -> Checkpoint {
         spec_titles: state.specs.iter().map(|e| e.title.clone()).collect(),
         active_spec: state.active_spec,
         compare: state.compare,
+        sidebar: None,
+        tattoos: None,
     }
 }
 
@@ -2262,6 +2405,15 @@ fn attack_session(test: &str) -> Session {
 /// Replays a recipe as our commands and checks every checkpoint and the end state against
 /// upstream.
 fn check_recipe(name: &str) -> TreeRecipe {
+    check_recipe_with(name, &mut |_, _| {})
+}
+
+/// `check_recipe`, calling `hook` once before the first step (no checkpoint) and after each
+/// checkpoint matched, with upstream's record of it.
+fn check_recipe_with(
+    name: &str,
+    hook: &mut dyn FnMut(&mut Session, Option<&Checkpoint>),
+) -> TreeRecipe {
     let recipe = upstream_tree_recipe(name);
     assert!(!recipe.actions.is_empty(), "{name}: no actions recorded");
     let mut s = Session::start(&format!("tree-recipe-{name}"));
@@ -2280,6 +2432,7 @@ fn check_recipe(name: &str) -> TreeRecipe {
         }
     }
     let before = our_tree_result(&mut s);
+    hook(&mut s, None);
     for action in &recipe.actions {
         match action.command() {
             Some(command) => {
@@ -2290,7 +2443,12 @@ fn check_recipe(name: &str) -> TreeRecipe {
                 let TreeAction::Check { check } = action else {
                     unreachable!()
                 };
-                assert_eq!(&our_checkpoint(&mut s), check, "{name}: checkpoint");
+                let mut ours = our_checkpoint(&mut s);
+                // the sidebar and the tattoo state are compared where they are recorded
+                ours.sidebar = check.sidebar.as_ref().map(|_| sidebar_of(&mut s));
+                ours.tattoos = check.tattoos.clone();
+                assert_eq!(&ours, check, "{name}: checkpoint");
+                hook(&mut s, Some(check));
             }
         }
     }
@@ -2391,7 +2549,11 @@ fn tree_round_trip() {
     let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
     load_xml(&lua, &fs::read_to_string(saved).unwrap(), "round-trip").unwrap();
     load_tree_lib(&lua);
-    assert_eq!(ours, upstream_result(&lua));
+    // a loaded build starts with no undo history; the edits made here have some
+    let mut reloaded = upstream_result(&lua);
+    assert!(ours.can_undo && !reloaded.can_undo);
+    reloaded.can_undo = ours.can_undo;
+    assert_eq!(ours, reloaded);
 }
 
 #[test]

@@ -60,6 +60,8 @@ pub(super) fn layout(lua: &Lua, pob_dir: &Path) -> mlua::Result<TreeLayout> {
                 group_center: group_x.zip(group_y).map(|(x, y)| [x, y]),
                 art: node_art(&node.get::<Table>("art")?)?,
                 ascendancy: node.get("ascendancy")?,
+                replaceable: node.get("replaceable")?,
+                mastery_effects: node.get("mastery_effects")?,
             })
         })
         .collect::<mlua::Result<Vec<_>>>()?;

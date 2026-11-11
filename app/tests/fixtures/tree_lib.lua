@@ -243,16 +243,74 @@ function compareColours()
 	return colours
 end
 
+-- The nodes the tattoo steps opened, for `checkpoint{ tattoos = true }`
+touched = {}
+
+local function sorted(list, key)
+	table.sort(list, function(a, b) return a[key] < b[key] end)
+	return list
+end
+
+-- Whether PassiveTreeView's right-click offers node replacement for the node, and whether it
+-- offers the mastery effects window (PassiveTreeView.lua:519-532). Written out from there:
+-- the replacement test has no mastery case of its own, an unallocated mastery with effects
+-- opens the same window as the last branch.
+function offersReplacement(node)
+	return (node.isTattoo
+		or (node.type == "Normal" and (node.dn == "Strength" or node.dn == "Dexterity" or node.dn == "Intelligence"))
+		or (node.type == "Notable" and #node.sd > 0 and (node.sd[1]:match("+30 to Dexterity") or node.sd[1]:match("+30 to Strength") or node.sd[1]:match("+30 to Intelligence")))
+		or node.type == "Keystone") and not node.expansionSkill and true or false
+end
+
+function offersMastery(node)
+	return node.type == "Mastery" and node.masteryEffects and true or false
+end
+
 -- The tree state right now, recorded for the gate to compare with ours at this point.
-function checkpoint()
+-- `opts.tattoos` adds the tattoo state and `opts.sidebar` the sidebar lines.
+function checkpoint(opts)
+	opts = opts or {}
 	local allocated, titles = {}, {}
 	for id in pairs(build.spec.allocNodes) do allocated[#allocated + 1] = id end
 	table.sort(allocated)
 	for i, spec in ipairs(build.treeTab.specList) do titles[i] = spec.title or "Default" end
-	table.insert(actions, { check = {
+	local check = {
 		allocated = allocated, spec_titles = titles, tree_version = build.spec.treeVersion,
 		active_spec = build.treeTab.activeSpec - 1, compare = compareColours(),
-	} })
+	}
+	if opts.sidebar then check.sidebar = goldenSidebar() end
+	if opts.tattoos then
+		local overrides, stats, replaceable, mastery = {}, {}, {}, {}
+		for id, node in pairs(build.spec.hashOverrides) do
+			overrides[#overrides + 1] = { id = id, dn = node.dn }
+		end
+		for id in pairs(touched) do
+			stats[#stats + 1] = { id = id, sd = build.spec.nodes[id].sd }
+		end
+		for id, node in pairs(build.spec.nodes) do
+			if node.x then
+				if offersReplacement(node) then replaceable[#replaceable + 1] = id end
+				if offersMastery(node) then mastery[#mastery + 1] = id end
+			end
+		end
+		table.sort(replaceable)
+		table.sort(mastery)
+		check.tattoos = {
+			overrides = sorted(overrides, "id"), touched = sorted(stats, "id"),
+			replaceable = replaceable, mastery_effects = mastery,
+			undo_depth = #build.spec.undo, can_undo = build.spec.undo[2] ~= nil,
+		}
+	end
+	table.insert(actions, { check = check })
+end
+
+-- "Remove All Tattoos" on the Reset Tree/Tattoos window (TreeTab.lua:129-148)
+function act.remove_all_tattoos()
+	build.treeTab.controls.reset.onClick()
+	pressPopup(nil, "removeTattoo")
+	assert(#main.popups == 0, "the reset window stayed open")
+	table.insert(actions, { remove_all_tattoos = true })
+	frame()
 end
 
 -- The best node by (pathDist, id) among the unallocated nodes that `ok` accepts.
@@ -358,4 +416,30 @@ function pick.unconnected_class()
 	end
 	assert(best, "every class is connected")
 	return build.spec.tree.classes[best].name
+end
+
+-- How many replacements ModifyNodePopup offers for the node (its Modifier dropdown's entries)
+local function candidates(node)
+	local depth = #main.popups
+	build.treeTab:ModifyNodePopup(node)
+	local count = #main.popups[1].controls.modSelect.list
+	while #main.popups > depth do main:ClosePopup() end
+	return count
+end
+
+-- The nearest unallocated main-tree small attribute node called `name` ("Strength") that
+-- offers at least two replacements.
+function pick.attribute(name)
+	return nearest(function(node)
+		return node.type == "Normal" and node.dn == name and not node.ascendancyName
+			and not node.isProxy and candidates(node) >= 2
+	end)
+end
+
+-- The nearest unallocated main-tree keystone that offers at least two replacements.
+function pick.keystone()
+	return nearest(function(node)
+		return node.type == "Keystone" and not node.ascendancyName and not node.isProxy
+			and not node.expansionSkill and candidates(node) >= 2
+	end)
 end

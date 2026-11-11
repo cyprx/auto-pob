@@ -3,13 +3,17 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use super::commands::{Command, GemSearchQuery, GemTooltipQuery, ItemTooltipQuery};
-use super::run::{Affected, Backend, BackgroundTask, Event};
+use super::commands::{
+    Command, ControlTooltipQuery, GemSearchQuery, GemTooltipQuery, ItemTooltipQuery, PopupKind,
+};
+use super::pob::{ends_item_db, ends_popup_session};
+use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Event};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, DisplayItemView,
-    GemSearchView, GemTooltipView, GroupTooltipView, ItemText, ItemTooltip, ItemTooltipView,
-    ItemsView, NodePower, NodeTooltip, NotesView, Points, PowerReport, SkillsView, SocketGroupText,
-    StatsView, TooltipLine, TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, ControlTooltipView,
+    DisplayItemView, DropList, GemSearchView, GemTooltipView, GroupTooltipView, ItemDbView,
+    ItemText, ItemTooltip, ItemTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, Points,
+    PopupView, PowerReport, SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout,
+    TreeState,
 };
 
 #[derive(Default, Debug)]
@@ -21,6 +25,8 @@ pub struct Log {
     pub step_tasks: Vec<BackgroundTask>,
     /// The text of each gem search view sent
     pub gem_searches: Vec<String>,
+    /// The query of each item database view sent
+    pub item_dbs: Vec<crate::engine::ItemDbQuery>,
     /// Recalculations that found a search open, and so marked its DPS job pending
     pub gem_restarts: usize,
     pub previews: Vec<u32>,
@@ -28,6 +34,7 @@ pub struct Log {
     pub copies: Vec<usize>,
     pub tooltips: Vec<usize>,
     pub item_tooltips: Vec<ItemTooltipQuery>,
+    pub control_tooltips: Vec<ControlTooltipQuery>,
     pub releases: usize,
 }
 
@@ -41,8 +48,16 @@ pub struct Fake {
     pub background: Arc<Mutex<VecDeque<Step>>>,
     /// Gem DPS steps still to run; they go before the power steps.
     pub gem_background: Arc<Mutex<VecDeque<Step>>>,
+    /// Anoint sort steps still to run; they go after the gem steps and before the power steps.
+    pub anoint_background: Arc<Mutex<VecDeque<Step>>>,
+    /// Item database steps still to run; they go after the Anoint steps, before the power steps.
+    pub item_db_background: Arc<Mutex<VecDeque<Step>>>,
     /// The open gem search
     pub gem_search: Option<GemSearchQuery>,
+    /// The open item database
+    pub item_db: Option<crate::engine::ItemDbQuery>,
+    /// The database closed; `ItemDb(None)` is still to be sent
+    item_db_ended: bool,
     /// Replaces the queue when a command returns `build` or `recalc`.
     pub restart_on_build: Vec<Step>,
     /// Called after each step with the number of steps run so far.
@@ -53,6 +68,10 @@ pub struct Fake {
     pub tooltip_vanished: bool,
     /// `item_tooltip_view` answers `None`, as for an item that no longer exists.
     pub item_vanished: bool,
+    /// `control_tooltip_view` answers `None`, as for a control that no longer exists.
+    pub control_vanished: bool,
+    /// The open popup session
+    pub popup: Option<PopupKind>,
     /// `breakdown_view` fails with this message.
     pub fail_breakdown: Option<String>,
     /// `build_loaded` answers this; PoB starts without a build when it was left on the list.
@@ -68,12 +87,18 @@ impl Fake {
                 fail_set_config: None,
                 background: Arc::default(),
                 gem_background: Arc::default(),
+                anoint_background: Arc::default(),
+                item_db_background: Arc::default(),
+                item_db: None,
+                item_db_ended: false,
                 gem_search: None,
                 restart_on_build: Vec::new(),
                 on_step: None,
                 on_release: None,
                 tooltip_vanished: false,
                 item_vanished: false,
+                control_vanished: false,
+                popup: None,
                 fail_breakdown: None,
                 build_loaded: true,
             },
@@ -126,12 +151,31 @@ impl Fake {
                 self.gem_search = None;
                 Ok(Affected::default())
             }
+            Command::SetItemDb(query) => {
+                self.item_db = Some(query);
+                self.item_db_ended = false;
+                Ok(Affected {
+                    item_db: true,
+                    ..Affected::default()
+                })
+            }
             Command::GemTooltip(query) => Ok(Affected {
                 gem_tooltip: Some(query),
                 ..Affected::default()
             }),
             Command::ItemTooltip(query) => Ok(Affected {
                 item_tooltip: Some(query),
+                ..Affected::default()
+            }),
+            Command::OpenPopup(kind) => {
+                self.popup = Some(kind);
+                Ok(Affected {
+                    popup: true,
+                    ..Affected::default()
+                })
+            }
+            Command::ControlTooltip(query) => Ok(Affected {
+                control_tooltip: Some(query),
                 ..Affected::default()
             }),
             Command::CopyItem { id } => Ok(Affected {
@@ -153,7 +197,17 @@ impl Fake {
 
 impl Backend for Fake {
     fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
-        let affected = self.apply_command(command)?;
+        let ends = ends_popup_session(&command);
+        let ends_db = ends_item_db(&command);
+        let mut affected = self.apply_command(command)?;
+        if ends_db && self.item_db.take().is_some() {
+            self.item_db_ended = true;
+            affected.item_db = true;
+        }
+        // a command that failed changed nothing, so it leaves the session open
+        if ends && self.popup.take().is_some() {
+            affected.popup = true;
+        }
         if (affected.build || affected.recalc) && !self.restart_on_build.is_empty() {
             *self.background.lock().unwrap() = self.restart_on_build.iter().cloned().collect();
         }
@@ -257,6 +311,10 @@ impl Backend for Fake {
     fn next_background(&self) -> Option<BackgroundTask> {
         if !self.gem_background.lock().unwrap().is_empty() {
             Some(BackgroundTask::GemDps)
+        } else if !self.anoint_background.lock().unwrap().is_empty() {
+            Some(BackgroundTask::AnointSort)
+        } else if self.item_db.is_some() && !self.item_db_background.lock().unwrap().is_empty() {
+            Some(BackgroundTask::ItemDb)
         } else if !self.background.lock().unwrap().is_empty() {
             Some(BackgroundTask::NodePower)
         } else {
@@ -267,10 +325,15 @@ impl Backend for Fake {
     fn background_step(
         &mut self,
         task: BackgroundTask,
-        _send: &dyn Fn(Event),
+        send: &dyn Fn(Event),
     ) -> anyhow::Result<Affected> {
+        if task == BackgroundTask::ItemDb {
+            send(Event::Progress { task, percent: 50 });
+        }
         let queue = match task {
             BackgroundTask::GemDps => self.gem_background.clone(),
+            BackgroundTask::AnointSort => self.anoint_background.clone(),
+            BackgroundTask::ItemDb => self.item_db_background.clone(),
             BackgroundTask::NodePower => self.background.clone(),
         };
         let step = queue.lock().unwrap().pop_front();
@@ -314,6 +377,32 @@ impl Backend for Fake {
         }))
     }
 
+    fn item_db_view(&mut self) -> anyhow::Result<DbSnapshot> {
+        if std::mem::take(&mut self.item_db_ended) {
+            return Ok(DbSnapshot::Ended);
+        }
+        let Some(query) = self.item_db.clone() else {
+            return Ok(DbSnapshot::Quiet);
+        };
+        self.log.lock().unwrap().item_dbs.push(query.clone());
+        Ok(DbSnapshot::View(ItemDbView {
+            db: query.db,
+            loading: false,
+            sorting: !self.item_db_background.lock().unwrap().is_empty(),
+            percent: None,
+            slot: DropList::default(),
+            kind: DropList::default(),
+            league: None,
+            requirement: None,
+            obtainable: None,
+            sort: None,
+            search: query.search,
+            search_mode: DropList::default(),
+            rows: vec![],
+            note: String::new(),
+        }))
+    }
+
     fn gem_tooltip_view(&mut self, query: &GemTooltipQuery) -> anyhow::Result<GemTooltipView> {
         Ok(GemTooltipView {
             query: query.clone(),
@@ -330,6 +419,32 @@ impl Backend for Fake {
             return Ok(None);
         }
         Ok(Some(ItemTooltipView {
+            query: query.clone(),
+            tooltip: ItemTooltip::default(),
+        }))
+    }
+
+    fn popup_view(&mut self) -> anyhow::Result<Option<PopupView>> {
+        Ok(self.popup.clone().map(|kind| PopupView {
+            kind,
+            title: "popup".into(),
+            controls: vec![],
+        }))
+    }
+
+    fn control_tooltip_view(
+        &mut self,
+        query: &ControlTooltipQuery,
+    ) -> anyhow::Result<Option<ControlTooltipView>> {
+        self.log
+            .lock()
+            .unwrap()
+            .control_tooltips
+            .push(query.clone());
+        if self.control_vanished {
+            return Ok(None);
+        }
+        Ok(Some(ControlTooltipView {
             query: query.clone(),
             tooltip: ItemTooltip::default(),
         }))

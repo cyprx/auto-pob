@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::commands::{GemSearchQuery, GemTooltipQuery, ItemTooltipQuery};
+use super::commands::{
+    ControlTooltipQuery, GemSearchQuery, GemTooltipQuery, ItemDb, ItemTooltipQuery, PopupKind,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -294,6 +296,12 @@ pub struct TreeNode {
     pub art: NodeArt,
     /// The ascendancy the node belongs to
     pub ascendancy: Option<String>,
+    /// Whether PoB's right-click offers to replace this node's modifier: a tattoo, a small
+    /// attribute, a "+30 to" attribute notable, or a keystone that isn't an expansion skill
+    /// (R18, PassiveTreeView.lua:519-526)
+    pub replaceable: bool,
+    /// Whether the node is a mastery with effects to choose from (R19)
+    pub mastery_effects: bool,
 }
 
 /// The build's state on the active tree.
@@ -458,6 +466,46 @@ pub struct GemSearchView {
     /// The search's group is gone (a recalculation added or dropped an item group); this is
     /// the last view of the search.
     pub ended: bool,
+}
+
+/// An item database panel: PoB's controls and, once its list builder ends, the rows (R13-R16).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ItemDbView {
+    pub db: ItemDb,
+    /// PoB is still loading the databases
+    pub loading: bool,
+    /// The list builder hasn't ended; no rows are sent until it has
+    pub sorting: bool,
+    pub percent: Option<u32>,
+    pub slot: DropList,
+    pub kind: DropList,
+    /// The uniques database only
+    #[serde(default)]
+    pub league: Option<DropList>,
+    #[serde(default)]
+    pub requirement: Option<DropList>,
+    #[serde(default)]
+    pub obtainable: Option<DropList>,
+    #[serde(default)]
+    pub sort: Option<DropList>,
+    pub search: String,
+    pub search_mode: DropList,
+    #[serde(default)]
+    pub rows: Vec<DbRow>,
+    /// The list's own text ("No items found that match those filters.", "Loading...")
+    pub note: String,
+}
+
+/// One database item the list shows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DbRow {
+    pub name: String,
+    /// `GetRowValue`: the name in its rarity colour
+    pub label: String,
+    pub base: String,
+    /// The measured power of a stat sort; none when the item fits no slot
+    #[serde(default)]
+    pub sort_value: Option<f64>,
 }
 
 /// One gem the picker lists, in PoB's order.
@@ -1119,6 +1167,73 @@ pub struct ItemTooltipView {
     pub tooltip: ItemTooltip,
 }
 
+/// The answer to a `ControlTooltip` query.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ControlTooltipView {
+    pub query: ControlTooltipQuery,
+    pub tooltip: ItemTooltip,
+}
+
+/// The open popup, whatever it is: PoB's controls as data (R5).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PopupView {
+    pub kind: PopupKind,
+    pub title: String,
+    /// Ordered by position (top to bottom, then left to right)
+    pub controls: Vec<PopupControl>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PopupControlKind {
+    Label,
+    Button,
+    Dropdown,
+    Slider,
+    Check,
+    Edit,
+    List,
+}
+
+/// One control of a popup. The fields of the other kinds hold their defaults.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PopupControl {
+    /// PoB's control key; a list's children are `parent.child`
+    pub name: String,
+    pub kind: PopupControlKind,
+    pub label: String,
+    /// `GetPos()` relative to the popup
+    pub pos: [f32; 2],
+    pub size: [f32; 2],
+    pub shown: bool,
+    pub enabled: bool,
+    /// Dropdown
+    #[serde(default)]
+    pub choices: Vec<String>,
+    pub selected: usize,
+    /// Slider, 0..=1
+    pub value: f64,
+    pub divisions: Option<u32>,
+    /// Check, Edit
+    pub checked: bool,
+    pub text: String,
+    /// PoB's static `tooltipText`
+    pub tooltip_text: Option<String>,
+    /// The control builds a tooltip on hover (ask with `ControlTooltip`)
+    pub hover_tooltip: bool,
+    /// List
+    #[serde(default)]
+    pub rows: Vec<PopupRow>,
+    pub row_selected: Option<String>,
+    /// A list's `defaultText`
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PopupRow {
+    pub key: String,
+    pub label: String,
+}
+
 /// The answer to a `CopyItem` query: the text PoB copies, with its `\r\n` line ends.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemText {
@@ -1156,7 +1271,52 @@ pub struct DisplayItemView {
     pub catalyst_quality: Option<String>,
     #[serde(default)]
     pub range_lines: Vec<RangeLineView>,
+    /// The windows PoB's panel offers for this item (R3), in the panel's order
+    #[serde(default)]
+    pub popups: Vec<PopupKind>,
+    /// The shown affix dropdowns of a crafted item (R9), in PoB's slot order
+    #[serde(default)]
+    pub affixes: Vec<AffixView>,
+    /// "Modifier sorting", while PoB shows it
+    pub crafting_sort: Option<DropList>,
+    /// A crafted cluster jewel's controls (R11)
+    pub cluster: Option<ClusterView>,
+    /// The crafted, crucible and custom mods PoB lists with a Remove button (R12)
+    #[serde(default)]
+    pub custom_mods: Vec<CustomModView>,
     pub tooltip: ItemTooltip,
+}
+
+/// One line of the display item's custom-mod list
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CustomModView {
+    /// "Crafted", "Crucible" or "Custom"
+    pub kind: String,
+    /// `itemLib.formatModLine`'s text
+    pub line: String,
+}
+
+/// One of PoB's affix dropdowns with the slider under it
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AffixView {
+    /// 0..=8: `displayItemAffix1..9`
+    pub slot: usize,
+    /// "Prefix:", "Suffix:" or "Explicit:"
+    pub label: String,
+    pub list: DropList,
+    /// The slider's value (0..=1) while PoB shows it
+    pub range: Option<f64>,
+    /// The slider's division count: the tiers of the chosen modifier group
+    pub tiers: Option<u32>,
+}
+
+/// A crafted cluster jewel's skill dropdown and "Added Passives" slider
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ClusterView {
+    pub skill: DropList,
+    pub count: u32,
+    pub min: u32,
+    pub max: u32,
 }
 
 /// One of the six variant dropdowns

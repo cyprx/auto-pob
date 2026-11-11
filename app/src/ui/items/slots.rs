@@ -114,6 +114,8 @@ impl ItemsUi {
                     }
                     self.slot_row(ui, view, &view.slots[row.slot], row.indent, out);
                 }
+                // a slot that wasn't drawn (hidden) can't take the focus now, or later
+                self.focus_slot = None;
             });
     }
 
@@ -179,6 +181,14 @@ impl ItemsUi {
                 self.rects.note(&combo.inner.response, || {
                     format!("slot_combo_{}", slot.name)
                 });
+                // the tree's right click on this slot's socket: scroll to it and drop it down
+                if self.focus_slot.as_deref() == Some(&slot.name) {
+                    self.focus_slot = None;
+                    let button = &combo.inner.response;
+                    button.scroll_to_me(Some(egui::Align::Center));
+                    button.request_focus();
+                    egui::Popup::open_id(ui.ctx(), button.id.with("popup"));
+                }
                 if slot.selected != 0 {
                     self.note_hover(
                         &combo.inner.response,

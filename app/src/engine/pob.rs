@@ -1,15 +1,17 @@
 //! Starts Path of Building's Lua with our own bootstrap.
 
 use super::commands::{
-    Command, ConfigValue, GemSearchQuery, GemTarget, GemToggle, GemTooltipQuery, ItemTooltipQuery,
-    SkillOption, SocketColour, Tab,
+    Command, ConfigValue, ControlTooltipQuery, GemSearchQuery, GemTarget, GemToggle,
+    GemTooltipQuery, ItemDb, ItemDbQuery, ItemTooltipQuery, PopupInput, PopupKind, SkillOption,
+    SocketColour, Tab,
 };
-use super::run::{Affected, Backend, BackgroundTask, Engine, Event};
+use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Engine, Event};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, DisplayItemView,
-    GemRow, GemSearchView, GemTooltipView, GroupTooltipView, ItemText, ItemTooltip,
-    ItemTooltipView, ItemsView, ModLineList, NodePower, NodeTooltip, NotesView, PowerReport,
-    SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, ControlTooltipView,
+    DisplayItemView, GemRow, GemSearchView, GemTooltipView, GroupTooltipView, ItemDbView, ItemText,
+    ItemTooltip, ItemTooltipView, ItemsView, ModLineList, NodePower, NodeTooltip, NotesView,
+    PopupView, PowerReport, SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout,
+    TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -34,8 +36,17 @@ pub struct PobBackend {
     gem_search: Option<GemSearchQuery>,
     /// A DPS step failed; the job stays stopped until the next `SearchGems`.
     gem_failed: bool,
+    /// An Anoint sort step failed; the job stays stopped until the window is opened again or
+    /// one of its controls is set.
+    anoint_failed: bool,
     /// A command ended the open search; its last view (`ended: true`) is still to be sent.
     gem_ended: Option<GemSearchQuery>,
+    /// The open item database search (R13); `None` when no panel is open
+    item_db: Option<ItemDbQuery>,
+    /// An ItemDb step failed; the job stays stopped until the next `SetItemDb`.
+    item_db_failed: bool,
+    /// The database closed or the build changed; `ItemDb(None)` is still to be sent (R21)
+    item_db_ended: bool,
     /// Lua's heap after the last memory release, in bytes
     released_lua_bytes: usize,
 }
@@ -107,6 +118,9 @@ impl PobBackend {
             ("@glue/skills.lua", include_str!("glue/skills.lua")),
             ("@glue/gems.lua", include_str!("glue/gems.lua")),
             ("@glue/items.lua", include_str!("glue/items.lua")),
+            ("@glue/crafting.lua", include_str!("glue/crafting.lua")),
+            ("@glue/popups.lua", include_str!("glue/popups.lua")),
+            ("@glue/itemdb.lua", include_str!("glue/itemdb.lua")),
             ("@glue/notes.lua", include_str!("glue/notes.lua")),
         ] {
             lua.load(source)
@@ -125,7 +139,11 @@ impl PobBackend {
             power_failed: false,
             gem_search: None,
             gem_failed: false,
+            anoint_failed: false,
             gem_ended: None,
+            item_db: None,
+            item_db_failed: false,
+            item_db_ended: false,
             released_lua_bytes: 0,
         })
     }
@@ -280,6 +298,26 @@ fn lua_target(lua: &Lua, target: GemTarget) -> Result<mlua::Value> {
     })
 }
 
+/// Commands that close the item database panel: its own Close, or leaving the build (R21).
+pub(crate) fn ends_item_db(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::CloseItemDb
+            | Command::ListBuilds { .. }
+            | Command::NewBuild
+            | Command::OpenBuild { .. }
+            | Command::ImportShareCode { .. }
+    )
+}
+
+/// The name `glue/itemdb.lua` knows a database by (also its serde name)
+fn db_name(db: ItemDb) -> &'static str {
+    match db {
+        ItemDb::Uniques => "Uniques",
+        ItemDb::Rares => "Rares",
+    }
+}
+
 /// Commands that end the gem search (R13): they add, drop or reorder the groups or gems, or
 /// leave the build.
 fn ends_gem_search(command: &Command) -> bool {
@@ -303,6 +341,47 @@ fn ends_gem_search(command: &Command) -> bool {
             | Command::ImportShareCode { .. }
             | Command::CloseGemSearch
     )
+}
+
+/// Whether a command ends the popup session (R4). The session's own commands and the queries
+/// leave it open; anything else may change the item or the build under it.
+pub(crate) fn ends_popup_session(command: &Command) -> bool {
+    !matches!(
+        command,
+        Command::OpenPopup(_)
+            | Command::SetPopupControl { .. }
+            | Command::PressPopupButton { .. }
+            | Command::ClosePopup
+            | Command::ControlTooltip(_)
+            | Command::SetItemDb(_)
+            | Command::CloseItemDb
+            | Command::ItemTooltip(_)
+            | Command::CopyItem { .. }
+            | Command::Breakdown(_)
+            | Command::GemTooltip(_)
+            | Command::GroupTooltip { .. }
+            | Command::CopySocketGroup { .. }
+            | Command::PreviewNode { .. }
+            | Command::ExportTreeLink
+            // the tree search's debounce can land after a node-replacement open: it changes
+            // neither the item nor the build
+            | Command::SetTreeSearch { .. }
+            | Command::Shutdown
+    )
+}
+
+/// What `glue.popup_press` reports.
+#[derive(serde::Deserialize)]
+struct Pressed {
+    build_flag: bool,
+}
+
+/// A popup session command changed the popup only (a press also flags the display item).
+fn popup_changed() -> Affected {
+    Affected {
+        popup: true,
+        ..Affected::default()
+    }
 }
 
 impl PobBackend {
@@ -333,6 +412,43 @@ impl PobBackend {
             }
             // ended above
             Command::CloseGemSearch => Ok(Affected::default()),
+            Command::SetItemDb(query) => {
+                let table = self.lua.create_table().map_err(|e| anyhow!("{e}"))?;
+                for (key, value) in [
+                    ("slot", query.slot),
+                    ("kind", query.kind),
+                    ("league", query.league),
+                    ("requirement", query.requirement),
+                    ("obtainable", query.obtainable),
+                    ("sort", query.sort),
+                    ("search_mode", query.search_mode),
+                ] {
+                    table.set(key, value as i64).map_err(|e| anyhow!("{e}"))?;
+                }
+                table
+                    .set("search", query.search.clone())
+                    .map_err(|e| anyhow!("{e}"))?;
+                // a refused query leaves a failed job failed
+                let restart = self.item_db_failed;
+                self.call::<_, ()>("item_db_open", (db_name(query.db), table, restart))?;
+                self.item_db_failed = false;
+                self.item_db = Some(query);
+                self.item_db_ended = false;
+                Ok(Affected {
+                    item_db: true,
+                    ..Affected::default()
+                })
+            }
+            // ended above
+            Command::CloseItemDb => Ok(Affected::default()),
+            Command::ViewDbItem { db, name } => {
+                self.call::<_, ()>("item_db_view_item", (db_name(db), name))?;
+                Ok(display_changed())
+            }
+            Command::AddDbItem { db, name } => {
+                self.call::<_, ()>("item_db_add", (db_name(db), name))?;
+                self.items_edited()
+            }
             Command::ItemTooltip(query) => Ok(Affected {
                 item_tooltip: Some(query),
                 ..Affected::default()
@@ -505,6 +621,10 @@ impl PobBackend {
             }
             Command::ResetTree => {
                 self.call::<_, ()>("reset_tree", ())?;
+                self.tree_edited()
+            }
+            Command::RemoveAllTattoos => {
+                self.call::<_, ()>("remove_all_tattoos", ())?;
                 self.tree_edited()
             }
             Command::SetMastery { node, effect } => {
@@ -921,6 +1041,30 @@ impl PobBackend {
                 self.call::<_, ()>("display_mutated", (line + 1, on))?;
                 Ok(display_changed())
             }
+            Command::SetAffix { slot, index, label } => {
+                self.call::<_, ()>("affix_set", (slot, index, label))?;
+                Ok(display_changed())
+            }
+            Command::SetAffixRange { slot, value } => {
+                self.call::<_, ()>("affix_range", (slot, value))?;
+                Ok(display_changed())
+            }
+            Command::SetCraftingSort { index } => {
+                self.call::<_, ()>("crafting_sort", index + 1)?;
+                Ok(display_changed())
+            }
+            Command::SetClusterSkill { index } => {
+                self.call::<_, ()>("cluster_skill", index + 1)?;
+                Ok(display_changed())
+            }
+            Command::SetClusterNodeCount { count } => {
+                self.call::<_, ()>("cluster_count", count)?;
+                Ok(display_changed())
+            }
+            Command::RemoveCustomMod { index } => {
+                self.call::<_, ()>("remove_custom", index + 1)?;
+                Ok(display_changed())
+            }
             Command::ToggleModLine { line } => {
                 let list = match line.list {
                     ModLineList::Enchant => "enchant",
@@ -936,6 +1080,77 @@ impl PobBackend {
                     ..Affected::default()
                 })
             }
+            Command::OpenPopup(kind) => {
+                self.anoint_failed = false;
+                let (name, arg) = match kind {
+                    PopupKind::Craft => ("craft", 0),
+                    // the item text editor only ever takes over a Craft session (R2)
+                    PopupKind::EditText => anyhow::bail!(
+                        "the item text editor opens from Craft's Create, not on its own"
+                    ),
+                    PopupKind::Enchant { second } => ("enchant", i64::from(second)),
+                    PopupKind::Anoint { slot } => ("anoint", slot as i64 + 1),
+                    PopupKind::Corrupt => ("corrupt", 0),
+                    PopupKind::AddModifier => ("add_modifier", 0),
+                    PopupKind::AddImplicit => ("add_implicit", 0),
+                    PopupKind::AddCrucible => ("add_crucible", 0),
+                    PopupKind::NodeReplacement { node } => ("node_replacement", i64::from(node)),
+                };
+                // Enchant's flag is a boolean for the glue
+                if name == "enchant" {
+                    self.call::<_, ()>("popup_open", (name, arg != 0))?;
+                } else {
+                    self.call::<_, ()>("popup_open", (name, arg))?;
+                }
+                Ok(popup_changed())
+            }
+            Command::SetPopupControl { name, value } => {
+                // a failed sort's builder is gone and a same-value pick runs no PoB code, so
+                // the control that restarts it is the glue's (Retry)
+                let restart = std::mem::take(&mut self.anoint_failed);
+                match value {
+                    PopupInput::Choice { index, label } => {
+                        self.call::<_, ()>("popup_set", (name, "choice", index, label))?
+                    }
+                    PopupInput::Number(value) => {
+                        self.call::<_, ()>("popup_set", (name, "number", value, ()))?
+                    }
+                    PopupInput::Check(on) => {
+                        self.call::<_, ()>("popup_set", (name, "check", on, ()))?
+                    }
+                    PopupInput::Text(text) => {
+                        self.call::<_, ()>("popup_set", (name, "text", text, ()))?
+                    }
+                    PopupInput::Row(key) => {
+                        self.call::<_, ()>("popup_set", (name, "row", key, ()))?
+                    }
+                }
+                if restart {
+                    self.call::<_, ()>("anoint_sort_restart", ())?;
+                }
+                Ok(popup_changed())
+            }
+            Command::PressPopupButton { name } => {
+                let pressed: Pressed = self.view("popup_press", name)?;
+                // a tattoo sets PoB's `buildFlag`: the tree changed (R22)
+                let mut affected = if pressed.build_flag {
+                    self.tree_edited()?
+                } else {
+                    Affected::default()
+                };
+                affected.popup = true;
+                affected.display_item = true;
+                // a popup PoB closed ends the session; the view says so by being empty
+                Ok(affected)
+            }
+            Command::ClosePopup => {
+                self.call::<_, ()>("popup_close", ())?;
+                Ok(popup_changed())
+            }
+            Command::ControlTooltip(query) => Ok(Affected {
+                control_tooltip: Some(query),
+                ..Affected::default()
+            }),
             Command::Undo(Tab::Items) => {
                 self.call::<_, ()>("items_undo", ())?;
                 self.items_edited()
@@ -967,7 +1182,21 @@ impl Backend for PobBackend {
         // failed changed nothing, and a changed group table ends the search on its own
         let ends = ends_gem_search(&command);
         let closes = matches!(command, Command::CloseGemSearch);
+        let ends_popup = ends_popup_session(&command);
+        let ends_db = ends_item_db(&command);
         let mut affected = self.apply_command(command, send)?;
+        // any other command may change what the popup is about, so it ends the session once
+        // it went through, and the window is told (R4); a failed one changed nothing
+        if ends_popup && self.call::<_, bool>("popup_end", ())? {
+            affected.popup = true;
+        }
+        // the panel is told once that its database closed (R21)
+        if ends_db && self.item_db.take().is_some() {
+            self.item_db_failed = false;
+            self.item_db_ended = true;
+            self.call::<_, ()>("item_db_close", ())?;
+            affected.item_db = true;
+        }
         if ends {
             // the picker is told it ended, unless it asked to close
             let live = self.gem_search.clone();
@@ -1051,6 +1280,21 @@ impl Backend for PobBackend {
         {
             return Some(BackgroundTask::GemDps);
         }
+        if !self.anoint_failed
+            && self
+                .call::<_, bool>("anoint_sort_pending", ())
+                .unwrap_or(false)
+        {
+            return Some(BackgroundTask::AnointSort);
+        }
+        if let Some(query) = &self.item_db
+            && !self.item_db_failed
+            && self
+                .call::<_, bool>("item_db_pending", db_name(query.db))
+                .unwrap_or(false)
+        {
+            return Some(BackgroundTask::ItemDb);
+        }
         let power = self.heatmap_on
             && !self.power_failed
             && self.call::<_, bool>("power_pending", ()).unwrap_or(false);
@@ -1062,6 +1306,8 @@ impl Backend for PobBackend {
         struct Step {
             percent: Option<u32>,
             finished: bool,
+            #[serde(default)]
+            rejected: Option<String>,
         }
         match task {
             BackgroundTask::NodePower => {
@@ -1081,6 +1327,64 @@ impl Backend for PobBackend {
                 Ok(Affected {
                     power: true,
                     report: step.finished,
+                    ..Affected::default()
+                })
+            }
+            BackgroundTask::AnointSort => {
+                let step: Step = match self.view("anoint_sort_step", ()) {
+                    Ok(step) => step,
+                    Err(e) => {
+                        self.anoint_failed = true;
+                        return Err(e);
+                    }
+                };
+                if let Some(percent) = step.percent {
+                    send(Event::Progress {
+                        task: BackgroundTask::AnointSort,
+                        percent,
+                    });
+                }
+                // the window shows the rows once the builder ends
+                Ok(Affected {
+                    popup: step.finished,
+                    ..Affected::default()
+                })
+            }
+            BackgroundTask::ItemDb => {
+                let Some(query) = &self.item_db else {
+                    return Ok(Affected::default());
+                };
+                let step: Step = match self.view("item_db_step", db_name(query.db)) {
+                    Ok(step) => step,
+                    Err(e) => {
+                        self.item_db_failed = true;
+                        return Err(e);
+                    }
+                };
+                if let Some(percent) = step.percent {
+                    send(Event::Progress {
+                        task: BackgroundTask::ItemDb,
+                        percent,
+                    });
+                }
+                // a query that waited out the load turned out bad: the panel closes, so the
+                // UI's query and PoB's controls agree, and the reason is the job's failure
+                if let Some(message) = step.rejected {
+                    self.item_db = None;
+                    self.item_db_ended = true;
+                    let _ = self.call::<_, ()>("item_db_close", ());
+                    send(Event::BackgroundFailed {
+                        task: BackgroundTask::ItemDb,
+                        message,
+                    });
+                    return Ok(Affected {
+                        item_db: true,
+                        ..Affected::default()
+                    });
+                }
+                // the panel shows the rows once the list builder ends
+                Ok(Affected {
+                    item_db: step.finished,
                     ..Affected::default()
                 })
             }
@@ -1148,6 +1452,19 @@ impl Backend for PobBackend {
         }))
     }
 
+    fn item_db_view(&mut self) -> Result<DbSnapshot> {
+        if std::mem::take(&mut self.item_db_ended) {
+            return Ok(DbSnapshot::Ended);
+        }
+        let Some(query) = &self.item_db else {
+            return Ok(DbSnapshot::Quiet);
+        };
+        let db = query.db;
+        let mut view: ItemDbView = self.view("item_db_view", db_name(db))?;
+        view.sorting &= !self.item_db_failed;
+        Ok(DbSnapshot::View(view))
+    }
+
     fn gem_tooltip_view(&mut self, query: &GemTooltipQuery) -> Result<GemTooltipView> {
         #[derive(serde::Deserialize)]
         struct Found {
@@ -1169,6 +1486,31 @@ impl Backend for PobBackend {
         let found: Option<ItemTooltip> =
             self.view("item_tooltip", (query.id, query.slot.clone()))?;
         Ok(found.map(|tooltip| ItemTooltipView {
+            query: query.clone(),
+            tooltip,
+        }))
+    }
+
+    fn popup_view(&mut self) -> Result<Option<PopupView>> {
+        self.view("popup_view", ())
+    }
+
+    fn control_tooltip_view(
+        &mut self,
+        query: &ControlTooltipQuery,
+    ) -> Result<Option<ControlTooltipView>> {
+        let found: Option<ItemTooltip> = match query {
+            ControlTooltipQuery::Popup { control, index } => {
+                self.view("popup_tooltip", (control.clone(), index.map(|i| i as i64)))?
+            }
+            ControlTooltipQuery::Affix { slot, index } => {
+                self.view("affix_tooltip", (*slot, index.map(|i| i as i64)))?
+            }
+            ControlTooltipQuery::DbItem { db, name } => {
+                self.view("item_db_tooltip", (db_name(*db), name.clone()))?
+            }
+        };
+        Ok(found.map(|tooltip| ControlTooltipView {
             query: query.clone(),
             tooltip,
         }))
@@ -1249,6 +1591,92 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queries_do_not_end_the_popup_session() {
+        use crate::engine::{CellRef, GemTarget, ItemDb};
+        let keeps = [
+            Command::ItemTooltip(ItemTooltipQuery { id: 1, slot: None }),
+            Command::ControlTooltip(ControlTooltipQuery::Popup {
+                control: "save".into(),
+                index: None,
+            }),
+            Command::ControlTooltip(ControlTooltipQuery::DbItem {
+                db: ItemDb::Uniques,
+                name: "x".into(),
+            }),
+            Command::CopyItem { id: 1 },
+            Command::Breakdown(CellRef {
+                section: "s".into(),
+                sub: 0,
+                row: 0,
+                cell: 0,
+            }),
+            Command::GemTooltip(GemTooltipQuery {
+                group: 0,
+                target: GemTarget::Slot(0),
+                gem_id: None,
+            }),
+            Command::OpenPopup(PopupKind::Craft),
+            Command::OpenPopup(PopupKind::NodeReplacement { node: 1 }),
+            Command::SetPopupControl {
+                name: "rarity".into(),
+                value: PopupInput::Check(true),
+            },
+            Command::PressPopupButton {
+                name: "save".into(),
+            },
+            Command::ClosePopup,
+            Command::SetTreeSearch {
+                text: "life".into(),
+            },
+            // the DB search's debounce can land after an OpenPopup (R4)
+            Command::SetItemDb(ItemDbQuery {
+                db: ItemDb::Rares,
+                slot: 0,
+                kind: 0,
+                league: 0,
+                requirement: 0,
+                obtainable: 0,
+                sort: 0,
+                search: String::new(),
+                search_mode: 0,
+            }),
+            Command::CloseItemDb,
+        ];
+        for command in keeps {
+            assert!(
+                !ends_popup_session(&command),
+                "{command:?} ends the session"
+            );
+        }
+        // anything that edits the item, the build or the tab does
+        let ends = [
+            Command::SortItems,
+            Command::RemoveAllTattoos,
+            Command::PasteItem {
+                text: String::new(),
+            },
+            Command::ViewDbItem {
+                db: ItemDb::Uniques,
+                name: "x".into(),
+            },
+            Command::AddDbItem {
+                db: ItemDb::Uniques,
+                name: "x".into(),
+            },
+            Command::SetMainSkillCount {
+                control: crate::engine::CalcsCount::Stages,
+                text: "1".into(),
+            },
+        ];
+        for command in ends {
+            assert!(
+                ends_popup_session(&command),
+                "{command:?} keeps the session"
+            );
+        }
+    }
 
     fn pinned_dir() -> std::path::PathBuf {
         std::env::var_os("AUTO_POB_POB_DIR")

@@ -105,6 +105,9 @@ pub enum Command {
         id: u32,
     },
     ResetTree,
+    /// "Remove All Tattoos" on the Reset window: presses PoB's button, which adds no undo state
+    /// (R18).
+    RemoveAllTattoos,
     /// Chooses a mastery's effect, allocating the mastery when it isn't yet.
     SetMastery {
         node: u32,
@@ -436,6 +439,36 @@ pub enum Command {
         line: usize,
         on: bool,
     },
+    /// Picks entry `index` of affix dropdown `slot` (0..=8, R9). `label` is the entry as the
+    /// caller saw it: PoB rebuilds every list after a pick, so a pick against a list that
+    /// changed is refused (R8).
+    SetAffix {
+        slot: usize,
+        index: usize,
+        label: String,
+    },
+    /// The slider under affix dropdown `slot`: 0..=1, tier and roll in one.
+    SetAffixRange {
+        slot: usize,
+        value: f64,
+    },
+    /// "Modifier sorting" (R9, R10).
+    SetCraftingSort {
+        index: usize,
+    },
+    /// A cluster jewel's skill dropdown (R11).
+    SetClusterSkill {
+        index: usize,
+    },
+    /// A cluster jewel's "Added Passives" slider, as a node count (R11).
+    SetClusterNodeCount {
+        count: u32,
+    },
+    /// A custom, crafted or crucible mod's Remove button (R12); `index` is in
+    /// `DisplayItemView::custom_mods`.
+    RemoveCustomMod {
+        index: usize,
+    },
     /// A click on a tooltip line of the display item (R4).
     ToggleModLine {
         line: ModLineRef,
@@ -480,6 +513,41 @@ pub enum Command {
 
     /// A query: the breakdown of a Calcs cell; the latest one in a batch is answered.
     Breakdown(CellRef),
+
+    /// Presses the panel's own button for this window and keeps what it opens as the engine's
+    /// popup session (R1, R3). Ends an open session. Answered as a `Popup`.
+    OpenPopup(PopupKind),
+    /// Sets one control of the open popup (R7). Refused for a control PoB doesn't show or
+    /// enable, or a pick whose label is no longer at that index (R8).
+    SetPopupControl {
+        name: String,
+        value: PopupInput,
+    },
+    /// Presses a button of the open popup. A popup PoB closes ends the session.
+    PressPopupButton {
+        name: String,
+    },
+    /// Cancel and Escape: drops the session.
+    ClosePopup,
+    /// A query: the tooltip of a popup entry or button, an affix entry or a DB item (R6); the
+    /// latest one in a batch is answered, as a `ControlTooltip`.
+    ControlTooltip(ControlTooltipQuery),
+
+    /// Opens or replaces the item database search (R13); the latest one in a batch is answered
+    /// as an `ItemDb`. While it is open PoB's DB load and stat sort run in the background.
+    SetItemDb(ItemDbQuery),
+    /// Closes the item database search.
+    CloseItemDb,
+    /// The double click on a database row: shows the item on the display panel (R15).
+    ViewDbItem {
+        db: ItemDb,
+        name: String,
+    },
+    /// Ctrl+click on a database row: adds the item and equips it (R15).
+    AddDbItem {
+        db: ItemDb,
+        name: String,
+    },
 
     Undo(Tab),
     Redo(Tab),
@@ -559,6 +627,84 @@ pub struct GemTooltipQuery {
 pub struct ItemTooltipQuery {
     pub id: u32,
     pub slot: Option<String>,
+}
+
+/// A window PoB opens from the Items tab's buttons (R3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PopupKind {
+    /// "Craft item...", shown while no item is displayed
+    Craft,
+    /// The item text editor; only reached from `Craft` (R2)
+    EditText,
+    Enchant {
+        second: bool,
+    },
+    /// "Anoint...", "Anoint 2..." and so on: `slot` is 0..=3
+    Anoint {
+        slot: usize,
+    },
+    Corrupt,
+    AddModifier,
+    AddImplicit,
+    AddCrucible,
+    NodeReplacement {
+        node: u32,
+    },
+}
+
+/// What a popup control is set to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PopupInput {
+    /// A dropdown entry, with the label that was shown (R8)
+    Choice {
+        index: usize,
+        label: String,
+    },
+    Number(f64),
+    Check(bool),
+    Text(String),
+    /// A list row, by its key
+    Row(String),
+}
+
+/// An item database (Task 6)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ItemDb {
+    Uniques,
+    Rares,
+}
+
+/// What an item database panel searches: PoB's controls, each as a 0-based index into its list.
+/// The rares database has only slot, type, search and search mode (R13): the rest must be 0.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ItemDbQuery {
+    pub db: ItemDb,
+    pub slot: usize,
+    pub kind: usize,
+    pub league: usize,
+    pub requirement: usize,
+    pub obtainable: usize,
+    pub sort: usize,
+    pub search: String,
+    pub search_mode: usize,
+}
+
+/// A tooltip behind a control (R6): `index` is the dropdown entry, or none for the control
+/// itself.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ControlTooltipQuery {
+    Popup {
+        control: String,
+        index: Option<usize>,
+    },
+    Affix {
+        slot: usize,
+        index: Option<usize>,
+    },
+    DbItem {
+        db: ItemDb,
+        name: String,
+    },
 }
 
 /// A Vaal gem's two "Enable <skill>" toggles.

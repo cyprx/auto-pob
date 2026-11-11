@@ -33,6 +33,8 @@ enum Dialog {
         name: String,
     },
     Reset,
+    /// PoB's "Remove All Tattoos" can't be undone
+    RemoveTattoos,
     Import {
         title: String,
         url: String,
@@ -94,6 +96,13 @@ impl Toolbar {
             rects.note(&reset, || "reset".into());
             if reset.clicked() {
                 self.dialog = Some(Dialog::Reset);
+            }
+            let tattoos = ui
+                .button("Remove all tattoos")
+                .on_hover_text("Remove every tattoo from the tree");
+            rects.note(&tattoos, || "remove_tattoos".into());
+            if tattoos.clicked() {
+                self.dialog = Some(Dialog::RemoveTattoos);
             }
         });
         ui.horizontal_wrapped(|ui| {
@@ -439,6 +448,7 @@ impl Toolbar {
             Dialog::DeleteSpec(_) => "Delete tree",
             Dialog::Class { .. } => "Change class",
             Dialog::Reset => "Reset tree",
+            Dialog::RemoveTattoos => "Remove all tattoos",
             Dialog::Import { .. } => "Import tree link",
         };
         egui::Window::new(title)
@@ -522,6 +532,19 @@ impl Toolbar {
                             close = true;
                         }
                         close |= ui.button("Cancel").clicked();
+                    });
+                }
+                Dialog::RemoveTattoos => {
+                    // PoB adds no undo state for this, so the question is the only safeguard
+                    ui.label("Remove every tattoo from this tree? This can't be undone.");
+                    ui.horizontal(|ui| {
+                        if button(ui, rects, "remove_tattoos_yes", "Remove", true) {
+                            commands.push(Command::RemoveAllTattoos);
+                            close = true;
+                        }
+                        let cancel = ui.button("Cancel");
+                        rects.note(&cancel, || "remove_tattoos_no".into());
+                        close |= cancel.clicked();
                     });
                 }
                 Dialog::Import { title, url } => {

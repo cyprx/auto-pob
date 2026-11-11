@@ -92,7 +92,7 @@ pub enum Command {
         realm: Realm,
     },
     /// Imports a part of a listed character (R18, R19): a request. `league` `None` is PoB's
-    /// "All".
+    /// "All" entry, which `PublicView.leagues` lists last as the label "All".
     ImportPublicCharacter {
         league: Option<String>,
         name: String,

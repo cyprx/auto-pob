@@ -200,10 +200,18 @@ function accountDump()
 	}
 	for _, account in ipairs(controls.siteAccountHistory.list) do out.history[#out.history + 1] = account end
 	for _, entry in ipairs(controls.siteCharSelectLeague.list) do out.leagues[#out.leagues + 1] = entry.label end
-	for _, char in ipairs(tab.lastCharList or {}) do
-		out.characters[#out.characters + 1] = { name = char.name, class = char.class, level = char.level, league = char.league }
+	-- PoB's own list for the "All" entry: its realm filter and its sort
+	local all
+	for index, entry in ipairs(controls.siteCharSelectLeague.list) do
+		if entry.league == nil then all = index end
 	end
-	table.sort(out.characters, function(a, b) return a.name:lower() < b.name:lower() end)
+	if all then
+		controls.siteCharSelectLeague:SetSel(all)
+		for _, entry in ipairs(controls.siteCharSelect.list) do
+			local char = entry.char
+			out.characters[#out.characters + 1] = { name = char.name, class = char.class, level = char.level, league = char.league }
+		end
+	end
 	return out
 end
 

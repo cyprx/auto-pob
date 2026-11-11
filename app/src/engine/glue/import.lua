@@ -345,10 +345,10 @@ function glue.account_view()
 		for _, char in ipairs(tab.lastCharList or {}) do
 			if char.realm == code then
 				public.characters[#public.characters + 1] = {
-					name = char.name or "?",
-					class = char.class or "?",
-					level = char.level or 0,
-					league = char.league or "?",
+					name = tostring(char.name or "?"),
+					class = tostring(char.class or "?"),
+					level = math.floor(tonumber(char.level) or 0),
+					league = tostring(char.league or "?"),
 				}
 			end
 		end
@@ -360,18 +360,25 @@ function glue.account_view()
 end
 
 -- What PoB's own status says once a request of the account import ends, for the request's error.
--- A callback that raised left PoB's flags where the press put them, so they are put back.
+-- A callback that raised leaves PoB's flags where its last line put them, and a status that
+-- still describes the running request, so they are put right:
+-- - the profile page's callback raises before it resets `DOWNLOADCHARLIST`, which PoB never
+--   leaves (Start is gone and Close refused): back to the account box;
+-- - the passive tree and item callbacks reset the stage first (`SELECTCHAR`) and raise later,
+--   leaving "Retrieving ...": PoB's failure text replaces it.
 local function status_after(tab, kind)
 	return function(req)
 		local status = tab.charImportStatus or ""
-		local mode = tab.charImportMode
 		if status:sub(1, #colorCodes.NEGATIVE) == colorCodes.NEGATIVE then
 			-- PoB's own message says why
 			req.error = StripEscapes(status)
-		elseif mode == "DOWNLOADCHARLIST" or mode == "IMPORTING" then
-			local text = kind == "list" and "Failed to retrieve character list."
-				or "Failed to retrieve character data, try again."
-			tab.charImportMode = kind == "list" and "GETACCOUNTNAME" or "SELECTCHAR"
+		elseif kind == "list" and tab.charImportMode == "DOWNLOADCHARLIST" then
+			local text = "Failed to retrieve character list."
+			tab.charImportMode = "GETACCOUNTNAME"
+			tab.charImportStatus = colorCodes.NEGATIVE .. text
+			req.error = text
+		elseif kind == "import" and req.error then
+			local text = "Failed to retrieve character data, try again."
 			tab.charImportStatus = colorCodes.NEGATIVE .. text
 			req.error = text
 		end
@@ -395,7 +402,10 @@ function glue.list_public_characters(account, realm_id)
 		error("no such realm", 0)
 	end
 	controls.siteAccountRealm:SetSel(index)
-	glue.paste_into(controls.siteAccountName, account)
+	if not glue.paste_into(controls.siteAccountName, account) then
+		-- all control characters: the box would keep the account it had
+		error("Missing discriminator e.g. #1234", 0)
+	end
 	local go = controls.siteAccountNameGo
 	if not go:IsEnabled() then
 		error("Missing discriminator e.g. " .. controls.siteAccountName.buf .. "#1234", 0)
@@ -439,9 +449,13 @@ function glue.import_public_character(league, name, kind, a, b, c)
 	end
 	controls.siteCharSelect:SetSel(at)
 	local button, label
+	-- these boxes have no callback (PoB's CheckBoxControl:Click skips a missing one too)
 	local function option(box, on)
 		if box.state ~= on then
-			glue.press_check(box, on)
+			box.state = on
+			if box.changeFunc then
+				box.changeFunc(on)
+			end
 		end
 	end
 	if kind == "tree" then

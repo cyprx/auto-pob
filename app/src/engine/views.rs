@@ -1448,7 +1448,8 @@ pub struct PublicView {
     #[serde(default)]
     pub history: Vec<String>,
     pub stage: PublicStage,
-    /// The league drop-down's entries in PoB's order, ending in "All"; empty before a list
+    /// The league drop-down's entries in PoB's order, ending in the label "All" (which is
+    /// `league: None` in `ImportPublicCharacter`); empty before a list
     #[serde(default)]
     pub leagues: Vec<String>,
     /// Every character of the account, in PoB's order (lowercase name); empty before a list

@@ -1773,9 +1773,10 @@ fn public_import_matches_pob() {
     assert_eq!(listed.history, [ACCOUNT]);
     assert_eq!(listed.account, ACCOUNT);
     let names: Vec<&str> = listed.characters.iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(names, ["GateOne", "gateThree", "GateTwo"]);
-    assert_eq!(listed.characters[0].league, "Mirage Gate");
-    assert_eq!(listed.characters[0].level, 90);
+    // by lowercase name, not by byte; the Xbox character is another realm's
+    assert_eq!(names, ["alphaGate", "GateOne", "gateThree", "GateTwo"]);
+    assert_eq!(listed.characters[1].league, "Mirage Gate");
+    assert_eq!(listed.characters[1].level, 90);
     let entry = s.requests().finished.remove(0);
     assert_eq!((entry.error, entry.cancelled), (None, false));
     s.assert_clean("list");
@@ -1884,6 +1885,38 @@ fn public_import_matches_pob() {
     assert_ne!(up_facts(&up).ascend, facts.ascend, "same ascendancy");
     s.assert_clean("second tree");
 
+    // ---- Options that are not PoB's defaults: each box does its own job (the gems differ so
+    // that a kept skill group shows) ----
+    let alt = net_fixture("public_items.json")
+        .replace("Brutality Support", "Melee Physical Damage Support");
+    web.route("GET", &character_url("items", "GateTwo"), Canned::ok(alt));
+    for (clear_items, clear_skills, wanted_groups) in [(true, false, 2), (false, true, 1)] {
+        up.eval::<()>(&format!(
+            "act.public_import('Standard', 'GateTwo', 'items', {clear_items}, {clear_skills}, false)"
+        ));
+        up_settle(&up);
+        s.backend
+            .apply(
+                import_character(
+                    Some("Standard"),
+                    "GateTwo",
+                    CharacterPart::ItemsAndSkills {
+                        clear_items,
+                        clear_skills,
+                        ignore_weapon_swap: false,
+                    },
+                ),
+                &|_| {},
+            )
+            .expect("items import");
+        s.settle_net(Duration::from_secs(15));
+        let entry = s.requests().finished.remove(0);
+        assert_eq!((entry.error, entry.cancelled), (None, false));
+        let what = format!("items, clear_items {clear_items}, clear_skills {clear_skills}");
+        assert_imported_equal(&mut s, &up, &what);
+        assert_eq!(up_facts(&up).groups, wanted_groups, "{what}");
+    }
+
     // ---- Our refusals ----
     for command in [
         import_character(
@@ -1920,6 +1953,22 @@ fn public_import_matches_pob() {
     up.eval::<()>("act.public_close()");
     assert_eq!(our_public(&mut s).stage, PublicStage::EnterAccount);
     assert_public_equal(&our_public(&mut s), &up_account(&up), "closed");
+    // nothing to import from before a list
+    let message = s
+        .backend
+        .apply(
+            import_character(
+                None,
+                "GateOne",
+                CharacterPart::Tree {
+                    delete_jewels: true,
+                },
+            ),
+            &|_| {},
+        )
+        .unwrap_err()
+        .to_string();
+    assert_eq!(message, "PoB doesn't offer that here");
     // no discriminator
     let theirs: String = up.eval("return act.public_list('GateTester', 'PC')");
     let ours = s
@@ -2000,16 +2049,44 @@ fn public_import_matches_pob() {
         .unwrap();
     let entry = finish_request(&mut s);
     assert!(entry.error.is_some() && !entry.cancelled, "{entry:?}");
-    // PoB's callback raised on the missing table; its own error is the text
-    assert!(
-        entry
-            .error
-            .as_deref()
-            .is_some_and(|e| e.contains("responseLua")),
-        "{entry:?}"
-    );
-    assert_eq!(our_public(&mut s).stage, PublicStage::SelectCharacter);
+    // PoB's callback raised on the missing table: its failure text, and a status to recover from
+    let recoverable = "Failed to retrieve character data, try again.";
+    assert_eq!(entry.error.as_deref(), Some(recoverable));
+    let after = our_public(&mut s);
+    assert_eq!(after.stage, PublicStage::SelectCharacter);
+    assert_eq!(after.status, recoverable);
     s.assert_clean("bad items");
+    // the same for a passive tree body that isn't JSON
+    web.route(
+        "GET",
+        &character_url("passive-skills", "GateOne"),
+        Canned::ok("{"),
+    );
+    s.backend
+        .apply(
+            import_character(
+                None,
+                "GateOne",
+                CharacterPart::Tree {
+                    delete_jewels: true,
+                },
+            ),
+            &|_| {},
+        )
+        .unwrap();
+    let entry = finish_request(&mut s);
+    assert_eq!(entry.error.as_deref(), Some(recoverable));
+    let after = our_public(&mut s);
+    assert_eq!(
+        (after.stage, after.status.as_str()),
+        (PublicStage::SelectCharacter, recoverable)
+    );
+    s.assert_clean("bad passives");
+    web.route(
+        "GET",
+        &character_url("passive-skills", "GateOne"),
+        Canned::ok(net_fixture("public_passives.json")),
+    );
     // a good retry
     web.route(
         "GET",

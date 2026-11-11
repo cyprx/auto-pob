@@ -1,5 +1,6 @@
 //! Commands the UI sends to the engine thread.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -622,8 +623,14 @@ pub enum Command {
     PressPopupButton {
         name: String,
     },
-    /// Cancel and Escape: drops the session.
+    /// Cancel and Escape: drops the session. On Options it presses PoB's own Cancel first.
     ClosePopup,
+    /// The app's own values for PoB's settings (R12), by `Settings.xml` key: replaces the whole
+    /// map, so a key left out goes back to its shared value. Needs no build. Sent after `Ready`
+    /// and after each Options Save. The engine never writes `auto-pob.toml`; the UI does.
+    SetOverrides {
+        values: BTreeMap<String, String>,
+    },
     /// A query: the tooltip of a popup entry or button, an affix entry or a DB item (R6); the
     /// latest one in a batch is answered, as a `ControlTooltip`.
     ControlTooltip(ControlTooltipQuery),
@@ -752,6 +759,8 @@ pub enum PopupKind {
     NodeReplacement {
         node: u32,
     },
+    /// PoB's Options window, run as a main-owned session (R13, R19): it needs no build
+    Options,
 }
 
 /// What a popup control is set to.

@@ -11,8 +11,8 @@ use super::views::{
     AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView,
     ControlTooltipView, DisplayItemView, GemRow, GemSearchView, GemTooltipView, GroupTooltipView,
     ItemDbView, ItemText, ItemTooltip, ItemTooltipView, ItemsView, ModLineList, NodePower,
-    NodeTooltip, NotesView, PopupView, PowerReport, RequestsView, ShareView, SkillsView,
-    SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
+    NodeTooltip, NotesView, PopupView, PowerReport, RequestsView, SettingsView, ShareView,
+    SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -141,6 +141,7 @@ impl PobBackend {
             ("@glue/notes.lua", include_str!("glue/notes.lua")),
             ("@glue/net.lua", include_str!("glue/net.lua")),
             ("@glue/import.lua", include_str!("glue/import.lua")),
+            ("@glue/settings.lua", include_str!("glue/settings.lua")),
         ] {
             lua.load(source)
                 .set_name(name)
@@ -148,6 +149,10 @@ impl PobBackend {
                 .map_err(lua_error)
                 .with_context(|| format!("Loading {name}"))?;
         }
+        // PoB has loaded Settings.xml: the shared values are what it holds now (R12)
+        let glue: mlua::Table = lua.globals().get("glue").map_err(lua_error)?;
+        let init: mlua::Function = glue.get("settings_init").map_err(lua_error)?;
+        init.call::<()>(()).map_err(lua_error)?;
         Ok(PobBackend {
             lua,
             game,
@@ -501,6 +506,8 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::SetPopupControl { .. }
             | Command::PressPopupButton { .. }
             | Command::ClosePopup
+            // the app's own values; they change neither the item nor the build (R12)
+            | Command::SetOverrides { .. }
             | Command::ControlTooltip(_)
             | Command::SetItemDb(_)
             | Command::CloseItemDb
@@ -1368,6 +1375,7 @@ impl PobBackend {
                     PopupKind::AddImplicit => ("add_implicit", 0),
                     PopupKind::AddCrucible => ("add_crucible", 0),
                     PopupKind::NodeReplacement { node } => ("node_replacement", i64::from(node)),
+                    PopupKind::Options => ("options", 0),
                 };
                 // Enchant's flag is a boolean for the glue
                 if name == "enchant" {
@@ -1413,12 +1421,29 @@ impl PobBackend {
                 };
                 affected.popup = true;
                 affected.display_item = true;
+                // Options' Save changes the settings and may hand back overrides (R12)
+                affected.settings = true;
                 // a popup PoB closed ends the session; the view says so by being empty
                 Ok(affected)
             }
             Command::ClosePopup => {
                 self.call::<_, ()>("popup_close", ())?;
-                Ok(popup_changed())
+                // Escape on Options is its Cancel, which puts the settings back
+                Ok(Affected {
+                    settings: true,
+                    ..popup_changed()
+                })
+            }
+            Command::SetOverrides { values } => {
+                let table = self.lua.create_table().map_err(|e| anyhow!("{e}"))?;
+                for (key, value) in values {
+                    table.set(key, value).map_err(|e| anyhow!("{e}"))?;
+                }
+                self.call::<_, ()>("set_overrides", table)?;
+                Ok(Affected {
+                    settings: true,
+                    ..Affected::default()
+                })
             }
             Command::ControlTooltip(query) => Ok(Affected {
                 control_tooltip: Some(query),
@@ -1879,6 +1904,10 @@ impl Backend for PobBackend {
         self.view("requests_view", ())
     }
 
+    fn settings_view(&mut self) -> Result<SettingsView> {
+        self.view("settings_view", ())
+    }
+
     fn share_view(&mut self) -> Result<ShareView> {
         self.view("share_view", ())
     }
@@ -1947,6 +1976,10 @@ mod tests {
                 gem_id: None,
             }),
             Command::OpenPopup(PopupKind::Craft),
+            Command::OpenPopup(PopupKind::Options),
+            Command::SetOverrides {
+                values: Default::default(),
+            },
             Command::OpenPopup(PopupKind::NodeReplacement { node: 1 }),
             Command::SetPopupControl {
                 name: "rarity".into(),

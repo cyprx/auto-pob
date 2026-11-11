@@ -15,8 +15,8 @@ use super::views::{
     AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView,
     ControlTooltipView, DisplayItemView, DropList, GemSearchView, GemTooltipView, GroupTooltipView,
     ItemDbView, ItemText, ItemTooltip, ItemTooltipView, ItemsView, NodePower, NodeTooltip,
-    NotesView, PendingRequest, Points, PopupView, PowerReport, RequestsView, ShareView, SkillsView,
-    SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
+    NotesView, PendingRequest, Points, PopupView, PowerReport, RequestsView, SettingsView,
+    ShareView, SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
 };
 
 #[derive(Default, Debug)]
@@ -519,11 +519,17 @@ impl Backend for Fake {
     }
 
     fn popup_view(&mut self) -> anyhow::Result<Option<PopupView>> {
-        Ok(self.popup.clone().map(|kind| PopupView {
-            kind,
-            title: "popup".into(),
-            controls: vec![],
-        }))
+        // a session of the item or the build ends with the build; only Options outlives it (R19)
+        let build_loaded = self.build_loaded;
+        Ok(self
+            .popup
+            .clone()
+            .filter(|kind| build_loaded || *kind == PopupKind::Options)
+            .map(|kind| PopupView {
+                kind,
+                title: "popup".into(),
+                controls: vec![],
+            }))
     }
 
     fn control_tooltip_view(
@@ -629,6 +635,10 @@ impl Backend for Fake {
                 .collect(),
             finished: vec![],
         })
+    }
+
+    fn settings_view(&mut self) -> anyhow::Result<SettingsView> {
+        Ok(SettingsView::default())
     }
 
     fn set_waker(&mut self, wake: Waker) {

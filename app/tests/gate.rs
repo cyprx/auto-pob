@@ -27,12 +27,16 @@ mod item_db;
 mod items;
 #[path = "gate/items_harness.rs"]
 mod items_harness;
+#[path = "gate/longtail_harness.rs"]
+mod longtail_harness;
 #[path = "gate/net_harness.rs"]
 mod net_harness;
 #[path = "gate/network.rs"]
 mod network;
 #[path = "gate/parity.rs"]
 mod parity;
+#[path = "gate/settings.rs"]
+mod settings;
 #[path = "gate/skills.rs"]
 mod skills;
 #[path = "gate/tattoos.rs"]

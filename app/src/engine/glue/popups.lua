@@ -10,7 +10,9 @@ glue = glue or {}
 
 local NOT_SHOWN = "PoB doesn't show that control for this item"
 
--- { popup, kind, item, build }: nil while no session is open
+-- { popup, kind, owner, item, build }: nil while no session is open. The owner (R19) says what
+-- ends it: `item` (the displayed item or the build changed), `build` (the build changed) or
+-- `main` (nothing but PoB or a command; it needs no build and survives build changes).
 local session
 
 local function main()
@@ -23,12 +25,21 @@ end
 
 -- ---- The session ----
 
--- A session whose item is no longer displayed (or whose build was replaced) is over
+-- A session whose owner is gone is over: an item session's item is no longer displayed or
+-- its build was replaced; a build session's build was replaced; a main session has no owner
+-- to lose (R19)
 local function live()
 	if not session then
 		return false
 	end
-	if session.build ~= pob.build or session.item ~= pob.build.itemsTab.displayItem then
+	if session.owner == "main" then
+		return true
+	end
+	if session.build ~= pob.build then
+		session = nil
+		return false
+	end
+	if session.owner == "item" and session.item ~= pob.build.itemsTab.displayItem then
 		session = nil
 		return false
 	end
@@ -69,9 +80,14 @@ local function settle(mine, depth)
 		close_above(depth)
 		session = session or {}
 		session.popup = top
-		session.kind = "EditText"
-		session.item = items_tab().displayItem
-		session.build = pob.build
+		-- only an item session's follow-up is the item text editor; any other keeps the
+		-- opener's kind (Options' DPI dropdown closes the window and opens it again)
+		if session.owner == nil or session.owner == "item" then
+			session.kind = "EditText"
+			session.owner = "item"
+			session.item = items_tab().displayItem
+			session.build = pob.build
+		end
 		return false
 	end
 	session = nil
@@ -97,8 +113,18 @@ end
 function glue.popup_end()
 	-- not `live()`: the command that just ran may itself have replaced the item (R4)
 	local was = session ~= nil
+	-- an Options window that goes away unanswered is cancelled, so PoB's half-edited values
+	-- don't stay in `main` for the next save to write
+	if was and session.kind == "Options" then
+		glue.popup_cancel_options()
+	end
 	session = nil
 	return was
+end
+
+-- Whether the open session is PoB's Options window
+function glue.popup_is_options()
+	return session ~= nil and session.kind == "Options"
 end
 
 -- ---- Opening ----
@@ -157,6 +183,25 @@ end
 -- slot) and keeps the popup it opens as the session.
 function glue.popup_open(kind, arg)
 	local open
+	if kind == "options" then
+		-- PoB's own opener; the window needs no build (R13)
+		local popups = main().popups
+		local depth = #popups
+		local ok, err = pcall(function()
+			main():OpenOptionsPopup()
+		end)
+		local count = #popups - depth
+		local top = popups[1]
+		close_above(depth)
+		if not ok then
+			error(err, 0)
+		end
+		if count == 0 then
+			error("PoB didn't open that window", 0)
+		end
+		session = { popup = top, kind = "Options", owner = "main" }
+		return
+	end
 	if kind == "node_replacement" then
 		-- the right-click's body (PassiveTreeView.lua:519-533) without `buildFlag`, which
 		-- changes nothing: the node must pass PoB's rule; an allocated mastery is the effect
@@ -199,7 +244,7 @@ function glue.popup_open(kind, arg)
 	end
 	-- a failed open above left the session it found alone; this one replaces it (R4)
 	local shown = kind == "node_replacement" and { NodeReplacement = { node = arg } } or KINDS[kind](arg)
-	session = { popup = top, kind = shown, item = tab.displayItem, build = pob.build }
+	session = { popup = top, kind = shown, owner = "item", item = tab.displayItem, build = pob.build }
 end
 
 -- ---- Controls ----
@@ -243,10 +288,12 @@ end
 -- (`notableDB.search`). Numeric keys are named by their number.
 local function all_controls(popup)
 	local found = {}
+	local options = session ~= nil and session.kind == "Options" and session.popup == popup
 	for key, control in pairs(popup.controls) do
 		local name = tostring(key)
 		local kind = kind_of(control)
-		if kind then
+		-- the rows the app doesn't offer are not in the window at all (R13)
+		if kind and not (options and glue.settings_hidden(name)) then
 			found[name] = { control = control, kind = kind }
 			if kind == "List" and control.controls then
 				for child_key, child in pairs(control.controls) do
@@ -265,6 +312,9 @@ end
 local function find(name)
 	local entry = all_controls(session.popup)[name]
 	if not entry then
+		if glue.popup_is_options() and glue.settings_hidden(name) then
+			error("PoB doesn't offer that here", 0)
+		end
 		error("no such control", 0)
 	end
 	return entry.control, entry.kind
@@ -433,8 +483,22 @@ function glue.popup_press(name)
 	return { ended = ended, build_flag = (pob.build.buildFlag and not flag_before) and true or false }
 end
 
--- Cancel and Escape: PoB only closes the popup
+-- Presses Options' Cancel (which restores the values the window changed as it went)
+function glue.popup_cancel_options()
+	if not glue.popup_is_options() then
+		return
+	end
+	local cancel = session.popup.controls.cancel
+	if cancel then
+		pcall(with_session, function()
+			cancel.onClick()
+		end)
+	end
+end
+
+-- Cancel and Escape: PoB only closes the popup. Escape on Options is PoB's `cancel` button.
 function glue.popup_close()
+	glue.popup_cancel_options()
 	session = nil
 end
 

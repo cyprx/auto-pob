@@ -21,7 +21,10 @@ pub fn opener_label(kind: &PopupKind) -> Option<String> {
         PopupKind::AddModifier => "Add modifier...".into(),
         PopupKind::AddImplicit => "Add Implicit...".into(),
         PopupKind::AddCrucible => "Add Crucible mod...".into(),
-        PopupKind::Craft | PopupKind::EditText | PopupKind::NodeReplacement { .. } => return None,
+        PopupKind::Craft
+        | PopupKind::EditText
+        | PopupKind::NodeReplacement { .. }
+        | PopupKind::Options => return None,
     })
 }
 

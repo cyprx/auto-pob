@@ -32,7 +32,8 @@ pub use views::{
     ModLineList, ModLineRef, NodeArt, NodePath, NodePower, NodePowerEntry, NodeTooltip, NoteColour,
     NotesView, OAuthView, PendingRequest, Points, PopupControl, PopupControlKind, PopupRow,
     PopupView, PowerReport, PowerReportRow, PublicStage, PublicView, RangeLineView, RequestsView,
-    ShareView, SheetImage, SiteRef, SkillOptionsView, SkillSetEntry, SkillsView, SlotChoice,
-    SlotKind, SlotView, SocketGroupText, SocketGroupView, SocketView, SpecEntry, Sprite, StatRow,
-    StatsView, TooltipLine, TreeLayout, TreeNode, TreeState, VariantView,
+    SettingEffect, SettingRow, SettingsView, ShareView, SheetImage, SiteRef, SkillOptionsView,
+    SkillSetEntry, SkillsView, SlotChoice, SlotKind, SlotView, SocketGroupText, SocketGroupView,
+    SocketView, SpecEntry, Sprite, StatRow, StatsView, TooltipLine, TreeLayout, TreeNode,
+    TreeState, VariantView,
 };

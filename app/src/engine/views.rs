@@ -945,6 +945,46 @@ mod tests {
         lua.from_value(value).unwrap()
     }
 
+    fn row(key: &str, value: &str, effect: SettingEffect) -> SettingRow {
+        SettingRow {
+            key: key.into(),
+            control: format!("{key}Control"),
+            label: format!("The {key}"),
+            shared: "shared".into(),
+            value: value.into(),
+            overridden: true,
+            effect,
+        }
+    }
+
+    #[test]
+    fn settings_view_round_trips() {
+        let view = SettingsView {
+            rows: vec![
+                row("colorPositive", "^x33FF77", SettingEffect::PobText),
+                row("showTitlebarName", "false", SettingEffect::Ui),
+                row("showAnimations", "true", SettingEffect::NoEffect),
+            ],
+            saved_overrides: BTreeMap::from([("defaultCharLevel".to_string(), "90".to_string())]),
+        };
+        let json = serde_json::to_string(&view).unwrap();
+        assert_eq!(serde_json::from_str::<SettingsView>(&json).unwrap(), view);
+        // an older writer without the overrides still reads
+        let old: SettingsView = serde_json::from_str(r#"{"rows":[]}"#).unwrap();
+        assert_eq!(old, SettingsView::default());
+        // and the Lua table the glue builds reads the same, with an empty override table
+        let from_lua: SettingsView = lua_value(
+            r#"return { rows = { { key = "showTitlebarName", control = "showTitlebarNameControl",
+              label = "The showTitlebarName", shared = "shared", value = "false",
+              overridden = true, effect = "Ui" } }, saved_overrides = {} }"#,
+        );
+        assert_eq!(
+            from_lua.rows,
+            vec![row("showTitlebarName", "false", SettingEffect::Ui)]
+        );
+        assert!(from_lua.saved_overrides.is_empty());
+    }
+
     #[test]
     fn config_view_from_lua_table() {
         let view: ConfigView = lua_value(
@@ -1345,6 +1385,43 @@ pub struct RangeLineView {
     /// A Foulborn box next to the line
     pub mutable: bool,
     pub mutated: bool,
+}
+
+/// Who acts on a setting's change (R13).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SettingEffect {
+    /// PoB formats its own text from it; nothing to do here
+    PobText,
+    /// The UI acts on it (zoom, window title, the tree canvas)
+    Ui,
+    /// PoB's option has no counterpart here
+    NoEffect,
+}
+
+/// One of PoB's settings, as `Settings.xml` holds it: every value is a string (`true`/`false`,
+/// numbers as `tostring` writes them, colours as `^x...`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SettingRow {
+    /// The `Settings.xml` attribute
+    pub key: String,
+    /// The Options control that edits it; empty for none
+    pub control: String,
+    pub label: String,
+    /// What `Settings.xml` holds (what an override hides)
+    pub shared: String,
+    /// What PoB runs with now
+    pub value: String,
+    pub overridden: bool,
+    pub effect: SettingEffect,
+}
+
+/// PoB's settings and the app's overrides (R12). Needs no build.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SettingsView {
+    pub rows: Vec<SettingRow>,
+    /// The overrides an Options Save changed since the last view, for the UI to write (R12)
+    #[serde(default)]
+    pub saved_overrides: BTreeMap<String, String>,
 }
 
 /// The network requests: the pending ones in the order they began, and the ones finished since

@@ -13,8 +13,8 @@ use super::views::{
     AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView,
     ControlTooltipView, DisplayItemView, GemSearchView, GemTooltipView, GroupTooltipView,
     ItemDbView, ItemText, ItemTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, PopupView,
-    PowerReport, RequestsView, ShareView, SkillsView, SocketGroupText, StatsView, TreeLayout,
-    TreeState,
+    PowerReport, RequestsView, SettingsView, ShareView, SkillsView, SocketGroupText, StatsView,
+    TreeLayout, TreeState,
 };
 use pob_runtime::net::Waker;
 
@@ -50,6 +50,8 @@ pub enum Snapshot {
     Notes(Arc<NotesView>),
     /// The pending and newly finished network requests; sent with or without a build (R10)
     Requests(Arc<RequestsView>),
+    /// PoB's settings and the app's overrides; sent with or without a build (R12)
+    Settings(Arc<SettingsView>),
     /// The build sharing and import box of the Import/Export tab (R16, R17)
     Share(Arc<ShareView>),
     /// The build's share code, answering `ExportShareCode` (R17)
@@ -153,6 +155,8 @@ pub struct Affected {
     pub short_link: bool,
     /// The network requests changed: one began, finished or was cancelled (R10)
     pub requests: bool,
+    /// The settings or the overrides changed (R12); list-safe
+    pub settings: bool,
     /// The import box or the sharing state changed (R16, R17); build-only
     pub share: bool,
     /// The share code was requested (R17); build-only
@@ -191,12 +195,14 @@ impl Affected {
         link: false,
         short_link: false,
         requests: true,
+        settings: true,
         share: true,
         share_code: false,
         account: true,
     };
 
-    /// Only views that need no build are asked for: the build list and the requests (R10).
+    /// Only views that need no build are asked for: the build list, the requests, the settings
+    /// and the popup (a main-owned session needs no build, R19).
     fn list_safe_only(&self) -> bool {
         *self == self.list_safe()
     }
@@ -206,6 +212,8 @@ impl Affected {
         Affected {
             list: self.list,
             requests: self.requests,
+            settings: self.settings,
+            popup: self.popup,
             ..Affected::default()
         }
     }
@@ -247,6 +255,7 @@ impl Affected {
         self.link |= other.link;
         self.short_link |= other.short_link;
         self.requests |= other.requests;
+        self.settings |= other.settings;
         self.share |= other.share;
         self.share_code |= other.share_code;
         self.account |= other.account;
@@ -335,6 +344,8 @@ pub trait Backend {
     fn release_memory(&mut self);
     /// The pending network requests and the ones finished since the last call (R10)
     fn requests_view(&mut self) -> anyhow::Result<RequestsView>;
+    /// PoB's settings and the overrides over them; needs no build (R12)
+    fn settings_view(&mut self) -> anyhow::Result<SettingsView>;
     /// Gives the backend a way to wake the loop from other threads (R9). Called once, after
     /// `start`.
     fn set_waker(&mut self, _wake: Waker) {}
@@ -360,7 +371,8 @@ pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send
             },
         });
     }
-    // With no build open only the list and the requests can be answered; the rest would raise
+    // With no build open only the list, the requests, the settings and the popup can be
+    // answered; the rest would raise
     // on a missing build, so they are dropped here, for every caller at once.
     let flags = if flags.list_safe_only() {
         flags
@@ -387,6 +399,9 @@ pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send
     }
     if flags.list {
         emit(seq, send, backend.build_list_view(), Snapshot::BuildList);
+    }
+    if flags.settings {
+        emit(seq, send, backend.settings_view(), Snapshot::Settings);
     }
     if flags.stats {
         emit(seq, send, backend.stats_view(), Snapshot::Stats);
@@ -980,6 +995,7 @@ mod tests {
                 match s {
                     Snapshot::Build(_) => "build",
                     Snapshot::BuildList(_) => "list",
+                    Snapshot::Settings(_) => "settings",
                     Snapshot::Stats(_) => "stats",
                     Snapshot::Config(_) => "config",
                     Snapshot::TreeLayout(_) => "tree_layout",
@@ -1004,6 +1020,7 @@ mod tests {
                 "requests",
                 "build",
                 "list",
+                "settings",
                 "stats",
                 "config",
                 "tree",
@@ -1099,9 +1116,9 @@ mod tests {
         assert_eq!(stats_seq, Some(3));
         assert_eq!(config_seq, Some(3));
         assert_eq!(log.lock().unwrap().set_configs, 2);
-        // Ready + 15 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items + DisplayItem; the channel disconnect means the
+        // Ready + 16 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items + DisplayItem; the channel disconnect means the
         // thread (and so every wake) is finished.
-        assert_eq!(wakes.load(Ordering::SeqCst), 23);
+        assert_eq!(wakes.load(Ordering::SeqCst), 24);
     }
 
     #[test]
@@ -1116,16 +1133,19 @@ mod tests {
                 Event::Snapshot { snapshot, .. } => kinds.push(match snapshot {
                     Snapshot::BuildList(_) => "list",
                     Snapshot::Requests(_) => "requests",
+                    Snapshot::Settings(_) => "settings",
+                    Snapshot::Popup(_) => "popup",
                     _ => "other",
                 }),
                 Event::Error { message, .. } => panic!("unexpected error: {message}"),
                 _ => {}
             }
         }
-        // the requests need no build either (R10)
+        // the requests need no build either (R10), nor do the settings (R12) and the popup
+        // (a main-owned session, R19)
         assert_eq!(
             kinds,
-            ["requests", "list"],
+            ["requests", "list", "settings", "popup"],
             "only the list-safe views go out"
         );
     }
@@ -1522,7 +1542,9 @@ mod tests {
         let kinds = |events: &[Event]| {
             snapshots(events)
                 .into_iter()
-                .filter(|(_, s)| matches!(s, Snapshot::Popup(_) | Snapshot::ControlTooltip(_)))
+                .filter(|(_, s)| {
+                    matches!(s, Snapshot::Popup(Some(_)) | Snapshot::ControlTooltip(_))
+                })
                 .count()
         };
         // with a build both are answered
@@ -2042,6 +2064,70 @@ mod tests {
         };
         assert_eq!(kinds(true), ["requests", "stats"]);
         assert_eq!(kinds(false), ["requests"]);
+    }
+
+    #[test]
+    fn settings_snapshot_is_list_safe() {
+        let flags = Affected {
+            settings: true,
+            stats: true,
+            ..Affected::default()
+        };
+        let kinds = |build_loaded: bool| {
+            let (mut fake, _log) = Fake::new();
+            fake.build_loaded = build_loaded;
+            let events = RefCell::new(Vec::new());
+            send_snapshots(&mut fake, 1, flags.clone(), &|e| {
+                events.borrow_mut().push(e)
+            });
+            let events = events.into_inner();
+            assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
+            snapshots(&events)
+                .iter()
+                .map(|(_, s)| match s {
+                    Snapshot::Stats(_) => "stats",
+                    Snapshot::Settings(_) => "settings",
+                    _ => "other",
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(kinds(true), ["settings", "stats"]);
+        // the settings are answered with no build open; the stats are not
+        assert_eq!(kinds(false), ["settings"]);
+        // a settings-only batch is list-safe by itself, so no build check is made
+        assert!(
+            Affected {
+                settings: true,
+                ..Affected::default()
+            }
+            .list_safe_only()
+        );
+    }
+
+    #[test]
+    fn options_popup_is_answered_without_a_build() {
+        // a main-owned session outlives the build (R19); an item session does not
+        let kinds = |popup: crate::engine::PopupKind| {
+            let (mut fake, _log) = Fake::new();
+            fake.build_loaded = false;
+            fake.popup = Some(popup);
+            let events = RefCell::new(Vec::new());
+            send_snapshots(
+                &mut fake,
+                1,
+                Affected {
+                    popup: true,
+                    ..Affected::default()
+                },
+                &|e| events.borrow_mut().push(e),
+            );
+            snapshots(&events.into_inner())
+                .iter()
+                .map(|(_, s)| matches!(s, Snapshot::Popup(Some(_))))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(kinds(crate::engine::PopupKind::Options), [true]);
+        assert_eq!(kinds(crate::engine::PopupKind::Corrupt), [false]);
     }
 
     #[test]

@@ -203,6 +203,9 @@ end
 mainObject.continuousIntegrationMode = nil
 
 runCallback("OnInit")
+-- Options' Save would rewrite manifest.xml in the pinned PoB folder to switch branches; the
+-- folder is read-only for us and the beta branch is ruled out (R13)
+mainObject.main.SetManifestBranch = function() end
 runCallback("OnFrame") -- Need at least one frame for everything to initialise
 
 if mainObject.promptMsg then

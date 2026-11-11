@@ -354,6 +354,8 @@ impl AutoPobApp {
                     }
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     Snapshot::Requests(view) => self.on_requests(&view),
+                    // the Options window reads it (Task 4)
+                    Snapshot::Settings(_) => {}
                     // the Import tab keeps its own
                     Snapshot::Share(_) | Snapshot::ShareCode(_) | Snapshot::Account(_) => {}
                     // power results of the build being left
@@ -1767,6 +1769,9 @@ mod tests {
             Ok(crate::engine::AccountView::default())
         }
 
+        fn settings_view(&mut self) -> anyhow::Result<crate::engine::SettingsView> {
+            Ok(crate::engine::SettingsView::default())
+        }
         fn requests_view(&mut self) -> anyhow::Result<crate::engine::RequestsView> {
             Ok(crate::engine::RequestsView::default())
         }

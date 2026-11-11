@@ -260,6 +260,15 @@ impl AutoPobApp {
                 task: BackgroundTask::GemDps,
                 ..
             } => self.skills.on_gem_failed(),
+            // the Anoint window shows its own progress (Task 8)
+            Event::Progress {
+                task: BackgroundTask::AnointSort,
+                ..
+            }
+            | Event::BackgroundFailed {
+                task: BackgroundTask::AnointSort,
+                ..
+            } => {}
             Event::Progress { percent, .. } => self.tree.on_progress(percent),
             Event::BackgroundFailed { message, .. } => {
                 self.tree.power_failed();

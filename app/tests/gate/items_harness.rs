@@ -768,7 +768,16 @@ fn relabel_pick(s: &mut Session, command: Command) -> Command {
         return command;
     };
     // only the lists PoB builds from `pairs`
-    if name != "modSelect" && name != "modGroupSelect" {
+    if ![
+        "modSelect",
+        "modGroupSelect",
+        "implicit1",
+        "implicit2",
+        "implicit3",
+        "implicit4",
+    ]
+    .contains(&name.as_str())
+    {
         return Command::SetPopupControl {
             name,
             value: PopupInput::Choice { index, label },
@@ -803,9 +812,16 @@ pub(crate) fn checkpoints(recipe: &ItemsRecipe) -> Vec<&ItemsCheckpoint> {
         .collect()
 }
 
+/// How many Anoint sort steps `settle` has run, so a test can see the sort was a background job
+pub(crate) static ANOINT_SORT_STEPS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 /// Runs the background steps the engine would run between commands, until there are none.
 pub(crate) fn settle(s: &mut Session) {
     while let Some(task) = s.backend.next_background() {
+        if task == auto_pob::engine::BackgroundTask::AnointSort {
+            ANOINT_SORT_STEPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         s.backend
             .background_step(task, &|_| {})
             .unwrap_or_else(|e| panic!("{task:?}: {e}"));

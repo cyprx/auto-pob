@@ -251,34 +251,6 @@ local function find(name)
 	return entry.control, entry.kind
 end
 
--- What PoB's Draw does before a list control reads its rows (R14, R17): restart the list
--- builder on a new flag or output revision. A name sort never yields, so the builder is
--- run to its end here; a stat sort is a background job.
-local function list_sync(control)
-	if not control.ListBuilder then
-		return
-	end
-	local tab = control.itemsTab
-	if tab and tab.build.outputRevision ~= control.listOutputRevision then
-		control.listBuildFlag = true
-	end
-	if control.listBuildFlag then
-		control.listBuildFlag = false
-		wipeTable(control.list)
-		control.listBuilder = coroutine.create(control.ListBuilder)
-		control.listOutputRevision = tab and tab.build.outputRevision
-	end
-	if control.listBuilder and not (control.sortDetail and control.sortDetail.stat) then
-		local ok, err = coroutine.resume(control.listBuilder, control)
-		if not ok then
-			error(err, 0)
-		end
-		if coroutine.status(control.listBuilder) == "dead" then
-			control.listBuilder = nil
-		end
-	end
-end
-
 local function row_key(value, index)
 	if type(value) == "table" then
 		return tostring(value.id or index)
@@ -329,7 +301,7 @@ local function control_view(name, control, kind, popup_x, popup_y)
 	elseif kind == "Edit" then
 		view.text = control.buf or ""
 	elseif kind == "List" then
-		list_sync(control)
+		glue.list_sync(control)
 		for i, value in ipairs(control.list) do
 			local ok, label = pcall(control.GetRowValue, control, 1, i, value)
 			view.rows[i] = { key = row_key(value, i), label = ok and text_of(label) or "" }
@@ -411,7 +383,7 @@ function glue.popup_set(name, kind, value, label)
 		elseif kind == "text" and control_kind == "Edit" then
 			glue.paste_into(control, value)
 		elseif kind == "row" and control_kind == "List" then
-			list_sync(control)
+			glue.list_sync(control)
 			for i, entry in ipairs(control.list) do
 				if row_key(entry, i) == value then
 					control:SelectIndex(i)
@@ -473,4 +445,40 @@ function glue.popup_tooltip(name, index)
 		out = glue.read_tooltip(tooltip)
 	end)
 	return out
+end
+
+-- ---- The anoint list's stat sort (R17) ----
+
+-- The open Anoint session's notable list, or nil
+local function notable_list()
+	if not live() or type(session.kind) ~= "table" or not session.kind.Anoint then
+		return nil
+	end
+	return session.popup.controls.notableDB
+end
+
+-- Whether the Anoint window's list has a stat sort to run: PoB's Draw preamble would restart
+-- it on a new flag or output revision, and a live builder is work
+function glue.anoint_sort_pending()
+	local control = notable_list()
+	if not (control and control.ListBuilder) then
+		return false
+	end
+	if not (control.sortDetail and control.sortDetail.stat) then
+		return false
+	end
+	return glue.list_pending(control)
+end
+
+-- One slice of the stat sort. Returns `{ finished, percent }`; a failed resume is an error.
+function glue.anoint_sort_step()
+	local control = notable_list()
+	if not control then
+		return { finished = true }
+	end
+	local result
+	with_session(function()
+		result = glue.list_step(control)
+	end)
+	return result
 end

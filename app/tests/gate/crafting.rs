@@ -4,8 +4,9 @@
 
 use super::items::gear_sessions;
 use super::items_harness::{
-    ItemsRecipe, assert_same, checkpoints, first_difference, json, json_of, open_popups,
-    raws_and_jewels, run_items_recipe, strip_nulls, upstream_json, upstream_with_items_lib,
+    ANOINT_SORT_STEPS, ItemsRecipe, assert_same, checkpoints, first_difference, json, json_of,
+    open_popups, raws_and_jewels, run_items_recipe, strip_nulls, upstream_json,
+    upstream_with_items_lib,
 };
 use super::{Session, lock, lua_value};
 use auto_pob::engine::{
@@ -1051,4 +1052,45 @@ fn prefix_source_raising_matches_pob() {
     s.run(Command::ClosePopup).unwrap();
     assert!(s.backend.popup_view().unwrap().is_none());
     assert_eq!(open_popups(&s), 0);
+}
+
+/// Enchant, anoint and corrupt through PoB's windows, with the anoint list's stat sort as a
+/// background job, then each recipe's round trip.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn enchant_corrupt_recipes_match_pob() {
+    let _guard = lock();
+    let started = std::time::Instant::now();
+    let (recipe, mut s) = run_items_recipe("enchant_anoint");
+    // every compared part was non-default somewhere: an enchantment, an anointment, a sorted
+    // list and a selected row
+    let mut sorted_rows = false;
+    let mut selected = false;
+    let mut enchanted = false;
+    for check in checkpoints(&recipe) {
+        if let Some(display) = check.display.as_ref() {
+            enchanted |= display.to_string().to_lowercase().contains("enchant");
+        }
+        let Some(popup) = check.popup.as_ref() else {
+            continue;
+        };
+        for control in popup["controls"].as_array().unwrap() {
+            if control["name"] == "notableDB" {
+                sorted_rows |= !control["rows"].as_array().unwrap().is_empty();
+                selected |= !control["row_selected"].is_null();
+            }
+        }
+    }
+    assert!(
+        sorted_rows && selected && enchanted,
+        "{sorted_rows} {selected} {enchanted}"
+    );
+    assert!(
+        ANOINT_SORT_STEPS.load(std::sync::atomic::Ordering::Relaxed) > 0,
+        "the stat sort ran no background step"
+    );
+    crafting_round_trip("enchant_anoint", &recipe, &mut s);
+    let (recipe, mut s) = run_items_recipe("corrupt");
+    crafting_round_trip("corrupt", &recipe, &mut s);
+    eprintln!("enchant_corrupt: {:?}", started.elapsed());
 }

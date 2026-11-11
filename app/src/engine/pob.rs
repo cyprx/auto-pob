@@ -35,6 +35,9 @@ pub struct PobBackend {
     gem_search: Option<GemSearchQuery>,
     /// A DPS step failed; the job stays stopped until the next `SearchGems`.
     gem_failed: bool,
+    /// An Anoint sort step failed; the job stays stopped until the window is opened again or
+    /// one of its controls is set.
+    anoint_failed: bool,
     /// A command ended the open search; its last view (`ended: true`) is still to be sent.
     gem_ended: Option<GemSearchQuery>,
     /// Lua's heap after the last memory release, in bytes
@@ -110,6 +113,7 @@ impl PobBackend {
             ("@glue/items.lua", include_str!("glue/items.lua")),
             ("@glue/crafting.lua", include_str!("glue/crafting.lua")),
             ("@glue/popups.lua", include_str!("glue/popups.lua")),
+            ("@glue/itemdb.lua", include_str!("glue/itemdb.lua")),
             ("@glue/notes.lua", include_str!("glue/notes.lua")),
         ] {
             lua.load(source)
@@ -128,6 +132,7 @@ impl PobBackend {
             power_failed: false,
             gem_search: None,
             gem_failed: false,
+            anoint_failed: false,
             gem_ended: None,
             released_lua_bytes: 0,
         })
@@ -1001,6 +1006,7 @@ impl PobBackend {
                 })
             }
             Command::OpenPopup(kind) => {
+                self.anoint_failed = false;
                 let (name, arg) = match kind {
                     PopupKind::Craft => ("craft", 0),
                     PopupKind::EditText => ("edit_text", 0),
@@ -1021,6 +1027,7 @@ impl PobBackend {
                 Ok(popup_changed())
             }
             Command::SetPopupControl { name, value } => {
+                self.anoint_failed = false;
                 match value {
                     PopupInput::Choice { index, label } => {
                         self.call::<_, ()>("popup_set", (name, "choice", index, label))?
@@ -1183,6 +1190,13 @@ impl Backend for PobBackend {
         {
             return Some(BackgroundTask::GemDps);
         }
+        if !self.anoint_failed
+            && self
+                .call::<_, bool>("anoint_sort_pending", ())
+                .unwrap_or(false)
+        {
+            return Some(BackgroundTask::AnointSort);
+        }
         let power = self.heatmap_on
             && !self.power_failed
             && self.call::<_, bool>("power_pending", ()).unwrap_or(false);
@@ -1213,6 +1227,26 @@ impl Backend for PobBackend {
                 Ok(Affected {
                     power: true,
                     report: step.finished,
+                    ..Affected::default()
+                })
+            }
+            BackgroundTask::AnointSort => {
+                let step: Step = match self.view("anoint_sort_step", ()) {
+                    Ok(step) => step,
+                    Err(e) => {
+                        self.anoint_failed = true;
+                        return Err(e);
+                    }
+                };
+                if let Some(percent) = step.percent {
+                    send(Event::Progress {
+                        task: BackgroundTask::AnointSort,
+                        percent,
+                    });
+                }
+                // the window shows the rows once the builder ends
+                Ok(Affected {
+                    popup: step.finished,
                     ..Affected::default()
                 })
             }

@@ -45,6 +45,8 @@ pub struct Fake {
     pub background: Arc<Mutex<VecDeque<Step>>>,
     /// Gem DPS steps still to run; they go before the power steps.
     pub gem_background: Arc<Mutex<VecDeque<Step>>>,
+    /// Anoint sort steps still to run; they go after the gem steps and before the power steps.
+    pub anoint_background: Arc<Mutex<VecDeque<Step>>>,
     /// The open gem search
     pub gem_search: Option<GemSearchQuery>,
     /// Replaces the queue when a command returns `build` or `recalc`.
@@ -76,6 +78,7 @@ impl Fake {
                 fail_set_config: None,
                 background: Arc::default(),
                 gem_background: Arc::default(),
+                anoint_background: Arc::default(),
                 gem_search: None,
                 restart_on_build: Vec::new(),
                 on_step: None,
@@ -283,6 +286,8 @@ impl Backend for Fake {
     fn next_background(&self) -> Option<BackgroundTask> {
         if !self.gem_background.lock().unwrap().is_empty() {
             Some(BackgroundTask::GemDps)
+        } else if !self.anoint_background.lock().unwrap().is_empty() {
+            Some(BackgroundTask::AnointSort)
         } else if !self.background.lock().unwrap().is_empty() {
             Some(BackgroundTask::NodePower)
         } else {
@@ -297,6 +302,7 @@ impl Backend for Fake {
     ) -> anyhow::Result<Affected> {
         let queue = match task {
             BackgroundTask::GemDps => self.gem_background.clone(),
+            BackgroundTask::AnointSort => self.anoint_background.clone(),
             BackgroundTask::NodePower => self.background.clone(),
         };
         let step = queue.lock().unwrap().pop_front();

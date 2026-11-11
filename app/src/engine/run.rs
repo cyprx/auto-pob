@@ -51,6 +51,8 @@ pub enum Snapshot {
 pub enum BackgroundTask {
     /// The gem picker's DPS sort; it goes first whenever it has work (R12)
     GemDps,
+    /// The Anoint window's stat sort; it goes after the gem picker's, before node power (R20)
+    AnointSort,
     NodePower,
 }
 
@@ -1500,6 +1502,31 @@ mod tests {
         }));
         drop(tx);
         run_live(fake, &rx)
+    }
+
+    #[test]
+    fn anoint_sort_runs_before_item_db() {
+        // ItemDb arrives with Task 6; the order it joins is GemDps, AnointSort, ItemDb,
+        // NodePower (R20), so the sort goes before node power and after the gem picker
+        let (mut fake, log) = Fake::new();
+        fake.background
+            .lock()
+            .unwrap()
+            .extend((0..2).map(|_| step_affecting_power()));
+        fake.anoint_background
+            .lock()
+            .unwrap()
+            .extend((0..2).map(|_| step_affecting_gems()));
+        fake.gem_background
+            .lock()
+            .unwrap()
+            .extend((0..2).map(|_| step_affecting_gems()));
+        run_until_idle(&mut fake, vec![Command::SearchGems(gem_query(""))], 6);
+        use BackgroundTask::{AnointSort, GemDps, NodePower};
+        assert_eq!(
+            log.lock().unwrap().step_tasks,
+            [GemDps, GemDps, AnointSort, AnointSort, NodePower, NodePower]
+        );
     }
 
     #[test]

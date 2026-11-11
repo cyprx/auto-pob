@@ -27,6 +27,19 @@ pub struct PopupOutput {
     pub queries: Vec<Command>,
 }
 
+/// Extras a window adds around the engine's controls (the Options window's "auto-pob only"
+/// boxes and fields). They draw only; what they change is theirs to send.
+pub trait Decorate {
+    /// Drawn above a row, before its controls
+    fn before_row(&mut self, _ui: &mut egui::Ui, _view: &PopupView, _row: &[usize]) {}
+    /// Drawn right after a control, in its row
+    fn after_control(&mut self, _ui: &mut egui::Ui, _control: &PopupControl) {}
+}
+
+struct Plain;
+
+impl Decorate for Plain {}
+
 /// The shown controls of `view`, grouped by vertical centre and sorted by x within a row (R5).
 pub fn rows(view: &PopupView) -> Vec<Vec<usize>> {
     let centre = |i: usize| {
@@ -151,6 +164,8 @@ pub struct PopupWindow {
     /// `OpenPopup` went out as this command and nothing has answered it yet
     opening: Option<u64>,
     pub(crate) rects: Rects,
+    /// The height the rows needed in the last frame
+    content_height: f32,
 }
 
 impl PopupWindow {
@@ -294,6 +309,17 @@ impl PopupWindow {
 
     /// Draws the window. `busy`: the engine hasn't caught up with what was sent.
     pub fn show(&mut self, ctx: &egui::Context, now: f64, busy: bool) -> PopupOutput {
+        self.show_with(ctx, now, busy, &mut Plain)
+    }
+
+    /// `show`, with `deco` drawing around the controls.
+    pub fn show_with(
+        &mut self,
+        ctx: &egui::Context,
+        now: f64,
+        busy: bool,
+        deco: &mut dyn Decorate,
+    ) -> PopupOutput {
         let mut out = PopupOutput::default();
         let Some(view) = self.view.clone() else {
             if self.opening.is_some() {
@@ -312,6 +338,7 @@ impl PopupWindow {
         let mut close = escape;
 
         let width = window_width(&view);
+        let mut content_height = self.content_height;
         egui::Modal::new(egui::Id::unique("auto_pob_popup_window")).show(ctx, |ui| {
             ui.set_min_width(width);
             ui.set_max_width(width.max(MAX_CONTROL_WIDTH));
@@ -324,16 +351,22 @@ impl PopupWindow {
                 });
             });
             ui.separator();
-            egui::ScrollArea::vertical()
+            let max_height = (ctx.content_rect().height() - 140.0).max(200.0);
+            // The window's size is the last frame's, so a scroll area left to shrink would
+            // stay as small as the first view it held; it is given the height it needed last.
+            let shown = egui::ScrollArea::vertical()
                 .id_salt("popup_scroll")
-                .max_height((ctx.content_rect().height() - 140.0).max(200.0))
+                .max_height(max_height)
+                .min_scrolled_height(content_height.min(max_height))
                 .auto_shrink([true, true])
                 .show(ui, |ui| {
                     for row in rows(&view) {
-                        self.row(ui, &view, &row, busy, &mut out);
+                        self.row(ui, &view, &row, busy, &mut out, deco);
                     }
                 });
+            content_height = shown.content_size.y;
         });
+        self.content_height = content_height;
 
         // a box not drawn this frame (its control was hidden) drops what was typed: the
         // engine refuses a control PoB doesn't show (R25)
@@ -356,13 +389,16 @@ impl PopupWindow {
         row: &[usize],
         busy: bool,
         out: &mut PopupOutput,
+        deco: &mut dyn Decorate,
     ) {
+        deco.before_row(ui, view, row);
         let has_list = row
             .iter()
             .any(|&i| view.controls[i].kind == PopupControlKind::List);
         let mut draw = |ui: &mut egui::Ui| {
             for &i in row {
                 self.control(ui, view, &view.controls[i], busy, out);
+                deco.after_control(ui, &view.controls[i]);
             }
         };
         if has_list {

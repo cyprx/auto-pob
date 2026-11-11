@@ -200,6 +200,11 @@ impl Fake {
                     ..Affected::default()
                 })
             }
+            // the real engine answers with the settings (R12)
+            Command::SetOverrides { .. } => Ok(Affected {
+                settings: true,
+                ..Affected::default()
+            }),
             Command::ControlTooltip(query) => Ok(Affected {
                 control_tooltip: Some(query),
                 ..Affected::default()

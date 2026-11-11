@@ -126,9 +126,11 @@ numbers are PoB's numbers.
     that doesn't work, copy the link shown and open it yourself.
   - Nothing is sent unless you ask. Opening a build, switching tabs and typing in the import
     box send nothing; a request starts only when you press a button (or pass a link).
-  - The release notice is opt-in: start the app with `AUTO_POB_UPDATE_CHECK=1` and it looks at
-    this repository's latest release once and tells you if there is a newer one. It never
-    updates anything.
+  - The release notice is opt-in: turn on "Look for new auto-pob releases" in Options (it is
+    `update_check = true` in `auto-pob.toml`), or start the app with `AUTO_POB_UPDATE_CHECK=1`.
+    It looks at this repository's latest release once and tells you if there is a newer one. It
+    never updates anything. The variable only forces the notice on; the setting decides
+    otherwise, and the default is off.
   - Limits:
     - A request that gets "unauthorised" refreshes your sign-in token at most twice. Past that
       it stops with an error and does not retry, where PoB itself would keep trying.
@@ -156,8 +158,34 @@ the Network section).
 | Variable | Effect |
 |---|---|
 | `AUTO_POB_POB_DIR` | Use this PoB folder instead of the pinned download (no download). |
-| `AUTO_POB_UPDATE_CHECK` | Set to `1` to look for a newer auto-pob release when the app starts. Off by default. |
-| `AUTO_POB_USER_DIR` | Keep `Builds/` and `Settings.xml` here instead of `<data dir>/RustyPathOfBuilding1/userdata/`. |
+| `AUTO_POB_CONFIG` | Read and write auto-pob's settings file here instead of `<config dir>/auto-pob/auto-pob.toml`. |
+| `AUTO_POB_UPDATE_CHECK` | Set to `1` to look for a newer auto-pob release when the app starts, whatever `update_check` says. Off by default. |
+| `AUTO_POB_USER_DIR` | Keep `Builds/` and `Settings.xml` here instead of `<data dir>/RustyPathOfBuilding1/userdata/`. Wins over `user_dir` in `auto-pob.toml`. |
+
+### auto-pob.toml
+
+auto-pob's own settings live in `auto-pob.toml` (PoB's stay in `Settings.xml`). Options writes it;
+you can also edit it by hand, and comments and keys it doesn't know are kept.
+
+```toml
+user_dir = "/home/me/pob"   # the folder for Builds/ and Settings.xml; the default if absent
+update_check = false        # the opt-in release notice
+
+[trade]
+realm = "PC"                # PC, PS4 or Xbox
+league = "Standard"
+
+[overrides]                 # Settings.xml keys auto-pob keeps its own value for
+colorPositive = "^x33FF77"
+```
+
+Precedence for the user folder: `AUTO_POB_USER_DIR`, then `user_dir`, then the default. For the
+release notice: `AUTO_POB_UPDATE_CHECK=1` forces it on, otherwise `update_check`.
+
+On the first start with no `auto-pob.toml`, no `AUTO_POB_USER_DIR` and an existing classic app
+folder, auto-pob asks whether to use that folder or another one, and writes the answer. Without
+the classic folder it uses the default and writes nothing until you save Options. A file that
+cannot be parsed is renamed to `auto-pob.toml.bad` and the app says so.
 
 auto-pob shares `Builds/` and `Settings.xml` with the classic app
 (`rusty-path-of-building`), so builds saved by one open in the other.

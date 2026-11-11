@@ -10,6 +10,7 @@ pub enum BuildAction {
     SaveAs,
     Undo,
     Redo,
+    Options,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -74,6 +75,10 @@ pub fn top_bar(
             .clicked()
         {
             action = Some(BuildAction::Redo);
+        }
+        ui.separator();
+        if ui.button("Options").clicked() {
+            action = Some(BuildAction::Options);
         }
         ui.separator();
         let class = view.ascendancy.as_deref().unwrap_or(&view.class);

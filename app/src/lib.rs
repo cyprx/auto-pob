@@ -3,6 +3,7 @@
 pub mod engine;
 pub mod game;
 pub mod pob_files;
+pub mod settings;
 pub mod theme;
 pub mod ui;
 pub mod update_notice;

@@ -3,9 +3,10 @@
 use std::sync::Arc;
 
 use crate::engine::views::{BuildListView, BuildView, ConfigView, RequestsView, StatsView};
-use crate::engine::{BackgroundTask, Command, Engine, Event, ImportMode, Snapshot, Tab};
+use crate::engine::{BackgroundTask, Command, Engine, Event, ImportMode, PopupKind, Snapshot, Tab};
 use crate::game::Game;
 use crate::pob_files::DownloadProgress;
+use crate::settings::{self, AppSettings};
 use crate::theme;
 use crate::ui::build::{self, BuildAction, BuildTab};
 use crate::ui::build_list::{BuildListUi, ListScreenAction};
@@ -14,6 +15,7 @@ use crate::ui::config::ConfigUi;
 use crate::ui::import::{Confirm, ImportOutput, ImportUi, Plan};
 use crate::ui::items::{ItemsOutput, ItemsUi};
 use crate::ui::notes::NotesUi;
+use crate::ui::options::{self, OptionsUi};
 use crate::ui::popup::{self, PopupWindow};
 use crate::ui::requests;
 use crate::ui::skills::{SkillsOutput, SkillsUi};
@@ -103,6 +105,14 @@ pub struct AutoPobApp {
     popup: PopupWindow,
     /// The tab that opened the popup: leaving it closes the window
     popup_tab: Option<BuildTab>,
+    /// The Options window, which any screen can open and a build change doesn't end (R19)
+    options: OptionsUi,
+    /// auto-pob.toml as it is on disk, and where it goes (None: nowhere, as in the tests)
+    settings: AppSettings,
+    config_path: Option<std::path::PathBuf>,
+    /// The zoom factor and window title the settings last asked for
+    applied_zoom: f32,
+    applied_title: String,
     /// The seq of the raw item text last sent, to keep its window open on an error
     text_seq: Option<u64>,
     sidebar: sidebar::SidebarState,
@@ -166,6 +176,11 @@ impl AutoPobApp {
             items: ItemsUi::default(),
             popup: PopupWindow::default(),
             popup_tab: None,
+            options: OptionsUi::default(),
+            settings: AppSettings::default(),
+            config_path: None,
+            applied_zoom: 1.0,
+            applied_title: "auto-pob".into(),
             text_seq: None,
             sidebar: sidebar::SidebarState::default(),
             notes: NotesUi::default(),
@@ -207,17 +222,136 @@ impl AutoPobApp {
         self
     }
 
+    /// The contents of `auto-pob.toml` (defaults when there is none) and the file to write them
+    /// to. The engine gets the overrides once it is ready.
+    #[must_use]
+    pub fn with_settings(mut self, settings: AppSettings, path: std::path::PathBuf) -> Self {
+        self.settings = settings;
+        self.config_path = Some(path);
+        self
+    }
+
+    /// A message shown at the top until dismissed.
+    #[must_use]
+    pub fn with_notice(mut self, notice: String) -> Self {
+        self.notices.push(notice);
+        self
+    }
+
     fn restart(&mut self) {
         let spawn = std::mem::replace(&mut self.spawn, Box::new(|| unreachable!()));
+        let settings = std::mem::take(&mut self.settings);
+        let config_path = self.config_path.take();
         *self = AutoPobApp::new(spawn);
+        self.settings = settings;
+        self.config_path = config_path;
+    }
+
+    /// The app's own values for PoB's settings go to the engine (R12).
+    fn send_overrides(&mut self) {
+        if !self.settings.overrides.is_empty() {
+            self.send_overrides_always();
+        }
+    }
+
+    fn send_overrides_always(&mut self) {
+        let values = self.settings.overrides.clone();
+        self.send(Command::SetOverrides { values });
+    }
+
+    /// Writes `auto-pob.toml`; a failure or a damaged file is told to the user.
+    fn write_settings(&mut self) {
+        let Some(path) = self.config_path.clone() else {
+            return;
+        };
+        match settings::save_noting(&path, &self.settings) {
+            Ok(None) => {}
+            Ok(Some(backup)) => self.notices.push(format!(
+                "{} could not be read, so it was moved to {} and a new one written.",
+                path.display(),
+                backup.display()
+            )),
+            Err(e) => self
+                .notices
+                .push(format!("Couldn't save {}: {e:#}", path.display())),
+        }
+    }
+
+    fn open_options(&mut self) {
+        self.send(Command::OpenPopup(PopupKind::Options));
+    }
+
+    /// PoB's settings, as the engine sees them now; the answer to an Options Save also carries
+    /// the overrides it moved, and then the file is written and the map sent again (R12).
+    fn on_settings(&mut self, view: &crate::engine::SettingsView, seq: u64) {
+        if let Some(next) = self.options.on_settings(view, seq) {
+            self.settings = next;
+            self.write_settings();
+            self.send_overrides_always();
+        }
+    }
+
+    fn on_popup_snapshot(&mut self, snapshot: &Snapshot, seq: u64) {
+        match snapshot {
+            Snapshot::Popup(Some(view)) if matches!(view.kind, PopupKind::Options) => {
+                self.options.window.on_snapshot_at(snapshot, seq);
+            }
+            Snapshot::Popup(Some(_)) => self.popup.on_snapshot_at(snapshot, seq),
+            _ => {
+                self.popup.on_snapshot_at(snapshot, seq);
+                self.options.window.on_snapshot_at(snapshot, seq);
+            }
+        }
+    }
+
+    /// Draws the Options window and sends what it asks.
+    fn options_window(&mut self, ui: &mut egui::Ui) {
+        if !self.options.window.is_blocking() {
+            return;
+        }
+        let now = ui.input(|i| i.time);
+        let behind = self.behind();
+        let out = self.options.show(ui.ctx(), now, behind);
+        let save_at = out.save_at;
+        for (i, command) in out.commands.into_iter().enumerate() {
+            let seq = self.send(command);
+            if save_at == Some(i) {
+                self.options.save_sent(seq);
+            }
+        }
+        // questions never leave the app waiting
+        for query in out.queries {
+            self.engine.send(query);
+        }
+    }
+
+    /// What the UI does for PoB's settings: the zoom and the window title (R13).
+    fn apply_ui_settings(&mut self, ctx: &egui::Context) {
+        let effects = options::ui_effects(self.options.rows());
+        if (effects.zoom - self.applied_zoom).abs() > f32::EPSILON {
+            ctx.set_zoom_factor(effects.zoom);
+            self.applied_zoom = effects.zoom;
+        }
+        let build = (self.screen == Screen::Build && self.entering.is_none())
+            .then(|| self.build.as_ref().map(|b| b.name.as_str()))
+            .flatten();
+        let title = options::window_title(effects.show_title, build);
+        if title != self.applied_title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.applied_title = title;
+        }
     }
 
     /// Sends a command whose snapshots the UI waits for.
     fn send(&mut self, command: Command) -> u64 {
-        if matches!(command, Command::OpenPopup(_)) {
+        if let Command::OpenPopup(kind) = &command {
             // a late edit would end the new session (R4), so every pending one goes first
             self.flush_edits();
-            self.popup_tab = Some(self.tab);
+            if matches!(kind, PopupKind::Options) {
+                self.options.begin(&self.settings);
+            } else {
+                self.popup_tab = Some(self.tab);
+            }
         }
         #[cfg(test)]
         self.sent_full.push(format!("{command:?}"));
@@ -243,12 +377,16 @@ impl AutoPobApp {
         .then(|| command.clone());
         let is_close = matches!(command, Command::ClosePopup);
         let is_open = matches!(command, Command::OpenPopup(_));
+        let is_options = matches!(command, Command::OpenPopup(PopupKind::Options));
         let seq = self.engine.send(command);
-        if is_open {
+        if is_options {
+            self.options.window.open_sent(seq);
+        } else if is_open {
             self.popup.open_sent(seq);
         }
         if is_close {
             self.popup.close_sent(seq);
+            self.options.window.close_sent(seq);
         }
         self.last_sent = seq;
         if let Some(command) = echo {
@@ -295,7 +433,10 @@ impl AutoPobApp {
     fn on_event(&mut self, event: Event) {
         match event {
             Event::Downloading(p) => self.progress = Some(p),
-            Event::Ready => self.ready = true,
+            Event::Ready => {
+                self.ready = true;
+                self.send_overrides();
+            }
             Event::StartupFailed { message } => self.startup_error = Some(message),
             Event::Snapshot { seq, snapshot } => {
                 self.last_snapshot = self.last_snapshot.max(seq);
@@ -345,17 +486,16 @@ impl AutoPobApp {
                     | Snapshot::ItemText(_)
                     | Snapshot::ItemDb(_) => self.items.on_snapshot_at(&snapshot, seq),
                     Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
-                    Snapshot::Popup(_) => self.popup.on_snapshot_at(&snapshot, seq),
+                    Snapshot::Popup(_) => self.on_popup_snapshot(&snapshot, seq),
                     // the popup window, the display panel and the database panel each keep the
                     // answers to their own questions
                     Snapshot::ControlTooltip(_) => {
-                        self.popup.on_snapshot_at(&snapshot, seq);
+                        self.on_popup_snapshot(&snapshot, seq);
                         self.items.on_snapshot_at(&snapshot, seq);
                     }
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     Snapshot::Requests(view) => self.on_requests(&view),
-                    // the Options window reads it (Task 4)
-                    Snapshot::Settings(_) => {}
+                    Snapshot::Settings(view) => self.on_settings(&view, seq),
                     // the Import tab keeps its own
                     Snapshot::Share(_) | Snapshot::ShareCode(_) | Snapshot::Account(_) => {}
                     // power results of the build being left
@@ -452,6 +592,7 @@ impl AutoPobApp {
         }
         // the window stays open for another try (R4)
         self.popup.on_error(seq);
+        self.options.on_error(seq);
         if self.text_seq == Some(seq) {
             self.text_seq = None;
             // the raw-text window stays open for another try
@@ -535,6 +676,9 @@ impl AutoPobApp {
             self.send(command);
         }
         if let Some(command) = self.popup.flush() {
+            self.send(command);
+        }
+        if let Some(command) = self.options.window.flush() {
             self.send(command);
         }
     }
@@ -661,6 +805,9 @@ impl AutoPobApp {
             if let Some(command) = self.popup.close() {
                 self.send(command);
             }
+            for command in self.options.close() {
+                self.send(command);
+            }
         }
 
         for action in std::mem::take(&mut self.ready_actions) {
@@ -705,6 +852,8 @@ impl AutoPobApp {
             Screen::List => self.list_screen(ui),
             Screen::Build => self.build_screen(ui),
         }
+        self.options_window(ui);
+        self.apply_ui_settings(&ctx);
         self.dialogs(&ctx);
     }
 
@@ -847,6 +996,7 @@ impl AutoPobApp {
             Some(ListScreenAction::OpenBuild(path)) => self.request(Pending::Open(path)),
             Some(ListScreenAction::New) => self.request(Pending::New),
             Some(ListScreenAction::Import) => self.import = Some(String::new()),
+            Some(ListScreenAction::Options) => self.open_options(),
             None => {}
         }
     }
@@ -872,7 +1022,8 @@ impl AutoPobApp {
             || self.tree.has_dialog()
             || self.skills.has_dialog()
             || self.items.has_dialog()
-            || self.popup.is_blocking();
+            || self.popup.is_blocking()
+            || self.options.window.is_blocking();
         // a focused button or row doesn't take Ctrl+Z from the tab
         let typing = ui.ctx().text_edit_focused();
         let mut action = None;
@@ -1073,6 +1224,7 @@ impl AutoPobApp {
             Some(BuildAction::SaveAs) => self.open_save_as(None),
             Some(BuildAction::Undo) => self.undo_redo(false),
             Some(BuildAction::Redo) => self.undo_redo(true),
+            Some(BuildAction::Options) => self.open_options(),
             None => {}
         }
     }
@@ -1359,6 +1511,10 @@ impl eframe::App for AutoPobApp {
         self.show(ui);
     }
 }
+
+#[cfg(test)]
+#[path = "app_options_tests.rs"]
+mod options_tests;
 
 #[cfg(test)]
 mod tests {

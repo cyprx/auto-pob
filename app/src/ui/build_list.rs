@@ -14,6 +14,7 @@ pub enum ListScreenAction {
     OpenBuild(PathBuf),
     New,
     Import,
+    Options,
 }
 
 pub struct BuildListUi {
@@ -101,6 +102,9 @@ impl BuildListUi {
             }
             if ui.button("Import code").clicked() {
                 action = Some(ListScreenAction::Import);
+            }
+            if ui.button("Options").clicked() {
+                action = Some(ListScreenAction::Options);
             }
         });
         ui.separator();

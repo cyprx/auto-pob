@@ -3,9 +3,11 @@ pub mod build;
 pub mod build_list;
 pub mod calcs;
 pub mod config;
+pub mod first_run;
 pub mod import;
 pub mod items;
 pub mod notes;
+pub mod options;
 pub mod popup;
 #[cfg(test)]
 mod popup_tests;

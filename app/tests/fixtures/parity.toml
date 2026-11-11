@@ -2224,8 +2224,7 @@ gap = "Task 14"
 note = "fork name; with the version in the Help window"
 
 [controls."main.options"]
-gap = "Task 4"
-note = "Options window (R13)"
+ported = "app/src/ui/build.rs top_bar and app/src/ui/build_list.rs Options buttons open app/src/ui/options.rs OptionsUi"
 
 [controls."main.versionLabel"]
 gap = "Task 14"
@@ -3127,8 +3126,7 @@ gap = "Task 6"
 note = "R16"
 
 [popups."Options"]
-gap = "Task 4"
-note = "R13"
+ported = "app/src/ui/options.rs OptionsUi draws PoB's Options popup through PopupWindow, with auto-pob-only boxes"
 
 [popups."PassiveSpecListControl:69"]
 gap = "Task 13"

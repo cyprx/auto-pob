@@ -188,3 +188,32 @@ function popupTooltip(name, index)
 	end
 	return tooltipDump(tt)
 end
+
+-- ---- Crafting an item ----
+
+-- The 0-based index of the entry of a dropdown named by its `name` or its label without colour
+-- codes
+function entryIndex(control, name)
+	for i, entry in ipairs(control.list) do
+		local label = type(entry) == "table" and (entry.name or entry.label) or entry
+		label = label:gsub("%^x%x%x%x%x%x%x", ""):gsub("%^%d", "")
+		if label == name then return i - 1, type(entry) == "table" and entry.label or entry end
+	end
+	error("no entry " .. name)
+end
+
+-- The Craft window, as a user fills it in: rarity, name, type and base, then Create
+function craftBase(rarity, title, typeName, baseName)
+	act.open_popup("craftDisplayItem")
+	local controls = main.popups[1].controls
+	for _, step in ipairs({ { "rarity", rarity }, { "type", typeName } }) do
+		local index, label = entryIndex(controls[step[1]], step[2])
+		act.popup_set(step[1], { Choice = { index = index, label = label } })
+	end
+	if title then act.popup_set("title", { Text = title }) end
+	-- choosing the type gave the base dropdown its list
+	local index, label = entryIndex(controls.base, baseName)
+	act.popup_set("base", { Choice = { index = index, label = label } })
+	act.popup_press("save")
+	assert(not main.popups[1], "Create left a window open")
+end

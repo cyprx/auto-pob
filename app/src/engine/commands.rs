@@ -436,6 +436,31 @@ pub enum Command {
         line: usize,
         on: bool,
     },
+    /// Picks entry `index` of affix dropdown `slot` (0..=8, R9). `label` is the entry as the
+    /// caller saw it: PoB rebuilds every list after a pick, so a pick against a list that
+    /// changed is refused (R8).
+    SetAffix {
+        slot: usize,
+        index: usize,
+        label: String,
+    },
+    /// The slider under affix dropdown `slot`: 0..=1, tier and roll in one.
+    SetAffixRange {
+        slot: usize,
+        value: f64,
+    },
+    /// "Modifier sorting" (R9, R10).
+    SetCraftingSort {
+        index: usize,
+    },
+    /// A cluster jewel's skill dropdown (R11).
+    SetClusterSkill {
+        index: usize,
+    },
+    /// A cluster jewel's "Added Passives" slider, as a node count (R11).
+    SetClusterNodeCount {
+        count: u32,
+    },
     /// A click on a tooltip line of the display item (R4).
     ToggleModLine {
         line: ModLineRef,

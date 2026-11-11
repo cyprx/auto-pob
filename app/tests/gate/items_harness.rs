@@ -7,7 +7,8 @@ use super::{
 };
 use auto_pob::engine::upstream::{SidebarLine, golden_of};
 use auto_pob::engine::{
-    Backend, Command, ItemsView, ModLineRef, PopupInput, PopupKind, SocketColour, Tab,
+    Backend, Command, ControlTooltipQuery, ItemsView, ModLineRef, PopupInput, PopupKind,
+    SocketColour, Tab,
 };
 use auto_pob::game::Game;
 use mlua::LuaSerdeExt;
@@ -243,6 +244,26 @@ pub(crate) enum ItemsAction {
     ToggleModLine {
         line: ModLineRef,
     },
+    /// Recorded by items_lib's `act.affix`, `act.affix_range`, `act.crafting_sort`,
+    /// `act.cluster_skill` and `act.cluster_count`
+    SetAffix {
+        slot: usize,
+        index: usize,
+        label: String,
+    },
+    SetAffixRange {
+        slot: usize,
+        value: f64,
+    },
+    SetCraftingSort {
+        index: usize,
+    },
+    SetClusterSkill {
+        index: usize,
+    },
+    SetClusterNodeCount {
+        count: u32,
+    },
     Undo,
     Redo,
     /// Recorded by popup_lib's `act.open_popup`, `act.popup_set`, `act.popup_press` and
@@ -324,6 +345,13 @@ impl ItemsAction {
                 Command::SetRangeLineMutated { line, on }
             }
             ItemsAction::ToggleModLine { line } => Command::ToggleModLine { line },
+            ItemsAction::SetAffix { slot, index, label } => {
+                Command::SetAffix { slot, index, label }
+            }
+            ItemsAction::SetAffixRange { slot, value } => Command::SetAffixRange { slot, value },
+            ItemsAction::SetCraftingSort { index } => Command::SetCraftingSort { index },
+            ItemsAction::SetClusterSkill { index } => Command::SetClusterSkill { index },
+            ItemsAction::SetClusterNodeCount { count } => Command::SetClusterNodeCount { count },
             ItemsAction::OpenPopup { kind } => Command::OpenPopup(kind),
             ItemsAction::SetPopupControl { name, value } => {
                 Command::SetPopupControl { name, value }
@@ -364,6 +392,21 @@ pub(crate) struct ItemsCheckpoint {
     /// The open popup (`popupDump()`); none while no window is open
     #[serde(default)]
     pub(crate) popup: Option<serde_json::Value>,
+    /// Slot 0's affix tooltips as hovering shows them (`affixTooltips()`)
+    #[serde(default)]
+    pub(crate) affix_tooltips: Vec<RecordedAffixTooltip>,
+    /// The tree layout's text (`layoutDigest()`), when the recipe asked for it
+    #[serde(default)]
+    pub(crate) layout: Option<String>,
+}
+
+/// An affix dropdown entry's tooltip (or, without an index, the slider's) at a checkpoint
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub(crate) struct RecordedAffixTooltip {
+    pub(crate) slot: usize,
+    #[serde(default)]
+    pub(crate) index: Option<usize>,
+    pub(crate) tooltip: serde_json::Value,
 }
 
 /// A recipe run in upstream PoB: the steps it took and where they ended.
@@ -437,6 +480,9 @@ pub(crate) fn upstream_items_recipe(name: &str) -> ItemsRecipe {
                 check.items = strip_nulls(check.items);
                 check.display = check.display.map(strip_nulls);
                 check.popup = check.popup.map(strip_nulls);
+                for recorded in &mut check.affix_tooltips {
+                    recorded.tooltip = strip_nulls(recorded.tooltip.take());
+                }
                 return ItemsAction::Check {
                     check: Box::new(check),
                 };
@@ -500,6 +546,8 @@ pub(crate) fn our_items_checkpoint(s: &mut Session) -> ItemsCheckpoint {
             .popup_view()
             .expect("popup view")
             .map(|view| json_of(&view)),
+        affix_tooltips: Vec::new(),
+        layout: None,
     }
 }
 
@@ -533,9 +581,13 @@ pub(crate) fn run_items_recipe(name: &str) -> (ItemsRecipe, Session) {
     for action in &recipe.actions {
         match action.command() {
             Some(command) => {
+                let started = std::time::Instant::now();
                 let affected = s
                     .run(command)
                     .unwrap_or_else(|e| panic!("{name}: {action:?}: {e}"));
+                if matches!(action, ItemsAction::SetCraftingSort { .. }) {
+                    eprintln!("{name}: SetCraftingSort took {:?}", started.elapsed());
+                }
                 if matches!(
                     action,
                     ItemsAction::PasteItem { .. }
@@ -555,6 +607,11 @@ pub(crate) fn run_items_recipe(name: &str) -> (ItemsRecipe, Session) {
                         | ItemsAction::SetRangeLine { .. }
                         | ItemsAction::SetRangeLineMutated { .. }
                         | ItemsAction::ToggleModLine { .. }
+                        | ItemsAction::SetAffix { .. }
+                        | ItemsAction::SetAffixRange { .. }
+                        | ItemsAction::SetCraftingSort { .. }
+                        | ItemsAction::SetClusterSkill { .. }
+                        | ItemsAction::SetClusterNodeCount { .. }
                 ) {
                     assert!(
                         affected.display_item,
@@ -651,6 +708,35 @@ pub(crate) fn run_items_recipe(name: &str) -> (ItemsRecipe, Session) {
                         assert_eq!(ours, theirs, "{name}: checkpoint {checked} popup")
                     }
                 }
+                // the affix tooltips, hovered now on our side
+                for recorded in &check.affix_tooltips {
+                    let query = ControlTooltipQuery::Affix {
+                        slot: recorded.slot,
+                        index: recorded.index,
+                    };
+                    let view = s
+                        .backend
+                        .control_tooltip_view(&query)
+                        .unwrap()
+                        .unwrap_or_else(|| panic!("{name}: no tooltip for {query:?}"));
+                    let what = format!("{name}: checkpoint {checked} tooltip {query:?}");
+                    let ours = json_of(&view.tooltip);
+                    if first_difference("", &ours, &recorded.tooltip).is_some() {
+                        // see `canonical_tooltip`
+                        eprintln!("{what}: the \"can appear on\" order differs");
+                        assert_same(
+                            &canonical_tooltip(ours),
+                            &canonical_tooltip(recorded.tooltip.clone()),
+                            &what,
+                        );
+                    }
+                    assert!(!view.tooltip.lines.is_empty() || recorded.index == Some(0));
+                }
+                if let Some(theirs) = &check.layout {
+                    let ours: String =
+                        lua_value(&s.backend.lua, "return glue.tree_layout_digest()");
+                    assert_eq!(&ours, theirs, "{name}: checkpoint {checked} tree layout");
+                }
                 checked += 1;
             }
         }
@@ -681,4 +767,52 @@ pub(crate) fn settle(s: &mut Session) {
             .background_step(task, &|_| {})
             .unwrap_or_else(|e| panic!("{task:?}: {e}"));
     }
+}
+
+/// A notable's tooltip ends with the cluster jewels it can appear on: a group per size, with
+/// the skills that carry it. PoB builds both lists from `pairs`, so two Lua states order the
+/// groups and the skills differently; the blank line that follows every group but the first
+/// moves with them. In canonical form the groups are sorted by header, the skills within each,
+/// and the blanks come last. Every other line is compared as it is.
+fn canonical_tooltip(mut tooltip: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    let Some(lines) = tooltip["lines"].as_array_mut() else {
+        return tooltip;
+    };
+    let text = |line: &Value| line["text"].as_str().unwrap_or_default().to_string();
+    let Some(start) = lines
+        .iter()
+        .position(|l| text(l).ends_with(" can appear on:"))
+    else {
+        return tooltip;
+    };
+    let tail: Vec<Value> = lines.split_off(start + 1);
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    let mut blanks = Vec::new();
+    for line in tail {
+        let t = text(&line);
+        if line["size"] == 18 {
+            groups.push((line.to_string(), Vec::new()));
+        } else if t.is_empty() {
+            blanks.push(line);
+        } else {
+            groups
+                .last_mut()
+                .expect("a skill before its size")
+                .1
+                .push(line.to_string());
+        }
+    }
+    groups.sort();
+    for (header, mut skills) in groups {
+        skills.sort();
+        lines.push(serde_json::from_str(&header).unwrap());
+        lines.extend(
+            skills
+                .iter()
+                .map(|l| serde_json::from_str::<Value>(l).unwrap()),
+        );
+    }
+    lines.extend(blanks);
+    tooltip
 }

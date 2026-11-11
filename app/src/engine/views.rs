@@ -1228,7 +1228,37 @@ pub struct DisplayItemView {
     /// The windows PoB's panel offers for this item (R3), in the panel's order
     #[serde(default)]
     pub popups: Vec<PopupKind>,
+    /// The shown affix dropdowns of a crafted item (R9), in PoB's slot order
+    #[serde(default)]
+    pub affixes: Vec<AffixView>,
+    /// "Modifier sorting", while PoB shows it
+    pub crafting_sort: Option<DropList>,
+    /// A crafted cluster jewel's controls (R11)
+    pub cluster: Option<ClusterView>,
     pub tooltip: ItemTooltip,
+}
+
+/// One of PoB's affix dropdowns with the slider under it
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AffixView {
+    /// 0..=8: `displayItemAffix1..9`
+    pub slot: usize,
+    /// "Prefix:", "Suffix:" or "Explicit:"
+    pub label: String,
+    pub list: DropList,
+    /// The slider's value (0..=1) while PoB shows it
+    pub range: Option<f64>,
+    /// The slider's division count: the tiers of the chosen modifier group
+    pub tiers: Option<u32>,
+}
+
+/// A crafted cluster jewel's skill dropdown and "Added Passives" slider
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ClusterView {
+    pub skill: DropList,
+    pub count: u32,
+    pub min: u32,
+    pub max: u32,
 }
 
 /// One of the six variant dropdowns

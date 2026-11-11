@@ -3,10 +3,14 @@
 //! Included from `gate.rs`, whose helpers it reaches through `super::`.
 
 use super::items::gear_sessions;
-use super::items_harness::{assert_same, first_difference, json_of, open_popups, strip_nulls};
-use super::{Session, lock};
+use super::items_harness::{
+    ItemsRecipe, assert_same, checkpoints, first_difference, json, json_of, open_popups,
+    raws_and_jewels, run_items_recipe, strip_nulls, upstream_json, upstream_with_items_lib,
+};
+use super::{Session, lock, lua_value};
 use auto_pob::engine::{
-    Backend, Command, ControlTooltipQuery, PopupControlKind, PopupInput, PopupKind, PopupView,
+    Backend, Command, ControlTooltipQuery, DisplayItemView, PopupControlKind, PopupInput,
+    PopupKind, PopupView,
 };
 use mlua::LuaSerdeExt;
 use std::collections::BTreeSet;
@@ -615,5 +619,309 @@ fn popup_session_lifecycle() {
         "doesn't show that control",
     );
     s.run(Command::ClosePopup).unwrap();
+    assert_eq!(open_popups(&s), 0);
+}
+
+// ---- The crafter ----
+
+/// Ends a recipe's test: saves the build, loads the file in upstream PoB and compares what it
+/// holds with the recipe's end state and ours (R24). The undo history and the list filter are
+/// not saved.
+pub(crate) fn crafting_round_trip(name: &str, recipe: &ItemsRecipe, s: &mut Session) {
+    s.run(Command::Save).unwrap();
+    let saved = s.backend.build_view().unwrap().path.expect("a saved build");
+    let lua = upstream_with_items_lib(&saved, &recipe.base);
+    let saved_part = |mut value: serde_json::Value| {
+        for key in ["can_undo", "can_redo", "list_filter"] {
+            value.as_object_mut().unwrap().remove(key);
+        }
+        value
+    };
+    let ours = saved_part(json(&s.backend.items_view().unwrap()));
+    let reloaded = saved_part(upstream_json(&lua));
+    assert_same(
+        &reloaded,
+        &saved_part(recipe.result.clone()),
+        &format!("{name}: reloaded vs recipe"),
+    );
+    assert_same(&ours, &reloaded, &format!("{name}: ours vs reloaded"));
+    let (raws, jewels) = raws_and_jewels(&lua, "build");
+    assert_eq!(raws, recipe.raws, "{name}: item text after reload");
+    assert_eq!(jewels, recipe.jewels, "{name}: jewels after reload");
+    let (ours_raws, ours_jewels) = raws_and_jewels(&s.backend.lua, "pob.build");
+    assert_eq!(ours_raws, raws, "{name}: our item text");
+    assert_eq!(ours_jewels, jewels, "{name}: our jewels");
+    assert!(!raws.is_empty(), "{name}: no items");
+    let overrides = |lua: &mlua::Lua, build: &str| -> serde_json::Value {
+        strip_nulls(lua_value(
+            lua,
+            &format!("return {build}.spec.hashOverrides or {{}}"),
+        ))
+    };
+    assert_eq!(
+        overrides(&s.backend.lua, "pob.build"),
+        overrides(&lua, "build"),
+        "{name}: hash overrides"
+    );
+}
+
+/// Crafts an item through the Craft window, as the panel's button does
+fn craft_ours(s: &mut Session, rarity: &str, title: &str, kind: &str, base: &str) {
+    s.run(Command::OpenPopup(PopupKind::Craft)).unwrap();
+    for (name, wanted) in [("rarity", rarity), ("type", kind)] {
+        let view = ours_popup(s);
+        let control = view.controls.iter().find(|c| c.name == name).unwrap();
+        let index = control
+            .choices
+            .iter()
+            .position(|c| c.ends_with(wanted))
+            .unwrap_or_else(|| panic!("no {wanted}"));
+        s.run(Command::SetPopupControl {
+            name: name.into(),
+            value: PopupInput::Choice {
+                index,
+                label: control.choices[index].clone(),
+            },
+        })
+        .unwrap();
+    }
+    s.run(Command::SetPopupControl {
+        name: "title".into(),
+        value: PopupInput::Text(title.into()),
+    })
+    .unwrap();
+    let view = ours_popup(s);
+    let control = view.controls.iter().find(|c| c.name == "base").unwrap();
+    let index = control
+        .choices
+        .iter()
+        .position(|c| c.contains(base))
+        .unwrap_or_else(|| panic!("no base {base}"));
+    s.run(Command::SetPopupControl {
+        name: "base".into(),
+        value: PopupInput::Choice {
+            index,
+            label: control.choices[index].clone(),
+        },
+    })
+    .unwrap();
+    s.run(Command::PressPopupButton {
+        name: "save".into(),
+    })
+    .unwrap();
+}
+
+fn display(s: &mut Session) -> DisplayItemView {
+    s.backend
+        .display_item_view()
+        .unwrap()
+        .expect("an item is displayed")
+}
+
+/// Runs `command`, which must fail with a message containing `expected`, and checks that
+/// the display item is as it was.
+fn refused_display(s: &mut Session, command: Command, expected: &str) {
+    let before = s.backend.display_item_view().unwrap().map(|v| json_of(&v));
+    let what = format!("{command:?}");
+    let error = s
+        .run(command)
+        .expect_err(&format!("{what} should be refused"));
+    assert!(
+        error.to_string().contains(expected),
+        "{what}: {error} doesn't say {expected:?}"
+    );
+    assert_eq!(
+        s.backend.display_item_view().unwrap().map(|v| json_of(&v)),
+        before,
+        "{what} changed the display item"
+    );
+    assert_eq!(open_popups(s), 0);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn craft_recipes_match_pob() {
+    let _guard = lock();
+    let mut tiers = false;
+    let mut ranges = false;
+    let mut sorted = false;
+    let mut counted = false;
+    let mut tooltips = 0;
+    let mut slider_tooltips = 0;
+    let mut suffix = false;
+    let mut kept = None;
+    for name in ["craft_rare", "cluster"] {
+        let (recipe, mut s) = run_items_recipe(name);
+        for check in checkpoints(&recipe) {
+            // the checkpoint after Save has no display item
+            let Some(display) = check.display.as_ref() else {
+                continue;
+            };
+            for affix in display["affixes"].as_array().unwrap() {
+                tiers |= affix.get("tiers").is_some();
+                ranges |= affix.get("range").is_some();
+                suffix |= affix["label"] == "Suffix:";
+            }
+            sorted |= display["crafting_sort"]["list"]["selected"]
+                .as_u64()
+                .or(display["crafting_sort"]["selected"].as_u64())
+                .is_some_and(|i| i > 0);
+            counted |= display["cluster"]["count"].as_u64().is_some_and(|c| c > 0);
+            for recorded in &check.affix_tooltips {
+                if recorded.tooltip["lines"]
+                    .as_array()
+                    .is_some_and(|l| !l.is_empty())
+                {
+                    tooltips += 1;
+                    slider_tooltips += usize::from(recorded.index.is_none());
+                }
+            }
+        }
+        crafting_round_trip(name, &recipe, &mut s);
+        if name == "craft_rare" {
+            kept = Some(s);
+        }
+    }
+    assert!(
+        tiers && ranges && suffix,
+        "no affix had a slider or a suffix label"
+    );
+    assert!(sorted, "the modifier sorting never left its default");
+    assert!(counted, "no cluster jewel was compared");
+    assert!(tooltips >= 6 && slider_tooltips > 0, "{tooltips} tooltips");
+
+    // the errors (Review Focus 3), in craft_rare's session
+    let mut s = kept.unwrap();
+    assert!(
+        s.backend
+            .lua
+            .load("return pob.build.itemsTab.selControl == nil")
+            .eval::<bool>()
+            .unwrap(),
+        "selControl is set"
+    );
+    craft_ours(&mut s, "Rare", "Error Ring", "Ring", "Two-Stone Ring");
+    let before = display(&mut s);
+    assert_eq!(before.affixes.len(), 6);
+    assert!(before.crafting_sort.is_some() && before.cluster.is_none());
+    let old = before.affixes[1].list.labels.clone();
+    s.run(Command::SetAffix {
+        slot: 0,
+        index: 1,
+        label: before.affixes[0].list.labels[1].clone(),
+    })
+    .unwrap();
+    let after = display(&mut s);
+    assert_eq!(after.affixes[0].list.selected, 1);
+    // two picks queued in one batch: the second's list was rebuilt by the first
+    let moved = old
+        .iter()
+        .zip(&after.affixes[1].list.labels)
+        .position(|(a, b)| a != b)
+        .expect("the first pick changed slot 1's list");
+    refused_display(
+        &mut s,
+        Command::SetAffix {
+            slot: 1,
+            index: moved,
+            label: old[moved].clone(),
+        },
+        "the list changed; pick again",
+    );
+    refused_display(
+        &mut s,
+        Command::SetAffix {
+            slot: 8,
+            index: 0,
+            label: "None".into(),
+        },
+        "doesn't show that control",
+    );
+    refused_display(
+        &mut s,
+        Command::SetAffixRange {
+            slot: 8,
+            value: 0.5,
+        },
+        "doesn't show that control",
+    );
+    // slot 5 is empty: its slider is hidden
+    assert!(after.affixes[5].range.is_none());
+    refused_display(
+        &mut s,
+        Command::SetAffixRange {
+            slot: 5,
+            value: 0.5,
+        },
+        "doesn't show that control",
+    );
+    refused_display(
+        &mut s,
+        Command::SetAffix {
+            slot: 1,
+            index: 999,
+            label: "None".into(),
+        },
+        "no such choice",
+    );
+    refused_display(
+        &mut s,
+        Command::SetCraftingSort { index: 999 },
+        "no such choice",
+    );
+    refused_display(
+        &mut s,
+        Command::SetClusterSkill { index: 0 },
+        "doesn't show that control",
+    );
+    refused_display(
+        &mut s,
+        Command::SetClusterNodeCount { count: 10 },
+        "doesn't show that control",
+    );
+    // a tooltip of a vanished control answers nothing
+    for query in [
+        ControlTooltipQuery::Affix {
+            slot: 8,
+            index: Some(0),
+        },
+        ControlTooltipQuery::Affix {
+            slot: 5,
+            index: None,
+        },
+        ControlTooltipQuery::Affix {
+            slot: 1,
+            index: Some(999),
+        },
+    ] {
+        assert!(s.backend.control_tooltip_view(&query).unwrap().is_none());
+    }
+    // no display item: every command is refused
+    s.run(Command::CancelDisplayItem { if_id: None }).unwrap();
+    for command in [
+        Command::SetAffix {
+            slot: 0,
+            index: 0,
+            label: "None".into(),
+        },
+        Command::SetAffixRange {
+            slot: 0,
+            value: 0.5,
+        },
+        Command::SetCraftingSort { index: 1 },
+        Command::SetClusterSkill { index: 0 },
+        Command::SetClusterNodeCount { count: 10 },
+    ] {
+        refused_display(&mut s, command, "no item is being viewed");
+    }
+    assert!(
+        s.backend
+            .control_tooltip_view(&ControlTooltipQuery::Affix {
+                slot: 0,
+                index: Some(0)
+            })
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(open_popups(&s), 0);
 }

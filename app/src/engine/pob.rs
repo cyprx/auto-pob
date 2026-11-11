@@ -961,6 +961,26 @@ impl PobBackend {
                 self.call::<_, ()>("display_mutated", (line + 1, on))?;
                 Ok(display_changed())
             }
+            Command::SetAffix { slot, index, label } => {
+                self.call::<_, ()>("affix_set", (slot, index, label))?;
+                Ok(display_changed())
+            }
+            Command::SetAffixRange { slot, value } => {
+                self.call::<_, ()>("affix_range", (slot, value))?;
+                Ok(display_changed())
+            }
+            Command::SetCraftingSort { index } => {
+                self.call::<_, ()>("crafting_sort", index + 1)?;
+                Ok(display_changed())
+            }
+            Command::SetClusterSkill { index } => {
+                self.call::<_, ()>("cluster_skill", index + 1)?;
+                Ok(display_changed())
+            }
+            Command::SetClusterNodeCount { count } => {
+                self.call::<_, ()>("cluster_count", count)?;
+                Ok(display_changed())
+            }
             Command::ToggleModLine { line } => {
                 let list = match line.list {
                     ModLineList::Enchant => "enchant",
@@ -1294,8 +1314,11 @@ impl Backend for PobBackend {
             ControlTooltipQuery::Popup { control, index } => {
                 self.view("popup_tooltip", (control.clone(), index.map(|i| i as i64)))?
             }
-            // the affix editor and the item databases answer in later tasks
-            ControlTooltipQuery::Affix { .. } | ControlTooltipQuery::DbItem { .. } => None,
+            ControlTooltipQuery::Affix { slot, index } => {
+                self.view("affix_tooltip", (*slot, index.map(|i| i as i64)))?
+            }
+            // the item databases answer in a later task
+            ControlTooltipQuery::DbItem { .. } => None,
         };
         Ok(found.map(|tooltip| ControlTooltipView {
             query: query.clone(),

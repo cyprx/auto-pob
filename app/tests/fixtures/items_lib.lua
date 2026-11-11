@@ -202,11 +202,88 @@ function displayDump()
 	}) do
 		if c[opener[1]]:IsShown() then table.insert(out.popups, opener[2]) end
 	end
+	-- the crafter's dropdowns, from the controls PoB keeps up to date (UpdateAffixControls)
+	out.affixes = {}
+	for i = 1, 9 do
+		local drop = c["displayItemAffix" .. i]
+		if drop:IsShown() then
+			local affix = {
+				slot = i - 1,
+				label = (c["displayItemAffixLabel" .. i]:GetProperty("label"):gsub("^%^7", "")),
+				list = dropDump(drop),
+			}
+			if drop.slider:IsShown() then
+				affix.range = drop.slider.val
+				affix.tiers = drop.slider.divCount
+			end
+			out.affixes[#out.affixes + 1] = affix
+		end
+	end
+	if c.craftingSorting:IsShown() then out.crafting_sort = dropDump(c.craftingSorting) end
+	if c.displayItemClusterJewelSkill:IsShown() then
+		out.cluster = {
+			skill = dropDump(c.displayItemClusterJewelSkill),
+			count = item.clusterJewelNodeCount,
+			min = item.clusterJewel.minNodes,
+			max = item.clusterJewel.maxNodes,
+		}
+	end
 	out.tooltip = tooltipDump(t.displayItemTooltip)
 	for i, line in ipairs(t.displayItemTooltip.lines) do
 		if line.modLine then out.tooltip.lines[i].mod_line = modLineRef(item, line.modLine) end
 	end
 	return out
+end
+
+-- Hovering an entry of affix dropdown `slot` (0..8; `index` is 0-based) or, without an index,
+-- the slider under it: the control's own tooltip hook, on a fresh Tooltip
+function affixTooltip(slot, index)
+	local drop = tab().controls["displayItemAffix" .. (slot + 1)]
+	if not (drop and drop:IsShown()) then return nil end
+	local tt = new("Tooltip")
+	if index then
+		local entry = drop.list[index + 1]
+		if entry == nil then return nil end
+		drop.tooltipFunc(tt, "HOVER", index + 1, entry)
+	else
+		if not drop.slider:IsShown() then return nil end
+		drop.slider.tooltipFunc(tt, drop.slider.val)
+	end
+	return tooltipDump(tt)
+end
+
+-- The affix tooltips a checkpoint compares: slot 0's first, middle and last entry, then its
+-- slider when PoB shows one
+local function affixTooltips()
+	local drop = tab().controls.displayItemAffix1
+	if not (tab().displayItem and drop:IsShown()) then return nil end
+	local last = #drop.list - 1
+	local out = {}
+	for _, index in ipairs({ 0, math.floor(last / 2), last }) do
+		local dup = false
+		for _, seen in ipairs(out) do dup = dup or seen.index == index end
+		if not dup then out[#out + 1] = { slot = 0, index = index, tooltip = affixTooltip(0, index) } end
+	end
+	if drop.slider:IsShown() then out[#out + 1] = { slot = 0, tooltip = affixTooltip(0) } end
+	return out
+end
+
+-- The text the tree's layout key is made of, read from the nodes the spec holds: the tree
+-- version, then each placed node by id with its name, stat lines, type, art and ascendancy
+function layoutDigest()
+	local nodes = {}
+	for _, node in pairs(build.spec.nodes) do
+		if node.x then nodes[#nodes + 1] = node end
+	end
+	table.sort(nodes, function(a, b) return a.id < b.id end)
+	local lines = { build.spec.treeVersion }
+	for _, node in ipairs(nodes) do
+		lines[#lines + 1] = table.concat({
+			tostring(node.id), node.dn or "", table.concat(node.sd or {}, "\1"), node.type or "",
+			node.icon or "", node.inactiveIcon or "", node.activeIcon or "", node.ascendancyName or "",
+		}, "\2")
+	end
+	return table.concat(lines, "\n")
 end
 
 -- Hovering a row of the item list: its own tooltip hook, on a fresh Tooltip
@@ -756,12 +833,59 @@ function act.redo()
 	record({ cmd = "Redo" })
 end
 
--- The Items tab right now, recorded for the gate to compare with ours at this point
-function checkpoint()
+-- ---- The crafter ----
+
+-- the label of a dropdown entry
+local function entryLabel(entry)
+	return type(entry) == "table" and entry.label or entry
+end
+
+-- Picks an entry of an affix dropdown (the gate's `SetAffix`; `index` is 0-based)
+function act.affix(slot, index)
+	local drop = control("displayItemAffix" .. (slot + 1))
+	assert(drop:IsShown() and drop:IsEnabled(), "the affix dropdown is not usable")
+	local entry = drop.list[index + 1]
+	assert(entry ~= nil, "no such entry")
+	drop:SetSel(index + 1)
+	record({ cmd = "SetAffix", slot = slot, index = index, label = entryLabel(entry) })
+end
+
+-- The slider under an affix dropdown
+function act.affix_range(slot, value)
+	local slider = control("displayItemAffix" .. (slot + 1)).slider
+	assert(slider:IsShown(), "the affix slider is not shown")
+	slider:SetVal(value)
+	record({ cmd = "SetAffixRange", slot = slot, value = value })
+end
+
+-- "Modifier sorting"
+function act.crafting_sort(index)
+	pickDrop(control("craftingSorting"), index)
+	record({ cmd = "SetCraftingSort", index = index })
+end
+
+function act.cluster_skill(index)
+	pickDrop(control("displayItemClusterJewelSkill"), index)
+	record({ cmd = "SetClusterSkill", index = index })
+end
+
+-- The "Added Passives" slider, which takes 0..1 across the jewel's node counts
+function act.cluster_count(count)
+	local jewel = tab().displayItem.clusterJewel
+	local slider = control("displayItemClusterJewelNodeCount")
+	assert(slider:IsShown(), "the node count slider is not shown")
+	slider:SetVal((count - jewel.minNodes) / (jewel.maxNodes - jewel.minNodes))
+	record({ cmd = "SetClusterNodeCount", count = count })
+end
+
+-- The Items tab right now, recorded for the gate to compare with ours at this point. `layout`
+-- adds the tree layout's text.
+function checkpoint(layout)
 	frame()
 	local jewels = {}
 	for node, id in pairs(build.spec.jewels) do
 		if id ~= 0 then jewels[node] = id end
 	end
-	table.insert(actions, { check = { items = itemsDump(), jewels = jewels, sidebar = sidebar_lines(), display = displayDump(), main_group = build.mainSocketGroup, popup = popupDump and popupDump() or nil } })
+	table.insert(actions, { check = { items = itemsDump(), jewels = jewels, sidebar = sidebar_lines(), display = displayDump(), main_group = build.mainSocketGroup, popup = popupDump and popupDump() or nil,
+		affix_tooltips = affixTooltips(), layout = layout and layoutDigest() or nil } })
 end

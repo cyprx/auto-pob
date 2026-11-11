@@ -1,8 +1,10 @@
 //! Runs unmodified upstream Path of Building (through its `HeadlessWrapper.lua`) to produce
 //! reference data for the gate tests.
 
+use super::net::NetHandle;
 use anyhow::{Context as _, Result, anyhow};
 use mlua::{Lua, LuaSerdeExt};
+use pob_runtime::net::NetConfig;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path};
 
@@ -22,6 +24,19 @@ pub fn upstream_lua(pob_dir: &Path) -> Result<Lua> {
         .context("Starting upstream HeadlessWrapper.lua")?;
     super::native::register_compression(&lua).map_err(|e| anyhow!("{e}"))?;
     Ok(lua)
+}
+
+/// `upstream_lua` with our subscript natives over `net` (R8), installed after the wrapper's
+/// stubs as `register_compression` is. Upstream has no glue to open request scopes, so its
+/// scope stays open: every launch is a press the harness made. Deliver its subscripts with
+/// [`NetHandle::service`] and [`Dispatch::Launch`](super::net::Dispatch::Launch).
+pub fn upstream_lua_with_net(pob_dir: &Path, net: NetConfig) -> Result<(Lua, NetHandle)> {
+    let lua = upstream_lua(pob_dir)?;
+    let handle = super::net::register(&lua, pob_dir, net).map_err(|e| anyhow!("{e}"))?;
+    lua.load("__net_scope(1)")
+        .exec()
+        .map_err(|e| anyhow!("{e}"))?;
+    Ok((lua, handle))
 }
 
 /// What upstream PoB shows for a build.

@@ -551,6 +551,13 @@ pub enum Command {
 
     Undo(Tab),
     Redo(Tab),
+    /// Stops a pending network request: its subscripts are aborted and PoB's own failure path
+    /// runs with "Cancelled" (R12).
+    CancelRequest {
+        id: u64,
+    },
+    /// Internal: a subscript thread woke the loop. The loop never applies it (R9).
+    Wake,
     Shutdown,
 }
 

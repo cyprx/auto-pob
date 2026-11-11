@@ -536,6 +536,7 @@ dependencies = [
  "log",
  "luautf8-rs",
  "mlua",
+ "pob-runtime",
  "reqwest",
  "serde",
  "serde_json",

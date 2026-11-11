@@ -22,6 +22,9 @@ local function error_reason(message)
 	return table.concat(lines, " ")
 end
 
+-- For the other glue files: a prompt's reason (R11)
+glue.error_reason = error_reason
+
 local function frame()
 	-- The tree view calculates node power in a frame when the heat map is on
 	-- (PassiveTreeView.lua:773-776); here `glue.power_step` does that, a slice at a time, so a

@@ -270,6 +270,8 @@ impl AutoPobApp {
                         self.items.on_snapshot_at(&snapshot, seq);
                     }
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
+                    // the pending-request line comes with the Import tab (Task 8)
+                    Snapshot::Requests(_) => {}
                     // power results of the build being left
                     Snapshot::NodePower(_) | Snapshot::PowerReport(_)
                         if self.entering.is_some() => {}
@@ -1363,6 +1365,10 @@ mod tests {
 
         fn tree_link_view(&mut self) -> anyhow::Result<String> {
             Ok("https://example.test/tree".into())
+        }
+
+        fn requests_view(&mut self) -> anyhow::Result<crate::engine::RequestsView> {
+            Ok(crate::engine::RequestsView::default())
         }
     }
 

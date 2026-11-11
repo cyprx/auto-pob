@@ -1345,3 +1345,34 @@ pub struct RangeLineView {
     pub mutable: bool,
     pub mutated: bool,
 }
+
+/// The network requests: the pending ones in the order they began, and the ones finished since
+/// the last view, each sent once (R10).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RequestsView {
+    #[serde(default)]
+    pub pending: Vec<PendingRequest>,
+    #[serde(default)]
+    pub finished: Vec<FinishedRequest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingRequest {
+    pub id: u64,
+    /// What the request does, such as `Fetching characters` (R10)
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinishedRequest {
+    pub id: u64,
+    pub label: String,
+    /// Why it failed: PoB's message, curl's, or `Cancelled` (R25)
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub cancelled: bool,
+    /// A callback of the request initialised a new build (R14)
+    #[serde(default)]
+    pub new_build: bool,
+}

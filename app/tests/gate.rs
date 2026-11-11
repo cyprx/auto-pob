@@ -27,6 +27,10 @@ mod item_db;
 mod items;
 #[path = "gate/items_harness.rs"]
 mod items_harness;
+#[path = "gate/net_harness.rs"]
+mod net_harness;
+#[path = "gate/network.rs"]
+mod network;
 #[path = "gate/skills.rs"]
 mod skills;
 #[path = "gate/tattoos.rs"]
@@ -642,8 +646,9 @@ fn engine_starting_on_the_build_list_raises_no_errors() {
         match engine.events.recv_timeout(left) {
             Ok(Event::Error { message, .. }) => panic!("error on the list: {message}"),
             Ok(Event::Snapshot { snapshot, .. }) => {
+                // the list and the requests need no build (R10)
                 assert!(
-                    matches!(snapshot, Snapshot::BuildList(_)),
+                    matches!(snapshot, Snapshot::BuildList(_) | Snapshot::Requests(_)),
                     "a build view went out with no build open"
                 )
             }

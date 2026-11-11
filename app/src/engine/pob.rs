@@ -34,6 +34,8 @@ pub struct PobBackend {
     gem_failed: bool,
     /// A command ended the open search; its last view (`ended: true`) is still to be sent.
     gem_ended: Option<GemSearchQuery>,
+    /// Lua's heap after the last memory release, in bytes
+    released_lua_bytes: usize,
 }
 
 /// Runs before the bootstrap.
@@ -120,6 +122,7 @@ impl PobBackend {
             gem_search: None,
             gem_failed: false,
             gem_ended: None,
+            released_lua_bytes: 0,
         })
     }
 
@@ -731,6 +734,11 @@ impl PobBackend {
     }
 }
 
+/// How much Lua's heap must have grown since the last release for another to be worth a full
+/// collection. A node power or gem DPS sort leaves hundreds of megabytes of garbage; a tooltip
+/// or a single edit leaves little.
+const RELEASE_GROWTH_BYTES: usize = 32 << 20;
+
 impl Backend for PobBackend {
     fn apply(&mut self, command: Command, send: &dyn Fn(Event)) -> Result<Affected> {
         // a structural command ends the search only when it went through (R13); one that
@@ -944,6 +952,28 @@ impl Backend for PobBackend {
             "calcs_breakdown",
             (cell.section.clone(), cell.sub, cell.row, cell.cell),
         )
+    }
+
+    fn release_memory(&mut self) {
+        let before = self.lua.used_memory();
+        if before < self.released_lua_bytes + RELEASE_GROWTH_BYTES {
+            return;
+        }
+        let start = std::time::Instant::now();
+        // LuaJIT runs its collector only as it allocates, so the garbage a job left stays
+        // until something else allocates; and what Lua frees stays in malloc's arenas.
+        if let Err(e) = self.lua.gc_collect() {
+            log::warn!("Lua collection failed: {e}");
+        }
+        super::memory::release_free_memory();
+        self.released_lua_bytes = self.lua.used_memory();
+        log::debug!(
+            "released memory in {:?}: Lua heap {} MB -> {} MB, RSS {} MB",
+            start.elapsed(),
+            before >> 20,
+            self.released_lua_bytes >> 20,
+            super::memory::resident_bytes().map_or(0, |b| b >> 20),
+        );
     }
 
     fn tree_link_view(&mut self) -> Result<String> {

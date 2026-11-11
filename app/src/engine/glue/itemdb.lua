@@ -97,7 +97,8 @@ local waiting = {}
 local check_query, apply_query
 
 -- What Draw does once the database has loaded: the leagues and types the filters list. A
--- query opened while it loaded is applied now; returns true then.
+-- query opened while it loaded is applied now: returns true then, or false and the reason
+-- when the query turns out to be bad (its leagues and types weren't known before).
 local function prepare(db, control)
 	if control.db.loading then
 		return false
@@ -108,8 +109,13 @@ local function prepare(db, control)
 	local query = waiting[db]
 	if query then
 		waiting[db] = nil
-		check_query(control, query)
-		apply_query(control, query)
+		local ok, err = pcall(function()
+			check_query(control, query)
+			apply_query(control, query)
+		end)
+		if not ok then
+			return false, tostring(err)
+		end
 		return true
 	end
 	return false
@@ -173,12 +179,17 @@ end
 -- last sort failed). Nothing is changed when the query is refused.
 function glue.item_db_open(db, q, restart)
 	local control = db_control(db)
-	prepare(db, control)
+	-- the leagues and types the filters index; a query that waited out the load is not applied
+	-- here, the new one replaces it
+	if not control.db.loading and not control.leaguesAndTypesLoaded then
+		control:LoadLeaguesAndTypes()
+	end
 	check_query(control, q)
+	-- one query is open at a time: it replaces any that still waits, for either database
+	waiting = {}
 	if control.db.loading then
 		waiting[db] = q
 	else
-		waiting[db] = nil
 		apply_query(control, q)
 	end
 	if restart then
@@ -216,7 +227,11 @@ function glue.item_db_step(db)
 			return { finished = false }
 		end
 	end
-	if prepare(db, control) then
+	local applied, rejected = prepare(db, control)
+	if rejected then
+		return { finished = true, rejected = rejected }
+	end
+	if applied then
 		return { finished = true }
 	end
 	return glue.list_step(control)
@@ -236,7 +251,12 @@ function glue.item_db_view(db)
 	if loading then
 		control.defaultText = "^7Loading..."
 	else
-		prepare(db, control)
+		-- a query that waited out the load is applied here if no step got to it first, so
+		-- this read can raise; the job's step reports it as a rejection instead
+		local _, rejected = prepare(db, control)
+		if rejected then
+			error(rejected, 0)
+		end
 		glue.list_sync(control)
 		sorting = glue.list_pending(control)
 	end
@@ -328,6 +348,10 @@ end
 
 -- What hovering a row shows; nil for a vanished item or a database still loading
 function glue.item_db_tooltip(db, name)
+	-- ItemDBControl:AddValueTooltip clears its tooltip while a popup is open
+	if glue.popup_live() then
+		return nil
+	end
 	local control = db_control(db)
 	local item = not control.db.loading and control.db.list[name]
 	if not item then

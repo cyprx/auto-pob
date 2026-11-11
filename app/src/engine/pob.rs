@@ -426,8 +426,10 @@ impl PobBackend {
                 table
                     .set("search", query.search.clone())
                     .map_err(|e| anyhow!("{e}"))?;
-                let restart = std::mem::take(&mut self.item_db_failed);
+                // a refused query leaves a failed job failed
+                let restart = self.item_db_failed;
                 self.call::<_, ()>("item_db_open", (db_name(query.db), table, restart))?;
+                self.item_db_failed = false;
                 self.item_db = Some(query);
                 self.item_db_ended = false;
                 Ok(Affected {
@@ -1291,6 +1293,8 @@ impl Backend for PobBackend {
         struct Step {
             percent: Option<u32>,
             finished: bool,
+            #[serde(default)]
+            rejected: Option<String>,
         }
         match task {
             BackgroundTask::NodePower => {
@@ -1348,6 +1352,21 @@ impl Backend for PobBackend {
                     send(Event::Progress {
                         task: BackgroundTask::ItemDb,
                         percent,
+                    });
+                }
+                // a query that waited out the load turned out bad: the panel closes, so the
+                // UI's query and PoB's controls agree, and the reason is the job's failure
+                if let Some(message) = step.rejected {
+                    self.item_db = None;
+                    self.item_db_ended = true;
+                    let _ = self.call::<_, ()>("item_db_close", ());
+                    send(Event::BackgroundFailed {
+                        task: BackgroundTask::ItemDb,
+                        message,
+                    });
+                    return Ok(Affected {
+                        item_db: true,
+                        ..Affected::default()
                     });
                 }
                 // the panel shows the rows once the list builder ends

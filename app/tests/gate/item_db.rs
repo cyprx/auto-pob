@@ -408,6 +408,18 @@ fn item_db_matches_pob() {
         sorting.sorting && sorting.rows.is_empty(),
         "no sort is running"
     );
+    // one slice in, PoB's own "Sorting... (N%)" gives the percent
+    assert!(s.backend.next_background() == Some(BackgroundTask::ItemDb));
+    s.backend
+        .background_step(BackgroundTask::ItemDb, &|_| {})
+        .unwrap();
+    let mid = panel(&mut s);
+    assert!(
+        mid.sorting && mid.rows.is_empty(),
+        "the sort ended in a slice"
+    );
+    assert!(mid.percent.is_some_and(|p| p <= 100), "{:?}", mid.percent);
+    assert!(mid.note.starts_with("Sorting"), "{}", mid.note);
     let items_before = json(&s.backend.items_view().unwrap());
     let affected = s
         .run(Command::AddDbItem {
@@ -431,6 +443,110 @@ fn item_db_matches_pob() {
     assert!(affected.display_item);
     assert!(s.backend.display_item_view().unwrap().is_some());
     assert_eq!(open_popups(&s), 0);
+
+    // a click that raises comes back with PoB's message and puts the key state back
+    s.backend
+        .lua
+        .load("pob.build.itemsTab.AddItem = function() error('boom from AddItem', 0) end")
+        .exec()
+        .unwrap();
+    let err = s
+        .run(Command::AddDbItem {
+            db: ItemDb::Uniques,
+            name: name.clone(),
+        })
+        .expect_err("AddItem raised");
+    assert!(format!("{err:#}").contains("boom from AddItem"), "{err:#}");
+    s.backend
+        .lua
+        .load("pob.build.itemsTab.AddItem = nil")
+        .exec()
+        .unwrap();
+    let ctrl: bool = s
+        .backend
+        .lua
+        .load("return IsKeyDown('CTRL')")
+        .eval()
+        .unwrap();
+    assert!(!ctrl, "Ctrl stayed down");
+
+    // a failed step stops the job until the next SetItemDb (R20); a refused one doesn't restart it
+    s.run(Command::SetItemDb(belt_by_life.ours(&unique_lists)))
+        .unwrap();
+    assert_eq!(s.backend.next_background(), Some(BackgroundTask::ItemDb));
+    s.backend
+        .lua
+        .load("real_step = glue.item_db_step; glue.item_db_step = function() error('boom', 0) end")
+        .exec()
+        .unwrap();
+    assert!(
+        s.backend
+            .background_step(BackgroundTask::ItemDb, &|_| {})
+            .is_err()
+    );
+    assert_eq!(
+        s.backend.next_background(),
+        None,
+        "a failed job stays stopped"
+    );
+    s.backend
+        .lua
+        .load("glue.item_db_step = real_step")
+        .exec()
+        .unwrap();
+    let mut bad = belt_by_life.ours(&unique_lists);
+    bad.slot = 999;
+    assert!(s.run(Command::SetItemDb(bad)).is_err());
+    assert_eq!(
+        s.backend.next_background(),
+        None,
+        "a refused query restarted it"
+    );
+    s.run(Command::SetItemDb(belt_by_life.ours(&unique_lists)))
+        .unwrap();
+    assert_eq!(s.backend.next_background(), Some(BackgroundTask::ItemDb));
+    settle(&mut s);
+
+    // a query that waited out the load and turns out bad closes the panel and fails the job
+    s.backend
+        .lua
+        .load(
+            "local m = pob.main.main; m.uniqueDB.loading = true\n\
+             pob.build.itemsTab.controls.uniqueDB.leaguesAndTypesLoaded = false",
+        )
+        .exec()
+        .unwrap();
+    let mut late = belt_by_life.ours(&unique_lists);
+    late.kind = 999;
+    s.run(Command::SetItemDb(late)).unwrap();
+    assert!(panel(&mut s).loading);
+    s.backend
+        .lua
+        .load("pob.main.main.uniqueDB.loading = nil")
+        .exec()
+        .unwrap();
+    let failures = std::cell::RefCell::new(Vec::new());
+    assert_eq!(s.backend.next_background(), Some(BackgroundTask::ItemDb));
+    let affected = s
+        .backend
+        .background_step(BackgroundTask::ItemDb, &|e| failures.borrow_mut().push(e))
+        .unwrap();
+    assert!(affected.item_db);
+    assert!(
+        failures.borrow().iter().any(|e| matches!(e,
+            auto_pob::engine::Event::BackgroundFailed { message, .. } if message.contains("no such choice"))),
+        "{:?}",
+        failures.borrow()
+    );
+    assert!(matches!(
+        s.backend.item_db_view().unwrap(),
+        DbSnapshot::Ended
+    ));
+    assert!(matches!(
+        s.backend.item_db_view().unwrap(),
+        DbSnapshot::Quiet
+    ));
+    assert_eq!(s.backend.next_background(), None);
     eprintln!("item_db_matches_pob: {:?}", started.elapsed());
 }
 
@@ -452,15 +568,15 @@ fn item_db_responsive() {
     std::fs::copy(fixtures_dir().join("attack.xml"), &build).unwrap();
     let engine = Engine::spawn(Game::Poe1, std::env::temp_dir(), user.clone(), || {});
     engine.send(Command::OpenBuild { path: build });
-    // the lists come with the first panel; Body Armour is slot 4, "Sort by Life" is found by label
+    // the first panel is still loading and brings the dropdowns' lists
     engine.send(Command::SetItemDb(ItemDbQuery {
         db: ItemDb::Uniques,
-        slot: 4,
+        slot: 0,
         kind: 0,
         league: 0,
         requirement: 0,
         obtainable: 0,
-        sort: SORT_BY_LIFE,
+        sort: 0,
         search: String::new(),
         search_mode: 0,
     }));
@@ -469,6 +585,31 @@ fn item_db_responsive() {
         let wait = deadline.saturating_duration_since(Instant::now());
         engine.events.recv_timeout(wait).expect("an event")
     };
+    let first = loop {
+        match next() {
+            Event::Snapshot {
+                snapshot: Snapshot::ItemDb(Some(view)),
+                ..
+            } => break view,
+            Event::Error { message, .. } | Event::StartupFailed { message } => panic!("{message}"),
+            _ => {}
+        }
+    };
+    assert!(first.loading, "the databases were loaded already");
+    assert!(first.rows.is_empty() && !first.sorting);
+    assert_eq!(first.note, "Loading...");
+    let index = |list: &DropList, label: &str| list.labels.iter().position(|l| l == label).unwrap();
+    engine.send(Command::SetItemDb(ItemDbQuery {
+        db: ItemDb::Uniques,
+        slot: index(&first.slot, "Body Armour"),
+        kind: 0,
+        league: 0,
+        requirement: 0,
+        obtainable: 0,
+        sort: index(first.sort.as_ref().unwrap(), "Sort by Life"),
+        search: String::new(),
+        search_mode: 0,
+    }));
     // the sort has started when the first slice reports progress
     let mut progress = 0;
     loop {
@@ -484,10 +625,6 @@ fn item_db_responsive() {
                 snapshot: Snapshot::ItemDb(Some(view)),
                 ..
             } => {
-                assert_eq!(
-                    view.sort.as_ref().unwrap().labels[SORT_BY_LIFE],
-                    "Sort by Life"
-                );
                 assert!(view.rows.is_empty() || !view.sorting, "rows while sorting");
                 assert!(
                     view.sorting || view.loading,
@@ -549,9 +686,6 @@ fn item_db_responsive() {
         started.elapsed()
     );
 }
-
-/// "Sort by Life" in the uniques database's sort dropdown (checked against its labels)
-const SORT_BY_LIFE: usize = 11;
 
 /// Browse, view, save and add through the recorded recipe (DoD 3), then the round trip
 #[test]

@@ -38,6 +38,39 @@ numbers are PoB's numbers.
     send when you press Enter or leave them, and Esc reverts.
   - Gem options (sort, default level and quality, support types, legacy gems) are saved with
     the build, and hovering a group shows PoB's tooltip.
+- **Items tab**: PoB's items, equipment slots and item sets.
+  - The slots are in PoB's order: weapons, armour, rings, amulet and belt, flasks, abyssal
+    sockets (shown while the item has them) and the jewel sockets of your tree. Pick an item
+    in a slot's dropdown, or drag a row from the item list onto the slot. Flasks have their
+    active box. Hover a slot or an entry for PoB's item tooltip, with the comparison with
+    what you wear.
+  - The item list shows every item of the build and where it is used. Sort it, drag rows to
+    reorder them, filter it by item set, and delete items (Delete key or the "..." menu; it
+    asks first when the item is in use). Ctrl+C on a row copies the item's text. Double-click
+    a row to edit the item.
+  - Item sets: switch the active set above the slots, switch between the two weapon sets
+    (I / II), and create, rename, copy, reorder or delete sets in "Manage...".
+  - Ctrl+V pastes an item from the clipboard into the display panel. "Create custom..." and
+    "Edit..." open a text window for the item's rarity and text. The panel shows PoB's
+    tooltip and PoB's own controls for the item: version and variants, sockets and links,
+    quality, influence, catalyst, range sliders, Foulborn, and clicking a mod line to turn it
+    off. "Save" (or "Add to build") puts the item in the build; "Cancel" drops it.
+    Ctrl+D turns the stat comparison on tooltips on and off.
+  - Ctrl+Z and Ctrl+Y undo and redo item and slot changes on this tab. Changes to the item
+    being displayed are not part of the build until you save it, so they aren't counted as
+    unsaved changes and can't be undone.
+  - Limits:
+    - There is no "Paste item" button, because the app can only read the clipboard on
+      Ctrl+V. Use Ctrl+V or "Create custom...".
+    - Hovering an item that grants a skill doesn't show the skill's gem tooltip (PoB shows it
+      only while Shift is held).
+    - The third ring slot and the graft slots only appear when the build enables them (a
+      build with the extra ring slot, or a 3.27 tree for grafts). They are not yet checked
+      against PoB.
+    - PoB's first Undo on this tab after you load a build also removes the jewels socketed in
+      the tree; equip them again. This is how PoB itself behaves.
+    - Crafting, the unique and rare item databases, custom and implicit mods, enchants,
+      anointing, corruption and cluster jewel editing are not here yet.
 - **Calcs tab**: PoB's own calculation breakdown, in sections.
   - Pick the skill, part, minion skill and calculation mode at the top, as in PoB, and show
     the minion's numbers instead of the player's.
@@ -50,7 +83,7 @@ numbers are PoB's numbers.
   around the selection. Preview shows the text with the colours applied. Edits are sent to the
   build half a second after you stop typing.
 - **Shortcuts**: Ctrl+S saves. Ctrl+Z undoes and Ctrl+Y (or Ctrl+Shift+Z) redoes, on the
-  Tree, Skills, Config and Calcs tabs. Each tab has its own history. They wait while a dialog is open.
+  Tree, Skills, Items, Config and Calcs tabs. Each tab has its own history. They wait while a dialog is open.
 
 ## Running
 

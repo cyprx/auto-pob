@@ -586,6 +586,96 @@ fn engine_spawn_reaches_ready_with_snapshots() {
 
 #[test]
 #[ignore = "needs the pinned PoB install"]
+fn engine_starting_on_the_build_list_raises_no_errors() {
+    let _guard = lock();
+    pob_dir();
+    let user = std::env::temp_dir().join(format!("auto-pob-gate-listmode-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&user);
+    // PoB keeps its settings in "Path of Building" under the user folder; Mode LIST is where
+    // it starts after the user last left it on the build list
+    let settings = user.join("Path of Building");
+    fs::create_dir_all(settings.join("Builds")).unwrap();
+    fs::write(
+        settings.join("Settings.xml"),
+        "<PathOfBuilding>\n\t<Mode mode=\"LIST\"/>\n</PathOfBuilding>\n",
+    )
+    .unwrap();
+    let build = settings.join("Builds/minion.xml");
+    fs::copy(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/minion.xml"),
+        &build,
+    )
+    .unwrap();
+    let engine = Engine::spawn(Game::Poe1, std::env::temp_dir(), user.clone(), || {});
+    let (mut ready, mut list) = (false, false);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    while !(ready && list) && std::time::Instant::now() < deadline {
+        match engine
+            .events
+            .recv_timeout(std::time::Duration::from_secs(30))
+        {
+            Ok(Event::Ready) => ready = true,
+            Ok(Event::Snapshot {
+                snapshot: Snapshot::BuildList(_),
+                ..
+            }) => list = true,
+            Ok(Event::Error { message, .. }) => panic!("startup error: {message}"),
+            Ok(Event::StartupFailed { message }) => panic!("startup failed: {message}"),
+            Ok(_) => {}
+            Err(e) => panic!("no event: {e}"),
+        }
+    }
+    assert!(ready && list, "ready {ready}, list {list}");
+    // nothing else follows: no error and no build view
+    let quiet = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while let Some(left) = quiet.checked_duration_since(std::time::Instant::now()) {
+        match engine.events.recv_timeout(left) {
+            Ok(Event::Error { message, .. }) => panic!("error on the list: {message}"),
+            Ok(Event::Snapshot { snapshot, .. }) => {
+                assert!(
+                    matches!(snapshot, Snapshot::BuildList(_)),
+                    "a build view went out with no build open"
+                )
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    // opening a build brings the build views, as before
+    engine.send(Command::OpenBuild { path: build });
+    let (mut build_view, mut stats, mut tree) = (false, false, false);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    while !(build_view && stats && tree) && std::time::Instant::now() < deadline {
+        match engine
+            .events
+            .recv_timeout(std::time::Duration::from_secs(30))
+        {
+            Ok(Event::Snapshot { snapshot, .. }) => match snapshot {
+                Snapshot::Build(_) => build_view = true,
+                Snapshot::Stats(_) => stats = true,
+                Snapshot::Tree(_) => tree = true,
+                _ => {}
+            },
+            Ok(Event::Error { message, .. }) => panic!("error opening: {message}"),
+            Ok(_) => {}
+            Err(e) => panic!("no event: {e}"),
+        }
+    }
+    assert!(build_view && stats && tree, "{build_view} {stats} {tree}");
+    engine.send(Command::Shutdown);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while engine
+        .events
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .is_ok()
+        && std::time::Instant::now() < deadline
+    {}
+    assert!(!engine.is_alive(), "the engine didn't stop after Shutdown");
+    let _ = fs::remove_dir_all(&user);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
 fn folder_without_trailing_slash_stays_inside_the_folder() {
     let _guard = lock();
     let mut s = Session::start("folder-slash");

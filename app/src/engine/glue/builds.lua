@@ -75,6 +75,12 @@ local function enter_build(...)
 	end
 end
 
+-- Whether PoB has a build initialised. It starts on the build list when Settings.xml says so
+-- (Main.lua), and then `pob.build` is the uninitialised BUILD mode: no spec, no tabs.
+function glue.build_loaded()
+	return main_module().mode == "BUILD" and pob.build.spec ~= nil
+end
+
 -- Recalculates the open build, raising any error PoB hit while doing it.
 function glue.recalculate()
 	pob.build.buildFlag = true

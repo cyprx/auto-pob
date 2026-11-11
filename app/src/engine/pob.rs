@@ -763,6 +763,10 @@ impl Backend for PobBackend {
         self.view("list_builds", self.folder.clone())
     }
 
+    fn build_loaded(&mut self) -> Result<bool> {
+        self.call("build_loaded", ())
+    }
+
     fn stats_view(&mut self) -> Result<StatsView> {
         self.view("stats_view", ())
     }

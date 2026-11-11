@@ -11,7 +11,7 @@ pub(crate) mod fake;
 
 pub use commands::{
     CalcsControl, CalcsCount, Command, ConfigValue, GemFilter, GemSearchQuery, GemTarget,
-    GemToggle, GemTooltipQuery, ItemTooltipQuery, SkillOption, Tab,
+    GemToggle, GemTooltipQuery, ItemTooltipQuery, SkillOption, SocketColour, Tab,
 };
 pub use run::{Affected, Backend, BackgroundTask, Engine, Event, Snapshot, run_loop};
 pub use views::{

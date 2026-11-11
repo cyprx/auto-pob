@@ -4,7 +4,16 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::views::CellRef;
+use super::views::{CellRef, ModLineRef};
+
+/// A socket's colour on the display item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketColour {
+    R,
+    G,
+    B,
+    W,
+}
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -370,6 +379,58 @@ pub enum Command {
     /// Ctrl+D (R13): saved with the build, not undoable, not unsaved.
     SetShowStatDifferences {
         on: bool,
+    },
+
+    /// One of the six variant dropdowns (`DisplayItemView.variants[..].control`, 0..=5), legacy
+    /// or grouped; `index` is 0-based in its list (R11).
+    SetItemVariant {
+        control: usize,
+        index: usize,
+    },
+    /// The version dropdown of an item with variant groups.
+    SetItemVersion {
+        index: usize,
+    },
+    /// The quality box; the box filters digits and takes at most two.
+    SetItemQuality {
+        text: String,
+    },
+    /// One of the two influence dropdowns (`which` 0 or 1).
+    SetItemInfluence {
+        which: usize,
+        index: usize,
+    },
+    SetItemCatalyst {
+        index: usize,
+    },
+    SetItemCatalystQuality {
+        text: String,
+    },
+    /// Socket `index` (0-based) takes a colour.
+    SetItemSocket {
+        index: usize,
+        colour: SocketColour,
+    },
+    /// The link after socket `index`.
+    SetItemSocketLink {
+        index: usize,
+        linked: bool,
+    },
+    /// The "+" button.
+    AddItemSocket,
+    /// A range slider: `line` indexes `DisplayItemView.range_lines`; `value` is 0..=1.
+    SetRangeLine {
+        line: usize,
+        value: f64,
+    },
+    /// The Foulborn box next to a line.
+    SetRangeLineMutated {
+        line: usize,
+        on: bool,
+    },
+    /// A click on a tooltip line of the display item (R4).
+    ToggleModLine {
+        line: ModLineRef,
     },
 
     /// Picks the item set in PoB's set dropdown, by PoB's id.

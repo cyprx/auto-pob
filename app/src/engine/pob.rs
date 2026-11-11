@@ -2,14 +2,14 @@
 
 use super::commands::{
     Command, ConfigValue, GemSearchQuery, GemTarget, GemToggle, GemTooltipQuery, ItemTooltipQuery,
-    SkillOption, Tab,
+    SkillOption, SocketColour, Tab,
 };
 use super::run::{Affected, Backend, BackgroundTask, Engine, Event};
 use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, DisplayItemView,
     GemRow, GemSearchView, GemTooltipView, GroupTooltipView, ItemText, ItemTooltip,
-    ItemTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, PowerReport, SkillsView,
-    SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
+    ItemTooltipView, ItemsView, ModLineList, NodePower, NodeTooltip, NotesView, PowerReport,
+    SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -861,6 +861,71 @@ impl PobBackend {
                     items: true,
                     display_item: true,
                     recalc: changed,
+                    ..Affected::default()
+                })
+            }
+            Command::SetItemVariant { control, index } => {
+                self.call::<_, ()>("display_variant", (control, index + 1))?;
+                Ok(display_changed())
+            }
+            Command::SetItemVersion { index } => {
+                self.call::<_, ()>("display_version", index + 1)?;
+                Ok(display_changed())
+            }
+            Command::SetItemQuality { text } => {
+                self.call::<_, ()>("display_quality", text)?;
+                Ok(display_changed())
+            }
+            Command::SetItemInfluence { which, index } => {
+                self.call::<_, ()>("display_influence", (which, index + 1))?;
+                Ok(display_changed())
+            }
+            Command::SetItemCatalyst { index } => {
+                self.call::<_, ()>("display_catalyst", index + 1)?;
+                Ok(display_changed())
+            }
+            Command::SetItemCatalystQuality { text } => {
+                self.call::<_, ()>("display_catalyst_quality", text)?;
+                Ok(display_changed())
+            }
+            Command::SetItemSocket { index, colour } => {
+                let colour = match colour {
+                    SocketColour::R => "R",
+                    SocketColour::G => "G",
+                    SocketColour::B => "B",
+                    SocketColour::W => "W",
+                };
+                self.call::<_, ()>("display_socket", (index + 1, colour))?;
+                Ok(display_changed())
+            }
+            Command::SetItemSocketLink { index, linked } => {
+                self.call::<_, ()>("display_link", (index + 1, linked))?;
+                Ok(display_changed())
+            }
+            Command::AddItemSocket => {
+                self.call::<_, ()>("display_add_socket", ())?;
+                Ok(display_changed())
+            }
+            Command::SetRangeLine { line, value } => {
+                self.call::<_, ()>("display_range", (line + 1, value))?;
+                Ok(display_changed())
+            }
+            Command::SetRangeLineMutated { line, on } => {
+                self.call::<_, ()>("display_mutated", (line + 1, on))?;
+                Ok(display_changed())
+            }
+            Command::ToggleModLine { line } => {
+                let list = match line.list {
+                    ModLineList::Enchant => "enchant",
+                    ModLineList::Scourge => "scourge",
+                    ModLineList::Implicit => "implicit",
+                    ModLineList::Explicit => "explicit",
+                    ModLineList::Crucible => "crucible",
+                };
+                self.call::<_, ()>("display_toggle_mod", (list, line.index + 1))?;
+                Ok(Affected {
+                    display_item: true,
+                    recalc: true,
                     ..Affected::default()
                 })
             }

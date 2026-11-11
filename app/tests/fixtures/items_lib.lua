@@ -589,6 +589,145 @@ function act.stat_differences(on)
 	record({ cmd = "SetShowStatDifferences", on = on })
 end
 
+-- ---- The display item's editors ----
+-- Each presses its own control. The controls' state that PoB syncs only in Draw is synced the way
+-- Draw does it: by asking `IsShown()`, or `UpdateSocketControls()` for the sockets.
+
+local function control(name)
+	local c = tab().controls[name]
+	assert(c, "no control " .. name)
+	return c
+end
+
+-- A shown, enabled dropdown; `index` is 0-based
+local function pickDrop(c, index)
+	assert(c:IsShown() and c:IsEnabled(), "the dropdown is not usable")
+	c:SetSel(index + 1)
+end
+
+local variantControls = { "displayItemVariant", "displayItemAltVariant", "displayItemAltVariant2",
+	"displayItemAltVariant3", "displayItemAltVariant4", "displayItemAltVariant5" }
+
+function act.variant(index, entry)
+	pickDrop(control(variantControls[index + 1]), entry)
+	record({ cmd = "SetItemVariant", control = index, index = entry })
+end
+
+function act.version(index)
+	pickDrop(control("displayItemVersion"), index)
+	record({ cmd = "SetItemVersion", index = index })
+end
+
+-- Typing into a box: select what is there, then the characters arrive one OnChar each
+local function typeInto(c, text)
+	assert(c:IsShown(), "the box is not shown")
+	c:SelectAll()
+	c:OnChar(text)
+end
+
+function act.quality(text)
+	typeInto(control("displayItemQualityEdit"), text)
+	record({ cmd = "SetItemQuality", text = text })
+end
+
+function act.influence(which, index)
+	pickDrop(control(which == 0 and "displayItemInfluence" or "displayItemInfluence2"), index)
+	record({ cmd = "SetItemInfluence", which = which, index = index })
+end
+
+function act.catalyst(index)
+	pickDrop(control("displayItemCatalyst"), index)
+	record({ cmd = "SetItemCatalyst", index = index })
+end
+
+function act.catalyst_quality(text)
+	typeInto(control("displayItemCatalystQualityEdit"), text)
+	record({ cmd = "SetItemCatalystQuality", text = text })
+end
+
+function act.socket(index, colour)
+	local t = tab()
+	t:UpdateSocketControls()
+	local c = control("displayItemSocket" .. (index + 1))
+	assert(c:IsShown(), "the socket is not shown")
+	for i, entry in ipairs(c.list) do
+		if entry.color == colour then c:SetSel(i) end
+	end
+	record({ cmd = "SetItemSocket", index = index, colour = colour })
+end
+
+-- The check box after socket `index`
+function act.link(index, linked)
+	local t = tab()
+	t:UpdateSocketControls()
+	local c = control("displayItemLink" .. (index + 1))
+	assert(c:IsShown(), "the link is not shown")
+	if (c.state and true or false) ~= linked then
+		c.state = linked
+		c.changeFunc(linked)
+	end
+	record({ cmd = "SetItemSocketLink", index = index, linked = linked })
+end
+
+function act.add_socket()
+	local c = control("displayItemAddSocket")
+	assert(c:IsShown(), "the button is not shown")
+	c.onClick()
+	record({ cmd = "AddItemSocket" })
+end
+
+-- The slider and the Foulborn box of range line `line` (0-based): the stacked ones of a unique
+-- when PoB lists all its affixes (the default), else the single pair after the dropdown picks the
+-- line
+local function rangeControls(line)
+	local item = tab().displayItem
+	if main.showAllItemAffixes and item.rarity == "UNIQUE" then
+		return control("displayItemStackedRangeSlider" .. (line + 1)),
+			control("displayItemStackedMutatedCheckbox" .. (line + 1))
+	end
+	local drop = control("displayItemRangeLine")
+	assert(drop:IsShown(), "the range line dropdown is not shown")
+	drop:SetSel(line + 1)
+	return control("displayItemRangeSlider"), control("displayItemMutatedCheckbox")
+end
+
+-- The Draw that precedes a click asks the slider whether it is shown, which syncs its value to
+-- the line (ItemsTab.lua:1076-1088)
+function act.range(line, value)
+	local slider = rangeControls(line)
+	assert(slider:IsShown(), "the slider is not shown")
+	slider:SetVal(value)
+	record({ cmd = "SetRangeLine", line = line, value = value })
+end
+
+-- The Foulborn box beside the slider
+function act.mutated(line, on)
+	local _, box = rangeControls(line)
+	assert(box:IsShown(), "the Foulborn box is not shown")
+	if (box.state and true or false) ~= on then
+		box.state = on
+		box.changeFunc(on)
+	end
+	record({ cmd = "SetRangeLineMutated", line = line, on = on })
+end
+
+-- The click on a tooltip line (ItemsTab.lua:1535); the click's body is the model method
+function act.toggle_mod(list, index)
+	local t = tab()
+	local item = t.displayItem
+	local field = ({ enchant = "enchantModLines", scourge = "scourgeModLines", implicit = "implicitModLines",
+		explicit = "explicitModLines", crucible = "crucibleModLines" })[list]
+	local modLine = item[field][index + 1]
+	t:UpdateDisplayItemTooltip()
+	local onTooltip = false
+	for _, line in ipairs(t.displayItemTooltip.lines) do
+		if line.modLine == modLine then onTooltip = true end
+	end
+	assert(onTooltip, "that mod line is not on the tooltip")
+	t:ToggleDisplayItemModLine(modLine)
+	record({ cmd = "ToggleModLine", line = { list = list, index = index } })
+end
+
 -- Ctrl+Z and Ctrl+Y on the tab (ItemsTab.lua:1458-1465)
 function act.undo()
 	tab():Undo()

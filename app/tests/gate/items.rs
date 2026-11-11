@@ -3,11 +3,12 @@
 
 use super::{
     Session, fixtures, fixtures_dir, load_tree_lib, load_xml, lock, lua_value, plain_notes,
-    pob_dir, recipe_setting, upstream_lua,
+    pob_dir, recipe_setting, snapshot_dir, upstream_lua,
 };
 use auto_pob::engine::upstream::{SidebarLine, golden_of};
 use auto_pob::engine::{
-    Backend, Command, DisplayItemView, ItemTooltipLine, ItemTooltipQuery, ItemsView, SlotKind, Tab,
+    Backend, Command, DisplayItemView, ItemTooltipLine, ItemTooltipQuery, ItemsView, ModLineList,
+    ModLineRef, SlotKind, SocketColour, Tab,
 };
 use auto_pob::game::Game;
 use mlua::LuaSerdeExt;
@@ -865,6 +866,46 @@ enum ItemsAction {
     SetShowStatDifferences {
         on: bool,
     },
+    SetItemVariant {
+        control: usize,
+        index: usize,
+    },
+    SetItemVersion {
+        index: usize,
+    },
+    SetItemQuality {
+        text: String,
+    },
+    SetItemInfluence {
+        which: usize,
+        index: usize,
+    },
+    SetItemCatalyst {
+        index: usize,
+    },
+    SetItemCatalystQuality {
+        text: String,
+    },
+    SetItemSocket {
+        index: usize,
+        colour: String,
+    },
+    SetItemSocketLink {
+        index: usize,
+        linked: bool,
+    },
+    AddItemSocket,
+    SetRangeLine {
+        line: usize,
+        value: f64,
+    },
+    SetRangeLineMutated {
+        line: usize,
+        on: bool,
+    },
+    ToggleModLine {
+        line: ModLineRef,
+    },
     Undo,
     Redo,
     /// Built from the recorded checkpoint table
@@ -905,10 +946,45 @@ impl ItemsAction {
             ItemsAction::SaveDisplayItem => Command::SaveDisplayItem,
             ItemsAction::CancelDisplayItem => Command::CancelDisplayItem,
             ItemsAction::SetShowStatDifferences { on } => Command::SetShowStatDifferences { on },
+            ItemsAction::SetItemVariant { control, index } => {
+                Command::SetItemVariant { control, index }
+            }
+            ItemsAction::SetItemVersion { index } => Command::SetItemVersion { index },
+            ItemsAction::SetItemQuality { text } => Command::SetItemQuality { text },
+            ItemsAction::SetItemInfluence { which, index } => {
+                Command::SetItemInfluence { which, index }
+            }
+            ItemsAction::SetItemCatalyst { index } => Command::SetItemCatalyst { index },
+            ItemsAction::SetItemCatalystQuality { text } => {
+                Command::SetItemCatalystQuality { text }
+            }
+            ItemsAction::SetItemSocket { index, colour } => Command::SetItemSocket {
+                index,
+                colour: socket_colour(&colour),
+            },
+            ItemsAction::SetItemSocketLink { index, linked } => {
+                Command::SetItemSocketLink { index, linked }
+            }
+            ItemsAction::AddItemSocket => Command::AddItemSocket,
+            ItemsAction::SetRangeLine { line, value } => Command::SetRangeLine { line, value },
+            ItemsAction::SetRangeLineMutated { line, on } => {
+                Command::SetRangeLineMutated { line, on }
+            }
+            ItemsAction::ToggleModLine { line } => Command::ToggleModLine { line },
             ItemsAction::Undo => Command::Undo(Tab::Items),
             ItemsAction::Redo => Command::Redo(Tab::Items),
             ItemsAction::Check { .. } => return None,
         })
+    }
+}
+
+fn socket_colour(colour: &str) -> SocketColour {
+    match colour {
+        "R" => SocketColour::R,
+        "G" => SocketColour::G,
+        "B" => SocketColour::B,
+        "W" => SocketColour::W,
+        other => panic!("no socket colour {other}"),
     }
 }
 
@@ -935,6 +1011,25 @@ struct ItemsRecipe {
     setup_xml: Option<String>,
     actions: Vec<ItemsAction>,
     result: serde_json::Value,
+    /// Every item's `BuildRaw()` and `spec.jewels` where the recipe ended
+    raws: BTreeMap<u32, String>,
+    jewels: BTreeMap<u32, u32>,
+}
+
+/// Every item's `BuildRaw()` and the jewels each socket holds, read with `code` in a Lua state
+/// where `BUILD` is the build.
+fn raws_and_jewels(lua: &mlua::Lua, build: &str) -> (BTreeMap<u32, String>, BTreeMap<u32, u32>) {
+    let raws = lua_value(
+        lua,
+        &format!(
+            "local out = {{}} for id, item in pairs({build}.itemsTab.items) do out[id] = item:BuildRaw() end return out"
+        ),
+    );
+    let jewels: BTreeMap<u32, u32> = lua_value(lua, &format!("return {build}.spec.jewels"));
+    (
+        raws,
+        jewels.into_iter().filter(|(_, id)| *id != 0).collect(),
+    )
 }
 
 /// Runs `items/<name>.lua` in upstream PoB on its base fixture, or on its `setup` build.
@@ -984,11 +1079,14 @@ fn upstream_items_recipe(name: &str) -> ItemsRecipe {
             serde_json::from_value(json.clone()).unwrap_or_else(|e| panic!("{name}: {json}: {e}"))
         })
         .collect();
+    let (raws, jewels) = raws_and_jewels(&lua, "build");
     ItemsRecipe {
         base,
         setup_xml: setup,
         actions,
         result: upstream_json(&lua),
+        raws,
+        jewels,
     }
 }
 
@@ -1037,6 +1135,11 @@ fn our_items_checkpoint(s: &mut Session) -> ItemsCheckpoint {
 /// Replays a recipe as our commands and checks every checkpoint and the end state against
 /// upstream.
 fn check_items_recipe(name: &str) -> ItemsRecipe {
+    run_items_recipe(name).0
+}
+
+/// `check_items_recipe`, keeping our session where the recipe ended.
+fn run_items_recipe(name: &str) -> (ItemsRecipe, Session) {
     let recipe = upstream_items_recipe(name);
     assert!(!recipe.actions.is_empty(), "{name}: no actions recorded");
     let mut s = Session::start(&format!("items-recipe-{name}"));
@@ -1069,6 +1172,18 @@ fn check_items_recipe(name: &str) -> ItemsRecipe {
                         | ItemsAction::SetDisplayItemText { .. }
                         | ItemsAction::SaveDisplayItem
                         | ItemsAction::CancelDisplayItem
+                        | ItemsAction::SetItemVariant { .. }
+                        | ItemsAction::SetItemVersion { .. }
+                        | ItemsAction::SetItemQuality { .. }
+                        | ItemsAction::SetItemInfluence { .. }
+                        | ItemsAction::SetItemCatalyst { .. }
+                        | ItemsAction::SetItemCatalystQuality { .. }
+                        | ItemsAction::SetItemSocket { .. }
+                        | ItemsAction::SetItemSocketLink { .. }
+                        | ItemsAction::AddItemSocket
+                        | ItemsAction::SetRangeLine { .. }
+                        | ItemsAction::SetRangeLineMutated { .. }
+                        | ItemsAction::ToggleModLine { .. }
                 ) {
                     assert!(
                         affected.display_item,
@@ -1124,7 +1239,7 @@ fn check_items_recipe(name: &str) -> ItemsRecipe {
     let ours = json(&s.backend.items_view().unwrap());
     assert_ne!(ours, before, "{name}: the recipe changes the Items tab");
     assert_same(&ours, &recipe.result, name);
-    recipe
+    (recipe, s)
 }
 
 fn checkpoints(recipe: &ItemsRecipe) -> Vec<&ItemsCheckpoint> {
@@ -1857,4 +1972,515 @@ fn display_item_view_is_pure() {
     let before = state(&mut s);
     assert_eq!(display(&mut s), display(&mut s));
     assert_eq!(state(&mut s), before);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn display_edit_recipes_match_pob() {
+    let _guard = lock();
+    let variants = check_items_recipe("variants");
+    let checks = checkpoints(&variants);
+    assert_eq!(checks.len(), 5);
+    let display = |i: usize| checks[i].display.as_ref().expect("a displayed item");
+    // a legacy unique: variant 2 on its first dropdown, alternate variant 3 on its second
+    let legacy = display(0)["variants"].as_array().unwrap();
+    assert_eq!(legacy[0]["control"], 0);
+    assert_eq!(legacy[0]["list"]["selected"], 1);
+    assert_eq!(legacy[1]["control"], 1);
+    assert_eq!(legacy[1]["list"]["selected"], 2);
+    assert!(checks[1].display.is_none());
+    // variant groups: the group controls are the first ones, and the second took its second choice
+    let grouped = display(2)["variants"].as_array().unwrap();
+    assert!(grouped.len() >= 2, "{grouped:?}");
+    assert_eq!(grouped[1]["list"]["selected"], 1);
+    // versions: the dropdown, and the lines of the version picked
+    assert_eq!(display(3)["version"]["selected"], 0);
+    let lines = |d: &serde_json::Value| -> String { d["tooltip"]["lines"].to_string() };
+    assert!(lines(display(3)).contains("+20 to maximum Life"));
+    assert!(!lines(display(3)).contains("+60 to maximum Life"));
+    assert!(checks[4].display.is_none());
+    let edits = check_items_recipe("display_edits");
+    let checks = checkpoints(&edits);
+    assert_eq!(checks.len(), 6);
+    let display = |i: usize| checks[i].display.as_ref().expect("a displayed item");
+    // the amulet
+    let amulet = display(0);
+    assert_eq!(amulet["quality"], "20");
+    assert_eq!(amulet["influences"][0]["selected"], 1);
+    assert_eq!(amulet["influences"][1]["selected"], 2);
+    assert_eq!(amulet["catalyst"]["selected"], 4);
+    assert_eq!(amulet["catalyst_quality"], "15");
+    assert!(checks[1].display.is_none());
+    // the armour: socket 1 green, no link after socket 2, a fifth socket
+    let sockets = display(2)["sockets"].as_array().unwrap();
+    assert_eq!(sockets.len(), 5);
+    assert_eq!(sockets[0]["colour"], "G");
+    assert_eq!(sockets[1]["linked"], false);
+    assert_eq!(sockets[0]["linked"], true);
+    // the unique: the first line at 1.0 though its slider held a stale 1.0, then a mutated line
+    // and a mod line off
+    let range = |d: &serde_json::Value, i: usize| d["range_lines"][i]["range"].as_f64();
+    assert_eq!(range(display(3), 0), Some(1.0));
+    assert!(
+        display(4)["range_lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l["mutated"] == true),
+        "no line mutated"
+    );
+    assert_ne!(display(3)["tooltip"], display(4)["tooltip"]);
+    assert!(checks[5].display.is_none());
+    // the other layout of the range controls
+    range_dropdown_matches_pob();
+}
+
+/// A unique jewel: PoB shows no influence, catalyst, variant or socket control for it.
+const UNIQUE_JEWEL: &str = "Rarity: UNIQUE\nTester's Jewel\nCobalt Jewel\nQuality: 0\nImplicits: 0\n+(10-20) to maximum Life\n+7 to maximum Mana";
+
+/// The first Foulborn unique (by name) with a mutable line that has no slider, with that line's
+/// 0-based index, and a line of the same item that has a slider but can't mutate.
+const FIND_NO_SLIDER: &str = r#"
+local titles = {}
+for title in pairs(data.foulbornMap) do titles[#titles + 1] = title end
+table.sort(titles)
+local texts = {}
+for _, list in pairs(data.uniques) do
+	for _, text in ipairs(list) do texts[text:match("^[^\n]+")] = text end
+end
+for _, title in ipairs(titles) do
+	local text = texts[title]
+	if text then
+		local item = new("Item", text)
+		local bare, plain
+		for i, m in ipairs(item.rangeLineList) do
+			if m.modId and m.newModId and not m.showSlider and not bare then bare = i - 1 end
+			if m.showSlider and not (m.modId and m.newModId) and not plain then plain = i - 1 end
+		end
+		if bare and plain then return { text = text, bare = bare, plain = plain } end
+	end
+end
+error("no such unique")
+"#;
+
+#[derive(serde::Deserialize)]
+struct NoSlider {
+    text: String,
+    bare: usize,
+    plain: usize,
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn display_edit_errors() {
+    let _guard = lock();
+    let (mut s, _lua) = gear_sessions("display-edit-errors");
+    // every display command, with the error each must give
+    let refuse = |s: &mut Session, command: Command, message: &str| {
+        let before = (display(s), s.backend.items_view().unwrap());
+        let error = s.run(command.clone()).expect_err(&format!("{command:?}"));
+        assert!(
+            error.to_string().contains(message),
+            "{command:?}: {error} (wanted {message})"
+        );
+        assert_eq!(
+            (display(s), s.backend.items_view().unwrap()),
+            before,
+            "{command:?} changed something"
+        );
+        assert_eq!(open_popups(s), 0, "{command:?}: a popup was left open");
+    };
+    let hidden = "PoB doesn't show that control for this item";
+    let line = |list, index| ModLineRef { list, index };
+
+    // no item is displayed
+    let every_command = |s: &mut Session| {
+        let commands = [
+            Command::SetItemVariant {
+                control: 0,
+                index: 0,
+            },
+            Command::SetItemVersion { index: 0 },
+            Command::SetItemQuality { text: "5".into() },
+            Command::SetItemInfluence { which: 0, index: 1 },
+            Command::SetItemCatalyst { index: 1 },
+            Command::SetItemCatalystQuality { text: "5".into() },
+            Command::SetItemSocket {
+                index: 0,
+                colour: SocketColour::R,
+            },
+            Command::SetItemSocketLink {
+                index: 0,
+                linked: true,
+            },
+            Command::AddItemSocket,
+            Command::SetRangeLine {
+                line: 0,
+                value: 0.5,
+            },
+            Command::SetRangeLineMutated { line: 0, on: true },
+            Command::ToggleModLine {
+                line: line(ModLineList::Explicit, 0),
+            },
+        ];
+        for command in commands {
+            refuse(s, command, "no item is being viewed");
+        }
+    };
+    every_command(&mut s);
+
+    // a jewel with none of the controls
+    s.run(Command::PasteItem {
+        text: UNIQUE_JEWEL.into(),
+    })
+    .unwrap();
+    for command in [
+        Command::SetItemInfluence { which: 0, index: 1 },
+        Command::SetItemInfluence { which: 1, index: 1 },
+        Command::SetItemInfluence { which: 2, index: 1 },
+        Command::SetItemCatalyst { index: 1 },
+        Command::SetItemCatalystQuality { text: "5".into() },
+        Command::SetItemVariant {
+            control: 5,
+            index: 0,
+        },
+        Command::SetItemVariant {
+            control: 0,
+            index: 0,
+        },
+        Command::SetItemVersion { index: 0 },
+        Command::SetItemSocket {
+            index: 0,
+            colour: SocketColour::R,
+        },
+        Command::SetItemSocketLink {
+            index: 0,
+            linked: true,
+        },
+        Command::AddItemSocket,
+        // the second line has no slider and is no range line at all
+        Command::SetRangeLineMutated { line: 0, on: true },
+    ] {
+        refuse(&mut s, command, hidden);
+    }
+    refuse(
+        &mut s,
+        Command::SetRangeLine {
+            line: 1,
+            value: 0.5,
+        },
+        "no such range line",
+    );
+    refuse(
+        &mut s,
+        Command::SetRangeLineMutated { line: 1, on: true },
+        "no such range line",
+    );
+    // the quality box takes two digits
+    refuse(
+        &mut s,
+        Command::SetItemQuality { text: "123".into() },
+        "too long",
+    );
+    // a mod line the item doesn't have
+    refuse(
+        &mut s,
+        Command::ToggleModLine {
+            line: line(ModLineList::Explicit, 9),
+        },
+        "no such mod line",
+    );
+    refuse(
+        &mut s,
+        Command::ToggleModLine {
+            line: line(ModLineList::Implicit, 0),
+        },
+        "no such mod line",
+    );
+    // text the box filters away changes nothing and is no error
+    s.run(Command::SetItemQuality { text: "abc".into() })
+        .unwrap();
+    assert_eq!(display(&mut s).unwrap().quality.as_deref(), Some("0"));
+
+    // a mod line of a variant the item doesn't use is in the item but not on its tooltip
+    s.run(Command::PasteItem {
+        text: "Rarity: UNIQUE\nTester's Charm\nIron Ring\nVariant: Old\nVariant: New\nImplicits: 0\n{variant:1}+10 to maximum Life\n{variant:2}+20 to maximum Mana".into(),
+    })
+    .unwrap();
+    refuse(
+        &mut s,
+        Command::ToggleModLine {
+            line: line(ModLineList::Explicit, 0),
+        },
+        "isn't on the tooltip",
+    );
+    // the line that is on the tooltip toggles, and says so
+    let affected = s
+        .run(Command::ToggleModLine {
+            line: line(ModLineList::Explicit, 1),
+        })
+        .unwrap();
+    assert!(affected.display_item && affected.recalc);
+
+    // a mutable line without a slider, and a slider line that can't mutate
+    let found: NoSlider = s
+        .backend
+        .lua
+        .from_value(s.backend.lua.load(FIND_NO_SLIDER).eval().unwrap())
+        .unwrap();
+    s.run(Command::PasteItem { text: found.text }).unwrap();
+    refuse(
+        &mut s,
+        Command::SetRangeLine {
+            line: found.bare,
+            value: 0.5,
+        },
+        hidden,
+    );
+    refuse(
+        &mut s,
+        Command::SetRangeLineMutated {
+            line: found.plain,
+            on: true,
+        },
+        hidden,
+    );
+
+    // and with the item gone again
+    s.run(Command::CancelDisplayItem).unwrap();
+    every_command(&mut s);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn items_round_trip() {
+    let _guard = lock();
+    for name in ["paste_equip", "sets", "display_edits"] {
+        let (recipe, mut s) = run_items_recipe(name);
+        s.run(Command::Save).unwrap();
+        let saved = s.backend.build_view().unwrap().path.expect("a saved build");
+        // what upstream PoB makes of the file we wrote
+        let lua = upstream_with_items_lib(&saved, &recipe.base);
+        let reloaded = upstream_json(&lua);
+        // the undo history and what the list shows are not saved
+        let saved_part = |mut value: serde_json::Value| {
+            for key in ["can_undo", "can_redo", "list_filter"] {
+                value.as_object_mut().unwrap().remove(key);
+            }
+            value
+        };
+        let ours = saved_part(json(&s.backend.items_view().unwrap()));
+        let expected = saved_part(recipe.result.clone());
+        let reloaded = saved_part(reloaded);
+        assert_same(&reloaded, &expected, &format!("{name}: reloaded vs recipe"));
+        assert_same(&ours, &reloaded, &format!("{name}: ours vs reloaded"));
+        let (raws, jewels) = raws_and_jewels(&lua, "build");
+        assert_eq!(raws, recipe.raws, "{name}: item text after reload");
+        assert_eq!(jewels, recipe.jewels, "{name}: jewels after reload");
+        let (ours_raws, ours_jewels) = raws_and_jewels(&s.backend.lua, "pob.build");
+        assert_eq!(ours_raws, raws, "{name}: our item text");
+        assert_eq!(ours_jewels, jewels, "{name}: our jewels");
+        assert!(!raws.is_empty(), "{name}: no items");
+    }
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn no_silent_writes_items() {
+    let _guard = lock();
+    let (mut s, _lua) = gear_sessions("items-no-writes");
+    let dir = s.builds_dir();
+    let before = snapshot_dir(&dir);
+    let found: NoSlider = s
+        .backend
+        .lua
+        .from_value(s.backend.lua.load(FIND_NO_SLIDER).eval().unwrap())
+        .unwrap();
+    let view = s.backend.items_view().unwrap();
+    let slot = |name: &str| view.slots.iter().find(|slot| slot.name == name).unwrap();
+    let spare = slot("Ring 2").choices[0];
+    let first = view.items[0].id;
+    let second_set = view.sets[0].id;
+    let amulet = "Rarity: RARE\nDoom Pendant\nOnyx Amulet\nQuality: 0\nImplicits: 1\n{tags:attribute}+12 to all Attributes\n{tags:life}+70 to maximum Life\n{tags:resistance}+30% to Fire Resistance";
+    let armour = "Rarity: RARE\nDoom Plate\nGlorious Plate\nSockets: R-R-R-R\nImplicits: 0\n+50 to maximum Life";
+    let versioned = "Rarity: UNIQUE\nVeil of Versions\nPrismatic Ring\nVersion: Old\nVersion: New\nImplicits: 0\n{version:1}+20 to maximum Life\n{version:2}+60 to maximum Life";
+    let commands = vec![
+        // the list and the slots (Tasks 3-4)
+        Command::SetItemListFilter { index: 1 },
+        Command::SetItemListFilter { index: 0 },
+        Command::SortItems,
+        Command::MoveItem { from: 0, to: 1 },
+        Command::EquipItem {
+            slot: "Ring 2".into(),
+            id: Some(spare),
+        },
+        Command::EquipItem {
+            slot: "Ring 2".into(),
+            id: None,
+        },
+        Command::SetFlaskActive {
+            slot: "Flask 1".into(),
+            on: false,
+        },
+        Command::SelectWeaponSet { second: true },
+        Command::SelectWeaponSet { second: false },
+        Command::Undo(Tab::Items),
+        Command::Redo(Tab::Items),
+        // item sets
+        Command::NewItemSet {
+            title: "Mapping".into(),
+        },
+        Command::CopyItemSet {
+            id: second_set,
+            title: "Bossing".into(),
+        },
+        Command::RenameItemSet {
+            id: second_set,
+            title: "Leveling".into(),
+        },
+        Command::MoveItemSet { from: 0, to: 1 },
+        Command::SelectItemSet { id: second_set },
+        // the display item (Task 5) and its editors (this task)
+        Command::SetShowStatDifferences { on: false },
+        Command::PasteItem {
+            text: amulet.into(),
+        },
+        Command::SetItemQuality { text: "20".into() },
+        Command::SetItemInfluence { which: 0, index: 1 },
+        Command::SetItemInfluence { which: 1, index: 2 },
+        Command::SetItemCatalyst { index: 4 },
+        Command::SetItemCatalystQuality { text: "15".into() },
+        Command::ToggleModLine {
+            line: ModLineRef {
+                list: ModLineList::Explicit,
+                index: 0,
+            },
+        },
+        Command::SaveDisplayItem,
+        Command::PasteItem {
+            text: armour.into(),
+        },
+        Command::SetItemSocket {
+            index: 0,
+            colour: SocketColour::G,
+        },
+        Command::SetItemSocketLink {
+            index: 1,
+            linked: false,
+        },
+        Command::AddItemSocket,
+        Command::SetDisplayItemText {
+            rarity: 2,
+            text: armour.replace("Rarity: RARE\n", ""),
+        },
+        Command::CancelDisplayItem,
+        Command::PasteItem {
+            text: versioned.into(),
+        },
+        Command::SetItemVersion { index: 0 },
+        Command::PasteItem { text: found.text },
+        Command::SetRangeLine {
+            line: found.plain,
+            value: 0.25,
+        },
+        Command::SetRangeLineMutated {
+            line: found.bare,
+            on: true,
+        },
+        Command::SaveDisplayItem,
+        Command::EditItem { id: first },
+        Command::CancelDisplayItem,
+        // deleting
+        Command::DeleteItem { id: spare },
+        Command::DeleteUnusedItems,
+        Command::DeleteItemSet { id: second_set },
+        Command::DeleteAllItems,
+    ];
+    for command in commands {
+        let shown = format!("{command:?}");
+        s.run(command).unwrap_or_else(|e| panic!("{shown}: {e}"));
+    }
+    // the queries
+    let id = s.backend.items_view().unwrap().items.first().map(|i| i.id);
+    if let Some(id) = id {
+        s.backend.item_text(id).unwrap();
+        s.backend
+            .item_tooltip_view(&ItemTooltipQuery { id, slot: None })
+            .unwrap();
+    }
+    assert_eq!(
+        snapshot_dir(&dir).keys().collect::<Vec<_>>(),
+        before.keys().collect::<Vec<_>>(),
+        "files appeared or went"
+    );
+    assert!(
+        snapshot_dir(&s.user)
+            .keys()
+            .all(|p| !p.to_string_lossy().contains("~~temp~~")),
+        "a temporary file was left"
+    );
+    for (path, bytes) in &before {
+        assert!(
+            snapshot_dir(&dir)[path] == *bytes,
+            "{} changed",
+            path.display()
+        );
+    }
+    // only an explicit Save writes
+    s.run(Command::Save).unwrap();
+    let after = snapshot_dir(&dir);
+    assert!(
+        before.iter().any(|(path, bytes)| after[path] != *bytes),
+        "Save didn't write the build"
+    );
+}
+
+/// With "show all item affixes sliders" off, a unique has the single slider and Foulborn box
+/// after the range line dropdown instead of one pair per line.
+fn range_dropdown_matches_pob() {
+    let (mut s, lua) = gear_sessions("display-range-dropdown");
+    let found: NoSlider = s
+        .backend
+        .lua
+        .from_value(s.backend.lua.load(FIND_NO_SLIDER).eval().unwrap())
+        .unwrap();
+    on_both(&s, &lua, "main.showAllItemAffixes = false");
+    s.backend
+        .lua
+        .load("pob.main.main.showAllItemAffixes = false")
+        .exec()
+        .unwrap();
+    lua.globals().set("text", found.text.clone()).unwrap();
+    lua.load("act.paste(text)").exec().unwrap();
+    s.run(Command::PasteItem { text: found.text }).unwrap();
+    let compare = |s: &mut Session, what: &str| {
+        let theirs: serde_json::Value = lua_value(&lua, "return displayDump()");
+        let ours = json_of(&display(s).expect("displayed"));
+        assert_same(&ours, &strip_nulls(theirs), what);
+    };
+    compare(&mut s, "pasted");
+    for (what, command, code) in [
+        (
+            "slider",
+            Command::SetRangeLine {
+                line: found.plain,
+                value: 0.25,
+            },
+            format!("act.range({}, 0.25)", found.plain),
+        ),
+        (
+            "foulborn",
+            Command::SetRangeLineMutated {
+                line: found.bare,
+                on: true,
+            },
+            format!("act.mutated({}, true)", found.bare),
+        ),
+    ] {
+        let before = display(&mut s);
+        s.run(command).unwrap();
+        lua.load(code).exec().unwrap();
+        compare(&mut s, what);
+        assert_ne!(display(&mut s), before, "{what}: nothing changed");
+    }
 }

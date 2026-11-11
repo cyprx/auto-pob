@@ -719,3 +719,191 @@ function glue.display_show_differences(on)
 	pob.build.buildFlag = true
 	return true
 end
+
+-- ---- The display item's editors (R11) ----
+-- Each press first checks that PoB shows the control (and enables it, for a dropdown), then
+-- runs the control's own callback.
+
+local NOT_SHOWN = "PoB doesn't show that control for this item"
+
+local function display_tab()
+	local tab = items_tab()
+	if not tab.displayItem then
+		error("no item is being viewed", 0)
+	end
+	return tab
+end
+
+local function require_shown(control)
+	if not (control and control:IsShown()) then
+		error(NOT_SHOWN, 0)
+	end
+end
+
+-- Picks entry `index` (1-based) of a dropdown that is shown and enabled. `SetSel` clamps, so
+-- the range is checked first; picking the entry already selected does nothing, as in PoB.
+local function pick_entry(control, index)
+	require_shown(control)
+	if not control:IsEnabled() then
+		error(NOT_SHOWN, 0)
+	end
+	if index < 1 or index > #control.list then
+		error("no such choice", 0)
+	end
+	control:SetSel(index)
+end
+
+local VARIANT_CONTROLS = {
+	"displayItemVariant", "displayItemAltVariant", "displayItemAltVariant2",
+	"displayItemAltVariant3", "displayItemAltVariant4", "displayItemAltVariant5",
+}
+
+-- `control` is 0..5; both the legacy dropdowns and the variant groups' ones call
+-- SelectDisplayItemVariant
+function glue.display_variant(control, index)
+	local tab = display_tab()
+	pick_entry(tab.controls[VARIANT_CONTROLS[control + 1]], index)
+end
+
+function glue.display_version(index)
+	local tab = display_tab()
+	pick_entry(tab.controls.displayItemVersion, index)
+end
+
+-- The boxes filter their text with "%D" and take two characters. Typing nothing that passes the
+-- filter changes nothing.
+function glue.display_quality(text)
+	local tab = display_tab()
+	local box = tab.controls.displayItemQualityEdit
+	require_shown(box)
+	glue.type_into(box, text)
+end
+
+function glue.display_catalyst_quality(text)
+	local tab = display_tab()
+	local box = tab.controls.displayItemCatalystQualityEdit
+	require_shown(box)
+	glue.type_into(box, text)
+end
+
+-- `which` is 0 or 1
+function glue.display_influence(which, index)
+	local tab = display_tab()
+	local name = which == 0 and "displayItemInfluence" or which == 1 and "displayItemInfluence2"
+	if not name then
+		error(NOT_SHOWN, 0)
+	end
+	pick_entry(tab.controls[name], index)
+end
+
+function glue.display_catalyst(index)
+	local tab = display_tab()
+	pick_entry(tab.controls.displayItemCatalyst, index)
+end
+
+-- PoB syncs the socket controls to the item when it displays it and after adding a socket
+function glue.display_socket(index, colour)
+	local tab = display_tab()
+	tab:UpdateSocketControls()
+	local control = tab.controls["displayItemSocket" .. index]
+	require_shown(control)
+	for i, entry in ipairs(control.list) do
+		if entry.color == colour then
+			pick_entry(control, i)
+			return
+		end
+	end
+	error("no such colour", 0)
+end
+
+-- The check box after socket `index`: a click flips it, so pressing it for the state it has does
+-- nothing
+function glue.display_link(index, linked)
+	local tab = display_tab()
+	tab:UpdateSocketControls()
+	local control = tab.controls["displayItemLink" .. index]
+	require_shown(control)
+	if (control.state and true or false) ~= linked then
+		glue.press_check(control, linked)
+	end
+end
+
+function glue.display_add_socket()
+	local tab = display_tab()
+	local button = tab.controls.displayItemAddSocket
+	require_shown(button)
+	button.onClick()
+end
+
+-- Whether the panel shows one stacked slider per line (the "show all affixes" option)
+local function stacked(tab)
+	return pob.main.main.showAllItemAffixes and tab.displayItem.rarity == "UNIQUE"
+end
+
+-- The slider and the Foulborn box of range line `line` (1-based), after selecting the line in
+-- the range line dropdown as the user would
+local function range_controls(tab, line)
+	if not tab.displayItem.rangeLineList[line] then
+		error("no such range line", 0)
+	end
+	local c = tab.controls
+	if stacked(tab) then
+		return c["displayItemStackedRangeSlider" .. line], c["displayItemStackedMutatedCheckbox" .. line]
+	end
+	local drop = c.displayItemRangeLine
+	require_shown(drop)
+	if line > #drop.list then
+		error(NOT_SHOWN, 0)
+	end
+	if drop.selIndex ~= line then
+		drop:SetSel(line)
+	end
+	return c.displayItemRangeSlider, c.displayItemMutatedCheckbox
+end
+
+-- `value` is the slider's 0..1. A slider's `val` is synced to the line only when its `shown` runs
+-- in Draw (ItemsTab.lua:1076-1088), so IsShown runs first.
+function glue.display_range(line, value)
+	local tab = display_tab()
+	local slider = range_controls(tab, line)
+	require_shown(slider)
+	slider:SetVal(value)
+end
+
+-- The box's state is likewise synced in `shown`; its click flips the line
+function glue.display_mutated(line, on)
+	local tab = display_tab()
+	local _, box = range_controls(tab, line)
+	require_shown(box)
+	if (box.state and true or false) ~= on then
+		glue.press_check(box, on)
+	end
+end
+
+local MOD_LINE_FIELDS = {
+	enchant = "enchantModLines",
+	scourge = "scourgeModLines",
+	implicit = "implicitModLines",
+	explicit = "explicitModLines",
+	crucible = "crucibleModLines",
+}
+
+-- A click on a line of the display tooltip (ItemsTab.lua:1521-1539) calls
+-- ToggleDisplayItemModLine; only a line that PoB's tooltip carries the mod line on is a click
+function glue.display_toggle_mod(list, index)
+	local tab = display_tab()
+	local item = tab.displayItem
+	local lines = item[MOD_LINE_FIELDS[list] or ""]
+	local mod_line = lines and lines[index]
+	if not mod_line then
+		error("no such mod line", 0)
+	end
+	fresh_display_tooltip(tab)
+	for _, line in ipairs(tab.displayItemTooltip.lines) do
+		if line.modLine == mod_line then
+			tab:ToggleDisplayItemModLine(mod_line)
+			return
+		end
+	end
+	error("that mod line isn't on the tooltip", 0)
+end

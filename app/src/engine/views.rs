@@ -617,6 +617,117 @@ pub struct CalcsView {
     pub can_redo: bool,
 }
 
+/// The Items tab: the build's items, the equipment slots and the item sets.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ItemsView {
+    /// In PoB's order (`itemOrderList`)
+    #[serde(default)]
+    pub items: Vec<ItemEntry>,
+    /// The item list's loadout filter
+    #[serde(default)]
+    pub list_filter: DropList,
+    /// The ids the list shows under its filter, in order
+    #[serde(default)]
+    pub listed: Vec<u32>,
+    /// The list can be reordered (no filter is on)
+    #[serde(default)]
+    pub can_reorder: bool,
+    /// In PoB's order (`orderedSlots`)
+    #[serde(default)]
+    pub slots: Vec<SlotView>,
+    #[serde(default)]
+    pub sets: Vec<ItemSetEntry>,
+    pub active_set: u32,
+    /// The active set shows its swap weapons
+    #[serde(default)]
+    pub second_weapon_set: bool,
+    #[serde(default)]
+    pub show_stat_differences: bool,
+    #[serde(default)]
+    pub can_undo: bool,
+    #[serde(default)]
+    pub can_redo: bool,
+}
+
+/// One item of the build.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ItemEntry {
+    pub id: u32,
+    pub name: String,
+    pub base: String,
+    pub rarity: String,
+    /// PoB's colour code for the rarity
+    pub colour: String,
+    /// The list row's text, with the "(Unused)" or "(Used in ...)" marker and PoB's colour codes
+    pub display_label: String,
+    /// The slot PoB would equip it in first
+    #[serde(default)]
+    pub primary_slot: Option<String>,
+    /// The first slot it is equipped in (in this set, or in another one)
+    #[serde(default)]
+    pub equipped: Option<EquippedIn>,
+    /// The title of another set that has it as an abyss jewel
+    #[serde(default)]
+    pub abyss_set: Option<String>,
+    /// The title of another tree that has it socketed
+    #[serde(default)]
+    pub tree: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EquippedIn {
+    pub slot: String,
+    pub label: String,
+    /// The title of the set, when it isn't the active one
+    #[serde(default)]
+    pub set: Option<String>,
+}
+
+/// One equipment slot, with PoB's own dropdown for it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SlotView {
+    /// PoB's slot name, e.g. "Ring 2" or "Jewel 26725"
+    pub name: String,
+    pub label: String,
+    pub kind: SlotKind,
+    /// The slot an abyssal socket belongs to
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// The tree node of a jewel socket
+    #[serde(default)]
+    pub node: Option<u32>,
+    /// PoB shows the slot
+    pub shown: bool,
+    /// PoB lets the dropdown be used (it has an item to choose)
+    pub enabled: bool,
+    /// The equipped item's id, 0 for none
+    pub selected: u32,
+    /// The ids the dropdown offers after "None"
+    #[serde(default)]
+    pub choices: Vec<u32>,
+    /// The flask's activation box, for a flask slot
+    #[serde(default)]
+    pub flask_active: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SlotKind {
+    #[default]
+    Gear,
+    Swap,
+    Abyssal,
+    Flask,
+    Graft,
+    Jewel,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ItemSetEntry {
+    pub id: u32,
+    /// "Default" for a set with no title
+    pub title: String,
+}
+
 /// One of the selector's dropdowns. Labels keep PoB's colour codes.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DropList {

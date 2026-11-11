@@ -7,8 +7,8 @@ use super::commands::{Command, GemSearchQuery, GemTooltipQuery};
 use super::run::{Affected, Backend, BackgroundTask, Event};
 use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, GemSearchView,
-    GemTooltipView, GroupTooltipView, NodePower, NodeTooltip, NotesView, Points, PowerReport,
-    SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
+    GemTooltipView, GroupTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, Points,
+    PowerReport, SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
 };
 
 #[derive(Default, Debug)]
@@ -196,6 +196,10 @@ impl Backend for Fake {
 
     fn skills_view(&mut self) -> anyhow::Result<SkillsView> {
         Ok(SkillsView::default())
+    }
+
+    fn items_view(&mut self) -> anyhow::Result<ItemsView> {
+        Ok(ItemsView::default())
     }
 
     fn socket_group_text(&mut self, group: usize) -> anyhow::Result<SocketGroupText> {

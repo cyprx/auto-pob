@@ -10,8 +10,8 @@ use crate::pob_files::DownloadProgress;
 use super::commands::{Command, GemTooltipQuery};
 use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, GemSearchView,
-    GemTooltipView, GroupTooltipView, NodePower, NodeTooltip, NotesView, PowerReport, SkillsView,
-    SocketGroupText, StatsView, TreeLayout, TreeState,
+    GemTooltipView, GroupTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, PowerReport,
+    SkillsView, SocketGroupText, StatsView, TreeLayout, TreeState,
 };
 
 #[derive(Debug, Clone)]
@@ -29,6 +29,7 @@ pub enum Snapshot {
     TreeLink(Arc<String>),
     Calcs(Arc<CalcsView>),
     Skills(Arc<SkillsView>),
+    Items(Arc<ItemsView>),
     SocketGroupText(Arc<SocketGroupText>),
     GroupTooltip(Arc<GroupTooltipView>),
     GemSearch(Arc<GemSearchView>),
@@ -86,6 +87,8 @@ pub struct Affected {
     pub calcs: bool,
     /// The Skills tab changed
     pub skills: bool,
+    /// The Items tab changed
+    pub items: bool,
     /// The build's notes changed
     pub notes: bool,
     /// Node power changed (a background step ran)
@@ -119,6 +122,7 @@ impl Affected {
         recalc: false,
         calcs: true,
         skills: true,
+        items: true,
         notes: true,
         power: false,
         gem_search: false,
@@ -141,6 +145,7 @@ impl Affected {
         self.recalc |= other.recalc;
         self.calcs |= other.calcs;
         self.skills |= other.skills;
+        self.items |= other.items;
         self.notes |= other.notes;
         self.power |= other.power;
         self.gem_search |= other.gem_search;
@@ -169,6 +174,7 @@ pub trait Backend {
     fn tree_state_view(&mut self) -> anyhow::Result<TreeState>;
     fn calcs_view(&mut self) -> anyhow::Result<CalcsView>;
     fn skills_view(&mut self) -> anyhow::Result<SkillsView>;
+    fn items_view(&mut self) -> anyhow::Result<ItemsView>;
     fn notes_view(&mut self) -> anyhow::Result<NotesView>;
     /// What copying this socket group writes; an error for a group that doesn't exist or can't be copied.
     fn socket_group_text(&mut self, group: usize) -> anyhow::Result<SocketGroupText>;
@@ -238,6 +244,9 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
     }
     if flags.skills {
         emit(seq, send, backend.skills_view(), Snapshot::Skills);
+    }
+    if flags.items {
+        emit(seq, send, backend.items_view(), Snapshot::Items);
     }
     if flags.notes {
         emit(seq, send, backend.notes_view(), Snapshot::Notes);
@@ -404,6 +413,7 @@ pub fn run_loop(
             affected.tree = true;
             affected.calcs = true;
             affected.skills = true;
+            affected.items = true;
         }
         send_snapshots(backend, last_seq, affected, send);
         if shutdown {
@@ -551,6 +561,17 @@ mod tests {
     }
 
     #[test]
+    fn recalc_sends_items_view() {
+        let (mut fake, _log) = Fake::new();
+        let events = run_queued(&mut fake, vec![set_config()]);
+        let items = snapshots(&events)
+            .into_iter()
+            .filter(|(_, s)| matches!(s, Snapshot::Items(_)))
+            .count();
+        assert_eq!(items, 1);
+    }
+
+    #[test]
     fn queued_commands_share_one_recalculation() {
         let (mut fake, log) = Fake::new();
         let events = run_queued(&mut fake, (0..5).map(|_| set_config()).collect());
@@ -599,6 +620,7 @@ mod tests {
                     Snapshot::Tree(_) => "tree",
                     Snapshot::Calcs(_) => "calcs",
                     Snapshot::Skills(_) => "skills",
+                    Snapshot::Items(_) => "items",
                     Snapshot::Notes(_) => "notes",
                     other => panic!("unexpected {other:?}"),
                 }
@@ -608,7 +630,7 @@ mod tests {
         assert_eq!(
             kinds,
             [
-                "build", "list", "stats", "config", "tree", "calcs", "skills", "notes"
+                "build", "list", "stats", "config", "tree", "calcs", "skills", "items", "notes"
             ]
         );
     }
@@ -640,12 +662,13 @@ mod tests {
         assert_eq!(log.lock().unwrap().set_configs, 1);
         // The command before Shutdown still produced its snapshots, tagged with Shutdown's seq.
         let snaps = snapshots(&events);
-        assert_eq!(snaps.len(), 5);
+        assert_eq!(snaps.len(), 6);
         assert!(matches!(snaps[0], (2, Snapshot::Stats(_))));
         assert!(matches!(snaps[1], (2, Snapshot::Config(_))));
         assert!(matches!(snaps[2], (2, Snapshot::Tree(_))));
         assert!(matches!(snaps[3], (2, Snapshot::Calcs(_))));
         assert!(matches!(snaps[4], (2, Snapshot::Skills(_))));
+        assert!(matches!(snaps[5], (2, Snapshot::Items(_))));
     }
 
     #[test]
@@ -691,9 +714,9 @@ mod tests {
         assert_eq!(stats_seq, Some(3));
         assert_eq!(config_seq, Some(3));
         assert_eq!(log.lock().unwrap().set_configs, 2);
-        // Ready + 9 initial snapshots + Stats + Config + Tree + Calcs + Skills; the channel disconnect means the
+        // Ready + 10 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items; the channel disconnect means the
         // thread (and so every wake) is finished.
-        assert_eq!(wakes.load(Ordering::SeqCst), 15);
+        assert_eq!(wakes.load(Ordering::SeqCst), 17);
     }
 
     #[test]

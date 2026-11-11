@@ -6,8 +6,8 @@ use super::commands::{
 use super::run::{Affected, Backend, BackgroundTask, Engine, Event};
 use super::views::{
     BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, GemRow, GemSearchView,
-    GemTooltipView, GroupTooltipView, NodePower, NodeTooltip, NotesView, PowerReport, SkillsView,
-    SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
+    GemTooltipView, GroupTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, PowerReport,
+    SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -99,8 +99,10 @@ impl PobBackend {
             ("@glue/tree.lua", include_str!("glue/tree.lua")),
             ("@glue/power.lua", include_str!("glue/power.lua")),
             ("@glue/calcs.lua", include_str!("glue/calcs.lua")),
+            ("@glue/controls.lua", include_str!("glue/controls.lua")),
             ("@glue/skills.lua", include_str!("glue/skills.lua")),
             ("@glue/gems.lua", include_str!("glue/gems.lua")),
+            ("@glue/items.lua", include_str!("glue/items.lua")),
             ("@glue/notes.lua", include_str!("glue/notes.lua")),
         ] {
             lua.load(source)
@@ -787,6 +789,10 @@ impl Backend for PobBackend {
 
     fn skills_view(&mut self) -> Result<SkillsView> {
         self.view("skills_view", ())
+    }
+
+    fn items_view(&mut self) -> Result<ItemsView> {
+        self.view("items_view", ())
     }
 
     fn socket_group_text(&mut self, group: usize) -> Result<SocketGroupText> {

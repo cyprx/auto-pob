@@ -227,6 +227,8 @@ impl AutoPobApp {
                     | Snapshot::GroupTooltip(_)
                     | Snapshot::GemSearch(_)
                     | Snapshot::GemTooltip(_) => self.skills.on_snapshot(&snapshot),
+                    // the Items tab's UI comes later
+                    Snapshot::Items(_) => {}
                     Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
@@ -1052,6 +1054,10 @@ mod tests {
 
         fn skills_view(&mut self) -> anyhow::Result<crate::engine::SkillsView> {
             Ok(crate::engine::SkillsView::default())
+        }
+
+        fn items_view(&mut self) -> anyhow::Result<crate::engine::ItemsView> {
+            Ok(crate::engine::ItemsView::default())
         }
 
         fn socket_group_text(

@@ -10,8 +10,8 @@ use super::items_harness::{
 };
 use super::{Session, lock, lua_value};
 use auto_pob::engine::{
-    Backend, Command, ControlTooltipQuery, DisplayItemView, PopupControlKind, PopupInput,
-    PopupKind, PopupView,
+    Backend, BackgroundTask, Command, ControlTooltipQuery, DisplayItemView, PopupControlKind,
+    PopupInput, PopupKind, PopupView,
 };
 use mlua::LuaSerdeExt;
 use std::collections::BTreeSet;
@@ -1061,36 +1061,161 @@ fn prefix_source_raising_matches_pob() {
 fn enchant_corrupt_recipes_match_pob() {
     let _guard = lock();
     let started = std::time::Instant::now();
+    let steps_before = ANOINT_SORT_STEPS.load(std::sync::atomic::Ordering::Relaxed);
     let (recipe, mut s) = run_items_recipe("enchant_anoint");
-    // every compared part was non-default somewhere: an enchantment, an anointment, a sorted
-    // list and a selected row
-    let mut sorted_rows = false;
+    assert!(
+        ANOINT_SORT_STEPS.load(std::sync::atomic::Ordering::Relaxed) > steps_before,
+        "the stat sort ran no background step"
+    );
+    // every compared part was non-default somewhere: an enchant line that goes again, a
+    // stat-sorted list whose rows differ in colour, and a selected row
+    let tooltip_lines = |check: &super::items_harness::ItemsCheckpoint| {
+        check
+            .display
+            .as_ref()
+            .map(|d| d["tooltip"]["lines"].as_array().unwrap().len())
+    };
+    let checks = checkpoints(&recipe);
+    assert!(
+        tooltip_lines(checks[0]) > tooltip_lines(checks[1]),
+        "the enchant line is not on the item at checkpoint 0 and gone at 1"
+    );
+    let mut sorted = 0;
     let mut selected = false;
-    let mut enchanted = false;
-    for check in checkpoints(&recipe) {
-        if let Some(display) = check.display.as_ref() {
-            enchanted |= display.to_string().to_lowercase().contains("enchant");
-        }
+    for check in &checks {
         let Some(popup) = check.popup.as_ref() else {
             continue;
         };
-        for control in popup["controls"].as_array().unwrap() {
-            if control["name"] == "notableDB" {
-                sorted_rows |= !control["rows"].as_array().unwrap().is_empty();
-                selected |= !control["row_selected"].is_null();
-            }
+        let controls = popup["controls"].as_array().unwrap();
+        let list = controls.iter().find(|c| c["name"] == "notableDB");
+        let sort = controls.iter().find(|c| c["name"] == "notableDB.sort");
+        let (Some(list), Some(sort)) = (list, sort) else {
+            continue;
+        };
+        selected |= !list["row_selected"].is_null();
+        let choice = sort["choices"][sort["selected"].as_u64().unwrap() as usize]
+            .as_str()
+            .unwrap();
+        let rows = list["rows"].as_array().unwrap();
+        if choice != "Sort by Life" || rows.is_empty() {
+            continue;
         }
+        // the colour's red byte is the row's power scaled to the largest: descending
+        let red: Vec<u32> = rows
+            .iter()
+            .map(|r| {
+                let label = r["label"].as_str().unwrap();
+                u32::from_str_radix(&label[2..4], 16).unwrap()
+            })
+            .collect();
+        assert!(
+            red.windows(2).all(|w| w[0] >= w[1]),
+            "not in power order: {red:?}"
+        );
+        assert!(
+            red.iter().collect::<BTreeSet<_>>().len() >= 2,
+            "all rows share a colour: {red:?}"
+        );
+        assert!((5..=20).contains(&rows.len()), "{} rows", rows.len());
+        eprintln!("anoint sort: {} rows, reds {red:?}", rows.len());
+        sorted += 1;
     }
-    assert!(
-        sorted_rows && selected && enchanted,
-        "{sorted_rows} {selected} {enchanted}"
-    );
-    assert!(
-        ANOINT_SORT_STEPS.load(std::sync::atomic::Ordering::Relaxed) > 0,
-        "the stat sort ran no background step"
-    );
+    assert!(sorted >= 1 && selected, "{sorted} {selected}");
+    anoint_job_stops(&mut s);
     crafting_round_trip("enchant_anoint", &recipe, &mut s);
     let (recipe, mut s) = run_items_recipe("corrupt");
     crafting_round_trip("corrupt", &recipe, &mut s);
     eprintln!("enchant_corrupt: {:?}", started.elapsed());
+}
+
+/// The AnointSort job on the real backend: it is offered while an Anoint window sorts by a
+/// stat, stops when the session ends or the popup changes, and a failed step stops it until a
+/// control is set.
+fn anoint_job_stops(s: &mut Session) {
+    let sort = |s: &mut Session| {
+        let view = ours_popup(s);
+        let control = view
+            .controls
+            .iter()
+            .find(|c| c.name == "notableDB.sort")
+            .unwrap();
+        let index = control
+            .choices
+            .iter()
+            .position(|c| c == "Sort by Life")
+            .unwrap();
+        s.run(Command::SetPopupControl {
+            name: "notableDB.sort".into(),
+            value: PopupInput::Choice {
+                index,
+                label: "Sort by Life".into(),
+            },
+        })
+        .unwrap();
+    };
+    let open = |s: &mut Session| {
+        s.run(Command::PasteItem {
+            text: AMULET.into(),
+        })
+        .unwrap();
+        s.run(Command::OpenPopup(PopupKind::Anoint { slot: 0 }))
+            .unwrap();
+        sort(s);
+    };
+    open(s);
+    assert_eq!(
+        s.backend.next_background(),
+        Some(BackgroundTask::AnointSort)
+    );
+    // closing the window ends the job
+    s.run(Command::ClosePopup).unwrap();
+    assert_eq!(s.backend.next_background(), None);
+    // so does a command that ends the session
+    s.run(Command::OpenPopup(PopupKind::Anoint { slot: 0 }))
+        .unwrap();
+    sort(s);
+    assert_eq!(
+        s.backend.next_background(),
+        Some(BackgroundTask::AnointSort)
+    );
+    s.run(Command::CancelDisplayItem { if_id: None }).unwrap();
+    assert_eq!(s.backend.next_background(), None);
+    // a failed step stops the job until a control is set
+    s.run(Command::PasteItem {
+        text: AMULET.into(),
+    })
+    .unwrap();
+    s.run(Command::OpenPopup(PopupKind::Anoint { slot: 0 }))
+        .unwrap();
+    sort(s);
+    s.backend.lua.load("real_step = glue.anoint_sort_step; glue.anoint_sort_step = function() error('boom', 0) end").exec().unwrap();
+    assert_eq!(
+        s.backend.next_background(),
+        Some(BackgroundTask::AnointSort)
+    );
+    let failed = s
+        .backend
+        .background_step(BackgroundTask::AnointSort, &|_| {});
+    assert!(failed.is_err());
+    assert_eq!(
+        s.backend.next_background(),
+        None,
+        "a failed job stays stopped"
+    );
+    s.backend
+        .lua
+        .load("glue.anoint_sort_step = real_step")
+        .exec()
+        .unwrap();
+    s.run(Command::SetPopupControl {
+        name: "notableDB.search".into(),
+        value: PopupInput::Text("Strength".into()),
+    })
+    .unwrap();
+    assert_eq!(
+        s.backend.next_background(),
+        Some(BackgroundTask::AnointSort)
+    );
+    s.run(Command::ClosePopup).unwrap();
+    assert_eq!(open_popups(s), 0);
 }

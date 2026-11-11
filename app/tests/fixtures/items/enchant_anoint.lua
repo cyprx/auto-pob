@@ -52,12 +52,22 @@ function recipe()
 	act.paste(AMULET)
 	act.open_popup("displayItemAnoint")
 	local list = main.popups[1].controls.notableDB
-	act.popup_set("notableDB.search", { Text = "Constitution" })
-	assert(#list.list >= 1, "Constitution matches no notable")
+	act.popup_set("notableDB.search", { Text = "Strength" })
+	-- a search that leaves several notables, so the stat sort has rows of different powers
+	assert(#list.list >= 5 and #list.list <= 20, "Strength matches " .. #list.list .. " notables")
 	checkpoint()
 
 	pickLabel(list.controls.sort, "notableDB.sort", "Sort by Life")
 	checkpoint()
+	local powers, last = {}, math.huge
+	for i, node in ipairs(list.list) do
+		powers[node.measuredPower] = true
+		assert(node.measuredPower <= last, "the rows are not in power order")
+		last = node.measuredPower
+	end
+	local distinct = 0
+	for _ in pairs(powers) do distinct = distinct + 1 end
+	assert(distinct >= 2, "every row has the same power")
 
 	local key = popupDump().controls
 	local rows

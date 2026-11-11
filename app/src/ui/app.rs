@@ -2129,6 +2129,31 @@ mod tests {
     }
 
     #[test]
+    fn a_vanished_display_item_is_cancelled_while_another_tab_shows() {
+        let (mut app, ctx) = items_app();
+        app.tab = BuildTab::Tree;
+        frame(&mut app, &ctx, vec![]);
+        app.on_event(Event::Snapshot {
+            seq: 91,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(crate::engine::DisplayItemView {
+                id: Some(2),
+                ..Default::default()
+            }))),
+        });
+        let mut gone = crate::ui::items::tests::sample();
+        gone.items.retain(|e| e.id != 2);
+        app.on_event(Event::Snapshot {
+            seq: 92,
+            snapshot: Snapshot::Items(Arc::new(gone)),
+        });
+        let before = app.sent_full.len();
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(sent_since(&app, before), ["CancelDisplayItem"]);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(sent_since(&app, before).len(), 1);
+    }
+
+    #[test]
     fn leaving_the_items_tab_closes_its_dialogs() {
         let (mut app, ctx) = items_app();
         let pos = app.items.rect("manage").center();

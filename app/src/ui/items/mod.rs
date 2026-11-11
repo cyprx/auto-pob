@@ -91,10 +91,10 @@ impl ItemsUi {
         self.sets.close();
     }
 
-    /// An edit still being typed that must go out before Save or a tab change. The tab has
-    /// none yet.
+    /// What must go out before Save or a tab change, even while the tab isn't drawn: the
+    /// cancel of a display item whose list entry has gone. (Typed edits join it in Task 8.)
     pub fn flush(&mut self) -> Option<Command> {
-        None
+        std::mem::take(&mut self.cancel_display).then_some(Command::CancelDisplayItem)
     }
 
     pub fn on_snapshot(&mut self, snapshot: &Snapshot) {

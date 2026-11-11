@@ -130,6 +130,11 @@ impl ItemsUi {
                     })
             });
             self.rects.note(&combo.inner.response, || "filter".into());
+            let sort = ui.button("Sort");
+            self.rects.note(&sort, || "sort".into());
+            if sort.clicked() {
+                out.commands.push(Command::SortItems);
+            }
             let menu = ui.menu_button("\u{2026}", |ui| {
                 let sort = ui.button("Sort");
                 self.rects.note(&sort, || "menu_sort".into());
@@ -189,6 +194,7 @@ impl ItemsUi {
                     });
             },
         );
+        let mut list_focus = false;
         for (i, row) in reordered.rows.iter().enumerate() {
             let entry = rows[i];
             self.rects.note(row, || format!("row_{}", entry.id));
@@ -206,9 +212,15 @@ impl ItemsUi {
                     slot: None,
                 },
             );
-            if row.has_focus() {
-                self.row_keys(ui, entry, out);
-            }
+            list_focus |= row.has_focus();
+        }
+        // keys act on the selected item (by id), whichever index-keyed row holds the focus
+        if list_focus
+            && let Some(entry) = self
+                .selected
+                .and_then(|id| rows.iter().find(|e| e.id == id))
+        {
+            self.row_keys(ui, entry, out);
         }
         if let Some((from, to)) = reordered.moved {
             if let Some(entry) = rows.get(from) {

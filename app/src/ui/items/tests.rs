@@ -93,6 +93,7 @@ struct Harness {
     ui: ItemsUi,
     ctx: egui::Context,
     time: f64,
+    step: f64,
     copied: Vec<String>,
     /// A text field above the tab, with focus
     field: Option<String>,
@@ -110,6 +111,7 @@ impl Harness {
             ui,
             ctx: egui::Context::default(),
             time: 1.0,
+            step: 0.2,
             copied: Vec::new(),
             field: None,
         };
@@ -118,7 +120,7 @@ impl Harness {
     }
 
     fn frame(&mut self, events: Vec<Event>) -> ItemsOutput {
-        self.time += 0.2;
+        self.time += self.step;
         let input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 700.0))),
             time: Some(self.time),
@@ -181,6 +183,66 @@ impl Harness {
             repeat: false,
             modifiers,
         }])
+    }
+
+    /// Presses at `from`, drags to `to` and releases; every command sent on the way.
+    fn drag_between(&mut self, from: Pos2, to: Pos2) -> Vec<Command> {
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let mid = Pos2::new(from.x + 30.0, from.y + 6.0);
+        let mut all = Vec::new();
+        for events in [
+            vec![Event::PointerMoved(from)],
+            vec![button(from, true)],
+            vec![Event::PointerMoved(mid)],
+            vec![Event::PointerMoved(to)],
+            vec![Event::PointerMoved(to)],
+            vec![button(to, false)],
+            vec![],
+        ] {
+            all.extend(self.frame(events).commands);
+        }
+        all
+    }
+
+    fn double_click(&mut self, key: &str) -> Vec<Command> {
+        let pos = self.ui.rect(key).center();
+        let button = |pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        self.step = 0.05;
+        let mut all = Vec::new();
+        for events in [
+            vec![Event::PointerMoved(pos)],
+            vec![button(true)],
+            vec![button(false)],
+            vec![button(true)],
+            vec![button(false)],
+            vec![],
+        ] {
+            all.extend(self.frame(events).commands);
+        }
+        self.step = 0.2;
+        all
+    }
+
+    /// The engine's next view has the items in this order (ids), as after a move or a sort.
+    fn reorder(&mut self, order: &[u32]) {
+        let mut view = (*self.view()).clone();
+        view.items = order
+            .iter()
+            .map(|id| view.items.iter().find(|e| e.id == *id).unwrap().clone())
+            .collect();
+        view.listed = order.to_vec();
+        self.ui.on_snapshot(&Snapshot::Items(Arc::new(view)));
+        self.frame(vec![]);
     }
 
     fn view(&self) -> Arc<ItemsView> {
@@ -581,4 +643,132 @@ fn leaving_the_tab_closes_dialogs() {
     assert!(h.ui.has_dialog());
     h.ui.close_dialogs();
     assert!(!h.ui.has_dialog());
+}
+
+#[test]
+fn double_clicking_a_row_edits_the_item() {
+    let mut h = Harness::new(sample());
+    let sent = h.double_click("row_2");
+    assert!(
+        debug(&sent).contains(&"EditItem { id: 2 }".to_owned()),
+        "{sent:?}"
+    );
+}
+
+#[test]
+fn double_clicking_a_set_selects_it() {
+    let mut h = Harness::new(sample());
+    h.click("manage");
+    h.frame(vec![]);
+    let sent = h.double_click("sets_row_1");
+    assert_eq!(debug(&sent), ["SelectItemSet { id: 2 }"]);
+}
+
+#[test]
+fn dragging_a_row_reorders_the_list() {
+    let mut h = Harness::new(sample());
+    let from = h.ui.rect("row_1").center();
+    let r = h.ui.rect("row_3");
+    let below = Pos2::new(r.center().x, r.bottom() - 2.0);
+    assert_eq!(
+        debug(&h.drag_between(from, below)),
+        ["MoveItem { from: 0, to: 2 }"]
+    );
+}
+
+#[test]
+fn a_filtered_list_does_not_reorder() {
+    let mut view = sample();
+    view.can_reorder = false;
+    let mut h = Harness::new(view);
+    let from = h.ui.rect("row_1").center();
+    let r = h.ui.rect("row_3");
+    let below = Pos2::new(r.center().x, r.bottom() - 2.0);
+    assert!(h.drag_between(from, below).is_empty());
+}
+
+#[test]
+fn dragging_a_set_reorders_the_sets() {
+    let mut h = Harness::new(sample());
+    h.click("manage");
+    h.frame(vec![]);
+    let from = h.ui.rect("sets_row_0").center();
+    let r = h.ui.rect("sets_row_1");
+    let below = Pos2::new(r.center().x, r.bottom() - 2.0);
+    assert_eq!(
+        debug(&h.drag_between(from, below)),
+        ["MoveItemSet { from: 0, to: 1 }"]
+    );
+}
+
+#[test]
+fn keys_act_on_the_selected_item_after_a_reorder() {
+    let mut h = Harness::new(sample());
+    h.click("row_2");
+    let from = h.ui.rect("row_1").center();
+    let r = h.ui.rect("row_3");
+    let sent = h.drag_between(from, Pos2::new(r.center().x, r.bottom() - 2.0));
+    assert_eq!(debug(&sent), ["MoveItem { from: 0, to: 2 }"]);
+    // the engine's new order puts a different item under the focused row
+    h.reorder(&[2, 3, 1, 4]);
+    let o = h.frame(vec![Event::Copy]);
+    assert!(
+        debug(&o.queries).contains(&"CopyItem { id: 1 }".to_owned()),
+        "{:?}",
+        o.queries
+    );
+    let o = h.key(Key::Delete, Modifiers::NONE);
+    assert_eq!(debug(&o.commands), ["DeleteItem { id: 1 }"]);
+}
+
+#[test]
+fn a_second_delete_with_nothing_selected_does_nothing() {
+    let mut h = Harness::new(sample());
+    h.click("row_1");
+    let o = h.key(Key::Delete, Modifiers::NONE);
+    assert_eq!(debug(&o.commands), ["DeleteItem { id: 1 }"]);
+    // the engine's view no longer has it; the equipped item slid under the focused row
+    let mut view = (*h.view()).clone();
+    view.items.retain(|e| e.id != 1);
+    view.listed.retain(|id| *id != 1);
+    h.ui.on_snapshot(&Snapshot::Items(Arc::new(view)));
+    h.frame(vec![]);
+    let o = h.key(Key::Delete, Modifiers::NONE);
+    h.frame(vec![]);
+    assert!(o.commands.is_empty());
+    assert!(!h.ui.has_dialog(), "no prompt for an item nobody selected");
+}
+
+#[test]
+fn keys_act_on_the_selected_item_after_a_sort() {
+    let mut h = Harness::new(sample());
+    h.click("row_1");
+    h.reorder(&[4, 3, 2, 1]);
+    let o = h.key(Key::Delete, Modifiers::NONE);
+    assert_eq!(debug(&o.commands), ["DeleteItem { id: 1 }"]);
+}
+
+#[test]
+fn the_sort_button_sends_sort_items() {
+    let mut h = Harness::new(sample());
+    let o = h.click("sort");
+    assert_eq!(debug(&o.commands), ["SortItems"]);
+}
+
+#[test]
+fn flush_sends_a_pending_cancel_once() {
+    let mut h = Harness::new(sample());
+    h.ui.on_snapshot(&Snapshot::DisplayItem(Some(Arc::new(DisplayItemView {
+        id: Some(2),
+        ..DisplayItemView::default()
+    }))));
+    let mut gone = sample();
+    gone.items.retain(|e| e.id != 2);
+    h.ui.on_snapshot(&Snapshot::Items(Arc::new(gone)));
+    assert_eq!(
+        debug(&h.ui.flush().into_iter().collect::<Vec<_>>()),
+        ["CancelDisplayItem"]
+    );
+    assert!(h.ui.flush().is_none());
+    assert!(h.frame(vec![]).commands.is_empty(), "not sent twice");
 }

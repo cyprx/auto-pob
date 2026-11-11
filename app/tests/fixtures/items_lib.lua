@@ -429,6 +429,11 @@ end
 -- Dragging the set to a new place in the manager's list and dropping it; `to` is the final
 -- position, which a drop expresses as the row it lands before (ListControl.lua:426-436).
 function act.move_set(from, to)
+	-- a drop on the row's own place does nothing (ListControl.lua:429)
+	if from == to then
+		record({ cmd = "MoveItemSet", from = from, to = to })
+		return
+	end
 	withSetList(function(list)
 		list.selIndex, list.selValue = from + 1, list.list[from + 1]
 		local dragIndex = to > from and to + 2 or to + 1

@@ -813,7 +813,15 @@ impl PobBackend {
                 Ok(items_listed())
             }
             Command::MoveItemSet { from, to } => {
-                self.call::<_, ()>("items_move_set", (from + 1, to + 1))?;
+                let (Some(lua_from), Some(lua_to)) = (from.checked_add(1), to.checked_add(1))
+                else {
+                    return Err(anyhow!("no such item set"));
+                };
+                self.call::<_, ()>("items_move_set", (lua_from, lua_to))?;
+                // PoB's drop onto the same place changes nothing
+                if from == to {
+                    return Ok(Affected::default());
+                }
                 Ok(items_listed())
             }
             Command::Undo(Tab::Items) => {

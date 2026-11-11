@@ -903,6 +903,7 @@ fn check_items_recipe(name: &str) -> ItemsRecipe {
         }
     }
     assert!(checked > 0, "{name}: no checkpoint");
+    assert_eq!(open_popups(&s), 0, "{name}: a popup was left open");
     let ours = json(&s.backend.items_view().unwrap());
     assert_ne!(ours, before, "{name}: the recipe changes the Items tab");
     assert_same(&ours, &recipe.result, name);
@@ -1245,6 +1246,32 @@ fn set_recipe_matches_pob() {
     assert!(!t2.contains(&"Mapping".to_string()));
     // the second weapon set of the new set is on at checkpoint 1
     assert_eq!(checks[1].items["second_weapon_set"], true);
+    let ids = |c: &ItemsCheckpoint| -> Vec<u64> {
+        c.items["sets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_u64().unwrap())
+            .collect()
+    };
+    let bossing = ids(checks[0])[3];
+    assert_eq!(checks[1].items["active_set"], bossing);
+    // deleting the active set (the last one) leaves the one before it active, and unlists it
+    let after_delete = ids(checks[3]);
+    assert_eq!(after_delete.len(), 3);
+    assert!(!after_delete.contains(&bossing));
+    assert_eq!(checks[3].items["active_set"], after_delete[2]);
+    assert_eq!(after_delete, ids(checks[2])[..3]);
+    // Undo brings it back as the active set, in the order from before the move
+    assert_eq!(checks[4].items["active_set"], bossing);
+    // (the move added no undo state, so Undo restores the order from before it)
+    assert_eq!(ids(checks[4]), ids(checks[1]));
+    assert_ne!(ids(checks[4]), ids(checks[2]));
+}
+
+/// The number of popups PoB has open
+fn open_popups(s: &Session) -> u32 {
+    lua_value(&s.backend.lua, "return #pob.main.main.popups")
 }
 
 /// The number of entries in PoB's `itemSets` (orphans from a refused name show here)
@@ -1272,6 +1299,7 @@ fn item_set_errors() {
         );
         let after = (s.backend.items_view().unwrap(), item_set_count(s));
         assert_eq!(after, before, "{command:?} changed something");
+        assert_eq!(open_popups(s), 0, "{command:?} left a popup open");
     };
     let long = "x".repeat(101);
     for title in ["", "   ", long.as_str()] {
@@ -1328,6 +1356,53 @@ fn item_set_errors() {
         Command::MoveItemSet { from: 9, to: 0 },
         "no such item set",
     );
+    // every command that goes through renders no popup behind it
+    let titled = |s: &mut Session, title: &str| {
+        s.backend
+            .items_view()
+            .unwrap()
+            .sets
+            .iter()
+            .find(|set| set.title == title)
+            .unwrap_or_else(|| panic!("no set {title}"))
+            .id
+    };
+    s.run(Command::NewItemSet {
+        title: "New".into(),
+    })
+    .unwrap();
+    assert_eq!(open_popups(&s), 0, "New");
+    let made = titled(&mut s, "New");
+    s.run(Command::RenameItemSet {
+        id: made,
+        title: "Renamed".into(),
+    })
+    .unwrap();
+    assert_eq!(open_popups(&s), 0, "Rename");
+    s.run(Command::CopyItemSet {
+        id: made,
+        title: "Copied".into(),
+    })
+    .unwrap();
+    assert_eq!(open_popups(&s), 0, "Copy");
+    // a move to the same place changes nothing and doesn't touch the build
+    let moved = s.run(Command::MoveItemSet { from: 1, to: 1 }).unwrap();
+    assert!(!moved.build && !moved.items, "{moved:?}");
+    assert_eq!(open_popups(&s), 0, "Move to the same place");
+    s.run(Command::MoveItemSet { from: 0, to: 2 }).unwrap();
+    assert_eq!(open_popups(&s), 0, "Move");
+    refuse(
+        &mut s,
+        Command::MoveItemSet {
+            from: usize::MAX,
+            to: 0,
+        },
+        "no such item set",
+    );
+    let copied = titled(&mut s, "Copied");
+    s.run(Command::DeleteItemSet { id: copied }).unwrap();
+    assert_eq!(open_popups(&s), 0, "Delete");
+    s.run(Command::DeleteItemSet { id: made }).unwrap();
     // the last set stays
     s.run(Command::DeleteItemSet { id: second }).unwrap();
     assert_eq!(item_set_count(&s), 1);

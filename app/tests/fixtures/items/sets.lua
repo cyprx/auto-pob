@@ -16,6 +16,7 @@ function recipe()
 	checkpoint()
 	-- the active set goes: PoB picks the previous one
 	act.delete_set(t.activeItemSetId)
+	checkpoint()
 	act.undo()
 	checkpoint()
 end

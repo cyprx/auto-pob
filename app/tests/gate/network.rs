@@ -3539,3 +3539,100 @@ fn the_plain_gate_session_is_offline() {
 fn settle_net_of(s: &mut super::Session) {
     super::net_harness::settle_net(&mut s.backend, Duration::from_secs(10));
 }
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_replaced_build_cancels_a_request_ready_in_the_same_batch() {
+    let _guard = lock();
+    let web = canned_web();
+    web.route(
+        "GET",
+        CHARACTERS_URL,
+        Canned::ok(net_fixture("public_characters.json")),
+    );
+    web.route(
+        "GET",
+        PROFILE_URL,
+        Canned::ok(net_fixture("public_profile.html")),
+    );
+    for (part, body) in [
+        ("passive-skills", "public_passives.json"),
+        ("items", "public_items.json"),
+    ] {
+        web.route(
+            "GET",
+            &character_url(part, "GateOne"),
+            Canned::ok(net_fixture(body)),
+        );
+    }
+    let mut s = net_session("replaced-batch", canned(&web), None);
+    s.open_fixture("attack");
+    let attack_code = s.backend.share_code().expect("share code");
+    web.route("GET", LINK_DOWNLOAD, Canned::ok(attack_code));
+    s.open_fixture("new");
+    s.backend
+        .apply(list_command(ACCOUNT), &|_| {})
+        .expect("list");
+    s.settle_net(Duration::from_secs(15));
+    s.requests();
+
+    s.backend
+        .apply(import_command(LINK, ImportMode::ThisBuild), &|_| {})
+        .expect("link import");
+    s.backend
+        .apply(
+            import_character(
+                None,
+                "GateOne",
+                CharacterPart::ItemsAndSkills {
+                    clear_items: true,
+                    clear_skills: true,
+                    ignore_weapon_swap: false,
+                },
+            ),
+            &|_| {},
+        )
+        .expect("character import");
+    // both downloads have arrived before the step runs: one batch holds both callbacks
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(s.backend.next_background(), Some(BackgroundTask::Network));
+    s.backend
+        .background_step(BackgroundTask::Network, &|_| {})
+        .expect("one network step");
+    s.backend.recalculate().expect("recalculating");
+    let steps = s.settle_net(Duration::from_secs(15));
+    assert!(steps.iter().all(Result::is_ok), "{steps:?}");
+    let mut finished = s.requests().finished;
+    finished.sort_by_key(|f| f.id);
+    assert_eq!(finished.len(), 2, "{finished:?}");
+    assert!(finished[0].new_build && !finished[0].cancelled);
+    assert_eq!(
+        (finished[1].cancelled, finished[1].error.as_deref()),
+        (true, Some("Cancelled"))
+    );
+    assert_eq!(item_count_and_has(&s, "Doom Shell"), (1, false));
+    s.assert_clean("same batch");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_request_error_shows_no_url_or_name() {
+    let _guard = lock();
+    let web = canned_web();
+    web.route(
+        "GET",
+        OFFLINE,
+        Canned::fail("Couldn't connect to https://x.test/character/Bob"),
+    );
+    let mut s = net_session("error-redacted", canned(&web), None);
+    s.open_fixture("attack");
+    begin_fetch(&s.backend.lua, OFFLINE).expect("launched");
+    s.settle_net(Duration::from_secs(5));
+    let view = s.requests();
+    let error = view.finished[0].error.clone().unwrap_or_default();
+    assert!(error.contains("Couldn't connect"), "{error}");
+    assert!(
+        !error.contains("x.test") && !error.contains("Bob"),
+        "{error}"
+    );
+}

@@ -119,6 +119,11 @@ pub fn register(lua: &Lua, pob_dir: &Path, net: NetConfig) -> mlua::Result<NetHa
         })?,
     )?;
 
+    g.set(
+        "__net_redact",
+        lua.create_function(|_, text: String| Ok(super::native::redact(&text)))?,
+    )?;
+
     let gate = handle.gate.clone();
     g.set(
         "__net_in_init",
@@ -249,6 +254,14 @@ fn dispatch_glue(lua: &Lua, event: SubscriptEvent) {
                 .map(|e| message_of(&e))
         }
     };
+    // a callback that made a new build cancels the other requests now, before the rest of
+    // the batch is delivered: their events are discarded with their aborted subscripts (R13)
+    if let Err(e) = call_glue(lua, "net_cancel_replaced", ()) {
+        log::warn!(
+            "cancelling for the new build failed: {}",
+            super::native::redact(&message_of(&e))
+        );
+    }
     if let Some(message) = failure {
         // the message becomes the request's error, which the UI shows: no URL or name in it
         let message = super::native::redact(&message);

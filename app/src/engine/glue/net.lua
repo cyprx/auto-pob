@@ -66,6 +66,10 @@ end
 -- The first error a request meets in its popups, `promptMsg` or our own machinery sticks.
 local function record_error(req, message)
 	message = first_line(StripEscapes(tostring(message))):gsub("^%s+", ""):gsub("%s+$", "")
+	-- an error shown to the user carries no URL or name either (R21)
+	if __net_redact then
+		message = __net_redact(message)
+	end
 	-- a site's error page can be long: keep the start, on a character boundary
 	if #message > 200 then
 		local cut = 200
@@ -414,7 +418,7 @@ function glue.net_dispatch(kind, id, ...)
 		-- a download hands its callback (body, errMsg, header)
 		if entry and entry.type == "DOWNLOAD" then
 			local _, message = ...
-			req.last_error = message and first_line(message) or nil
+			req.last_error = message and __net_redact(first_line(message)) or nil
 		else
 			req.last_error = nil
 		end
@@ -435,7 +439,7 @@ function glue.net_dispatch(kind, id, ...)
 			reply = nil
 			message = "No auth token"
 		end
-		req.last_error = message
+		req.last_error = __net_redact and __net_redact(message) or message
 		-- PoB drops a CUSTOM subscript's error without calling back; the request ends anyway
 		if entry then
 			limit_refresh()

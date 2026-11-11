@@ -9,6 +9,17 @@ use std::{
 
 use mlua::{Integer as LuaInteger, Lua, Result as LuaResult, Table, UserData, UserDataMethods};
 
+use crate::net::CancelFlag;
+
+/// How often blocking socket calls look at the cancel flag.
+const CANCEL_SLICE: Duration = Duration::from_millis(100);
+
+/// Whether the subscript owning `lua` was aborted.
+fn cancelled(lua: &Lua) -> bool {
+    lua.app_data_ref::<CancelFlag>()
+        .is_some_and(|flag| flag.is_set())
+}
+
 pub fn create_module(lua: &Lua) -> LuaResult<Table> {
     let exports = lua.create_table()?;
 
@@ -137,6 +148,9 @@ impl UserData for LuaTcpIp4Server {
                         return Ok(userdata);
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        if cancelled(lua) {
+                            return Err(mlua::Error::external("aborted"));
+                        }
                         if deadline.is_some_and(|d| Instant::now() >= d) {
                             return Err(mlua::Error::external("timeout"));
                         }
@@ -174,7 +188,7 @@ impl UserData for LuaTcpClient {
         // TODO: map correct errors to `closed` and `timeout`
         methods.add_method_mut(
             "receive",
-            |_, this, (pattern, prefix, maxsize): (Option<String>, Option<String>, Option<u64>)| {
+            |lua, this, (pattern, prefix, maxsize): (Option<String>, Option<String>, Option<u64>)| {
                 if prefix.is_some() || maxsize.is_some() {
                     unimplemented!();
                 }
@@ -183,7 +197,34 @@ impl UserData for LuaTcpClient {
                     "*l" => {
                         let mut line = Vec::new();
 
-                        match this.reader.read_until(b'\n', &mut line) {
+                        // read in slices so an abort is noticed; a partial line stays in `line`
+                        let deadline = this.timeout.map(|t| Instant::now() + t);
+                        let result = loop {
+                            let slice = deadline
+                                .map(|d| d.saturating_duration_since(Instant::now()))
+                                .map_or(CANCEL_SLICE, |left| left.min(CANCEL_SLICE))
+                                .max(Duration::from_millis(1));
+                            this.reader.get_ref().set_read_timeout(Some(slice))?;
+                            match this.reader.read_until(b'\n', &mut line) {
+                                Err(e)
+                                    if matches!(
+                                        e.kind(),
+                                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                                    ) =>
+                                {
+                                    if cancelled(lua) {
+                                        return Err(mlua::Error::external("aborted"));
+                                    }
+                                    if deadline.is_some_and(|d| Instant::now() >= d) {
+                                        break Err(e);
+                                    }
+                                }
+                                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                                other => break other,
+                            }
+                        };
+
+                        match result {
                             Ok(0) => Err(mlua::Error::external("closed")),
                             Ok(_) => {
                                 if line.last() == Some(&b'\n') {

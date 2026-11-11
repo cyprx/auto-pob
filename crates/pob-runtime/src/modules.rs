@@ -8,6 +8,7 @@ pub mod luazip;
 use mlua::{Lua, Result as LuaResult};
 
 /// Registers Rust implementations of the Lua modules required by PoB's Lua code.
+#[cfg(feature = "bundled-lua-modules")]
 pub fn register(lua: &Lua) -> LuaResult<()> {
     lua.register_module("lua-utf8", luautf8::create_module(lua)?)?;
     lua.register_module("socket", luasocket::create_module(lua)?)?;

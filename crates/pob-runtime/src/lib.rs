@@ -1,6 +1,7 @@
 //! Subscript runtime and bundled Lua modules shared by the Rusty PoB runtime and the egui app.
 
 pub mod modules;
+pub mod net;
 pub mod subscript;
 pub mod util;
 

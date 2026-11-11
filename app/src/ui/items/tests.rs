@@ -3,7 +3,7 @@ use super::slots::{SlotRow, SlotSection, rows};
 use super::*;
 use crate::engine::views::{
     DisplayItemView, DropList, EquippedIn, ItemEntry, ItemSetEntry, ItemText, ItemTooltip,
-    ItemTooltipLine, SlotKind, SlotView,
+    ItemTooltipLine, ModLineList, ModLineRef, RangeLineView, SlotKind, SlotView,
 };
 use eframe::egui::{Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 
@@ -765,10 +765,307 @@ fn flush_sends_a_pending_cancel_once() {
     let mut gone = sample();
     gone.items.retain(|e| e.id != 2);
     h.ui.on_snapshot(&Snapshot::Items(Arc::new(gone)));
-    assert_eq!(
-        debug(&h.ui.flush().into_iter().collect::<Vec<_>>()),
-        ["CancelDisplayItem"]
-    );
-    assert!(h.ui.flush().is_none());
+    assert_eq!(debug(&h.ui.flush()), ["CancelDisplayItem"]);
+    assert!(h.ui.flush().is_empty());
     assert!(h.frame(vec![]).commands.is_empty(), "not sent twice");
+}
+
+// ---- the display panel ------------------------------------------------------------------
+
+fn tip_line(text: &str, mod_line: Option<ModLineRef>) -> ItemTooltipLine {
+    ItemTooltipLine::Line {
+        size: 14,
+        text: text.into(),
+        font: None,
+        center: false,
+        background: None,
+        mod_line,
+    }
+}
+
+fn display_view() -> DisplayItemView {
+    DisplayItemView {
+        id: Some(2),
+        name: "Kaom's Heart".into(),
+        save_label: "Save".into(),
+        edit_rarity: 3,
+        edit_text: "Kaom's Heart".into(),
+        quality: Some("20".into()),
+        range_lines: vec![
+            RangeLineView {
+                label: "+10 to Life".into(),
+                range: Some(0.5),
+                slider: true,
+                ..RangeLineView::default()
+            },
+            RangeLineView {
+                label: "+20 to Mana".into(),
+                range: Some(0.25),
+                slider: true,
+                mutable: true,
+                ..RangeLineView::default()
+            },
+        ],
+        tooltip: ItemTooltip {
+            lines: vec![
+                tip_line(
+                    "Clickable",
+                    Some(ModLineRef {
+                        list: ModLineList::Explicit,
+                        index: 1,
+                    }),
+                ),
+                tip_line("Plain", None),
+            ],
+            ..ItemTooltip::default()
+        },
+        ..DisplayItemView::default()
+    }
+}
+
+impl Harness {
+    fn show_display(&mut self, view: DisplayItemView) {
+        self.ui
+            .on_snapshot(&Snapshot::DisplayItem(Some(Arc::new(view))));
+        self.frame(vec![]);
+    }
+
+    fn drect(&self, key: &str) -> egui::Rect {
+        self.ui.rect(key)
+    }
+
+    fn button(&mut self, pos: Pos2, pressed: bool) -> ItemsOutput {
+        self.frame(vec![Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        }])
+    }
+
+    /// Focuses the box and types into it.
+    fn type_into(&mut self, key: &str, text: &str) -> Vec<Command> {
+        let pos = self.drect(key).center();
+        let mut all = Vec::new();
+        for events in [
+            vec![Event::PointerMoved(pos)],
+            vec![Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            }],
+            vec![Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            }],
+            vec![Event::Key {
+                key: Key::A,
+                physical_key: Some(Key::A),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            }],
+            vec![Event::Text(text.into())],
+            vec![],
+        ] {
+            all.extend(self.frame(events).commands);
+        }
+        all
+    }
+}
+
+#[test]
+fn clicking_a_mod_line_sends_toggle_mod_line() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    let o = h.click("tip_line_0");
+    assert_eq!(
+        debug(&o.commands),
+        ["ToggleModLine { line: ModLineRef { list: Explicit, index: 1 } }"]
+    );
+    let o = h.click("tip_line_1");
+    assert!(o.commands.is_empty(), "{:?}", o.commands);
+}
+
+#[test]
+fn hidden_editors_are_not_drawn() {
+    let mut h = Harness::new(sample());
+    let mut view = display_view();
+    view.quality = None;
+    view.range_lines.clear();
+    h.show_display(view);
+    for key in [
+        "quality",
+        "catalyst",
+        "catalyst_quality",
+        "range_lines",
+        "range_slider",
+        "add_socket",
+        "version",
+    ] {
+        assert!(!h.ui.display.rects.map.contains_key(key), "{key} was drawn");
+    }
+    assert!(h.ui.display.rects.map.contains_key("save"));
+    h.show_display(display_view());
+    assert!(h.ui.display.rects.map.contains_key("quality"));
+}
+
+#[test]
+fn save_flushes_a_focused_quality_box_first() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    let sent = h.type_into("quality", "15");
+    assert!(sent.is_empty(), "still typing: {sent:?}");
+    // pressing Save: the box is still focused when the click is handled
+    let pos = h.drect("save").center();
+    h.frame(vec![Event::PointerMoved(pos)]);
+    let mut commands = h.button(pos, true).commands;
+    commands.extend(h.button(pos, false).commands);
+    commands.extend(h.frame(vec![]).commands);
+    assert_eq!(
+        debug(&commands),
+        ["SetItemQuality { text: \"15\" }", "SaveDisplayItem"]
+    );
+}
+
+#[test]
+fn flush_sends_a_focused_quality_box_once() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    h.type_into("quality", "15");
+    assert_eq!(debug(&h.ui.flush()), ["SetItemQuality { text: \"15\" }"]);
+    assert!(h.ui.flush().is_empty());
+}
+
+#[test]
+fn enter_sends_the_quality_and_escape_reverts() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    h.type_into("quality", "15");
+    let o = h.key(Key::Enter, Modifiers::NONE);
+    assert_eq!(debug(&o.commands), ["SetItemQuality { text: \"15\" }"]);
+    h.type_into("quality", "99");
+    let o = h.key(Key::Escape, Modifiers::NONE);
+    assert!(o.commands.is_empty());
+    assert!(h.frame(vec![]).commands.is_empty());
+    assert!(h.ui.flush().is_empty());
+    assert_eq!(h.ui.display.quality.text, "20");
+}
+
+#[test]
+fn text_window_sends_set_display_item_text_with_rarity() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    h.click("edit");
+    let w = h.ui.display.text_window.clone().expect("window open");
+    assert_eq!(
+        (w.rarity, w.text.as_str(), w.creating),
+        (3, "Kaom's Heart", false)
+    );
+    h.click("text_rarity");
+    h.click("text_rarity_1");
+    h.type_into("text_edit", "Typed text");
+    let o = h.click("text_save");
+    assert_eq!(
+        debug(&o.commands),
+        ["SetDisplayItemText { rarity: 1, text: \"Typed text\" }"]
+    );
+    assert!(h.ui.display.text_window.is_some(), "kept until the view");
+}
+
+#[test]
+fn text_window_stays_after_an_error_and_closes_on_the_next_view() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    h.click("edit");
+    h.click("text_save");
+    h.ui.text_refused();
+    h.ui.on_snapshot(&Snapshot::DisplayItem(Some(Arc::new(display_view()))));
+    assert!(
+        h.ui.display.text_window.is_some(),
+        "an unrelated view keeps it"
+    );
+    h.click("text_save");
+    h.ui.on_snapshot(&Snapshot::DisplayItem(Some(Arc::new(display_view()))));
+    assert!(h.ui.display.text_window.is_none());
+}
+
+#[test]
+fn text_window_closes_when_the_item_changes() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    h.click("edit");
+    let mut other = display_view();
+    other.id = Some(3);
+    h.show_display(other);
+    assert!(h.ui.display.text_window.is_none());
+}
+
+#[test]
+fn create_custom_opens_a_rare_empty_window() {
+    let mut h = Harness::new(sample());
+    h.frame(vec![]);
+    h.click("create");
+    let w = h.ui.display.text_window.clone().expect("window open");
+    assert_eq!((w.rarity, w.text.as_str(), w.creating), (2, "", true));
+}
+
+#[test]
+fn slider_sends_on_release_only() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    let r = h.drect("range_slider");
+    let from = r.center();
+    let to = Pos2::new(r.left() + 5.0, from.y);
+    let mut during = Vec::new();
+    during.extend(h.frame(vec![Event::PointerMoved(from)]).commands);
+    during.extend(h.button(from, true).commands);
+    during.extend(
+        h.frame(vec![Event::PointerMoved(Pos2::new(from.x - 10.0, from.y))])
+            .commands,
+    );
+    during.extend(h.frame(vec![Event::PointerMoved(to)]).commands);
+    assert!(during.is_empty(), "nothing while dragging: {during:?}");
+    let released = h.button(to, false).commands;
+    assert_eq!(released.len(), 1, "{released:?}");
+    assert!(
+        matches!(released[0], Command::SetRangeLine { line: 0, value } if value < 0.2),
+        "{released:?}"
+    );
+    assert!(h.frame(vec![]).commands.is_empty());
+}
+
+#[test]
+fn the_range_combo_picks_the_line_for_the_slider() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    assert!(!h.ui.display.rects.map.contains_key("range_mutated"));
+    h.click("range_lines");
+    h.click("range_line_1");
+    h.frame(vec![]);
+    let o = h.click("range_mutated");
+    assert_eq!(
+        debug(&o.commands),
+        ["SetRangeLineMutated { line: 1, on: true }"]
+    );
+}
+
+#[test]
+fn focused_quality_box_survives_incoming_view() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    h.type_into("quality", "15");
+    let mut view = display_view();
+    view.quality = Some("20".into());
+    view.name = "Kaom's Heart".into();
+    h.show_display(view);
+    assert_eq!(h.ui.display.quality.text, "15");
+    h.key(Key::Enter, Modifiers::NONE);
+    let mut view = display_view();
+    view.quality = Some("15".into());
+    h.show_display(view);
+    assert_eq!(h.ui.display.quality.text, "15");
 }

@@ -35,6 +35,16 @@ fn line_label(
 
 /// Draws the tooltip; returns the mod line clicked, if any.
 pub fn item_tooltip_ui(ui: &mut egui::Ui, tooltip: &ItemTooltip) -> Option<ModLineRef> {
+    item_tooltip_ui_with(ui, tooltip, &mut |_, _| {})
+}
+
+/// As `item_tooltip_ui`; `seen` is told each text line's index in `tooltip.lines` and its
+/// response (for tests to find lines).
+pub fn item_tooltip_ui_with(
+    ui: &mut egui::Ui,
+    tooltip: &ItemTooltip,
+    seen: &mut dyn FnMut(usize, &egui::Response),
+) -> Option<ModLineRef> {
     let default = ui.visuals().text_color();
     let border = tooltip
         .colour
@@ -77,7 +87,7 @@ pub fn item_tooltip_ui(ui: &mut egui::Ui, tooltip: &ItemTooltip) -> Option<ModLi
                         });
                     });
             }
-            for line in &tooltip.lines[titles..] {
+            for (index, line) in tooltip.lines.iter().enumerate().skip(titles) {
                 match line {
                     ItemTooltipLine::Line {
                         size,
@@ -111,6 +121,7 @@ pub fn item_tooltip_ui(ui: &mut egui::Ui, tooltip: &ItemTooltip) -> Option<ModLi
                                 }
                             })
                             .inner;
+                        seen(index, &response);
                         if let Some(m) = mod_line
                             && response.clicked()
                         {

@@ -1,11 +1,13 @@
 //! The Items tab: PoB's equipment slots, item list and item sets. It takes engine snapshots
 //! and returns commands; it knows nothing else about PoB.
 
+pub mod display;
 pub mod list;
 pub mod sets;
 pub mod slots;
+pub mod text_window;
 
-use crate::engine::views::{ItemTooltipView, ItemsView};
+use crate::engine::views::{DisplayItemView, ItemTooltipView, ItemsView};
 use crate::engine::{Command, ItemTooltipQuery, Snapshot};
 use crate::ui::tree::Rects;
 use crate::widgets::item_tooltip_ui;
@@ -52,6 +54,9 @@ pub struct ItemsUi {
     sets: sets::State,
     /// The id of the item on the display panel, if it is one of the build's
     display_id: Option<u32>,
+    /// What the display panel shows, if anything
+    display_view: Option<Arc<DisplayItemView>>,
+    display: display::DisplayState,
     /// The display item whose list entry vanished, already cancelled
     cancelled: Option<u32>,
     cancel_display: bool,
@@ -89,12 +94,24 @@ impl ItemsUi {
         self.copy_asked = None;
         self.clipboard = None;
         self.sets.close();
+        self.display.text_window = None;
+        self.display.submitted = false;
     }
 
-    /// What must go out before Save or a tab change, even while the tab isn't drawn: the
-    /// cancel of a display item whose list entry has gone. (Typed edits join it in Task 8.)
-    pub fn flush(&mut self) -> Option<Command> {
-        std::mem::take(&mut self.cancel_display).then_some(Command::CancelDisplayItem)
+    /// What must go out before Save or a tab change, even while the tab isn't drawn: a quality
+    /// box still being typed in (R22: not counted as unsaved, PoB never counts display edits),
+    /// then the cancel of a display item whose list entry has gone.
+    pub fn flush(&mut self) -> Vec<Command> {
+        let mut commands = self.display.take_pending();
+        if std::mem::take(&mut self.cancel_display) {
+            commands.push(Command::CancelDisplayItem);
+        }
+        commands
+    }
+
+    /// The engine refused the raw text: the window stays open for another try.
+    pub fn text_refused(&mut self) {
+        self.display.submitted = false;
     }
 
     pub fn on_snapshot(&mut self, snapshot: &Snapshot) {
@@ -115,6 +132,18 @@ impl ItemsUi {
                 self.check_orphan();
             }
             Snapshot::DisplayItem(display) => {
+                let old = self.display_view.as_ref().map(|d| (d.id, d.name.clone()));
+                let new = display.as_ref().map(|d| (d.id, d.name.clone()));
+                // a window opened on another item is stale; one just saved is done
+                if self.display.submitted || (old != new && self.display.text_window.is_some()) {
+                    self.display.text_window = None;
+                    self.display.submitted = false;
+                }
+                if display.is_none() || old != new {
+                    self.display.on_gone();
+                }
+                self.display.on_view();
+                self.display_view = display.clone();
                 self.display_id = display.as_ref().and_then(|d| d.id);
                 if self.cancelled != self.display_id {
                     self.cancelled = None;
@@ -187,10 +216,20 @@ impl ItemsUi {
             .resizable(true)
             .default_size(340.0)
             .show(ui, |ui| self.slots_panel(ui, &view, &mut out));
+        egui::Panel::right("items_display")
+            .resizable(true)
+            .default_size(380.0)
+            .show(ui, |ui| match self.display_view.clone() {
+                Some(d) => out
+                    .commands
+                    .extend(display::show(ui, &d, &mut self.display)),
+                None => display::show_empty(ui, &mut self.display),
+            });
         egui::CentralPanel::default().show(ui, |ui| self.item_list(ui, &view, &mut out));
 
         let ctx = ui.ctx().clone();
         self.dialogs(&ctx, &view, &mut out);
+        out.commands.extend(self.display.text_window(&ctx));
         self.sets_window(&ctx, &view, &mut out);
 
         // the hover timer restarts when the pointer moves to something else
@@ -248,6 +287,7 @@ impl ItemsUi {
             .rects
             .map
             .get(key)
+            .or_else(|| self.display.rects.map.get(key))
             .unwrap_or_else(|| panic!("no rect {key}; have {:?}", self.rects.map.keys()))
     }
 }

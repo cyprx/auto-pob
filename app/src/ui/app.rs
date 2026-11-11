@@ -74,6 +74,8 @@ pub struct AutoPobApp {
     calcs: CalcsUi,
     skills: SkillsUi,
     items: ItemsUi,
+    /// The seq of the raw item text last sent, to keep its window open on an error
+    text_seq: Option<u64>,
     sidebar: sidebar::SidebarState,
     notes: NotesUi,
     config_ui: ConfigUi,
@@ -120,6 +122,7 @@ impl AutoPobApp {
             calcs: CalcsUi::default(),
             skills: SkillsUi::default(),
             items: ItemsUi::default(),
+            text_seq: None,
             sidebar: sidebar::SidebarState::default(),
             notes: NotesUi::default(),
             config_ui: ConfigUi::default(),
@@ -270,6 +273,11 @@ impl AutoPobApp {
     }
 
     fn on_error(&mut self, seq: u64, message: String) {
+        if self.text_seq == Some(seq) {
+            self.text_seq = None;
+            // the raw-text window stays open for another try
+            self.items.text_refused();
+        }
         if self.entering == Some(seq) {
             // the build never opened; go back to where the user was
             self.entering = None;
@@ -325,7 +333,7 @@ impl AutoPobApp {
         if let Some(command) = self.skills.flush() {
             self.send(command);
         }
-        if let Some(command) = self.items.flush() {
+        for command in self.items.flush() {
             self.send(command);
         }
     }
@@ -661,13 +669,17 @@ impl AutoPobApp {
         }
         if self.tab != BuildTab::Items {
             // leaving the tab sends an edit still being typed and closes its dialogs
-            if let Some(command) = self.items.flush() {
+            for command in self.items.flush() {
                 self.send(command);
             }
             self.items.close_dialogs();
         }
         for command in items_out.commands {
-            self.send(command);
+            let is_text = matches!(command, Command::SetDisplayItemText { .. });
+            let seq = self.send(command);
+            if is_text {
+                self.text_seq = Some(seq);
+            }
         }
         // questions never leave the app waiting
         for query in items_out.queries {

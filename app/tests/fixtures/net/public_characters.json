@@ -1,0 +1,5 @@
+[
+  {"name": "GateOne", "league": "Mirage Gate", "classId": 1, "ascendancyClass": 1, "class": "Juggernaut", "level": 90, "experience": 2427633571, "realm": "pc", "lastActive": true},
+  {"name": "GateTwo", "league": "Standard", "classId": 1, "ascendancyClass": 2, "class": "Berserker", "level": 78, "experience": 598423124, "realm": "pc"},
+  {"name": "gateThree", "league": "Standard", "classId": 1, "ascendancyClass": 0, "class": "Marauder", "level": 12, "experience": 40120, "realm": "pc"}
+]

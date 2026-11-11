@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use super::commands::{
     ControlTooltipQuery, GemSearchQuery, GemTooltipQuery, ItemDb, ItemTooltipQuery, PopupKind,
+    Realm,
 };
 
 use serde::{Deserialize, Serialize};
@@ -1419,4 +1420,74 @@ pub struct ImportCodeView {
     pub fetching: bool,
     /// The open build has a file, so it can be replaced
     pub can_import_to_this_build: bool,
+}
+
+/// The Import/Export tab's account import (R18, R19).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccountView {
+    #[serde(default)]
+    pub oauth: OAuthView,
+    #[serde(default)]
+    pub public: PublicView,
+}
+
+/// The sign-in half of the account import; Task 7 fills it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct OAuthView {
+    #[serde(default)]
+    pub signed_in: bool,
+}
+
+/// PoB's import by account name: the box, its history and the characters it listed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PublicView {
+    /// The account name box
+    pub account: String,
+    pub realm: Realm,
+    /// The accounts PoB remembers, in its order
+    #[serde(default)]
+    pub history: Vec<String>,
+    pub stage: PublicStage,
+    /// The league drop-down's entries in PoB's order, ending in "All"; empty before a list
+    #[serde(default)]
+    pub leagues: Vec<String>,
+    /// Every character of the account, in PoB's order (lowercase name); empty before a list
+    #[serde(default)]
+    pub characters: Vec<CharacterEntry>,
+    /// PoB's "Character import status" line, with colour codes stripped
+    #[serde(default)]
+    pub status: String,
+}
+
+impl Default for PublicView {
+    fn default() -> Self {
+        PublicView {
+            account: String::new(),
+            realm: Realm::Pc,
+            history: Vec::new(),
+            stage: PublicStage::EnterAccount,
+            leagues: Vec::new(),
+            characters: Vec::new(),
+            status: String::new(),
+        }
+    }
+}
+
+/// PoB's `charImportMode` of the account name import.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PublicStage {
+    EnterAccount,
+    Fetching,
+    SelectCharacter,
+    Importing,
+}
+
+/// A character of the listed account, as PoB's list shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CharacterEntry {
+    pub name: String,
+    /// GGG's `class`: the ascendancy when there is one
+    pub class: String,
+    pub level: u32,
+    pub league: String,
 }

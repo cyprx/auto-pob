@@ -135,3 +135,94 @@ function act.arg_import(uri)
 		end
 	end)
 end
+
+-- ---- Import by account name (ImportTab.lua:336-472, 813-1018) ----
+
+-- Realm drop-down, the box, Start: a user's steps. The button must be enabled, as PoB's is.
+function act.public_list(account, realm)
+	local controls = build.importTab.controls
+	controls.siteAccountRealm:SelByValue(realm, "id")
+	controls.siteAccountName:SetText(account, true)
+	if not controls.siteAccountNameGo:IsEnabled() then
+		return "Missing discriminator e.g. " .. controls.siteAccountName.buf .. "#1234"
+	end
+	controls.siteAccountNameGo.onClick()
+	frame()
+end
+
+-- The league drop-down (nil is "All"), the character, the options as clicks and the button
+function act.public_import(league, name, part, a, b, c)
+	local controls = build.importTab.controls
+	local leagues = controls.siteCharSelectLeague
+	for index, entry in ipairs(leagues.list) do
+		if entry.league == league then leagues:SetSel(index) break end
+	end
+	for index, entry in ipairs(controls.siteCharSelect.list) do
+		if entry.label == name then controls.siteCharSelect:SetSel(index) break end
+	end
+	local function click(box, on)
+		if box.state ~= on then
+			box.state = not box.state
+		end
+	end
+	if part == "tree" then
+		click(controls.siteCharImportTreeClearJewels, a)
+		controls.siteCharImportTree.onClick()
+	else
+		click(controls.siteCharImportItemsClearItems, a)
+		click(controls.siteCharImportItemsClearSkills, b)
+		click(controls.siteCharImportItemsIgnoreWeaponSwap, c)
+		controls.siteCharImportItems.onClick()
+	end
+	frame()
+end
+
+function act.public_close()
+	build.importTab.controls.siteCharClose.onClick()
+end
+
+function act.frame()
+	frame()
+end
+
+-- What the account name import shows, in PoB's own terms
+function accountDump()
+	local tab = build.importTab
+	local controls = tab.controls
+	local out = {
+		account = controls.siteAccountName.buf,
+		realm = controls.siteAccountRealm:GetSelValue().id,
+		stage = tab.charImportMode,
+		status = StripEscapes(tab.charImportStatus),
+		history = {}, leagues = {}, characters = {},
+		prompt = main.promptMsg ~= nil or launch.promptMsg ~= nil,
+		popups = #main.popups,
+	}
+	for _, account in ipairs(controls.siteAccountHistory.list) do out.history[#out.history + 1] = account end
+	for _, entry in ipairs(controls.siteCharSelectLeague.list) do out.leagues[#out.leagues + 1] = entry.label end
+	for _, char in ipairs(tab.lastCharList or {}) do
+		out.characters[#out.characters + 1] = { name = char.name, class = char.class, level = char.level, league = char.league }
+	end
+	table.sort(out.characters, function(a, b) return a.name:lower() < b.name:lower() end)
+	return out
+end
+
+-- The sidebar-independent facts a character import must have produced
+function importedFacts()
+	local equipped = 0
+	for _, slot in pairs(build.itemsTab.slots) do
+		if slot.selItemId ~= 0 then equipped = equipped + 1 end
+	end
+	return {
+		groups = #build.skillsTab.socketGroupList,
+		nodes = build.spec:CountAllocNodes(),
+		equipped = equipped,
+		ascend = build.spec.curAscendClassId,
+		level = build.characterLevel,
+		build_flag = build.buildFlag and true or false,
+		mod_flag = build.modFlag and true or false,
+		spec_mod = build.spec.modFlag and true or false,
+		items_mod = build.itemsTab.modFlag and true or false,
+		config_mod = build.configTab.modFlag and true or false,
+	}
+end

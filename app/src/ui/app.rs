@@ -1384,6 +1384,10 @@ mod tests {
             Ok(String::new())
         }
 
+        fn account_view(&mut self) -> anyhow::Result<crate::engine::AccountView> {
+            Ok(crate::engine::AccountView::default())
+        }
+
         fn requests_view(&mut self) -> anyhow::Result<crate::engine::RequestsView> {
             Ok(crate::engine::RequestsView::default())
         }

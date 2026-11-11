@@ -1,18 +1,18 @@
 //! Starts Path of Building's Lua with our own bootstrap.
 
 use super::commands::{
-    Command, ConfigValue, ControlTooltipQuery, GemSearchQuery, GemTarget, GemToggle,
+    CharacterPart, Command, ConfigValue, ControlTooltipQuery, GemSearchQuery, GemTarget, GemToggle,
     GemTooltipQuery, ImportMode, ItemDb, ItemDbQuery, ItemTooltipQuery, PopupInput, PopupKind,
     SkillOption, SocketColour, Tab,
 };
 use super::net::{Dispatch, NetHandle};
 use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Engine, Event};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, ControlTooltipView,
-    DisplayItemView, GemRow, GemSearchView, GemTooltipView, GroupTooltipView, ItemDbView, ItemText,
-    ItemTooltip, ItemTooltipView, ItemsView, ModLineList, NodePower, NodeTooltip, NotesView,
-    PopupView, PowerReport, RequestsView, ShareView, SkillsView, SocketGroupText, StatsView,
-    TooltipLine, TreeLayout, TreeState,
+    AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView,
+    ControlTooltipView, DisplayItemView, GemRow, GemSearchView, GemTooltipView, GroupTooltipView,
+    ItemDbView, ItemText, ItemTooltip, ItemTooltipView, ItemsView, ModLineList, NodePower,
+    NodeTooltip, NotesView, PopupView, PowerReport, RequestsView, ShareView, SkillsView,
+    SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -327,7 +327,17 @@ impl PobBackend {
             Affected::default()
         };
         affected.requests = true;
+        // a request of the account import ends with PoB's status and stage changed
+        affected.account = true;
         affected.short_link = self.call("short_link_ready", ())?;
+        Ok(affected)
+    }
+
+    /// A press of the account import began a request (R10): the request, the account view, and
+    /// whatever the press did to the build.
+    fn account_affected(&mut self) -> Result<Affected> {
+        let mut affected = self.network_affected()?;
+        affected.account = true;
         Ok(affected)
     }
 
@@ -508,6 +518,9 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::SetImportCode { .. }
             | Command::ShareBuild { .. }
             | Command::ExportShareCode
+            | Command::ListPublicCharacters { .. }
+            | Command::ImportPublicCharacter { .. }
+            | Command::ClosePublicCharacters
             // the tree search's debounce can land after a node-replacement open: it changes
             // neither the item nor the build
             | Command::SetTreeSearch { .. }
@@ -677,6 +690,29 @@ impl PobBackend {
                 share_code: true,
                 ..Affected::default()
             }),
+            Command::ListPublicCharacters { account, realm } => {
+                self.call::<_, u64>("list_public_characters", (account, realm.pob_id()))?;
+                self.account_affected()
+            }
+            Command::ImportPublicCharacter { league, name, part } => {
+                let (kind, a, b, c) = match part {
+                    CharacterPart::Tree { delete_jewels } => ("tree", delete_jewels, false, false),
+                    CharacterPart::ItemsAndSkills {
+                        clear_items,
+                        clear_skills,
+                        ignore_weapon_swap,
+                    } => ("items", clear_items, clear_skills, ignore_weapon_swap),
+                };
+                self.call::<_, u64>("import_public_character", (league, name, kind, a, b, c))?;
+                self.account_affected()
+            }
+            Command::ClosePublicCharacters => {
+                self.call::<_, ()>("close_public_characters", ())?;
+                Ok(Affected {
+                    account: true,
+                    ..Affected::default()
+                })
+            }
             Command::Save => {
                 self.call::<_, ()>("save", ())?;
                 // PoB's save rewrites the notes' `^_` escapes
@@ -1810,6 +1846,10 @@ impl Backend for PobBackend {
         self.call("share_code", ())
     }
 
+    fn account_view(&mut self) -> Result<AccountView> {
+        self.view("account_view", ())
+    }
+
     fn set_waker(&mut self, wake: Waker) {
         self.net.set_waker(wake);
     }
@@ -2002,6 +2042,30 @@ mod tests {
             }),
             None
         );
+    }
+
+    #[test]
+    fn public_import_commands_neither_cancel_nor_leave_the_build() {
+        use crate::engine::{CharacterPart, Realm};
+        let commands = [
+            Command::ListPublicCharacters {
+                account: "A#1234".into(),
+                realm: Realm::Pc,
+            },
+            Command::ImportPublicCharacter {
+                league: None,
+                name: "A".into(),
+                part: CharacterPart::Tree {
+                    delete_jewels: true,
+                },
+            },
+            Command::ClosePublicCharacters,
+        ];
+        for command in commands {
+            assert_eq!(cancels_requests(&command), None, "{command:?}");
+            assert!(!leaves_build(&command), "{command:?}");
+            assert!(!ends_popup_session(&command), "{command:?}");
+        }
     }
 
     fn pinned_dir() -> std::path::PathBuf {

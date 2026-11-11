@@ -10,10 +10,11 @@ use crate::pob_files::DownloadProgress;
 
 use super::commands::{Command, ControlTooltipQuery, GemTooltipQuery, ItemTooltipQuery};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, ControlTooltipView,
-    DisplayItemView, GemSearchView, GemTooltipView, GroupTooltipView, ItemDbView, ItemText,
-    ItemTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, PopupView, PowerReport,
-    RequestsView, ShareView, SkillsView, SocketGroupText, StatsView, TreeLayout, TreeState,
+    AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView,
+    ControlTooltipView, DisplayItemView, GemSearchView, GemTooltipView, GroupTooltipView,
+    ItemDbView, ItemText, ItemTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, PopupView,
+    PowerReport, RequestsView, ShareView, SkillsView, SocketGroupText, StatsView, TreeLayout,
+    TreeState,
 };
 use pob_runtime::net::Waker;
 
@@ -53,6 +54,8 @@ pub enum Snapshot {
     Share(Arc<ShareView>),
     /// The build's share code, answering `ExportShareCode` (R17)
     ShareCode(Arc<String>),
+    /// The Import/Export tab's account import (R18, R19)
+    Account(Arc<AccountView>),
 }
 
 /// Long-running work the engine does between commands.
@@ -154,6 +157,8 @@ pub struct Affected {
     pub share: bool,
     /// The share code was requested (R17); build-only
     pub share_code: bool,
+    /// The account import changed (R18, R19); build-only
+    pub account: bool,
 }
 
 impl Affected {
@@ -188,6 +193,7 @@ impl Affected {
         requests: true,
         share: true,
         share_code: false,
+        account: true,
     };
 
     /// Only views that need no build are asked for: the build list and the requests (R10).
@@ -243,6 +249,7 @@ impl Affected {
         self.requests |= other.requests;
         self.share |= other.share;
         self.share_code |= other.share_code;
+        self.account |= other.account;
     }
 }
 
@@ -321,6 +328,8 @@ pub trait Backend {
     fn share_view(&mut self) -> anyhow::Result<ShareView>;
     /// The build's share code: PoB's Generate button, no network (R17)
     fn share_code(&mut self) -> anyhow::Result<String>;
+    /// The Import/Export tab's account import (R18, R19)
+    fn account_view(&mut self) -> anyhow::Result<AccountView>;
     /// Hands back the memory the last busy stretch left behind. The loop calls it once it has
     /// been idle for a while after work, never between a background job's steps.
     fn release_memory(&mut self);
@@ -577,6 +586,9 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
     }
     if flags.share_code {
         emit(seq, send, backend.share_code(), Snapshot::ShareCode);
+    }
+    if flags.account {
+        emit(seq, send, backend.account_view(), Snapshot::Account);
     }
 }
 
@@ -976,6 +988,7 @@ mod tests {
                     Snapshot::Notes(_) => "notes",
                     Snapshot::Requests(_) => "requests",
                     Snapshot::Share(_) => "share",
+                    Snapshot::Account(_) => "account",
                     other => panic!("unexpected {other:?}"),
                 }
             })
@@ -996,7 +1009,8 @@ mod tests {
                 "popup",
                 "notes",
                 "requests",
-                "share"
+                "share",
+                "account"
             ]
         );
     }
@@ -1081,9 +1095,9 @@ mod tests {
         assert_eq!(stats_seq, Some(3));
         assert_eq!(config_seq, Some(3));
         assert_eq!(log.lock().unwrap().set_configs, 2);
-        // Ready + 14 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items + DisplayItem; the channel disconnect means the
+        // Ready + 15 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items + DisplayItem; the channel disconnect means the
         // thread (and so every wake) is finished.
-        assert_eq!(wakes.load(Ordering::SeqCst), 22);
+        assert_eq!(wakes.load(Ordering::SeqCst), 23);
     }
 
     #[test]

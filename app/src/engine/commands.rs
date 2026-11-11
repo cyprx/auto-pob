@@ -24,6 +24,38 @@ pub enum ImportMode {
     NewBuild,
 }
 
+/// A platform of PoB's account import (PoB's ids `"PC"`, `"XBOX"`, `"SONY"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Realm {
+    Pc,
+    Xbox,
+    Sony,
+}
+
+impl Realm {
+    /// PoB's id for the realm drop-down
+    pub fn pob_id(self) -> &'static str {
+        match self {
+            Realm::Pc => "PC",
+            Realm::Xbox => "XBOX",
+            Realm::Sony => "SONY",
+        }
+    }
+}
+
+/// What an account import takes from a character: PoB's two buttons and their options.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum CharacterPart {
+    /// "Passive Tree and Jewels"
+    Tree { delete_jewels: bool },
+    /// "Items and Skills"
+    ItemsAndSkills {
+        clear_items: bool,
+        clear_skills: bool,
+        ignore_weapon_swap: bool,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub enum Command {
     /// Sub-path relative to the Builds folder; "" is the root.
@@ -53,6 +85,21 @@ pub enum Command {
     ShareBuild {
         site: String,
     },
+    /// Lists an account's public characters: PoB's "Import By Account Name" Start button (R19).
+    /// A request; `AccountView.public` follows it.
+    ListPublicCharacters {
+        account: String,
+        realm: Realm,
+    },
+    /// Imports a part of a listed character (R18, R19): a request. `league` `None` is PoB's
+    /// "All".
+    ImportPublicCharacter {
+        league: Option<String>,
+        name: String,
+        part: CharacterPart,
+    },
+    /// PoB's Close button: back to the account box (R19)
+    ClosePublicCharacters,
     /// Ask for the build's share code: PoB's Generate button, no network (R17).
     ExportShareCode,
     Save,

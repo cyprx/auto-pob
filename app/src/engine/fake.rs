@@ -12,10 +12,10 @@ use super::commands::{
 use super::pob::{CancelScope, cancels_requests, ends_item_db, ends_popup_session};
 use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Event};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, ControlTooltipView,
-    DisplayItemView, DropList, GemSearchView, GemTooltipView, GroupTooltipView, ItemDbView,
-    ItemText, ItemTooltip, ItemTooltipView, ItemsView, NodePower, NodeTooltip, NotesView,
-    PendingRequest, Points, PopupView, PowerReport, RequestsView, ShareView, SkillsView,
+    AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView,
+    ControlTooltipView, DisplayItemView, DropList, GemSearchView, GemTooltipView, GroupTooltipView,
+    ItemDbView, ItemText, ItemTooltip, ItemTooltipView, ItemsView, NodePower, NodeTooltip,
+    NotesView, PendingRequest, Points, PopupView, PowerReport, RequestsView, ShareView, SkillsView,
     SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
 };
 
@@ -229,6 +229,17 @@ impl Fake {
             Command::ImportFromUrl { .. } => Ok(Affected {
                 share: true,
                 requests: true,
+                ..Affected::default()
+            }),
+            Command::ListPublicCharacters { .. } | Command::ImportPublicCharacter { .. } => {
+                Ok(Affected {
+                    account: true,
+                    requests: true,
+                    ..Affected::default()
+                })
+            }
+            Command::ClosePublicCharacters => Ok(Affected {
+                account: true,
                 ..Affected::default()
             }),
             Command::ExportShareCode => Ok(Affected {
@@ -593,6 +604,10 @@ impl Backend for Fake {
     fn share_view(&mut self) -> anyhow::Result<ShareView> {
         self.log.lock().unwrap().share_views += 1;
         Ok(ShareView::default())
+    }
+
+    fn account_view(&mut self) -> anyhow::Result<AccountView> {
+        Ok(AccountView::default())
     }
 
     fn share_code(&mut self) -> anyhow::Result<String> {

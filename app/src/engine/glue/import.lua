@@ -299,3 +299,176 @@ function glue.share_build(site_id)
 	end
 	return id
 end
+
+-- ---- Account name import (R19) ----
+
+local OFFERED = "PoB doesn't offer that here"
+
+-- PoB's `charImportMode` as the view's stage
+local STAGES = {
+	GETACCOUNTNAME = "EnterAccount",
+	DOWNLOADCHARLIST = "Fetching",
+	SELECTCHAR = "SelectCharacter",
+	IMPORTING = "Importing",
+}
+
+local REALMS = { PC = "Pc", XBOX = "Xbox", SONY = "Sony" }
+
+-- The account import of the open build, as the tab shows it. The characters are all of the
+-- account's, in the order PoB sorts a character list (by lowercase name), so a league can be
+-- picked from them; `ImportPublicCharacter` selects the league itself.
+function glue.account_view()
+	local tab = import_tab()
+	local controls = tab.controls
+	local stage = STAGES[tab.charImportMode] or "EnterAccount"
+	local view = {
+		oauth = { signed_in = false },
+		public = {
+			account = controls.siteAccountName.buf,
+			realm = REALMS[controls.siteAccountRealm:GetSelValue().id] or "Pc",
+			history = {},
+			stage = stage,
+			leagues = {},
+			characters = {},
+			status = StripEscapes(tab.charImportStatus or ""),
+		},
+	}
+	local public = view.public
+	for _, account in ipairs(controls.siteAccountHistory.list) do
+		public.history[#public.history + 1] = account
+	end
+	if stage == "SelectCharacter" or stage == "Importing" then
+		for _, entry in ipairs(controls.siteCharSelectLeague.list) do
+			public.leagues[#public.leagues + 1] = entry.label
+		end
+		local code = controls.siteAccountRealm:GetSelValue().realmCode
+		for _, char in ipairs(tab.lastCharList or {}) do
+			if char.realm == code then
+				public.characters[#public.characters + 1] = {
+					name = char.name or "?",
+					class = char.class or "?",
+					level = char.level or 0,
+					league = char.league or "?",
+				}
+			end
+		end
+		table.sort(public.characters, function(a, b)
+			return a.name:lower() < b.name:lower()
+		end)
+	end
+	return view
+end
+
+-- What PoB's own status says once a request of the account import ends, for the request's error.
+-- A callback that raised left PoB's flags where the press put them, so they are put back.
+local function status_after(tab, kind)
+	return function(req)
+		local status = tab.charImportStatus or ""
+		local mode = tab.charImportMode
+		if status:sub(1, #colorCodes.NEGATIVE) == colorCodes.NEGATIVE then
+			-- PoB's own message says why
+			req.error = StripEscapes(status)
+		elseif mode == "DOWNLOADCHARLIST" or mode == "IMPORTING" then
+			local text = kind == "list" and "Failed to retrieve character list."
+				or "Failed to retrieve character data, try again."
+			tab.charImportMode = kind == "list" and "GETACCOUNTNAME" or "SELECTCHAR"
+			tab.charImportStatus = colorCodes.NEGATIVE .. text
+			req.error = text
+		end
+	end
+end
+
+-- The realm drop-down, the account name box and Start (ImportTab.lua:336-380)
+function glue.list_public_characters(account, realm_id)
+	local tab = import_tab()
+	local controls = tab.controls
+	if tab.charImportMode == "DOWNLOADCHARLIST" or tab.charImportMode == "IMPORTING" then
+		error(OFFERED, 0)
+	end
+	local index
+	for i, realm in ipairs(controls.siteAccountRealm.list) do
+		if realm.id == realm_id then
+			index = i
+		end
+	end
+	if not index then
+		error("no such realm", 0)
+	end
+	controls.siteAccountRealm:SetSel(index)
+	glue.paste_into(controls.siteAccountName, account)
+	local go = controls.siteAccountNameGo
+	if not go:IsEnabled() then
+		error("Missing discriminator e.g. " .. controls.siteAccountName.buf .. "#1234", 0)
+	end
+	if not go:IsShown() then
+		error(OFFERED, 0)
+	end
+	local id, message = glue.net_begin("Fetching characters", { after = status_after(tab, "list") }, go.onClick)
+	if not id then
+		error(message or "couldn't start the request", 0)
+	end
+	return id
+end
+
+-- The league drop-down (nil is PoB's "All"), the character, the options and the part's button
+-- (ImportTab.lua:411-466). The tree's confirm is pressed, because the UI asked first.
+function glue.import_public_character(league, name, kind, a, b, c)
+	local tab = import_tab()
+	local controls = tab.controls
+	if tab.charImportMode ~= "SELECTCHAR" then
+		error(OFFERED, 0)
+	end
+	local index
+	for i, entry in ipairs(controls.siteCharSelectLeague.list) do
+		if entry.league == league and index == nil then
+			index = i
+		end
+	end
+	if not index then
+		error("no such character", 0)
+	end
+	controls.siteCharSelectLeague:SetSel(index)
+	local at
+	for i, entry in ipairs(controls.siteCharSelect.list) do
+		if entry.label == name and at == nil then
+			at = i
+		end
+	end
+	if not at then
+		error("no such character", 0)
+	end
+	controls.siteCharSelect:SetSel(at)
+	local button, label
+	local function option(box, on)
+		if box.state ~= on then
+			glue.press_check(box, on)
+		end
+	end
+	if kind == "tree" then
+		option(controls.siteCharImportTreeClearJewels, a)
+		button, label = controls.siteCharImportTree, "Importing passive tree"
+	else
+		option(controls.siteCharImportItemsClearItems, a)
+		option(controls.siteCharImportItemsClearSkills, b)
+		option(controls.siteCharImportItemsIgnoreWeaponSwap, c)
+		button, label = controls.siteCharImportItems, "Importing items and skills"
+	end
+	if not button:IsShown() or not button:IsEnabled() then
+		error(OFFERED, 0)
+	end
+	local id, message = glue.net_begin(label, { confirmed = true, after = status_after(tab, "import") }, button.onClick)
+	if not id then
+		error(message or "couldn't start the request", 0)
+	end
+	return id
+end
+
+-- PoB's Close button: back to the account box
+function glue.close_public_characters()
+	local tab = import_tab()
+	local close = tab.controls.siteCharClose
+	if tab.charImportMode == "DOWNLOADCHARLIST" or tab.charImportMode == "IMPORTING" then
+		error(OFFERED, 0)
+	end
+	close.onClick()
+end

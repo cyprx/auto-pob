@@ -8,8 +8,8 @@ use super::{assert_sidebar, lock, pob_dir, set};
 use auto_pob::engine::pob::PobBackend;
 use auto_pob::engine::upstream::golden_of;
 use auto_pob::engine::{
-    Backend, Command, ConfigValue, Engine, Event, FinishedRequest, ImportMode, RequestsView,
-    Snapshot,
+    Backend, CharacterEntry, CharacterPart, Command, ConfigValue, Engine, Event, FinishedRequest,
+    ImportMode, PublicStage, PublicView, Realm, RequestsView, Snapshot,
 };
 use auto_pob::game::Game;
 use pob_runtime::net::Canned;
@@ -1558,4 +1558,483 @@ fn build_sites_match_pob() {
 
     assert!(web.unrouted().is_empty(), "unrouted: {:?}", web.unrouted());
     eprintln!("build_sites_match_pob took {:?}", started.elapsed());
+}
+
+// ---- Import by account name (Task 6) ----
+
+const ACCOUNT: &str = "GateTester#1234";
+const CHARACTERS_URL: &str = "https://www.pathofexile.com/character-window/get-characters?accountName=GateTester%231234&realm=pc";
+const PROFILE_URL: &str = "https://www.pathofexile.com/account/view-profile/GateTester%231234";
+
+fn character_url(part: &str, name: &str) -> String {
+    format!(
+        "https://www.pathofexile.com/character-window/get-{part}?accountName=GateTester%231234&character={name}&realm=pc"
+    )
+}
+
+fn net_fixture(name: &str) -> String {
+    std::fs::read_to_string(super::fixtures_dir().join("net").join(name)).unwrap()
+}
+
+/// What upstream's `accountDump()` says.
+#[derive(Debug, serde::Deserialize)]
+struct UpAccount {
+    account: String,
+    realm: String,
+    stage: String,
+    status: String,
+    history: Vec<String>,
+    leagues: Vec<String>,
+    characters: Vec<CharacterEntry>,
+    prompt: bool,
+    popups: usize,
+}
+
+fn up_account(up: &UpstreamNet) -> UpAccount {
+    use mlua::LuaSerdeExt;
+    let value: mlua::Value = up.eval("return accountDump()");
+    up.lua.from_value(value).expect("upstream's account state")
+}
+
+fn stage_of(pob: &str) -> PublicStage {
+    match pob {
+        "GETACCOUNTNAME" => PublicStage::EnterAccount,
+        "DOWNLOADCHARLIST" => PublicStage::Fetching,
+        "SELECTCHAR" => PublicStage::SelectCharacter,
+        "IMPORTING" => PublicStage::Importing,
+        other => panic!("no stage {other}"),
+    }
+}
+
+fn our_public(s: &mut NetSession) -> PublicView {
+    s.backend.account_view().expect("account view").public
+}
+
+/// Our public view against upstream's dump. The leagues and characters are compared while a
+/// list is showing.
+fn assert_public_equal(ours: &PublicView, theirs: &UpAccount, what: &str) {
+    assert_eq!(theirs.popups, 0, "{what}: popups left open upstream");
+    assert_eq!(ours.account, theirs.account, "{what}: account");
+    assert_eq!(ours.realm.pob_id(), theirs.realm, "{what}: realm");
+    assert_eq!(ours.stage, stage_of(&theirs.stage), "{what}: stage");
+    assert_eq!(ours.status, theirs.status, "{what}: status");
+    assert_eq!(ours.history, theirs.history, "{what}: history");
+    if matches!(
+        ours.stage,
+        PublicStage::SelectCharacter | PublicStage::Importing
+    ) {
+        assert_eq!(ours.leagues, theirs.leagues, "{what}: leagues");
+        assert_eq!(ours.characters, theirs.characters, "{what}: characters");
+    }
+}
+
+fn list_command(account: &str) -> Command {
+    Command::ListPublicCharacters {
+        account: account.into(),
+        realm: Realm::Pc,
+    }
+}
+
+fn import_character(league: Option<&str>, name: &str, part: CharacterPart) -> Command {
+    Command::ImportPublicCharacter {
+        league: league.map(str::to_owned),
+        name: name.into(),
+        part,
+    }
+}
+
+/// Upstream's Items and Skills tabs, with `items_lib.lua` and `skills_lib.lua` loaded.
+fn load_dump_libs(up: &UpstreamNet) {
+    // those libraries start `act` afresh and redefine `checkpoint`, so the tree and network
+    // helpers come back after them
+    let load = |lib: &str| {
+        let text = std::fs::read_to_string(super::fixtures_dir().join(lib)).unwrap();
+        up.lua
+            .load(text)
+            .set_name(format!("={lib}"))
+            .exec()
+            .unwrap();
+    };
+    load("items_lib.lua");
+    load("skills_lib.lua");
+    super::load_tree_lib(&up.lua);
+    load("net_lib.lua");
+}
+
+/// Runs an upstream request to its end and lets PoB's frame handle what it changed.
+fn up_settle(up: &UpstreamNet) {
+    up.pump(Duration::from_secs(15));
+    up.eval::<()>("act.frame()");
+}
+
+/// Compares everything an import changes, against upstream.
+fn assert_imported_equal(s: &mut NetSession, up: &UpstreamNet, what: &str) {
+    use super::items_harness::{first_difference, json, upstream_json};
+    use mlua::LuaSerdeExt;
+    // ours is read first: the dumps run PoB's full display, which may rewrite gems
+    let our_items = json(&s.backend.items_view().expect("items view"));
+    let our_skills = s.backend.skills_view().expect("skills view");
+    let sidebar = s.backend.stats_view().expect("stats").stats;
+    let (ours, ours_undo) = our_tree(s);
+    let theirs_items = upstream_json(&up.lua);
+    assert_eq!(
+        first_difference("", &our_items, &theirs_items),
+        None,
+        "{what}: items"
+    );
+    let value: mlua::Value = up.eval("return skillsDump()");
+    let their_skills: auto_pob::engine::SkillsView = up.lua.from_value(value).unwrap();
+    assert_eq!(our_skills, their_skills, "{what}: skills");
+    let (theirs, theirs_undo) = upstream_tree(up);
+    assert_eq!(ours, theirs, "{what}: tree");
+    assert_eq!(ours_undo, theirs_undo, "{what}: tree undo");
+    let golden = golden_of(&up.lua, Game::Poe1.pob_version()).expect("upstream stats");
+    assert_sidebar("public", what, &sidebar, &golden.sidebar);
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct Facts {
+    groups: usize,
+    nodes: usize,
+    equipped: usize,
+    ascend: u32,
+    level: u32,
+    build_flag: bool,
+    mod_flag: bool,
+    spec_mod: bool,
+    items_mod: bool,
+    config_mod: bool,
+}
+
+fn up_facts(up: &UpstreamNet) -> Facts {
+    use mlua::LuaSerdeExt;
+    let value: mlua::Value = up.eval("return importedFacts()");
+    up.lua.from_value(value).unwrap()
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn public_import_matches_pob() {
+    let _guard = lock();
+    let started = Instant::now();
+    let web = canned_web();
+    web.route(
+        "GET",
+        CHARACTERS_URL,
+        Canned::ok(net_fixture("public_characters.json")),
+    );
+    web.route(
+        "GET",
+        PROFILE_URL,
+        Canned::ok(net_fixture("public_profile.html")),
+    );
+    for name in ["GateOne", "GateTwo"] {
+        web.route(
+            "GET",
+            &character_url("passive-skills", name),
+            Canned::ok(net_fixture("public_passives.json")),
+        );
+        web.route(
+            "GET",
+            &character_url("items", name),
+            Canned::ok(net_fixture("public_items.json")),
+        );
+    }
+    let new_xml = std::fs::read_to_string(super::fixture_xml("new")).unwrap();
+    let mut s = net_session("public-import", canned(&web), None);
+    s.open_fixture("new");
+    let up = UpstreamNet::new(&web, Some(&new_xml));
+    load_dump_libs(&up);
+    up.eval::<()>("launch.devMode = false");
+    // before any list the view is PoB's idle box
+    let idle = our_public(&mut s);
+    assert_eq!(idle.stage, PublicStage::EnterAccount);
+    assert_public_equal(&idle, &up_account(&up), "idle");
+
+    // ---- The list ----
+    up.eval::<()>(&format!("act.public_list('{ACCOUNT}', 'PC')"));
+    up.pump(Duration::from_secs(15));
+    s.backend
+        .apply(list_command(ACCOUNT), &|_| {})
+        .expect("list");
+    assert_eq!(our_public(&mut s).stage, PublicStage::Fetching);
+    assert_eq!(s.requests().pending[0].label, "Fetching characters");
+    let steps = s.settle_net(Duration::from_secs(15));
+    assert!(
+        steps.iter().any(|a| a.as_ref().is_ok_and(|a| a.account)),
+        "no step announced the account"
+    );
+    let listed = our_public(&mut s);
+    let theirs = up_account(&up);
+    assert_public_equal(&listed, &theirs, "list");
+    assert_eq!(listed.stage, PublicStage::SelectCharacter);
+    assert_eq!(listed.status, "Character list successfully retrieved.");
+    assert_eq!(listed.leagues, ["Mirage Gate", "Standard", "All"]);
+    assert_eq!(listed.history, [ACCOUNT]);
+    assert_eq!(listed.account, ACCOUNT);
+    let names: Vec<&str> = listed.characters.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["GateOne", "gateThree", "GateTwo"]);
+    assert_eq!(listed.characters[0].league, "Mirage Gate");
+    assert_eq!(listed.characters[0].level, 90);
+    let entry = s.requests().finished.remove(0);
+    assert_eq!((entry.error, entry.cancelled), (None, false));
+    s.assert_clean("list");
+
+    // ---- Both parts of GateOne, league "All" ----
+    up.eval::<()>("act.public_import(nil, 'GateOne', 'tree', true)");
+    if up.eval::<usize>("return #main.popups") > 0 {
+        up.eval::<()>("act.confirm()");
+    }
+    // the flags as the callback leaves them, before PoB's frame consumes `buildFlag` (Step 0)
+    up.pump(Duration::from_secs(15));
+    let tree_only = up_facts(&up);
+    up.eval::<()>("act.frame()");
+    s.backend
+        .apply(
+            import_character(
+                None,
+                "GateOne",
+                CharacterPart::Tree {
+                    delete_jewels: true,
+                },
+            ),
+            &|_| {},
+        )
+        .expect("tree import");
+    assert_eq!(s.requests().pending[0].label, "Importing passive tree");
+    assert_eq!(our_public(&mut s).stage, PublicStage::Importing);
+    let steps = s.settle_net(Duration::from_secs(15));
+    assert!(
+        steps
+            .iter()
+            .any(|a| a.as_ref().is_ok_and(|a| a.build && a.tree && a.recalc)),
+        "the step that imported the tree didn't answer for it"
+    );
+    let entry = s.requests().finished.remove(0);
+    assert_eq!((entry.error, entry.cancelled), (None, false));
+    eprintln!("tree-only import flags: {tree_only:?}");
+    assert!(
+        tree_only.build_flag,
+        "a tree import sets buildFlag: {tree_only:?}"
+    );
+    assert!(
+        tree_only.mod_flag && tree_only.spec_mod && tree_only.items_mod && tree_only.config_mod,
+        "{tree_only:?}"
+    );
+    assert_imported_equal(&mut s, &up, "tree");
+    assert_public_equal(&our_public(&mut s), &up_account(&up), "after the tree");
+
+    up.eval::<()>("act.public_import(nil, 'GateOne', 'items', true, true, true)");
+    up_settle(&up);
+    s.backend
+        .apply(
+            import_character(
+                None,
+                "GateOne",
+                CharacterPart::ItemsAndSkills {
+                    clear_items: true,
+                    clear_skills: true,
+                    ignore_weapon_swap: true,
+                },
+            ),
+            &|_| {},
+        )
+        .expect("items import");
+    assert_eq!(s.requests().pending[0].label, "Importing items and skills");
+    s.settle_net(Duration::from_secs(15));
+    let entry = s.requests().finished.remove(0);
+    assert_eq!((entry.error, entry.cancelled), (None, false));
+    assert_imported_equal(&mut s, &up, "items");
+    let facts = up_facts(&up);
+    assert!(facts.groups >= 1, "{facts:?}");
+    assert!(facts.nodes > 10, "{facts:?}");
+    assert!(facts.equipped >= 4, "{facts:?}");
+    assert_eq!(facts.level, 90);
+    assert_ne!(facts.ascend, 0, "no ascendancy: {facts:?}");
+    assert!(s.backend.build_view().unwrap().unsaved);
+    assert_public_equal(&our_public(&mut s), &up_account(&up), "after the items");
+    s.assert_clean("imports");
+
+    // ---- A second tree import, of another league's character, asks first ----
+    up.eval::<()>("act.public_import('Standard', 'GateTwo', 'tree', false)");
+    assert_eq!(
+        up.eval::<usize>("return #main.popups"),
+        1,
+        "no confirm upstream"
+    );
+    up.eval::<()>("act.confirm()");
+    up_settle(&up);
+    s.backend
+        .apply(
+            import_character(
+                Some("Standard"),
+                "GateTwo",
+                CharacterPart::Tree {
+                    delete_jewels: false,
+                },
+            ),
+            &|_| {},
+        )
+        .expect("second tree import");
+    s.settle_net(Duration::from_secs(15));
+    let entry = s.requests().finished.remove(0);
+    assert_eq!((entry.error, entry.cancelled), (None, false));
+    assert_eq!(up.eval::<usize>("return #main.popups"), 0);
+    assert_imported_equal(&mut s, &up, "second tree");
+    assert_ne!(up_facts(&up).ascend, facts.ascend, "same ascendancy");
+    s.assert_clean("second tree");
+
+    // ---- Our refusals ----
+    for command in [
+        import_character(
+            Some("Standard"),
+            "GateOne",
+            CharacterPart::Tree {
+                delete_jewels: true,
+            },
+        ),
+        import_character(
+            Some("Nowhere"),
+            "GateOne",
+            CharacterPart::Tree {
+                delete_jewels: true,
+            },
+        ),
+        import_character(
+            None,
+            "Nobody",
+            CharacterPart::Tree {
+                delete_jewels: true,
+            },
+        ),
+    ] {
+        let message = s.backend.apply(command, &|_| {}).unwrap_err().to_string();
+        assert_eq!(message, "no such character");
+    }
+    assert_eq!(s.requests().pending.len(), 0);
+
+    // ---- Errors: each one's PoB text, flags back to idle, and a good retry works ----
+    s.backend
+        .apply(Command::ClosePublicCharacters, &|_| {})
+        .unwrap();
+    up.eval::<()>("act.public_close()");
+    assert_eq!(our_public(&mut s).stage, PublicStage::EnterAccount);
+    assert_public_equal(&our_public(&mut s), &up_account(&up), "closed");
+    // no discriminator
+    let theirs: String = up.eval("return act.public_list('GateTester', 'PC')");
+    let ours = s
+        .backend
+        .apply(list_command("GateTester"), &|_| {})
+        .unwrap_err()
+        .to_string();
+    assert_eq!(ours, "Missing discriminator e.g. GateTester#1234");
+    assert_eq!(ours, theirs);
+    assert_eq!(s.requests().pending.len(), 0);
+    for (status, message) in [
+        (404, "Account name is incorrect."),
+        (403, "Account profile is private or does not exist."),
+    ] {
+        web.route("GET", CHARACTERS_URL, Canned::status(status, ""));
+        up.eval::<()>(&format!("act.public_list('{ACCOUNT}', 'PC')"));
+        up.pump(Duration::from_secs(15));
+        let theirs = up_account(&up);
+        assert_eq!(theirs.status, message);
+        s.backend.apply(list_command(ACCOUNT), &|_| {}).unwrap();
+        let entry = finish_request(&mut s);
+        assert_eq!(entry.error.as_deref(), Some(message), "{status}");
+        assert_public_equal(&our_public(&mut s), &theirs, &status.to_string());
+        assert_eq!(our_public(&mut s).stage, PublicStage::EnterAccount);
+        s.assert_clean(&status.to_string());
+    }
+    // a profile page without the link: the callback raises
+    web.route(
+        "GET",
+        CHARACTERS_URL,
+        Canned::ok(net_fixture("public_characters.json")),
+    );
+    web.route("GET", PROFILE_URL, Canned::ok("<html>no link here</html>"));
+    up.eval::<()>(&format!("act.public_list('{ACCOUNT}', 'PC')"));
+    up.pump(Duration::from_secs(15));
+    assert!(up_account(&up).prompt, "upstream didn't raise");
+    up.eval::<()>("launch.promptMsg = nil");
+    s.backend.apply(list_command(ACCOUNT), &|_| {}).unwrap();
+    let entry = finish_request(&mut s);
+    assert!(entry.error.is_some() && !entry.cancelled, "{entry:?}");
+    let broken = our_public(&mut s);
+    assert_eq!(broken.stage, PublicStage::EnterAccount);
+    assert_eq!(broken.status, "Failed to retrieve character list.");
+    assert_eq!(entry.error.as_deref(), Some(broken.status.as_str()));
+    s.assert_clean("profile page");
+    // a good retry
+    web.route(
+        "GET",
+        PROFILE_URL,
+        Canned::ok(net_fixture("public_profile.html")),
+    );
+    s.backend.apply(list_command(ACCOUNT), &|_| {}).unwrap();
+    assert_eq!(finish_request(&mut s).error, None);
+    up.eval::<()>(&format!("act.public_list('{ACCOUNT}', 'PC')"));
+    up.pump(Duration::from_secs(15));
+    assert_public_equal(&our_public(&mut s), &up_account(&up), "retry");
+    assert_eq!(our_public(&mut s).stage, PublicStage::SelectCharacter);
+    // a body that isn't JSON
+    let good_items = net_fixture("public_items.json");
+    web.route("GET", &character_url("items", "GateOne"), Canned::ok("{"));
+    up.eval::<()>("act.public_import(nil, 'GateOne', 'items', true, true, true)");
+    up.pump(Duration::from_secs(15));
+    assert!(up_account(&up).prompt, "upstream didn't raise");
+    up.eval::<()>("launch.promptMsg = nil");
+    s.backend
+        .apply(
+            import_character(
+                None,
+                "GateOne",
+                CharacterPart::ItemsAndSkills {
+                    clear_items: true,
+                    clear_skills: true,
+                    ignore_weapon_swap: true,
+                },
+            ),
+            &|_| {},
+        )
+        .unwrap();
+    let entry = finish_request(&mut s);
+    assert!(entry.error.is_some() && !entry.cancelled, "{entry:?}");
+    // PoB's callback raised on the missing table; its own error is the text
+    assert!(
+        entry
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("responseLua")),
+        "{entry:?}"
+    );
+    assert_eq!(our_public(&mut s).stage, PublicStage::SelectCharacter);
+    s.assert_clean("bad items");
+    // a good retry
+    web.route(
+        "GET",
+        &character_url("items", "GateOne"),
+        Canned::ok(good_items),
+    );
+    s.backend
+        .apply(
+            import_character(
+                None,
+                "GateOne",
+                CharacterPart::ItemsAndSkills {
+                    clear_items: true,
+                    clear_skills: true,
+                    ignore_weapon_swap: true,
+                },
+            ),
+            &|_| {},
+        )
+        .unwrap();
+    assert_eq!(finish_request(&mut s).error, None);
+    s.assert_clean("items retry");
+
+    assert!(web.unrouted().is_empty(), "unrouted: {:?}", web.unrouted());
+    let took = started.elapsed();
+    eprintln!("public_import_matches_pob took {took:?}");
+    assert!(took < Duration::from_secs(20), "over its budget: {took:?}");
 }

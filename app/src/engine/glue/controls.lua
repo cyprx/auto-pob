@@ -43,7 +43,10 @@ end
 
 function glue.press_check(control, on)
 	control.state = on
-	control.changeFunc(on)
+	-- some boxes have no callback (ImportTab's site import options)
+	if control.changeFunc then
+		control.changeFunc(on)
+	end
 end
 
 -- Pastes into an edit control as PoB's EditControl does on Ctrl+V (EditControl.lua:530): the

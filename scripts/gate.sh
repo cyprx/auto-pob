@@ -1,28 +1,35 @@
 #!/usr/bin/env bash
 # Runs the PoB comparison gate as one process per test, N at a time.
 #
-#   AUTO_POB_POB_DIR=<pinned PoB> scripts/gate.sh [-j N] [-f FILTER]
+#   AUTO_POB_POB_DIR=<pinned PoB> scripts/gate.sh [-j N] [-f FILTER] [-t SECS]
 #
 # Builds the gate once, then runs every ignored gate test in its own process of the built
 # binary. Tests listed in app/tests/gate-serial.txt (they share machine-wide resources) run
 # one at a time after the parallel ones. Writes target/gate-times.tsv as
 # `name<TAB>seconds<TAB>ok|FAIL`, slowest first. Exits 0 only if every selected test passed
-# and at least one was selected. Each process can peak near 1 GB, so keep N at 4 or below
-# on a 16 GB machine.
+# and at least one was selected. A test still running after SECS seconds (default 300) is
+# killed and counts as FAIL. Each process can peak near 1.7 GB, so keep N at 4 or below on a
+# 16 GB machine.
 set -uo pipefail
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+self=$(readlink -f "${BASH_SOURCE[0]}")
+root=$(dirname "$(dirname "$self")")
 serial_file="$root/app/tests/gate-serial.txt"
 
 # Internal mode: run one test, print `name<TAB>seconds<TAB>status` on stdout.
 if [[ ${1:-} == --one ]]; then
-    bin=$2 logdir=$3 name=$4
+    bin=$2 logdir=$3 limit=$4 name=$5
     log="$logdir/$(printf '%s' "$name" | tr -c 'A-Za-z0-9_' '_').log"
     start=$EPOCHREALTIME
-    "$bin" --ignored --exact "$name" --nocapture >"$log" 2>&1
+    timeout --kill-after=10 "$limit" "$bin" --ignored --exact "$name" --nocapture >"$log" 2>&1
     code=$?
     status=ok
-    [[ $code -ne 0 ]] && status=FAIL
+    if [[ $code -ne 0 ]]; then
+        status=FAIL
+        # 124: timeout stopped it; 137: it had to be killed
+        [[ $code -eq 124 || $code -eq 137 ]] &&
+            echo "gate.sh: timed out after ${limit}s (exit $code)" >>"$log"
+    fi
     awk -v n="$name" -v a="$start" -v b="$EPOCHREALTIME" -v s="$status" \
         'BEGIN { printf "%s\t%.1f\t%s\n", n, b - a, s }'
     exit 0
@@ -30,15 +37,21 @@ fi
 
 jobs=4
 filter=""
-while getopts "j:f:" opt; do
+limit=300
+while getopts "j:f:t:" opt; do
     case $opt in
         j) jobs=$OPTARG ;;
         f) filter=$OPTARG ;;
-        *) echo "usage: scripts/gate.sh [-j N] [-f FILTER]" >&2; exit 2 ;;
+        t) limit=$OPTARG ;;
+        *) echo "usage: scripts/gate.sh [-j N] [-f FILTER] [-t SECS]" >&2; exit 2 ;;
     esac
 done
 if ! [[ $jobs =~ ^[1-9][0-9]*$ ]]; then
     echo "gate.sh: -j needs a positive number" >&2
+    exit 2
+fi
+if ! [[ $limit =~ ^[1-9][0-9]*$ ]]; then
+    echo "gate.sh: -t needs a positive number of seconds" >&2
     exit 2
 fi
 if [[ -z ${AUTO_POB_POB_DIR:-} ]]; then
@@ -58,11 +71,11 @@ if [[ $code -ne 0 ]]; then
     exit "$code"
 fi
 bin=$(printf '%s\n' "$build" | sed -n 's/^ *Executable tests\/gate\.rs (\(.*\))$/\1/p' | tail -1)
-if [[ -z $bin || ! -x $root/$bin ]]; then
+[[ $bin == /* ]] || bin=$root/$bin
+if [[ -z $bin || ! -x $bin ]]; then
     echo "gate.sh: couldn't find the built gate binary" >&2
     exit 1
 fi
-bin=$root/$bin
 
 # every ignored test, narrowed by the filter (a substring, as for cargo test)
 all=$("$bin" --ignored --list 2>/dev/null | sed -n 's/: test$//p')
@@ -75,6 +88,13 @@ fi
 serial=""
 if [[ -f $serial_file ]]; then
     serial=$(sed 's/#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//' "$serial_file" | grep -v '^$' || true)
+fi
+if [[ -z $filter ]]; then
+    while IFS= read -r entry; do
+        [[ -z $entry ]] && continue
+        printf '%s\n' "$all" | grep -qFx -- "$entry" ||
+            echo "gate.sh: warning: gate-serial.txt names '$entry', which is not a gate test" >&2
+    done <<<"$serial"
 fi
 is_serial=$(printf '%s\n' "$selected" | grep -Fx -f <(printf '%s\n' "$serial" | grep -v '^$' || true) || true)
 parallel=$(printf '%s\n' "$selected" | grep -Fxv -f <(printf '%s\n' "$is_serial" | grep -v '^$' || echo "//none//") | grep -v '^$' || true)
@@ -100,7 +120,7 @@ began=$(date +%s)
 
 run_batch() { # list, jobs
     [[ -z $1 ]] && return
-    order "$1" | xargs -d '\n' -P "$2" -n 1 "$0" --one "$bin" "$logdir" >>"$results"
+    order "$1" | xargs -d '\n' -P "$2" -n 1 "$self" --one "$bin" "$logdir" "$limit" >>"$results"
 }
 run_batch "$parallel" "$jobs"
 run_batch "$is_serial" 1

@@ -15,7 +15,6 @@ use crate::engine::{Command, SettingsView};
 use crate::settings::{AppSettings, REALMS};
 use crate::widgets::{EditBox, EditBoxOptions};
 use eframe::egui;
-use std::path::PathBuf;
 
 /// What the window asks of the engine in one frame.
 #[derive(Debug, Default)]
@@ -208,11 +207,9 @@ impl OptionsUi {
 }
 
 fn set_folder(settings: &mut AppSettings, text: &str) {
-    let text = text.trim();
-    settings.user_dir = (!text.is_empty()).then(|| {
-        let dir = PathBuf::from(text);
-        std::path::absolute(&dir).unwrap_or(dir)
-    });
+    let home = directories::BaseDirs::new().map(|d| d.home_dir().to_path_buf());
+    settings.user_dir =
+        (!text.trim().is_empty()).then(|| crate::settings::expand_folder(text, home.as_deref()));
 }
 
 /// What the window draws around PoB's controls.
@@ -261,6 +258,9 @@ impl Extras<'_> {
                     if let Some(text) = sent {
                         set_folder(self.draft, &text);
                     }
+                    if std::env::var_os("AUTO_POB_USER_DIR").is_some() {
+                        ui.label("AUTO_POB_USER_DIR is set and wins over this folder.");
+                    }
                     if self.draft.user_dir != self.base.user_dir {
                         ui.colored_label(
                             ui.visuals().warn_fg_color,
@@ -285,18 +285,18 @@ impl Extras<'_> {
                 ui.end_row();
 
                 ui.label("Trade realm");
-                egui::ComboBox::from_id_salt("options_realm")
+                let combo = egui::ComboBox::from_id_salt("options_realm")
                     .selected_text(self.draft.trade_realm.as_str())
                     .show_ui(ui, |ui| {
                         for realm in REALMS {
-                            let picked = ui
-                                .selectable_label(self.draft.trade_realm == realm, realm)
-                                .clicked();
-                            if picked {
+                            let item = ui.selectable_label(self.draft.trade_realm == realm, realm);
+                            super::import::mark(ui, &format!("options_realm_{realm}"), &item);
+                            if item.clicked() {
                                 self.draft.trade_realm = realm.to_owned();
                             }
                         }
                     });
+                super::import::mark(ui, "options_realm", &combo.response);
                 ui.end_row();
 
                 ui.label("Trade league");
@@ -364,10 +364,11 @@ impl Decorate for Extras<'_> {
             self.overrides_changed = true;
         }
         if row.effect == SettingEffect::NoEffect {
-            ui.label(
+            let note = ui.label(
                 egui::RichText::new("Does nothing in auto-pob.")
                     .color(ui.visuals().weak_text_color()),
             );
+            super::import::mark(ui, &format!("note_{}", row.key), &note);
         }
     }
 }
@@ -616,18 +617,56 @@ mod tests {
         assert_eq!(h.ui.on_settings(&settings_view(&[]), 10), None);
     }
 
+    /// Drives the four auto-pob-only fields with real input.
+    fn edit_auto_pob_fields(h: &mut Harness) {
+        h.click_mark("options_update_check");
+        h.click_mark("options_realm");
+        h.click_mark("options_realm_PS4");
+        h.click_mark("options_league");
+        // typing lands after the old league
+        h.frame(vec![Event::Text("-Settlers".into())]);
+        h.click_mark("options_user_dir");
+        h.frame(vec![Event::Text("/typed/folder".into())]);
+    }
+
     #[test]
     fn auto_pob_only_fields_reach_the_saved_settings() {
         let mut h = Harness::new(&AppSettings::default());
-        h.click_mark("override_showFlavourText");
-        h.ui.draft.update_check = true;
-        h.ui.draft.trade_realm = "PS4".into();
+        edit_auto_pob_fields(&mut h);
+        // the folder box still has the focus: Save has to take what was typed
         let out = h.click_button("save");
         assert!(out.save_at.is_some());
         h.ui.save_sent(3);
         let next = h.ui.on_settings(&settings_view(&[]), 3).unwrap();
         assert!(next.update_check);
         assert_eq!(next.trade_realm, "PS4");
+        assert_eq!(next.trade_league, "Standard-Settlers");
+        assert_eq!(
+            next.user_dir,
+            Some(std::path::PathBuf::from("/typed/folder"))
+        );
+    }
+
+    #[test]
+    fn cancel_drops_the_auto_pob_only_edits() {
+        let mut h = Harness::new(&AppSettings::default());
+        edit_auto_pob_fields(&mut h);
+        let out = h.click_button("cancel");
+        assert_eq!(out.save_at, None);
+        assert_eq!(h.ui.on_settings(&settings_view(&[]), 9), None);
+        assert_eq!(h.ui.draft, AppSettings::default());
+    }
+
+    #[test]
+    fn the_restart_note_shows_for_a_changed_folder() {
+        let mut h = Harness::new(&AppSettings::default());
+        h.click_mark("options_user_dir");
+        h.frame(vec![Event::Text("/typed/folder".into())]);
+        h.click_mark("options_league");
+        assert_eq!(
+            h.ui.draft.user_dir,
+            Some(std::path::PathBuf::from("/typed/folder"))
+        );
     }
 
     #[test]
@@ -685,10 +724,12 @@ mod tests {
 
     #[test]
     fn no_effect_rows_say_so() {
-        // the note is drawn beside the box; the row for a setting that does something has none
-        let rows = settings_view(&[]).rows;
-        assert_eq!(rows[0].effect, SettingEffect::PobText);
-        assert_eq!(rows[1].effect, SettingEffect::NoEffect);
+        let _h = Harness::new(&AppSettings::default());
+        // both settings get the box; only the one PoB's option does nothing for gets the note
+        assert!(marked("override_showAnimations").is_some());
+        assert!(marked("note_showAnimations").is_some());
+        assert!(marked("override_showFlavourText").is_some());
+        assert_eq!(marked("note_showFlavourText"), None);
     }
 
     #[test]

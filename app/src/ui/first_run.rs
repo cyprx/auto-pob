@@ -3,7 +3,9 @@
 //! written to the settings file; nothing else on disk is touched.
 
 use super::app::AutoPobApp;
-use crate::settings::{AppSettings, FirstRun, FirstRunChoice, settle_first_run};
+use crate::settings::{
+    AppSettings, FirstRun, FirstRunChoice, expand_folder, prepare_folder, settle_first_run,
+};
 use crate::theme;
 use eframe::egui;
 use std::path::{Path, PathBuf};
@@ -13,6 +15,10 @@ pub struct FirstRunScreen {
     classic: PathBuf,
     other: bool,
     text: String,
+    /// What `~` means
+    home: Option<PathBuf>,
+    /// Why the last answer was refused
+    error: Option<String>,
 }
 
 impl FirstRunScreen {
@@ -21,6 +27,8 @@ impl FirstRunScreen {
             classic,
             other: false,
             text: String::new(),
+            home: directories::BaseDirs::new().map(|d| d.home_dir().to_path_buf()),
+            error: None,
         }
     }
 
@@ -44,7 +52,10 @@ impl FirstRunScreen {
                 )));
                 crate::ui::import::mark(ui, "first_run_classic", &classic);
                 if classic.clicked() {
-                    choice = Some(FirstRunChoice::Classic);
+                    match prepare_folder(&self.classic) {
+                        Ok(()) => choice = Some(FirstRunChoice::Classic),
+                        Err(e) => self.error = Some(format!("{e:#}")),
+                    }
                 }
                 ui.add_space(6.0);
                 let other = ui.button("Use another folder");
@@ -68,13 +79,19 @@ impl FirstRunScreen {
                         let go = ui.add_enabled(usable, egui::Button::new("Use this folder"));
                         crate::ui::import::mark(ui, "first_run_go", &go);
                         if (go.clicked() || enter) && usable {
-                            let dir = PathBuf::from(self.text.trim());
-                            choice = Some(FirstRunChoice::Folder(
-                                std::path::absolute(&dir).unwrap_or(dir),
-                            ));
+                            // confirming is what makes the folder
+                            let dir = expand_folder(&self.text, self.home.as_deref());
+                            match prepare_folder(&dir) {
+                                Ok(()) => choice = Some(FirstRunChoice::Folder(dir)),
+                                Err(e) => self.error = Some(format!("{e:#}")),
+                            }
                         }
                     });
                     ui.label("The folder is made if it isn't there.");
+                }
+                if let Some(error) = &self.error {
+                    let label = ui.colored_label(ui.visuals().error_fg_color, error);
+                    crate::ui::import::mark(ui, "first_run_error", &label);
                 }
                 ui.add_space(12.0);
                 ui.label("Options changes it later.");
@@ -168,8 +185,14 @@ mod tests {
 
     impl Harness {
         fn new() -> Self {
+            Self::with(PathBuf::from("/classic/userdata"), None)
+        }
+
+        fn with(classic: PathBuf, home: Option<PathBuf>) -> Self {
+            let mut screen = FirstRunScreen::new(classic);
+            screen.home = home;
             let mut h = Self {
-                screen: FirstRunScreen::new(PathBuf::from("/classic/userdata")),
+                screen,
                 ctx: egui::Context::default(),
                 choice: None,
             };
@@ -214,10 +237,54 @@ mod tests {
 
     #[test]
     fn classic_button_chooses_the_classic_folder() {
-        let mut h = Harness::new();
+        let dir = std::env::temp_dir().join(format!("auto-pob-fr-classic-{}", std::process::id()));
+        let mut h = Harness::with(dir.clone(), None);
         assert_eq!(h.choice, None);
         h.click("first_run_classic");
         assert_eq!(h.choice, Some(FirstRunChoice::Classic));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn type_path(h: &mut Harness, text: &str) {
+        h.click("first_run_path");
+        h.frame(vec![Event::Text(text.into())]);
+        h.click("first_run_go");
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_used_stays_on_the_screen_with_the_reason() {
+        let dir = std::env::temp_dir().join(format!("auto-pob-fr-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("file");
+        std::fs::write(&file, "x").unwrap();
+        let mut h = Harness::with(PathBuf::from("/classic"), Some(dir.join("home")));
+        h.click("first_run_other");
+        type_path(&mut h, file.to_str().unwrap());
+        assert_eq!(h.choice, None);
+        assert!(marked("first_run_error").is_some());
+        assert!(marked("first_run_path").is_some(), "the question stays");
+        assert!(file.is_file());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_missing_folder_is_made_only_on_confirm_and_tilde_means_home() {
+        let dir = std::env::temp_dir().join(format!("auto-pob-fr-ok-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut h = Harness::with(PathBuf::from("/classic"), Some(dir.clone()));
+        h.click("first_run_other");
+        h.click("first_run_path");
+        h.frame(vec![Event::Text("~/builds/new".into())]);
+        assert!(!dir.join("builds").exists(), "typing makes nothing");
+        h.click("first_run_go");
+        assert_eq!(
+            h.choice,
+            Some(FirstRunChoice::Folder(dir.join("builds").join("new")))
+        );
+        assert!(dir.join("builds").join("new").is_dir());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -227,13 +294,10 @@ mod tests {
         h.click("first_run_other");
         h.click("first_run_go");
         assert_eq!(h.choice, None, "an empty path chooses nothing");
-        h.click("first_run_path");
-        h.frame(vec![Event::Text("/somewhere/else".into())]);
-        h.click("first_run_go");
-        assert_eq!(
-            h.choice,
-            Some(FirstRunChoice::Folder(PathBuf::from("/somewhere/else")))
-        );
+        let dir = std::env::temp_dir().join(format!("auto-pob-fr-else-{}", std::process::id()));
+        type_path(&mut h, dir.to_str().unwrap());
+        assert_eq!(h.choice, Some(FirstRunChoice::Folder(dir.clone())));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

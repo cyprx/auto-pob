@@ -235,7 +235,11 @@ pub fn save_noting(path: &Path, s: &AppSettings) -> Result<Option<PathBuf>> {
     let name = path
         .file_name()
         .context("the settings path has no file name")?;
-    let temp = path.with_file_name(format!("{}.tmp", name.to_string_lossy()));
+    let temp = path.with_file_name(format!(
+        "{}.{}.tmp",
+        name.to_string_lossy(),
+        std::process::id()
+    ));
     let write = || -> Result<()> {
         use std::io::Write as _;
         let mut file = std::fs::File::create(&temp)?;
@@ -284,6 +288,30 @@ pub fn first_run(
     } else {
         FirstRun::UseDefault
     })
+}
+
+/// A typed folder with a leading `~` or `~/` replaced by `home`, made absolute.
+pub fn expand_folder(text: &str, home: Option<&Path>) -> PathBuf {
+    let text = text.trim();
+    let path = match (text, home) {
+        ("~", Some(home)) => home.to_path_buf(),
+        (t, Some(home)) if t.starts_with("~/") => home.join(&t[2..]),
+        _ => PathBuf::from(text),
+    };
+    std::path::absolute(&path).unwrap_or(path)
+}
+
+/// Makes sure `dir` can hold the user's files: makes it if it is missing, refuses a file, and
+/// proves it is writable. Call it only once the user has confirmed the folder.
+pub fn prepare_folder(dir: &Path) -> Result<()> {
+    if dir.exists() && !dir.is_dir() {
+        bail!("{} is a file, not a folder", dir.display());
+    }
+    std::fs::create_dir_all(dir).with_context(|| format!("can't make {}", dir.display()))?;
+    let probe = dir.join(format!(".auto-pob-write-test-{}", std::process::id()));
+    std::fs::write(&probe, b"").with_context(|| format!("can't write in {}", dir.display()))?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
 }
 
 /// The user's answer to the first-run question.
@@ -373,7 +401,13 @@ mod tests {
         assert!(!text.contains("showAnimations"), "{text}");
         assert_eq!(load(&path).unwrap().unwrap(), s);
         // no temporary file is left behind
-        assert!(!dir.join("auto-pob.toml.tmp").exists());
+        assert!(
+            std::fs::read_dir(&dir).unwrap().all(|e| !e
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp"))
+        );
         // saving the same settings again changes nothing
         save(&path, &s).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
@@ -493,6 +527,40 @@ mod tests {
         // a file, or the env var, settles it
         assert_eq!(first_run(Some(&AppSettings::default()), &data, false), None);
         assert_eq!(first_run(None, &data, true), None);
+    }
+
+    #[test]
+    fn folders_are_expanded_and_checked() {
+        let dir = temp("folders");
+        let home = dir.join("home");
+        assert_eq!(expand_folder("~/pob", Some(&home)), home.join("pob"));
+        assert_eq!(expand_folder(" ~ ", Some(&home)), home);
+        // `~user` and a tilde inside a name are left alone
+        assert!(expand_folder("~x/pob", Some(&home)).ends_with("~x/pob"));
+        // a missing folder is made
+        let fresh = dir.join("a").join("b");
+        assert!(!fresh.exists());
+        prepare_folder(&fresh).unwrap();
+        assert!(fresh.is_dir());
+        // a regular file is refused
+        let file = dir.join("file");
+        std::fs::write(&file, "x").unwrap();
+        let e = format!("{:#}", prepare_folder(&file).unwrap_err());
+        assert!(e.contains("is a file"), "{e}");
+        let e = format!("{:#}", prepare_folder(&file.join("inside")).unwrap_err());
+        assert!(e.contains("can't make"), "{e}");
+        // so is a folder nobody can write in (skipped when running as root)
+        use std::os::unix::fs::PermissionsExt as _;
+        let locked = dir.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+        if std::fs::write(locked.join("probe"), "").is_err() {
+            let e = format!("{:#}", prepare_folder(&locked).unwrap_err());
+            assert!(e.contains("can't write"), "{e}");
+            let e = format!("{:#}", prepare_folder(&locked.join("sub")).unwrap_err());
+            assert!(e.contains("can't make"), "{e}");
+        }
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     #[test]

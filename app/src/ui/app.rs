@@ -110,6 +110,8 @@ pub struct AutoPobApp {
     /// auto-pob.toml as it is on disk, and where it goes (None: nowhere, as in the tests)
     settings: AppSettings,
     config_path: Option<std::path::PathBuf>,
+    /// Why the file may not be written in this run (it could not be read)
+    settings_locked: Option<String>,
     /// The zoom factor and window title the settings last asked for
     applied_zoom: f32,
     applied_title: String,
@@ -179,6 +181,7 @@ impl AutoPobApp {
             options: OptionsUi::default(),
             settings: AppSettings::default(),
             config_path: None,
+            settings_locked: None,
             applied_zoom: 1.0,
             applied_title: "auto-pob".into(),
             text_seq: None,
@@ -231,6 +234,13 @@ impl AutoPobApp {
         self
     }
 
+    /// The settings file could not be read (`reason`): it is never written in this run.
+    #[must_use]
+    pub fn with_locked_settings(mut self, reason: Option<String>) -> Self {
+        self.settings_locked = reason;
+        self
+    }
+
     /// A message shown at the top until dismissed.
     #[must_use]
     pub fn with_notice(mut self, notice: String) -> Self {
@@ -242,9 +252,11 @@ impl AutoPobApp {
         let spawn = std::mem::replace(&mut self.spawn, Box::new(|| unreachable!()));
         let settings = std::mem::take(&mut self.settings);
         let config_path = self.config_path.take();
+        let locked = self.settings_locked.take();
         *self = AutoPobApp::new(spawn);
         self.settings = settings;
         self.config_path = config_path;
+        self.settings_locked = locked;
     }
 
     /// The app's own values for PoB's settings go to the engine (R12).
@@ -259,21 +271,28 @@ impl AutoPobApp {
         self.send(Command::SetOverrides { values });
     }
 
-    /// Writes `auto-pob.toml`; a failure or a damaged file is told to the user.
-    fn write_settings(&mut self) {
+    /// Writes `settings` to `auto-pob.toml`. A damaged file moved aside is told to the user;
+    /// a failure is returned.
+    fn write_settings(&mut self, settings: &AppSettings) -> Result<(), String> {
+        if let Some(reason) = &self.settings_locked {
+            return Err(format!(
+                "the settings file wasn't read, so it is left alone ({reason})"
+            ));
+        }
         let Some(path) = self.config_path.clone() else {
-            return;
+            return Ok(());
         };
-        match settings::save_noting(&path, &self.settings) {
-            Ok(None) => {}
-            Ok(Some(backup)) => self.notices.push(format!(
-                "{} could not be read, so it was moved to {} and a new one written.",
-                path.display(),
-                backup.display()
-            )),
-            Err(e) => self
-                .notices
-                .push(format!("Couldn't save {}: {e:#}", path.display())),
+        match settings::save_noting(&path, settings) {
+            Ok(None) => Ok(()),
+            Ok(Some(backup)) => {
+                self.notices.push(format!(
+                    "{} could not be read, so it was moved to {} and a new one written.",
+                    path.display(),
+                    backup.display()
+                ));
+                Ok(())
+            }
+            Err(e) => Err(format!("Couldn't save {}: {e:#}", path.display())),
         }
     }
 
@@ -284,10 +303,21 @@ impl AutoPobApp {
     /// PoB's settings, as the engine sees them now; the answer to an Options Save also carries
     /// the overrides it moved, and then the file is written and the map sent again (R12).
     fn on_settings(&mut self, view: &crate::engine::SettingsView, seq: u64) {
-        if let Some(next) = self.options.on_settings(view, seq) {
-            self.settings = next;
-            self.write_settings();
-            self.send_overrides_always();
+        let Some(next) = self.options.on_settings(view, seq) else {
+            return;
+        };
+        match self.write_settings(&next) {
+            Ok(()) => {
+                self.options.commit(&next);
+                self.settings = next;
+                self.send_overrides_always();
+            }
+            Err(error) => {
+                // not saved: the old settings stay, the draft comes back in a reopened window
+                let draft = self.options.save_failed(next, error);
+                self.send(Command::OpenPopup(PopupKind::Options));
+                self.send(Command::SetOverrides { values: draft });
+            }
         }
     }
 

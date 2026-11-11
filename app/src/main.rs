@@ -20,6 +20,8 @@ struct Setup {
     game: Game,
     data_dir: PathBuf,
     config: PathBuf,
+    /// Why the settings file may not be written in this run
+    locked: Option<String>,
 }
 
 impl Setup {
@@ -51,6 +53,7 @@ impl Setup {
         };
         let mut app = AutoPobApp::new(Box::new(spawn))
             .with_settings(settings.unwrap_or_default(), self.config.clone())
+            .with_locked_settings(self.locked.clone())
             .with_startup_link(pob_link_from_args(std::env::args()));
         for notice in notices {
             app = app.with_notice(notice);
@@ -70,18 +73,37 @@ fn main() -> eframe::Result {
         .to_path_buf();
     let config = settings::config_path();
     let mut notices = Vec::new();
-    let settings = match settings::load(&config) {
-        Ok(settings) => settings,
-        Err(error) => {
-            // a file we can't read is kept, never overwritten
+    let mut locked = None;
+    let settings = match settings::load_checked(&config) {
+        settings::Loaded::Absent => None,
+        settings::Loaded::Settings(settings, warnings) => {
+            if !warnings.is_empty() {
+                notices.push(format!(
+                    "Some settings in {} were ignored: {}",
+                    config.display(),
+                    warnings.join("; ")
+                ));
+            }
+            Some(settings)
+        }
+        // not TOML at all: kept as a backup, never overwritten
+        settings::Loaded::Invalid(error) => {
             notices.push(match settings::back_up_corrupt(&config) {
                 Ok(backup) => format!(
-                    "{error:#}. It was moved to {} and the defaults are used.",
+                    "{error}. It was moved to {} and the defaults are used.",
                     backup.display()
                 ),
-                Err(e) => format!("{error:#}. It could not be moved aside either: {e:#}"),
+                Err(e) => format!("{error}. It could not be moved aside either: {e:#}"),
             });
             None
+        }
+        // can't be read: it is left exactly as it is, and not written over in this run
+        settings::Loaded::Unreadable(error) => {
+            notices.push(format!(
+                "{error}. The defaults are used and Options won't be saved this run."
+            ));
+            locked = Some(error);
+            Some(AppSettings::default())
         }
     };
     let env_user_dir = std::env::var_os("AUTO_POB_USER_DIR").is_some();
@@ -90,6 +112,7 @@ fn main() -> eframe::Result {
         game: Game::Poe1,
         data_dir,
         config,
+        locked,
     };
 
     let options = eframe::NativeOptions {

@@ -65,61 +65,106 @@ pub fn config_path() -> PathBuf {
     )
 }
 
-fn parse(text: &str) -> Result<(DocumentMut, AppSettings)> {
+/// Reads the keys we know. Text that is not TOML is an error; a key with a bad value is left
+/// out of the result with a warning, and every other key still loads.
+fn parse(text: &str) -> Result<(DocumentMut, AppSettings, Vec<String>)> {
     let doc: DocumentMut = text.parse().context("not valid TOML")?;
     let mut s = AppSettings::default();
+    let mut warnings = Vec::new();
+    let mut warn = |w: String| {
+        log::warn!("auto-pob.toml: {w}");
+        warnings.push(w);
+    };
     if let Some(item) = doc.get("user_dir") {
-        let dir = item.as_str().context("user_dir must be a string")?;
-        s.user_dir = (!dir.trim().is_empty()).then(|| PathBuf::from(dir));
+        match item.as_str() {
+            Some(dir) => s.user_dir = (!dir.trim().is_empty()).then(|| PathBuf::from(dir)),
+            None => warn("user_dir must be a string; ignored".into()),
+        }
     }
     if let Some(item) = doc.get("update_check") {
-        s.update_check = item
-            .as_bool()
-            .context("update_check must be true or false")?;
+        match item.as_bool() {
+            Some(on) => s.update_check = on,
+            None => warn("update_check must be true or false; ignored".into()),
+        }
     }
     if let Some(item) = doc.get("trade") {
-        let trade = item.as_table_like().context("trade must be a table")?;
-        if let Some(realm) = trade.get("realm") {
-            let realm = realm.as_str().context("trade.realm must be a string")?;
-            if !REALMS.contains(&realm) {
-                bail!("trade.realm must be PC, PS4 or Xbox, not {realm:?}");
+        match item.as_table_like() {
+            None => warn("trade must be a table; ignored".into()),
+            Some(trade) => {
+                if let Some(realm) = trade.get("realm") {
+                    match realm.as_str() {
+                        Some(r) if REALMS.contains(&r) => s.trade_realm = r.to_owned(),
+                        _ => {
+                            warn("trade.realm must be \"PC\", \"PS4\" or \"Xbox\"; ignored".into())
+                        }
+                    }
+                }
+                if let Some(league) = trade.get("league") {
+                    match league.as_str() {
+                        Some(l) => s.trade_league = l.to_owned(),
+                        None => warn("trade.league must be a string; ignored".into()),
+                    }
+                }
             }
-            s.trade_realm = realm.to_owned();
-        }
-        if let Some(league) = trade.get("league") {
-            s.trade_league = league
-                .as_str()
-                .context("trade.league must be a string")?
-                .to_owned();
         }
     }
     if let Some(item) = doc.get("overrides") {
-        let table = item.as_table_like().context("overrides must be a table")?;
-        for (key, item) in table.iter() {
-            let text = match item.as_value() {
-                Some(Value::String(s)) => s.value().clone(),
-                Some(Value::Boolean(b)) => b.value().to_string(),
-                Some(Value::Integer(i)) => i.value().to_string(),
-                Some(Value::Float(f)) => f.value().to_string(),
-                _ => bail!("overrides.{key} must be a string, number or true/false"),
-            };
-            s.overrides.insert(key.to_owned(), text);
+        match item.as_table_like() {
+            None => warn("overrides must be a table; ignored".into()),
+            Some(table) => {
+                for (key, item) in table.iter() {
+                    let text = match item.as_value() {
+                        Some(Value::String(s)) => s.value().clone(),
+                        Some(Value::Boolean(b)) => b.value().to_string(),
+                        Some(Value::Integer(i)) => i.value().to_string(),
+                        Some(Value::Float(f)) => f.value().to_string(),
+                        _ => {
+                            warn(format!(
+                                "overrides.{key} must be a string, number or true/false; ignored"
+                            ));
+                            continue;
+                        }
+                    };
+                    s.overrides.insert(key.to_owned(), text);
+                }
+            }
         }
     }
-    Ok((doc, s))
+    Ok((doc, s, warnings))
 }
 
-/// The settings in `path`; None when there is no file. A file that can't be read or parsed is
-/// an error that names the file.
-pub fn load(path: &Path) -> Result<Option<AppSettings>> {
+/// What reading the settings file found.
+#[derive(Debug)]
+pub enum Loaded {
+    Absent,
+    /// The settings, and one warning per key that was ignored
+    Settings(AppSettings, Vec<String>),
+    /// Not TOML at all; the file is untouched until the caller sets it aside
+    Invalid(String),
+    /// Could not be read (permissions, I/O): the file must not be renamed or written
+    Unreadable(String),
+}
+
+pub fn load_checked(path: &Path) -> Loaded {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Loaded::Absent,
+        Err(e) => return Loaded::Unreadable(format!("can't read {}: {e}", path.display())),
     };
-    parse(&text)
-        .map(|(_, s)| Some(s))
-        .with_context(|| format!("{}", path.display()))
+    match parse(&text) {
+        Ok((_, s, warnings)) => Loaded::Settings(s, warnings),
+        Err(e) => Loaded::Invalid(format!("{}: {e:#}", path.display())),
+    }
+}
+
+/// The settings in `path`; None when there is no file. A file that can't be read, or isn't
+/// TOML, is an error that names the file; a bad value only drops its own key.
+pub fn load(path: &Path) -> Result<Option<AppSettings>> {
+    match load_checked(path) {
+        Loaded::Absent => Ok(None),
+        Loaded::Settings(s, _) => Ok(Some(s)),
+        Loaded::Invalid(e) | Loaded::Unreadable(e) => bail!("{e}"),
+    }
 }
 
 /// Moves a file we can't parse out of the way (`.bad`, then `.bad-1`, ...) so a save can't
@@ -141,9 +186,31 @@ pub fn back_up_corrupt(path: &Path) -> Result<PathBuf> {
     Ok(backup)
 }
 
+fn same(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::String(a), Value::String(b)) => a.value() == b.value(),
+        (Value::Boolean(a), Value::Boolean(b)) => a.value() == b.value(),
+        (Value::Integer(a), Value::Integer(b)) => a.value() == b.value(),
+        (Value::Float(a), Value::Float(b)) => a.value() == b.value(),
+        _ => false,
+    }
+}
+
+/// `text` as a value of the same type as `old` when it reads as one (`90` over an integer),
+/// else a string.
+fn typed_like(old: Option<&Item>, text: &str) -> Value {
+    match old.and_then(Item::as_value) {
+        Some(Value::Integer(_)) => text.parse::<i64>().ok().map(Value::from),
+        Some(Value::Float(_)) => text.parse::<f64>().ok().map(Value::from),
+        Some(Value::Boolean(_)) => text.parse::<bool>().ok().map(Value::from),
+        _ => None,
+    }
+    .unwrap_or_else(|| Value::from(text))
+}
+
 fn set_value(table: &mut dyn toml_edit::TableLike, key: &str, new: Value) {
     if let Some(Item::Value(old)) = table.get_mut(key) {
-        if old.as_str() == new.as_str() && old.as_bool() == new.as_bool() {
+        if same(old, &new) {
             return;
         }
         // the new value takes the old one's spacing and trailing comment
@@ -194,7 +261,8 @@ fn apply(doc: &mut DocumentMut, s: &AppSettings) -> Result<()> {
             table.remove(&key);
         }
         for (key, text) in &s.overrides {
-            set_value(table, key, Value::from(text.as_str()));
+            let value = typed_like(table.get(key), text);
+            set_value(table, key, value);
         }
     }
     Ok(())
@@ -213,7 +281,7 @@ pub fn save_noting(path: &Path, s: &AppSettings) -> Result<Option<PathBuf>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
     };
-    let parsed = existing.map(|text| parse(&text).map(|(doc, _)| doc));
+    let parsed = existing.map(|text| parse(&text).map(|(doc, ..)| doc));
     let fresh = !matches!(parsed, Some(Ok(_)));
     let mut doc = match parsed {
         Some(Ok(doc)) => doc,
@@ -445,23 +513,94 @@ mod tests {
     fn bad_toml_is_an_error_not_a_panic() {
         let dir = temp("bad");
         let path = dir.join("auto-pob.toml");
-        for bad in [
-            "update_check = [",
-            "update_check = \"yes\"",
-            "[trade]\nrealm = \"Switch\"",
-            "user_dir = 4",
-            "overrides = 3",
-            "[overrides]\nx = [1]",
-        ] {
+        for bad in ["update_check = [", "this is = = not toml", "[trade"] {
             std::fs::write(&path, bad).unwrap();
             let error = format!("{:#}", load(&path).unwrap_err());
             assert!(error.contains("auto-pob.toml"), "{error}");
+            assert!(matches!(load_checked(&path), Loaded::Invalid(_)));
         }
         // numbers and booleans in [overrides] read as the text PoB would hold
         std::fs::write(&path, "[overrides]\nn = 125\nb = true\n").unwrap();
         let s = load(&path).unwrap().unwrap();
         assert_eq!(s.overrides["n"], "125");
         assert_eq!(s.overrides["b"], "true");
+    }
+
+    #[test]
+    fn a_bad_value_drops_only_its_own_key() {
+        let dir = temp("badvalue");
+        let path = dir.join("auto-pob.toml");
+        std::fs::write(
+            &path,
+            "update_check = \"yes\"\nuser_dir = 4\n[trade]\nrealm = \"Switch\"\nleague = \"Settlers\"\n[overrides]\nx = [1]\ngood = \"1\"\n",
+        )
+        .unwrap();
+        let Loaded::Settings(s, warnings) = load_checked(&path) else {
+            panic!("a bad value is not a bad file");
+        };
+        assert_eq!(warnings.len(), 4, "{warnings:?}");
+        assert!(!s.update_check);
+        assert_eq!(s.user_dir, None);
+        assert_eq!(s.trade_realm, "PC");
+        assert_eq!(s.trade_league, "Settlers");
+        assert_eq!(s.overrides.len(), 1);
+        assert_eq!(s.overrides["good"], "1");
+        // the file itself is untouched
+        assert!(std::fs::read_to_string(&path).unwrap().contains("Switch"));
+    }
+
+    #[test]
+    fn an_unreadable_file_is_reported_and_left_alone() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = temp("unreadable");
+        let path = dir.join("auto-pob.toml");
+        std::fs::write(&path, "update_check = true\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read_to_string(&path).is_err() {
+            assert!(matches!(load_checked(&path), Loaded::Unreadable(_)));
+            assert!(load(&path).is_err());
+        }
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn existing_value_types_are_kept() {
+        let dir = temp("types");
+        let path = dir.join("auto-pob.toml");
+        std::fs::write(
+            &path,
+            "[overrides]\ndefaultCharLevel = 90 # level\nshowAnimations = true\nratio = 0.5\ntext = \"a\"\n",
+        )
+        .unwrap();
+        let mut s = load(&path).unwrap().unwrap();
+        assert_eq!(s.overrides["defaultCharLevel"], "90");
+        save(&path, &s).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("defaultCharLevel = 90 # level"), "{text}");
+        assert!(text.contains("showAnimations = true"), "{text}");
+        assert!(text.contains("ratio = 0.5"), "{text}");
+        s.overrides.insert("defaultCharLevel".into(), "95".into());
+        s.overrides.insert("showAnimations".into(), "false".into());
+        s.overrides.insert("ratio".into(), "0.75".into());
+        s.overrides.insert("text".into(), "b".into());
+        s.overrides.insert("fresh".into(), "7".into());
+        save(&path, &s).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("defaultCharLevel = 95 # level"), "{text}");
+        assert!(text.contains("showAnimations = false"), "{text}");
+        assert!(text.contains("ratio = 0.75"), "{text}");
+        assert!(text.contains("text = \"b\""), "{text}");
+        // a new key is text, as PoB holds it
+        assert!(text.contains("fresh = \"7\""), "{text}");
+        // text that does not read as the old type replaces it as text
+        s.overrides.insert("defaultCharLevel".into(), "high".into());
+        save(&path, &s).unwrap();
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("defaultCharLevel = \"high\"")
+        );
     }
 
     #[test]

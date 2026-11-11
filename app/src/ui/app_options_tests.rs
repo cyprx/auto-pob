@@ -288,3 +288,66 @@ fn options_button_opens_the_window_from_the_list() {
     );
     assert!(!app.popup.is_blocking(), "Options is not the item popup's");
 }
+
+#[test]
+fn a_failed_write_does_not_look_saved() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let config = temp_config("readonly");
+    let dir = config.parent().unwrap().to_path_buf();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    if std::fs::write(dir.join("probe"), "").is_ok() {
+        // running as root: a read-only folder can't be made
+        let _ = std::fs::remove_file(dir.join("probe"));
+        return;
+    }
+    let before = AppSettings {
+        trade_league: "Old".into(),
+        ..AppSettings::default()
+    };
+    let (mut app, ctx) = app(before.clone(), &config);
+    until_ready(&mut app, &ctx);
+    open_options(&mut app, &ctx);
+    app.options.draft_mut().trade_league = "Edited".into();
+    app.options.save_sent(app.last_sent + 1);
+    let opens = app.sent_log.iter().filter(|c| *c == "OpenPopup").count();
+    app.on_settings(
+        &SettingsView {
+            saved_overrides: overrides(&[("showAnimations", "true")]),
+            ..settings_view(&[])
+        },
+        app.last_sent + 1,
+    );
+    // the old settings are still the ones in effect, and nothing was written
+    assert_eq!(app.settings, before);
+    assert!(!config.exists());
+    // the window comes back with the draft, so Save can be pressed again
+    assert_eq!(
+        app.sent_log.iter().filter(|c| *c == "OpenPopup").count(),
+        opens + 1
+    );
+    assert_eq!(app.options.draft_mut().trade_league, "Edited");
+    assert_eq!(app.options.draft_mut().overrides["showAnimations"], "true");
+    show_controls(&mut app, &ctx);
+    assert!(
+        marked("options_save_error").is_some(),
+        "the error shows inline"
+    );
+    assert_eq!(app.options.draft_mut().trade_league, "Edited");
+    // once the folder can be written, the same Save works
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    app.options.save_sent(app.last_sent + 1);
+    app.on_settings(&settings_view(&[]), app.last_sent + 1);
+    assert_eq!(app.settings.trade_league, "Edited");
+    assert!(config.exists());
+}
+
+#[test]
+fn a_locked_settings_file_is_never_written() {
+    let config = temp_config("locked");
+    let (app, ctx) = app(AppSettings::default(), &config);
+    let mut app = app.with_locked_settings(Some("permission denied".into()));
+    until_ready(&mut app, &ctx);
+    assert!(app.write_settings(&AppSettings::default()).is_err());
+    assert!(!config.exists());
+}

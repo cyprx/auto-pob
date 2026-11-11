@@ -37,6 +37,9 @@ pub struct OptionsUi {
     league: EditBox,
     /// PoB's Save went out as this command; the file is written when its answer is here
     saving: Option<u64>,
+    /// The file couldn't be written: the next `begin` keeps the draft and shows this
+    error: Option<String>,
+    retry: bool,
 }
 
 /// What the UI itself does with PoB's `Ui` settings (R13).
@@ -89,11 +92,36 @@ impl OptionsUi {
 
     /// The window is about to open over the settings in the file.
     pub fn begin(&mut self, saved: &AppSettings) {
-        self.base = saved.clone();
-        self.draft = saved.clone();
         self.folder = EditBox::default();
         self.league = EditBox::default();
         self.saving = None;
+        if std::mem::take(&mut self.retry) {
+            return;
+        }
+        self.error = None;
+        self.base = saved.clone();
+        self.draft = saved.clone();
+    }
+
+    /// The file was written: `next` is what the window shows from now on.
+    pub fn commit(&mut self, next: &AppSettings) {
+        self.base = next.clone();
+        self.draft = next.clone();
+        self.error = None;
+    }
+
+    /// The file could not be written. The draft (with the overrides PoB's Save moved) is kept
+    /// for the reopened window, which shows `error`. Returns the draft's overrides.
+    pub fn save_failed(
+        &mut self,
+        next: AppSettings,
+        error: String,
+    ) -> std::collections::BTreeMap<String, String> {
+        let overrides = next.overrides.clone();
+        self.draft = next;
+        self.error = Some(error);
+        self.retry = true;
+        overrides
     }
 
     /// PoB's Save went out as command `seq`.
@@ -119,8 +147,6 @@ impl OptionsUi {
         self.saving = None;
         let mut next = self.draft.clone();
         next.overrides.extend(view.saved_overrides.clone());
-        self.base = next.clone();
-        self.draft = next.clone();
         Some(next)
     }
 
@@ -164,6 +190,7 @@ impl OptionsUi {
                 draft,
                 folder,
                 league,
+                error,
                 ..
             } = self;
             let mut extras = Extras {
@@ -172,6 +199,7 @@ impl OptionsUi {
                 draft,
                 folder,
                 league,
+                error: error.as_deref(),
                 busy,
                 overrides_changed: false,
             };
@@ -219,6 +247,7 @@ struct Extras<'a> {
     draft: &'a mut AppSettings,
     folder: &'a mut EditBox,
     league: &'a mut EditBox,
+    error: Option<&'a str>,
     busy: bool,
     overrides_changed: bool,
 }
@@ -318,6 +347,10 @@ impl Extras<'_> {
                 }
                 ui.end_row();
             });
+        if let Some(error) = self.error {
+            let label = ui.colored_label(ui.visuals().error_fg_color, error);
+            super::import::mark(ui, "options_save_error", &label);
+        }
         ui.add_space(6.0);
     }
 }

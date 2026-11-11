@@ -239,6 +239,8 @@ impl AutoPobApp {
                     | Snapshot::ItemTooltip(_)
                     | Snapshot::ItemText(_) => self.items.on_snapshot_at(&snapshot, seq),
                     Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
+                    // the popup window arrives with the crafting UI
+                    Snapshot::Popup(_) | Snapshot::ControlTooltip(_) => {}
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
                     Snapshot::NodePower(_) | Snapshot::PowerReport(_)
@@ -1216,6 +1218,17 @@ mod tests {
                 query: query.clone(),
                 tooltip: crate::engine::ItemTooltip::default(),
             }))
+        }
+
+        fn popup_view(&mut self) -> anyhow::Result<Option<crate::engine::PopupView>> {
+            Ok(None)
+        }
+
+        fn control_tooltip_view(
+            &mut self,
+            _query: &crate::engine::ControlTooltipQuery,
+        ) -> anyhow::Result<Option<crate::engine::ControlTooltipView>> {
+            Ok(None)
         }
 
         fn item_text(&mut self, id: u32) -> anyhow::Result<crate::engine::ItemText> {

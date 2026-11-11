@@ -3,13 +3,16 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use super::commands::{Command, GemSearchQuery, GemTooltipQuery, ItemTooltipQuery};
+use super::commands::{
+    Command, ControlTooltipQuery, GemSearchQuery, GemTooltipQuery, ItemTooltipQuery, PopupKind,
+};
+use super::pob::ends_popup_session;
 use super::run::{Affected, Backend, BackgroundTask, Event};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, DisplayItemView,
-    GemSearchView, GemTooltipView, GroupTooltipView, ItemText, ItemTooltip, ItemTooltipView,
-    ItemsView, NodePower, NodeTooltip, NotesView, Points, PowerReport, SkillsView, SocketGroupText,
-    StatsView, TooltipLine, TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, ControlTooltipView,
+    DisplayItemView, GemSearchView, GemTooltipView, GroupTooltipView, ItemText, ItemTooltip,
+    ItemTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, Points, PopupView, PowerReport,
+    SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
 };
 
 #[derive(Default, Debug)]
@@ -28,6 +31,7 @@ pub struct Log {
     pub copies: Vec<usize>,
     pub tooltips: Vec<usize>,
     pub item_tooltips: Vec<ItemTooltipQuery>,
+    pub control_tooltips: Vec<ControlTooltipQuery>,
     pub releases: usize,
 }
 
@@ -53,6 +57,10 @@ pub struct Fake {
     pub tooltip_vanished: bool,
     /// `item_tooltip_view` answers `None`, as for an item that no longer exists.
     pub item_vanished: bool,
+    /// `control_tooltip_view` answers `None`, as for a control that no longer exists.
+    pub control_vanished: bool,
+    /// The open popup session
+    pub popup: Option<PopupKind>,
     /// `breakdown_view` fails with this message.
     pub fail_breakdown: Option<String>,
     /// `build_loaded` answers this; PoB starts without a build when it was left on the list.
@@ -74,6 +82,8 @@ impl Fake {
                 on_release: None,
                 tooltip_vanished: false,
                 item_vanished: false,
+                control_vanished: false,
+                popup: None,
                 fail_breakdown: None,
                 build_loaded: true,
             },
@@ -134,6 +144,17 @@ impl Fake {
                 item_tooltip: Some(query),
                 ..Affected::default()
             }),
+            Command::OpenPopup(kind) => {
+                self.popup = Some(kind);
+                Ok(Affected {
+                    popup: true,
+                    ..Affected::default()
+                })
+            }
+            Command::ControlTooltip(query) => Ok(Affected {
+                control_tooltip: Some(query),
+                ..Affected::default()
+            }),
             Command::CopyItem { id } => Ok(Affected {
                 item_text: Some(id),
                 ..Affected::default()
@@ -153,7 +174,11 @@ impl Fake {
 
 impl Backend for Fake {
     fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
-        let affected = self.apply_command(command)?;
+        let ends = ends_popup_session(&command);
+        let mut affected = self.apply_command(command)?;
+        if ends && self.popup.take().is_some() {
+            affected.popup = true;
+        }
         if (affected.build || affected.recalc) && !self.restart_on_build.is_empty() {
             *self.background.lock().unwrap() = self.restart_on_build.iter().cloned().collect();
         }
@@ -330,6 +355,32 @@ impl Backend for Fake {
             return Ok(None);
         }
         Ok(Some(ItemTooltipView {
+            query: query.clone(),
+            tooltip: ItemTooltip::default(),
+        }))
+    }
+
+    fn popup_view(&mut self) -> anyhow::Result<Option<PopupView>> {
+        Ok(self.popup.clone().map(|kind| PopupView {
+            kind,
+            title: "popup".into(),
+            controls: vec![],
+        }))
+    }
+
+    fn control_tooltip_view(
+        &mut self,
+        query: &ControlTooltipQuery,
+    ) -> anyhow::Result<Option<ControlTooltipView>> {
+        self.log
+            .lock()
+            .unwrap()
+            .control_tooltips
+            .push(query.clone());
+        if self.control_vanished {
+            return Ok(None);
+        }
+        Ok(Some(ControlTooltipView {
             query: query.clone(),
             tooltip: ItemTooltip::default(),
         }))

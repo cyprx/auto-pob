@@ -6,7 +6,9 @@ use super::{
     recipe_setting, upstream_lua,
 };
 use auto_pob::engine::upstream::{SidebarLine, golden_of};
-use auto_pob::engine::{Backend, Command, ItemsView, ModLineRef, SocketColour, Tab};
+use auto_pob::engine::{
+    Backend, Command, ItemsView, ModLineRef, PopupInput, PopupKind, SocketColour, Tab,
+};
 use auto_pob::game::Game;
 use mlua::LuaSerdeExt;
 use std::collections::BTreeMap;
@@ -26,6 +28,10 @@ pub(crate) fn upstream_with_items_lib_xml(xml: &str, name: &str) -> mlua::Lua {
         .set_name("=items_lib")
         .exec()
         .expect("items_lib.lua");
+    lua.load(fs::read_to_string(fixtures_dir().join("popup_lib.lua")).unwrap())
+        .set_name("=popup_lib")
+        .exec()
+        .expect("popup_lib.lua");
     lua
 }
 
@@ -239,6 +245,19 @@ pub(crate) enum ItemsAction {
     },
     Undo,
     Redo,
+    /// Recorded by popup_lib's `act.open_popup`, `act.popup_set`, `act.popup_press` and
+    /// `act.popup_close`
+    OpenPopup {
+        kind: PopupKind,
+    },
+    SetPopupControl {
+        name: String,
+        value: PopupInput,
+    },
+    PressPopupButton {
+        name: String,
+    },
+    ClosePopup,
     /// Built from the recorded checkpoint table
     #[serde(skip_deserializing)]
     Check {
@@ -305,6 +324,12 @@ impl ItemsAction {
                 Command::SetRangeLineMutated { line, on }
             }
             ItemsAction::ToggleModLine { line } => Command::ToggleModLine { line },
+            ItemsAction::OpenPopup { kind } => Command::OpenPopup(kind),
+            ItemsAction::SetPopupControl { name, value } => {
+                Command::SetPopupControl { name, value }
+            }
+            ItemsAction::PressPopupButton { name } => Command::PressPopupButton { name },
+            ItemsAction::ClosePopup => Command::ClosePopup,
             ItemsAction::Undo => Command::Undo(Tab::Items),
             ItemsAction::Redo => Command::Redo(Tab::Items),
             ItemsAction::Check { .. } => return None,
@@ -336,6 +361,9 @@ pub(crate) struct ItemsCheckpoint {
     pub(crate) sidebar: Vec<SidebarLine>,
     /// `mainSocketGroup`, 1-based as PoB has it: a weapon swap moves it (R6)
     pub(crate) main_group: u32,
+    /// The open popup (`popupDump()`); none while no window is open
+    #[serde(default)]
+    pub(crate) popup: Option<serde_json::Value>,
 }
 
 /// A recipe run in upstream PoB: the steps it took and where they ended.
@@ -408,6 +436,7 @@ pub(crate) fn upstream_items_recipe(name: &str) -> ItemsRecipe {
                     .unwrap_or_else(|e| panic!("{name}: checkpoint: {e}"));
                 check.items = strip_nulls(check.items);
                 check.display = check.display.map(strip_nulls);
+                check.popup = check.popup.map(strip_nulls);
                 return ItemsAction::Check {
                     check: Box::new(check),
                 };
@@ -466,6 +495,11 @@ pub(crate) fn our_items_checkpoint(s: &mut Session) -> ItemsCheckpoint {
             .load("return pob.build.mainSocketGroup")
             .eval()
             .unwrap(),
+        popup: s
+            .backend
+            .popup_view()
+            .expect("popup view")
+            .map(|view| json_of(&view)),
     }
 }
 
@@ -560,6 +594,15 @@ pub(crate) fn run_items_recipe(name: &str) -> (ItemsRecipe, Session) {
                     }
                 }
                 assert_eq!(open_popups(&s), 0, "{name}: {action:?} left a popup open");
+                if matches!(
+                    action,
+                    ItemsAction::OpenPopup { .. }
+                        | ItemsAction::SetPopupControl { .. }
+                        | ItemsAction::PressPopupButton { .. }
+                        | ItemsAction::ClosePopup
+                ) {
+                    assert!(affected.popup, "{name}: {action:?} doesn't flag the popup");
+                }
                 // the loop sends the display item after a batch that flags it or recalculates,
                 // which is what fills the tooltip PoB would otherwise rebuild only on an edit
                 // (R4)
@@ -571,6 +614,7 @@ pub(crate) fn run_items_recipe(name: &str) -> (ItemsRecipe, Session) {
                 let ItemsAction::Check { check } = action else {
                     unreachable!()
                 };
+                settle(&mut s);
                 let ours = our_items_checkpoint(&mut s);
                 assert_same(
                     &ours.items,
@@ -599,6 +643,14 @@ pub(crate) fn run_items_recipe(name: &str) -> (ItemsRecipe, Session) {
                     ours.main_group, check.main_group,
                     "{name}: checkpoint {checked} main group"
                 );
+                match (&ours.popup, &check.popup) {
+                    (Some(ours), Some(theirs)) => {
+                        assert_same(ours, theirs, &format!("{name}: checkpoint {checked} popup"))
+                    }
+                    (ours, theirs) => {
+                        assert_eq!(ours, theirs, "{name}: checkpoint {checked} popup")
+                    }
+                }
                 checked += 1;
             }
         }
@@ -620,4 +672,13 @@ pub(crate) fn checkpoints(recipe: &ItemsRecipe) -> Vec<&ItemsCheckpoint> {
             _ => None,
         })
         .collect()
+}
+
+/// Runs the background steps the engine would run between commands, until there are none.
+pub(crate) fn settle(s: &mut Session) {
+    while let Some(task) = s.backend.next_background() {
+        s.backend
+            .background_step(task, &|_| {})
+            .unwrap_or_else(|e| panic!("{task:?}: {e}"));
+    }
 }

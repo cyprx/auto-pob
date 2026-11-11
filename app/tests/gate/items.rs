@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::fs;
 
 /// Our session with the `gear` setup open, and upstream PoB with the same build.
-fn gear_sessions(test: &str) -> (Session, mlua::Lua) {
+pub(crate) fn gear_sessions(test: &str) -> (Session, mlua::Lua) {
     let xml = setup_xml("gear");
     let mut s = Session::start(test);
     let path = s.user.join("gear.xml");

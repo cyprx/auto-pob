@@ -19,6 +19,8 @@ use std::{
 
 #[path = "gate/calcs.rs"]
 mod calcs;
+#[path = "gate/crafting.rs"]
+mod crafting;
 #[path = "gate/items.rs"]
 mod items;
 #[path = "gate/items_harness.rs"]

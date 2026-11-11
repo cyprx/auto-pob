@@ -8,12 +8,12 @@ use std::time::Duration;
 
 use crate::pob_files::DownloadProgress;
 
-use super::commands::{Command, GemTooltipQuery, ItemTooltipQuery};
+use super::commands::{Command, ControlTooltipQuery, GemTooltipQuery, ItemTooltipQuery};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, DisplayItemView,
-    GemSearchView, GemTooltipView, GroupTooltipView, ItemText, ItemTooltipView, ItemsView,
-    NodePower, NodeTooltip, NotesView, PowerReport, SkillsView, SocketGroupText, StatsView,
-    TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, ControlTooltipView,
+    DisplayItemView, GemSearchView, GemTooltipView, GroupTooltipView, ItemText, ItemTooltipView,
+    ItemsView, NodePower, NodeTooltip, NotesView, PopupView, PowerReport, SkillsView,
+    SocketGroupText, StatsView, TreeLayout, TreeState,
 };
 
 #[derive(Debug, Clone)]
@@ -34,6 +34,9 @@ pub enum Snapshot {
     Items(Arc<ItemsView>),
     /// The display item; `None` while nothing is displayed
     DisplayItem(Option<Arc<DisplayItemView>>),
+    /// The popup session's window; `None` once the session is over
+    Popup(Option<Arc<PopupView>>),
+    ControlTooltip(Arc<ControlTooltipView>),
     SocketGroupText(Arc<SocketGroupText>),
     GroupTooltip(Arc<GroupTooltipView>),
     GemSearch(Arc<GemSearchView>),
@@ -97,6 +100,8 @@ pub struct Affected {
     pub items: bool,
     /// The Items tab's display item changed
     pub display_item: bool,
+    /// The popup session changed or ended (R21)
+    pub popup: bool,
     /// The build's notes changed
     pub notes: bool,
     /// Node power changed (a background step ran)
@@ -117,6 +122,8 @@ pub struct Affected {
     pub gem_tooltip: Option<GemTooltipQuery>,
     /// This item tooltip was requested; the latest request wins
     pub item_tooltip: Option<ItemTooltipQuery>,
+    /// This control's tooltip was requested; the latest request wins (R6)
+    pub control_tooltip: Option<ControlTooltipQuery>,
     /// The text PoB copies for this item was requested; the latest request wins
     pub item_text: Option<u32>,
     /// The tree link was requested
@@ -136,6 +143,7 @@ impl Affected {
         skills: true,
         items: true,
         display_item: true,
+        popup: true,
         notes: true,
         power: false,
         gem_search: false,
@@ -146,6 +154,7 @@ impl Affected {
         group_tooltip: None,
         gem_tooltip: None,
         item_tooltip: None,
+        control_tooltip: None,
         item_text: None,
         link: false,
     };
@@ -171,6 +180,7 @@ impl Affected {
         self.skills |= other.skills;
         self.items |= other.items;
         self.display_item |= other.display_item;
+        self.popup |= other.popup;
         self.notes |= other.notes;
         self.power |= other.power;
         self.gem_search |= other.gem_search;
@@ -186,6 +196,9 @@ impl Affected {
         }
         if other.item_tooltip.is_some() {
             self.item_tooltip = other.item_tooltip;
+        }
+        if other.control_tooltip.is_some() {
+            self.control_tooltip = other.control_tooltip;
         }
         self.item_text = other.item_text.or(self.item_text);
         self.link |= other.link;
@@ -233,6 +246,13 @@ pub trait Backend {
         query: &ItemTooltipQuery,
     ) -> anyhow::Result<Option<ItemTooltipView>>;
     fn item_text(&mut self, id: u32) -> anyhow::Result<ItemText>;
+    /// The popup session's window; `None` when no session is open
+    fn popup_view(&mut self) -> anyhow::Result<Option<PopupView>>;
+    /// `None`: the control or entry is gone
+    fn control_tooltip_view(
+        &mut self,
+        query: &ControlTooltipQuery,
+    ) -> anyhow::Result<Option<ControlTooltipView>>;
     fn node_power_view(&mut self) -> anyhow::Result<NodePower>;
     fn power_report_view(&mut self) -> anyhow::Result<PowerReport>;
     /// `Ok(None)` when the node no longer exists: nothing is sent.
@@ -320,6 +340,19 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
             Ok(view) => send(Event::Snapshot {
                 seq,
                 snapshot: Snapshot::DisplayItem(view.map(Arc::new)),
+            }),
+            Err(e) => send(Event::Error {
+                seq,
+                message: format!("{e:#}"),
+            }),
+        }
+    }
+    // "no session" is an answer too: it closes the window
+    if flags.popup {
+        match backend.popup_view() {
+            Ok(view) => send(Event::Snapshot {
+                seq,
+                snapshot: Snapshot::Popup(view.map(Arc::new)),
             }),
             Err(e) => send(Event::Error {
                 seq,
@@ -421,6 +454,20 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
                 snapshot: Snapshot::ItemTooltip(Arc::new(view)),
             }),
             // a vanished item or slot sends nothing
+            Ok(None) => {}
+            Err(e) => send(Event::Error {
+                seq,
+                message: format!("{e:#}"),
+            }),
+        }
+    }
+    if let Some(query) = &flags.control_tooltip {
+        match backend.control_tooltip_view(query) {
+            Ok(Some(view)) => send(Event::Snapshot {
+                seq,
+                snapshot: Snapshot::ControlTooltip(Arc::new(view)),
+            }),
+            // a vanished control sends nothing
             Ok(None) => {}
             Err(e) => send(Event::Error {
                 seq,
@@ -776,6 +823,7 @@ mod tests {
                     Snapshot::Skills(_) => "skills",
                     Snapshot::Items(_) => "items",
                     Snapshot::DisplayItem(_) => "display_item",
+                    Snapshot::Popup(_) => "popup",
                     Snapshot::Notes(_) => "notes",
                     other => panic!("unexpected {other:?}"),
                 }
@@ -794,6 +842,7 @@ mod tests {
                 "skills",
                 "items",
                 "display_item",
+                "popup",
                 "notes"
             ]
         );
@@ -879,9 +928,9 @@ mod tests {
         assert_eq!(stats_seq, Some(3));
         assert_eq!(config_seq, Some(3));
         assert_eq!(log.lock().unwrap().set_configs, 2);
-        // Ready + 11 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items + DisplayItem; the channel disconnect means the
+        // Ready + 12 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items + DisplayItem; the channel disconnect means the
         // thread (and so every wake) is finished.
-        assert_eq!(wakes.load(Ordering::SeqCst), 19);
+        assert_eq!(wakes.load(Ordering::SeqCst), 20);
     }
 
     #[test]
@@ -1195,6 +1244,106 @@ mod tests {
             )),
             "{events:?}"
         );
+    }
+
+    fn popup_query(control: &str) -> crate::engine::ControlTooltipQuery {
+        crate::engine::ControlTooltipQuery::Popup {
+            control: control.into(),
+            index: Some(0),
+        }
+    }
+
+    fn popups(events: &[Event]) -> Vec<bool> {
+        snapshots(events)
+            .into_iter()
+            .filter_map(|(_, s)| match s {
+                Snapshot::Popup(view) => Some(view.is_some()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn popup_none_is_sent_when_a_session_ends() {
+        let (mut fake, _log) = Fake::new();
+        let open = Command::OpenPopup(crate::engine::PopupKind::Craft);
+        let events = run_queued(&mut fake, vec![open.clone()]);
+        assert_eq!(popups(&events), [true]);
+        // a command that isn't the session's ends it, and the window is told
+        let (mut fake, _log) = Fake::new();
+        let events = run_queued(&mut fake, vec![open, Command::SortItems]);
+        assert_eq!(popups(&events), [false], "{events:?}");
+    }
+
+    #[test]
+    fn only_latest_control_tooltip_runs() {
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(
+            &mut fake,
+            vec![
+                Command::ControlTooltip(popup_query("one")),
+                Command::ControlTooltip(popup_query("two")),
+            ],
+        );
+        let tooltips: Vec<_> = snapshots(&events)
+            .into_iter()
+            .filter_map(|(_, s)| match s {
+                Snapshot::ControlTooltip(t) => Some(t.query.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tooltips, [popup_query("two")]);
+        assert_eq!(log.lock().unwrap().control_tooltips, [popup_query("two")]);
+    }
+
+    #[test]
+    fn vanished_control_tooltip_sends_nothing() {
+        let (mut fake, log) = Fake::new();
+        fake.control_vanished = true;
+        let events = run_queued(&mut fake, vec![Command::ControlTooltip(popup_query("one"))]);
+        assert_eq!(
+            log.lock().unwrap().control_tooltips.len(),
+            1,
+            "it was asked"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                Event::Snapshot {
+                    snapshot: Snapshot::ControlTooltip(_),
+                    ..
+                } | Event::Error { .. }
+            )),
+            "{events:?}"
+        );
+    }
+
+    #[test]
+    fn crafting_views_masked_without_a_build() {
+        let queries = || {
+            vec![
+                Command::OpenPopup(crate::engine::PopupKind::Craft),
+                Command::ControlTooltip(popup_query("one")),
+            ]
+        };
+        let kinds = |events: &[Event]| {
+            snapshots(events)
+                .into_iter()
+                .filter(|(_, s)| matches!(s, Snapshot::Popup(_) | Snapshot::ControlTooltip(_)))
+                .count()
+        };
+        // with a build both are answered
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(&mut fake, queries());
+        assert_eq!(kinds(&events), 2);
+        assert_eq!(log.lock().unwrap().control_tooltips.len(), 1);
+        // with none, neither reaches the backend
+        let (mut fake, log) = Fake::new();
+        fake.build_loaded = false;
+        let events = run_queued(&mut fake, queries());
+        assert_eq!(kinds(&events), 0);
+        assert!(log.lock().unwrap().control_tooltips.is_empty());
+        assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
     }
 
     #[test]

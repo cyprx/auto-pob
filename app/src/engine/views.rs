@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::commands::{GemSearchQuery, GemTooltipQuery, ItemTooltipQuery};
+use super::commands::{
+    ControlTooltipQuery, GemSearchQuery, GemTooltipQuery, ItemTooltipQuery, PopupKind,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -1119,6 +1121,73 @@ pub struct ItemTooltipView {
     pub tooltip: ItemTooltip,
 }
 
+/// The answer to a `ControlTooltip` query.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ControlTooltipView {
+    pub query: ControlTooltipQuery,
+    pub tooltip: ItemTooltip,
+}
+
+/// The open popup, whatever it is: PoB's controls as data (R5).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PopupView {
+    pub kind: PopupKind,
+    pub title: String,
+    /// Ordered by position (top to bottom, then left to right)
+    pub controls: Vec<PopupControl>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PopupControlKind {
+    Label,
+    Button,
+    Dropdown,
+    Slider,
+    Check,
+    Edit,
+    List,
+}
+
+/// One control of a popup. The fields of the other kinds hold their defaults.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PopupControl {
+    /// PoB's control key; a list's children are `parent.child`
+    pub name: String,
+    pub kind: PopupControlKind,
+    pub label: String,
+    /// `GetPos()` relative to the popup
+    pub pos: [f32; 2],
+    pub size: [f32; 2],
+    pub shown: bool,
+    pub enabled: bool,
+    /// Dropdown
+    #[serde(default)]
+    pub choices: Vec<String>,
+    pub selected: usize,
+    /// Slider, 0..=1
+    pub value: f64,
+    pub divisions: Option<u32>,
+    /// Check, Edit
+    pub checked: bool,
+    pub text: String,
+    /// PoB's static `tooltipText`
+    pub tooltip_text: Option<String>,
+    /// The control builds a tooltip on hover (ask with `ControlTooltip`)
+    pub hover_tooltip: bool,
+    /// List
+    #[serde(default)]
+    pub rows: Vec<PopupRow>,
+    pub row_selected: Option<String>,
+    /// A list's `defaultText`
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PopupRow {
+    pub key: String,
+    pub label: String,
+}
+
 /// The answer to a `CopyItem` query: the text PoB copies, with its `\r\n` line ends.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemText {
@@ -1156,6 +1225,9 @@ pub struct DisplayItemView {
     pub catalyst_quality: Option<String>,
     #[serde(default)]
     pub range_lines: Vec<RangeLineView>,
+    /// The windows PoB's panel offers for this item (R3), in the panel's order
+    #[serde(default)]
+    pub popups: Vec<PopupKind>,
     pub tooltip: ItemTooltip,
 }
 

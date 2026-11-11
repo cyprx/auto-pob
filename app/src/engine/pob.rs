@@ -1,15 +1,16 @@
 //! Starts Path of Building's Lua with our own bootstrap.
 
 use super::commands::{
-    Command, ConfigValue, GemSearchQuery, GemTarget, GemToggle, GemTooltipQuery, ItemTooltipQuery,
-    SkillOption, SocketColour, Tab,
+    Command, ConfigValue, ControlTooltipQuery, GemSearchQuery, GemTarget, GemToggle,
+    GemTooltipQuery, ItemTooltipQuery, PopupInput, PopupKind, SkillOption, SocketColour, Tab,
 };
 use super::run::{Affected, Backend, BackgroundTask, Engine, Event};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, DisplayItemView,
-    GemRow, GemSearchView, GemTooltipView, GroupTooltipView, ItemText, ItemTooltip,
-    ItemTooltipView, ItemsView, ModLineList, NodePower, NodeTooltip, NotesView, PowerReport,
-    SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, ControlTooltipView,
+    DisplayItemView, GemRow, GemSearchView, GemTooltipView, GroupTooltipView, ItemText,
+    ItemTooltip, ItemTooltipView, ItemsView, ModLineList, NodePower, NodeTooltip, NotesView,
+    PopupView, PowerReport, SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout,
+    TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -107,6 +108,8 @@ impl PobBackend {
             ("@glue/skills.lua", include_str!("glue/skills.lua")),
             ("@glue/gems.lua", include_str!("glue/gems.lua")),
             ("@glue/items.lua", include_str!("glue/items.lua")),
+            ("@glue/crafting.lua", include_str!("glue/crafting.lua")),
+            ("@glue/popups.lua", include_str!("glue/popups.lua")),
             ("@glue/notes.lua", include_str!("glue/notes.lua")),
         ] {
             lua.load(source)
@@ -303,6 +306,44 @@ fn ends_gem_search(command: &Command) -> bool {
             | Command::ImportShareCode { .. }
             | Command::CloseGemSearch
     )
+}
+
+/// Whether a command ends the popup session (R4). The session's own commands and the queries
+/// leave it open; anything else may change the item or the build under it.
+pub(crate) fn ends_popup_session(command: &Command) -> bool {
+    !matches!(
+        command,
+        Command::OpenPopup(_)
+            | Command::SetPopupControl { .. }
+            | Command::PressPopupButton { .. }
+            | Command::ClosePopup
+            | Command::ControlTooltip(_)
+            | Command::ItemTooltip(_)
+            | Command::CopyItem { .. }
+            | Command::Breakdown(_)
+            | Command::GemTooltip(_)
+            | Command::GroupTooltip { .. }
+            | Command::CopySocketGroup { .. }
+            | Command::PreviewNode { .. }
+            | Command::ExportTreeLink
+            | Command::Shutdown
+    )
+}
+
+/// What `glue.popup_press` reports.
+#[derive(serde::Deserialize)]
+struct Pressed {
+    ended: bool,
+    build_flag: bool,
+}
+
+/// A popup session command changed the popup, and the display item behind it (a press can
+/// save into it).
+fn popup_changed() -> Affected {
+    Affected {
+        popup: true,
+        ..Affected::default()
+    }
 }
 
 impl PobBackend {
@@ -936,6 +977,68 @@ impl PobBackend {
                     ..Affected::default()
                 })
             }
+            Command::OpenPopup(kind) => {
+                let (name, arg) = match kind {
+                    PopupKind::Craft => ("craft", 0),
+                    PopupKind::EditText => ("edit_text", 0),
+                    PopupKind::Enchant { second } => ("enchant", i64::from(second)),
+                    PopupKind::Anoint { slot } => ("anoint", slot as i64 + 1),
+                    PopupKind::Corrupt => ("corrupt", 0),
+                    PopupKind::AddModifier => ("add_modifier", 0),
+                    PopupKind::AddImplicit => ("add_implicit", 0),
+                    PopupKind::AddCrucible => ("add_crucible", 0),
+                    PopupKind::NodeReplacement { .. } => ("node_replacement", 0),
+                };
+                // Enchant's flag is a boolean for the glue
+                if name == "enchant" {
+                    self.call::<_, ()>("popup_open", (name, arg != 0))?;
+                } else {
+                    self.call::<_, ()>("popup_open", (name, arg))?;
+                }
+                Ok(popup_changed())
+            }
+            Command::SetPopupControl { name, value } => {
+                match value {
+                    PopupInput::Choice { index, label } => {
+                        self.call::<_, ()>("popup_set", (name, "choice", index, label))?
+                    }
+                    PopupInput::Number(value) => {
+                        self.call::<_, ()>("popup_set", (name, "number", value, ()))?
+                    }
+                    PopupInput::Check(on) => {
+                        self.call::<_, ()>("popup_set", (name, "check", on, ()))?
+                    }
+                    PopupInput::Text(text) => {
+                        self.call::<_, ()>("popup_set", (name, "text", text, ()))?
+                    }
+                    PopupInput::Row(key) => {
+                        self.call::<_, ()>("popup_set", (name, "row", key, ()))?
+                    }
+                }
+                Ok(popup_changed())
+            }
+            Command::PressPopupButton { name } => {
+                let pressed: Pressed = self.view("popup_press", name)?;
+                // a tattoo sets PoB's `buildFlag`: the tree changed (R22)
+                let mut affected = if pressed.build_flag {
+                    self.tree_edited()?
+                } else {
+                    Affected::default()
+                };
+                affected.popup = true;
+                affected.display_item = true;
+                // a popup PoB closed ends the session; the view says so by being empty
+                let _ = pressed.ended;
+                Ok(affected)
+            }
+            Command::ClosePopup => {
+                self.call::<_, ()>("popup_close", ())?;
+                Ok(popup_changed())
+            }
+            Command::ControlTooltip(query) => Ok(Affected {
+                control_tooltip: Some(query),
+                ..Affected::default()
+            }),
             Command::Undo(Tab::Items) => {
                 self.call::<_, ()>("items_undo", ())?;
                 self.items_edited()
@@ -967,7 +1070,11 @@ impl Backend for PobBackend {
         // failed changed nothing, and a changed group table ends the search on its own
         let ends = ends_gem_search(&command);
         let closes = matches!(command, Command::CloseGemSearch);
+        // any other command may change what the popup is about, so it ends the session first
+        // and the window is told (R4)
+        let popup_ended = ends_popup_session(&command) && self.call::<_, bool>("popup_end", ())?;
         let mut affected = self.apply_command(command, send)?;
+        affected.popup |= popup_ended;
         if ends {
             // the picker is told it ended, unless it asked to close
             let live = self.gem_search.clone();
@@ -1174,6 +1281,27 @@ impl Backend for PobBackend {
         }))
     }
 
+    fn popup_view(&mut self) -> Result<Option<PopupView>> {
+        self.view("popup_view", ())
+    }
+
+    fn control_tooltip_view(
+        &mut self,
+        query: &ControlTooltipQuery,
+    ) -> Result<Option<ControlTooltipView>> {
+        let found: Option<ItemTooltip> = match query {
+            ControlTooltipQuery::Popup { control, index } => {
+                self.view("popup_tooltip", (control.clone(), index.map(|i| i as i64)))?
+            }
+            // the affix editor and the item databases answer in later tasks
+            ControlTooltipQuery::Affix { .. } | ControlTooltipQuery::DbItem { .. } => None,
+        };
+        Ok(found.map(|tooltip| ControlTooltipView {
+            query: query.clone(),
+            tooltip,
+        }))
+    }
+
     fn item_text(&mut self, id: u32) -> Result<ItemText> {
         let text: String = self.call("item_copy", id)?;
         Ok(ItemText { id, text })
@@ -1249,6 +1377,66 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queries_do_not_end_the_popup_session() {
+        use crate::engine::{CellRef, GemTarget, ItemDb};
+        let keeps = [
+            Command::ItemTooltip(ItemTooltipQuery { id: 1, slot: None }),
+            Command::ControlTooltip(ControlTooltipQuery::Popup {
+                control: "save".into(),
+                index: None,
+            }),
+            Command::ControlTooltip(ControlTooltipQuery::DbItem {
+                db: ItemDb::Uniques,
+                name: "x".into(),
+            }),
+            Command::CopyItem { id: 1 },
+            Command::Breakdown(CellRef {
+                section: "s".into(),
+                sub: 0,
+                row: 0,
+                cell: 0,
+            }),
+            Command::GemTooltip(GemTooltipQuery {
+                group: 0,
+                target: GemTarget::Slot(0),
+                gem_id: None,
+            }),
+            Command::OpenPopup(PopupKind::Craft),
+            Command::SetPopupControl {
+                name: "rarity".into(),
+                value: PopupInput::Check(true),
+            },
+            Command::PressPopupButton {
+                name: "save".into(),
+            },
+            Command::ClosePopup,
+        ];
+        for command in keeps {
+            assert!(
+                !ends_popup_session(&command),
+                "{command:?} ends the session"
+            );
+        }
+        // anything that edits the item, the build or the tab does
+        let ends = [
+            Command::SortItems,
+            Command::PasteItem {
+                text: String::new(),
+            },
+            Command::SetMainSkillCount {
+                control: crate::engine::CalcsCount::Stages,
+                text: "1".into(),
+            },
+        ];
+        for command in ends {
+            assert!(
+                ends_popup_session(&command),
+                "{command:?} keeps the session"
+            );
+        }
+    }
 
     fn pinned_dir() -> std::path::PathBuf {
         std::env::var_os("AUTO_POB_POB_DIR")

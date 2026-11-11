@@ -187,6 +187,21 @@ function displayDump()
 			mutable = (modLine.modId and modLine.newModId) and true or false, mutated = modLine.mutated and true or false,
 		}
 	end
+	out.popups = {}
+	for _, opener in ipairs({
+		{ "displayItemEnchant", { Enchant = { second = false } } },
+		{ "displayItemEnchant2", { Enchant = { second = true } } },
+		{ "displayItemAnoint", { Anoint = { slot = 0 } } },
+		{ "displayItemAnoint2", { Anoint = { slot = 1 } } },
+		{ "displayItemAnoint3", { Anoint = { slot = 2 } } },
+		{ "displayItemAnoint4", { Anoint = { slot = 3 } } },
+		{ "displayItemCorrupt", "Corrupt" },
+		{ "displayItemAddImplicit", "AddImplicit" },
+		{ "displayItemAddCustom", "AddModifier" },
+		{ "displayItemAddCrucible", "AddCrucible" },
+	}) do
+		if c[opener[1]]:IsShown() then table.insert(out.popups, opener[2]) end
+	end
 	out.tooltip = tooltipDump(t.displayItemTooltip)
 	for i, line in ipairs(t.displayItemTooltip.lines) do
 		if line.modLine then out.tooltip.lines[i].mod_line = modLineRef(item, line.modLine) end
@@ -748,5 +763,5 @@ function checkpoint()
 	for node, id in pairs(build.spec.jewels) do
 		if id ~= 0 then jewels[node] = id end
 	end
-	table.insert(actions, { check = { items = itemsDump(), jewels = jewels, sidebar = sidebar_lines(), display = displayDump(), main_group = build.mainSocketGroup } })
+	table.insert(actions, { check = { items = itemsDump(), jewels = jewels, sidebar = sidebar_lines(), display = displayDump(), main_group = build.mainSocketGroup, popup = popupDump and popupDump() or nil } })
 end

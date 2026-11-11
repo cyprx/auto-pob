@@ -135,7 +135,7 @@ local function mod_line_ref(item, mod_line)
 	end
 end
 
-local function read_tooltip(tt, item)
+function glue.read_tooltip(tt, item)
 	local out = { influences = {}, lines = {} }
 	if tt.tooltipHeader then
 		out.header = tostring(tt.tooltipHeader)
@@ -168,6 +168,8 @@ local function read_tooltip(tt, item)
 	end
 	return out
 end
+
+local read_tooltip = glue.read_tooltip
 
 local function index_of(list, id)
 	for i, value in ipairs(list) do
@@ -513,8 +515,9 @@ local function drop_view(control)
 end
 
 -- The readers of the panel's parts, each `function(tab, item, out)`. SP5b adds its sections
--- (affixes, cluster jewels, custom mods) to this list.
+-- (affixes, cluster jewels, custom mods) to this list (`glue.display_sections`).
 local display_sections = {}
+glue.display_sections = display_sections
 
 -- the header, and what PoB's Edit popup opens with: read from the popup, which is closed again
 table.insert(display_sections, function(tab, item, out)

@@ -35,6 +35,11 @@ local function live()
 	return true
 end
 
+-- Whether a session is open (the affix tooltips PoB blanks while a popup exists ask)
+function glue.popup_live()
+	return live()
+end
+
 -- Removes every popup above `depth` from the stack, newest first
 local function close_above(depth)
 	local popups = main().popups

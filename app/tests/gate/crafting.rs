@@ -762,9 +762,8 @@ fn craft_recipes_match_pob() {
                 ranges |= affix.get("range").is_some();
                 suffix |= affix["label"] == "Suffix:";
             }
-            sorted |= display["crafting_sort"]["list"]["selected"]
+            sorted |= display["crafting_sort"]["selected"]
                 .as_u64()
-                .or(display["crafting_sort"]["selected"].as_u64())
                 .is_some_and(|i| i > 0);
             counted |= display["cluster"]["count"].as_u64().is_some_and(|c| c > 0);
             for recorded in &check.affix_tooltips {
@@ -922,6 +921,75 @@ fn craft_recipes_match_pob() {
             })
             .unwrap()
             .is_none()
+    );
+    assert_eq!(open_popups(&s), 0);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn mods_recipe_matches_pob() {
+    let _guard = lock();
+    let (recipe, mut s) = run_items_recipe("mods");
+    let mut kinds = BTreeSet::new();
+    let mut most = 0;
+    for check in checkpoints(&recipe) {
+        let Some(display) = check.display.as_ref() else {
+            continue;
+        };
+        let mods = display["custom_mods"].as_array().unwrap();
+        most = most.max(mods.len());
+        for m in mods {
+            assert!(
+                !m["line"].as_str().unwrap().contains("..."),
+                "a label was cut: {m}"
+            );
+            kinds.insert(m["kind"].as_str().unwrap().to_string());
+        }
+    }
+    assert_eq!(
+        kinds,
+        ["Crafted", "Crucible", "Custom"]
+            .map(String::from)
+            .into_iter()
+            .collect(),
+        "every kind is compared"
+    );
+    assert_eq!(most, 3);
+    crafting_round_trip("mods", &recipe, &mut s);
+
+    // the errors: no such row, and no item
+    craft_ours(&mut s, "Rare", "Mod Ring", "Ring", "Two-Stone Ring");
+    s.run(Command::OpenPopup(PopupKind::AddModifier)).unwrap();
+    // a session is open: the affix tooltips PoB blanks stay blank
+    assert!(
+        s.backend
+            .control_tooltip_view(&ControlTooltipQuery::Affix {
+                slot: 0,
+                index: Some(0)
+            })
+            .unwrap()
+            .is_none()
+    );
+    s.run(Command::ClosePopup).unwrap();
+    assert!(
+        s.backend
+            .control_tooltip_view(&ControlTooltipQuery::Affix {
+                slot: 0,
+                index: Some(0)
+            })
+            .unwrap()
+            .is_some()
+    );
+    refused_display(
+        &mut s,
+        Command::RemoveCustomMod { index: 0 },
+        "doesn't show that control",
+    );
+    s.run(Command::CancelDisplayItem { if_id: None }).unwrap();
+    refused_display(
+        &mut s,
+        Command::RemoveCustomMod { index: 0 },
+        "no item is being viewed",
     );
     assert_eq!(open_popups(&s), 0);
 }

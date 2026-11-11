@@ -981,6 +981,10 @@ impl PobBackend {
                 self.call::<_, ()>("cluster_count", count)?;
                 Ok(display_changed())
             }
+            Command::RemoveCustomMod { index } => {
+                self.call::<_, ()>("remove_custom", index + 1)?;
+                Ok(display_changed())
+            }
             Command::ToggleModLine { line } => {
                 let list = match line.list {
                     ModLineList::Enchant => "enchant",

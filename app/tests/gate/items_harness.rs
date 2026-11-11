@@ -264,6 +264,10 @@ pub(crate) enum ItemsAction {
     SetClusterNodeCount {
         count: u32,
     },
+    /// Recorded by items_lib's `act.remove_custom`
+    RemoveCustomMod {
+        index: usize,
+    },
     Undo,
     Redo,
     /// Recorded by popup_lib's `act.open_popup`, `act.popup_set`, `act.popup_press` and
@@ -352,6 +356,7 @@ impl ItemsAction {
             ItemsAction::SetCraftingSort { index } => Command::SetCraftingSort { index },
             ItemsAction::SetClusterSkill { index } => Command::SetClusterSkill { index },
             ItemsAction::SetClusterNodeCount { count } => Command::SetClusterNodeCount { count },
+            ItemsAction::RemoveCustomMod { index } => Command::RemoveCustomMod { index },
             ItemsAction::OpenPopup { kind } => Command::OpenPopup(kind),
             ItemsAction::SetPopupControl { name, value } => {
                 Command::SetPopupControl { name, value }
@@ -581,6 +586,7 @@ pub(crate) fn run_items_recipe(name: &str) -> (ItemsRecipe, Session) {
     for action in &recipe.actions {
         match action.command() {
             Some(command) => {
+                let command = relabel_pick(&mut s, command);
                 let started = std::time::Instant::now();
                 let affected = s
                     .run(command)
@@ -612,6 +618,7 @@ pub(crate) fn run_items_recipe(name: &str) -> (ItemsRecipe, Session) {
                         | ItemsAction::SetCraftingSort { .. }
                         | ItemsAction::SetClusterSkill { .. }
                         | ItemsAction::SetClusterNodeCount { .. }
+                        | ItemsAction::RemoveCustomMod { .. }
                 ) {
                     assert!(
                         affected.display_item,
@@ -749,6 +756,31 @@ pub(crate) fn run_items_recipe(name: &str) -> (ItemsRecipe, Session) {
     (recipe, s)
 }
 
+/// A recorded pick names the entry it chose by index and label. Where PoB builds a list from
+/// `pairs`, entries that tie sort in an order that differs per Lua state, so the index can
+/// land on another entry in ours: the label says which was meant.
+fn relabel_pick(s: &mut Session, command: Command) -> Command {
+    let Command::SetPopupControl {
+        name,
+        value: PopupInput::Choice { index, label },
+    } = command
+    else {
+        return command;
+    };
+    let view = s.backend.popup_view().ok().flatten();
+    let index = view
+        .and_then(|v| v.controls.into_iter().find(|c| c.name == name))
+        .map(|c| match c.choices.get(index) {
+            Some(here) if *here == label => index,
+            _ => c.choices.iter().position(|c| *c == label).unwrap_or(index),
+        })
+        .unwrap_or(index);
+    Command::SetPopupControl {
+        name,
+        value: PopupInput::Choice { index, label },
+    }
+}
+
 pub(crate) fn checkpoints(recipe: &ItemsRecipe) -> Vec<&ItemsCheckpoint> {
     recipe
         .actions
@@ -815,4 +847,70 @@ fn canonical_tooltip(mut tooltip: serde_json::Value) -> serde_json::Value {
     }
     lines.extend(blanks);
     tooltip
+}
+
+#[cfg(test)]
+mod canonical_tests {
+    use super::canonical_tooltip;
+    use serde_json::{Value, json};
+
+    fn line(text: &str, size: u32) -> Value {
+        json!({ "text": text, "size": size })
+    }
+
+    /// Two size groups, each with skills, after a lead-in line
+    fn tooltip(groups: &[(&str, &[&str])]) -> Value {
+        let mut lines = vec![line("Notable", 16), line("Notable can appear on:", 16)];
+        for (i, (size, skills)) in groups.iter().enumerate() {
+            if i > 0 {
+                lines.push(line("", 16));
+            }
+            lines.push(line(size, 18));
+            lines.extend(skills.iter().map(|s| line(s, 16)));
+        }
+        json!({ "lines": lines })
+    }
+
+    const BASE: &[(&str, &[&str])] = &[
+        ("Large", &["Fire", "Cold", "Life"]),
+        ("Medium", &["Fire", "Mana"]),
+    ];
+
+    #[test]
+    fn a_reordered_tail_compares_equal() {
+        let reordered: &[(&str, &[&str])] = &[
+            ("Medium", &["Mana", "Fire"]),
+            ("Large", &["Life", "Fire", "Cold"]),
+        ];
+        assert_eq!(
+            canonical_tooltip(tooltip(BASE)),
+            canonical_tooltip(tooltip(reordered))
+        );
+    }
+
+    #[test]
+    fn a_missing_extra_or_moved_skill_differs() {
+        let canon = |groups: &[(&str, &[&str])]| canonical_tooltip(tooltip(groups));
+        let base = canon(BASE);
+        let missing: &[(&str, &[&str])] =
+            &[("Large", &["Fire", "Cold"]), ("Medium", &["Fire", "Mana"])];
+        let extra: &[(&str, &[&str])] = &[
+            ("Large", &["Fire", "Cold", "Life", "Chaos"]),
+            ("Medium", &["Fire", "Mana"]),
+        ];
+        let moved: &[(&str, &[&str])] = &[
+            ("Large", &["Fire", "Cold"]),
+            ("Medium", &["Fire", "Mana", "Life"]),
+        ];
+        assert_ne!(base, canon(missing), "a missing skill");
+        assert_ne!(base, canon(extra), "an extra skill");
+        assert_ne!(base, canon(moved), "a skill moved between groups");
+    }
+
+    #[test]
+    fn lines_before_the_tail_stay_exact() {
+        let mut other = tooltip(BASE);
+        other["lines"][0] = line("Another notable", 16);
+        assert_ne!(canonical_tooltip(tooltip(BASE)), canonical_tooltip(other));
+    }
 }

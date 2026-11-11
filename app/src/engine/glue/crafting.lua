@@ -1,5 +1,5 @@
--- The display panel's crafting sections (R3, R9, R11). Later tasks add the custom-mod list;
--- the windows come first, then the affix editor and the cluster jewel controls.
+-- The display panel's crafting sections (R3, R9, R11, R12): the windows first, then the affix
+-- editor, the cluster jewel controls and the custom-mod list.
 
 glue = glue or {}
 
@@ -64,7 +64,39 @@ table.insert(glue.display_sections, function(tab, item, out)
 	end
 end)
 
--- ---- Commands (R9, R11) ----
+-- The lines PoB's Remove rows list (`UpdateCustomControls`), read from the model. The rows'
+-- own labels are cut by `DrawStringCursorIndex`, which is stubbed headless (R12).
+local function custom_lines(item)
+	local lines = copyTable(item.explicitModLines)
+	local crucible = item.crucibleModLines
+	if crucible and #crucible > 0 then
+		for _, line in ipairs(crucible) do
+			table.insert(lines, line)
+		end
+	end
+	local out = {}
+	if item.rareLikeUnique or item.rarity == "MAGIC" or item.rarity == "RARE"
+		or (crucible and #crucible > 0) then
+		for _, modLine in ipairs(lines) do
+			if modLine.custom or modLine.crafted or modLine.crucible then
+				local line = itemLib.formatModLine(modLine)
+				if line then
+					table.insert(out, {
+						kind = modLine.crafted and "Crafted" or modLine.crucible and "Crucible" or "Custom",
+						line = line,
+					})
+				end
+			end
+		end
+	end
+	return out
+end
+
+table.insert(glue.display_sections, function(tab, item, out)
+	out.custom_mods = custom_lines(item)
+end)
+
+-- ---- Commands (R9, R11, R12) ----
 
 local function display_tab()
 	local tab = items_tab()
@@ -136,11 +168,24 @@ function glue.cluster_count(count)
 	slider:SetVal((count - jewel.minNodes) / (jewel.maxNodes - jewel.minNodes))
 end
 
+-- Removes custom mod `index` (1-based, as the view lists them): the Remove row's own button,
+-- after the sync PoB's Draw would have made (R12)
+function glue.remove_custom(index)
+	local tab = display_tab()
+	tab:UpdateCustomControls()
+	local button = tab.controls["displayItemCustomModifierRemove" .. index]
+	if index < 1 or not (button and button:IsShown()) then
+		error(NOT_SHOWN, 0)
+	end
+	button.onClick()
+end
+
 -- The tooltip of an affix entry (`index`, 0-based) or, without one, of the slider, as PoB
--- builds it on hover. Nil when the control or the entry is gone.
+-- builds it on hover. Nil when the control or the entry is gone, or while a popup is open.
 function glue.affix_tooltip(slot, index)
 	local tab = items_tab()
-	if not tab.displayItem then
+	-- PoB blanks these tooltips while a popup is open, and a session is one (R1)
+	if not tab.displayItem or glue.popup_live() then
 		return nil
 	end
 	local drop = tab.controls["displayItemAffix" .. (slot + 1)]

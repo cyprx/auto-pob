@@ -1235,7 +1235,19 @@ pub struct DisplayItemView {
     pub crafting_sort: Option<DropList>,
     /// A crafted cluster jewel's controls (R11)
     pub cluster: Option<ClusterView>,
+    /// The crafted, crucible and custom mods PoB lists with a Remove button (R12)
+    #[serde(default)]
+    pub custom_mods: Vec<CustomModView>,
     pub tooltip: ItemTooltip,
+}
+
+/// One line of the display item's custom-mod list
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CustomModView {
+    /// "Crafted", "Crucible" or "Custom"
+    pub kind: String,
+    /// `itemLib.formatModLine`'s text
+    pub line: String,
 }
 
 /// One of PoB's affix dropdowns with the slider under it

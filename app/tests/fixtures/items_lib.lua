@@ -187,6 +187,21 @@ function displayDump()
 			mutable = (modLine.modId and modLine.newModId) and true or false, mutated = modLine.mutated and true or false,
 		}
 	end
+	-- the crafted, crucible and custom lines, from the model: the Remove rows' labels are all
+	-- "..." headless
+	out.custom_mods = {}
+	local rare = item.rarity == "MAGIC" or item.rarity == "RARE" or item.rareLikeUnique
+	for _, list in ipairs({ item.explicitModLines, item.crucibleModLines or {} }) do
+		for _, modLine in ipairs(list) do
+			local line = itemLib.formatModLine(modLine)
+			if line and (rare or #(item.crucibleModLines or {}) > 0)
+				and (modLine.custom or modLine.crafted or modLine.crucible) then
+				local kind = "Custom"
+				if modLine.crafted then kind = "Crafted" elseif modLine.crucible then kind = "Crucible" end
+				table.insert(out.custom_mods, { kind = kind, line = line })
+			end
+		end
+	end
 	out.popups = {}
 	for _, opener in ipairs({
 		{ "displayItemEnchant", { Enchant = { second = false } } },
@@ -876,6 +891,16 @@ function act.cluster_count(count)
 	assert(slider:IsShown(), "the node count slider is not shown")
 	slider:SetVal((count - jewel.minNodes) / (jewel.maxNodes - jewel.minNodes))
 	record({ cmd = "SetClusterNodeCount", count = count })
+end
+
+-- A custom mod's Remove button (`index` is 0-based in displayDump().custom_mods). PoB's Draw
+-- refreshes the rows first.
+function act.remove_custom(index)
+	tab():UpdateCustomControls()
+	local button = control("displayItemCustomModifierRemove" .. (index + 1))
+	assert(button:IsShown(), "the Remove row is not shown")
+	button.onClick()
+	record({ cmd = "RemoveCustomMod", index = index })
 end
 
 -- The Items tab right now, recorded for the gate to compare with ours at this point. `layout`

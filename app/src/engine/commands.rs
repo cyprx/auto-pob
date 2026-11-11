@@ -461,6 +461,11 @@ pub enum Command {
     SetClusterNodeCount {
         count: u32,
     },
+    /// A custom, crafted or crucible mod's Remove button (R12); `index` is in
+    /// `DisplayItemView::custom_mods`.
+    RemoveCustomMod {
+        index: usize,
+    },
     /// A click on a tooltip line of the display item (R4).
     ToggleModLine {
         line: ModLineRef,

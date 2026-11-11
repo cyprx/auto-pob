@@ -176,6 +176,7 @@ impl Backend for Fake {
     fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
         let ends = ends_popup_session(&command);
         let mut affected = self.apply_command(command)?;
+        // a command that failed changed nothing, so it leaves the session open
         if ends && self.popup.take().is_some() {
             affected.popup = true;
         }

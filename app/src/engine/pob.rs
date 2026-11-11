@@ -337,8 +337,7 @@ struct Pressed {
     build_flag: bool,
 }
 
-/// A popup session command changed the popup, and the display item behind it (a press can
-/// save into it).
+/// A popup session command changed the popup only (a press also flags the display item).
 fn popup_changed() -> Affected {
     Affected {
         popup: true,
@@ -1070,11 +1069,13 @@ impl Backend for PobBackend {
         // failed changed nothing, and a changed group table ends the search on its own
         let ends = ends_gem_search(&command);
         let closes = matches!(command, Command::CloseGemSearch);
-        // any other command may change what the popup is about, so it ends the session first
-        // and the window is told (R4)
-        let popup_ended = ends_popup_session(&command) && self.call::<_, bool>("popup_end", ())?;
+        let ends_popup = ends_popup_session(&command);
         let mut affected = self.apply_command(command, send)?;
-        affected.popup |= popup_ended;
+        // any other command may change what the popup is about, so it ends the session once
+        // it went through, and the window is told (R4); a failed one changed nothing
+        if ends_popup && self.call::<_, bool>("popup_end", ())? {
+            affected.popup = true;
+        }
         if ends {
             // the picker is told it ended, unless it asked to close
             let live = self.gem_search.clone();

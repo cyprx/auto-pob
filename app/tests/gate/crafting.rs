@@ -74,7 +74,7 @@ fn canonical(mut popup: serde_json::Value) -> serde_json::Value {
     if let Some(controls) = popup["controls"].as_array_mut() {
         for control in controls {
             let name = control["name"].as_str().unwrap_or_default();
-            if !(name.len() == 9 && name.starts_with("implicit")) {
+            if !["implicit1", "implicit2", "implicit3", "implicit4"].contains(&name) {
                 continue;
             }
             if let Some(Value::Array(mut choices)) = control.get("choices").cloned() {
@@ -145,8 +145,10 @@ impl Seen {
         for control in &view.controls {
             self.kinds.insert(format!("{:?}", control.kind));
             self.hidden |= !control.shown;
-            self.disabled_dropdown |=
-                control.kind == PopupControlKind::Dropdown && control.shown && !control.enabled;
+            self.disabled_dropdown |= control.name == "source"
+                && control.kind == PopupControlKind::Dropdown
+                && control.shown
+                && !control.enabled;
             self.tooltip_text |= control.tooltip_text.is_some();
             self.rows |= !control.rows.is_empty();
             self.row_selected |= control.row_selected.is_some();

@@ -140,7 +140,7 @@ function glue.panel_popups(tab)
 	local kinds = {}
 	for _, entry in ipairs(PANEL) do
 		local control = tab.controls[entry[1]]
-		if control and control:IsShown() then
+		if control and control:IsShown() and control:IsEnabled() then
 			table.insert(kinds, entry[2])
 		end
 	end

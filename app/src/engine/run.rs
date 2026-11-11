@@ -1276,6 +1276,21 @@ mod tests {
     }
 
     #[test]
+    fn a_failing_command_leaves_the_popup_session_open() {
+        let (mut fake, _log) = Fake::new();
+        fake.fail_set_config = Some("boom".into());
+        let events = run_queued(
+            &mut fake,
+            vec![
+                Command::OpenPopup(crate::engine::PopupKind::Craft),
+                set_config(),
+            ],
+        );
+        assert!(events.iter().any(|e| matches!(e, Event::Error { .. })));
+        assert_eq!(popups(&events).last(), Some(&true), "{events:?}");
+    }
+
+    #[test]
     fn only_latest_control_tooltip_runs() {
         let (mut fake, log) = Fake::new();
         let events = run_queued(

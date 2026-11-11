@@ -81,6 +81,18 @@ pub struct BuildListEntry {
     pub delete_prompt: String,
 }
 
+impl BuildListEntry {
+    /// The question `delete_prompt` asks, as `DeleteBuild` takes it back
+    pub fn delete_kind(&self) -> super::commands::DeleteKind {
+        use super::commands::DeleteKind;
+        match (self.is_folder, self.delete_prompt.is_empty()) {
+            (false, _) => DeleteKind::Build,
+            (true, true) => DeleteKind::EmptyFolder,
+            (true, false) => DeleteKind::Folder,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct StatsView {
     /// The player's rows. The "Skill DPS" stat is one row per Full DPS skill, in PoB's order.

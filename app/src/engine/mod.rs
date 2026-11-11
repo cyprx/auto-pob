@@ -13,9 +13,9 @@ pub mod views;
 pub(crate) mod fake;
 
 pub use commands::{
-    CalcsControl, CalcsCount, CharacterPart, Command, ConfigValue, ControlTooltipQuery, GemFilter,
-    GemSearchQuery, GemTarget, GemToggle, GemTooltipQuery, ImportMode, ItemDb, ItemDbQuery,
-    ItemTooltipQuery, PopupInput, PopupKind, Realm, SkillOption, SocketColour, Tab,
+    CalcsControl, CalcsCount, CharacterPart, Command, ConfigValue, ControlTooltipQuery, DeleteKind,
+    GemFilter, GemSearchQuery, GemTarget, GemToggle, GemTooltipQuery, ImportMode, ItemDb,
+    ItemDbQuery, ItemTooltipQuery, PopupInput, PopupKind, Realm, SkillOption, SocketColour, Tab,
 };
 pub use run::{
     Affected, Backend, BackgroundTask, DbSnapshot, Engine, Event, Liveness, Snapshot, run_loop,

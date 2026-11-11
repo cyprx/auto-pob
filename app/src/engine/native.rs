@@ -38,6 +38,51 @@ pub(crate) fn redact(line: &str) -> String {
         .collect()
 }
 
+/// The Builds folder a recursive `RemoveDir` may delete in (R16), held in the Lua state: as
+/// PoB spells it, and canonical.
+struct BuildsRoot(Option<(PathBuf, PathBuf)>);
+
+/// Sets the folder a recursive `RemoveDir` is confined to; `None`, or a folder that can't be
+/// resolved, refuses every recursive delete.
+pub fn set_builds_root(lua: &Lua, root: Option<&Path>) {
+    lua.set_app_data(BuildsRoot(root.and_then(|r| {
+        fs::canonicalize(r).ok().map(|real| (r.to_path_buf(), real))
+    })));
+}
+
+/// `remove_dir_all` for a folder strictly below the root: no component of the path below the
+/// root is a link, and the root itself is never removed. Links inside the tree are unlinked,
+/// never followed (`remove_dir_all` does not traverse them).
+fn recursive_remove(root: Option<&(PathBuf, PathBuf)>, path: &Path) -> std::io::Result<()> {
+    let refuse = || {
+        log::warn!("refused a recursive delete outside the Builds folder");
+        Err(std::io::Error::other("refused: outside the builds folder"))
+    };
+    let Some((spelled, real)) = root else {
+        return refuse();
+    };
+    let Some(rel) = path
+        .strip_prefix(spelled)
+        .or_else(|_| path.strip_prefix(real))
+        .ok()
+        .filter(|rel| path.is_absolute() && rel.file_name().is_some())
+    else {
+        return refuse();
+    };
+    let mut walk = real.clone();
+    for part in rel.components() {
+        if !matches!(part, std::path::Component::Normal(_)) {
+            return refuse();
+        }
+        walk.push(part);
+        match fs::symlink_metadata(&walk) {
+            Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {}
+            _ => return refuse(),
+        }
+    }
+    fs::remove_dir_all(&walk)
+}
+
 /// Registers `Inflate`, `Deflate`, `NewFileSearch`, `ConPrintf` support and the path functions.
 pub fn register(lua: &Lua, pob_dir: &Path, user_dir: &Path) -> mlua::Result<()> {
     let g = lua.globals();
@@ -87,10 +132,11 @@ pub fn register(lua: &Lua, pob_dir: &Path, user_dir: &Path) -> mlua::Result<()> 
     g.set(
         "RemoveDir",
         // a folder, and with `recursive` everything in it (PoB asks first, BuildListControl.lua
-        // :154); the folder's own symlinks are removed, not followed
-        lua.create_function(|_, (path, recursive): (String, Option<bool>)| {
+        // :154), but only below the registered Builds folder (see `recursive_remove`)
+        lua.create_function(|lua, (path, recursive): (String, Option<bool>)| {
             let removed = if recursive.unwrap_or(false) {
-                fs::remove_dir_all(path)
+                let root = lua.app_data_ref::<BuildsRoot>().and_then(|r| r.0.clone());
+                recursive_remove(root.as_ref(), Path::new(&path))
             } else {
                 fs::remove_dir(path)
             };
@@ -405,6 +451,7 @@ mod tests {
         lua.globals()
             .set("p", full.to_string_lossy().into_owned())
             .unwrap();
+        set_builds_root(&lua, Some(&tmp.0));
         let plain: (Option<bool>, Option<String>) = lua.load("return RemoveDir(p)").eval().unwrap();
         assert_eq!(plain.0, None);
         assert!(plain.1.is_some());
@@ -413,6 +460,63 @@ mod tests {
             lua.load("return RemoveDir(p, true)").eval().unwrap();
         assert_eq!(all, (Some(true), None));
         assert!(!full.exists());
+    }
+
+    fn remove(lua: &Lua, path: &Path) -> (Option<bool>, Option<String>) {
+        lua.globals()
+            .set("p", path.to_string_lossy().into_owned())
+            .unwrap();
+        lua.load("return RemoveDir(p, true)").eval().unwrap()
+    }
+
+    #[test]
+    fn recursive_remove_stays_inside_the_builds_root() {
+        use std::os::unix::fs::symlink;
+        let tmp = TempDir::new("rmroot");
+        let builds = tmp.0.join("Builds");
+        let outside = tmp.0.join("outside");
+        fs::create_dir_all(builds.join("tree/inner")).unwrap();
+        fs::create_dir_all(outside.join("keep")).unwrap();
+        fs::write(outside.join("keep/f.txt"), "keep").unwrap();
+        fs::write(outside.join("s.xml"), "s").unwrap();
+        let lua = lua();
+        let refused = Some("refused: outside the builds folder".to_string());
+        // nothing armed
+        assert_eq!(remove(&lua, &builds.join("tree")), (None, refused.clone()));
+        set_builds_root(&lua, Some(&builds));
+        // a folder outside the root, the root, a relative path
+        assert_eq!(remove(&lua, &outside), (None, refused.clone()));
+        assert_eq!(remove(&lua, &builds), (None, refused.clone()));
+        assert_eq!(remove(&lua, Path::new("outside")), (None, refused.clone()));
+        assert_eq!(
+            remove(&lua, &builds.join("../outside")),
+            (None, refused.clone())
+        );
+        // a folder that is a link, and one below a link
+        symlink(&outside, builds.join("escape")).unwrap();
+        assert_eq!(
+            remove(&lua, &builds.join("escape")),
+            (None, refused.clone())
+        );
+        assert_eq!(
+            remove(&lua, &builds.join("escape/keep")),
+            (None, refused.clone())
+        );
+        assert!(outside.join("keep/f.txt").is_file());
+        // a tree holding links out: they are unlinked, what they lead to stays
+        symlink(&outside, builds.join("tree/inner/dir_link")).unwrap();
+        symlink(outside.join("s.xml"), builds.join("tree/file_link")).unwrap();
+        assert_eq!(remove(&lua, &builds.join("tree")), (Some(true), None));
+        assert!(!builds.join("tree").exists());
+        assert!(outside.join("keep/f.txt").is_file() && outside.join("s.xml").is_file());
+        // the non-recursive form removes an empty folder and nothing else
+        fs::create_dir_all(outside.join("empty")).unwrap();
+        lua.globals()
+            .set("p", outside.join("keep").to_string_lossy().into_owned())
+            .unwrap();
+        let plain: (Option<bool>, Option<String>) = lua.load("return RemoveDir(p)").eval().unwrap();
+        assert_eq!(plain.0, None);
+        assert!(outside.join("keep/f.txt").is_file());
     }
 
     #[test]

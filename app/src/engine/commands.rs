@@ -57,6 +57,17 @@ pub enum CharacterPart {
     },
 }
 
+/// The question a delete was confirmed under
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeleteKind {
+    /// A build file
+    Build,
+    /// A folder PoB deletes without asking, because it was empty
+    EmptyFolder,
+    /// A folder with things in it, deleted with them
+    Folder,
+}
+
 #[derive(Debug, Clone)]
 pub enum Command {
     /// Sub-path relative to the Builds folder; "" is the root.
@@ -79,6 +90,9 @@ pub enum Command {
     /// a folder goes with everything in it. Refuses the open build (or a folder holding it).
     DeleteBuild {
         path: PathBuf,
+        /// What the UI asked about, from the entry's `delete_prompt`. The engine deletes only
+        /// when PoB asks the same question (R16).
+        kind: DeleteKind,
     },
     /// PoB's Ctrl+X, Ctrl+V into `folder`, a sub-path of the Builds folder ("" is the root)
     MoveBuild {

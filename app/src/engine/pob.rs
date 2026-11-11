@@ -2,9 +2,9 @@
 
 use super::buildpaths;
 use super::commands::{
-    CharacterPart, Command, ConfigValue, ControlTooltipQuery, GemSearchQuery, GemTarget, GemToggle,
-    GemTooltipQuery, ImportMode, ItemDb, ItemDbQuery, ItemTooltipQuery, PopupInput, PopupKind,
-    SkillOption, SocketColour, Tab,
+    CharacterPart, Command, ConfigValue, ControlTooltipQuery, DeleteKind, GemSearchQuery,
+    GemTarget, GemToggle, GemTooltipQuery, ImportMode, ItemDb, ItemDbQuery, ItemTooltipQuery,
+    PopupInput, PopupKind, SkillOption, SocketColour, Tab,
 };
 use super::net::{Dispatch, NetHandle};
 use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Engine, Event};
@@ -182,7 +182,10 @@ impl PobBackend {
 
     /// The Builds folder as PoB holds it (`main.buildPath`).
     fn build_root(&self) -> Result<String> {
-        self.call("build_root", ())
+        let root: String = self.call("build_root", ())?;
+        // a recursive RemoveDir may delete only below it (R16)
+        super::native::set_builds_root(&self.lua, Some(Path::new(&root)));
+        Ok(root)
     }
 
     /// `path` as PoB spells an entry of the Builds folder, or why it is refused (R16).
@@ -684,7 +687,7 @@ impl PobBackend {
                 if folder.contains("..") || folder.starts_with('/') {
                     anyhow::bail!("that isn't a valid folder");
                 }
-                self.folder = buildpaths::folder(&self.build_root()?, &folder, false)?;
+                self.folder = buildpaths::folder(&self.build_root()?, &folder, false, false)?;
                 Ok(Affected {
                     list: true,
                     ..Affected::default()
@@ -692,27 +695,54 @@ impl PobBackend {
             }
             Command::RenameBuild { path, name } => {
                 let path = self.build_entry(&path, false)?;
+                buildpaths::name_free(&path, &name, true)?;
                 self.call::<_, ()>("rename_build", (path, name))?;
                 Ok(list_changed())
             }
             Command::CopyBuild { path, name } => {
                 let path = self.build_entry(&path, true)?;
+                buildpaths::name_free(&path, &name, false)?;
                 self.call::<_, ()>("copy_build", (path, name))?;
                 Ok(list_changed())
             }
-            Command::DeleteBuild { path } => {
+            Command::DeleteBuild { path, kind } => {
                 let path = self.build_entry(&path, false)?;
-                self.call::<_, ()>("delete_build", path)?;
+                let kind_name = match kind {
+                    DeleteKind::Build => "build",
+                    DeleteKind::EmptyFolder => "empty",
+                    DeleteKind::Folder => "folder",
+                };
+                // the contents are looked at again: what the user was asked about must be
+                // what is deleted
+                let looked = std::fs::symlink_metadata(&path).ok();
+                let is_dir = looked.as_ref().is_some_and(|m| m.is_dir());
+                let has_contents = is_dir
+                    && std::fs::read_dir(&path).is_ok_and(|mut entries| entries.next().is_some());
+                let as_asked = match kind {
+                    DeleteKind::Build => looked.is_some() && !is_dir,
+                    DeleteKind::EmptyFolder => is_dir && !has_contents,
+                    DeleteKind::Folder => is_dir && has_contents,
+                };
+                if !as_asked {
+                    anyhow::bail!("the folder changed; look again");
+                }
+                self.call::<_, ()>("delete_build", (path.clone(), kind_name))?;
+                // PoB ignores what its delete answers: look at the file system
+                if std::fs::symlink_metadata(&path).is_ok() {
+                    anyhow::bail!("couldn't delete that build");
+                }
                 Ok(list_changed())
             }
             Command::MoveBuild { path, folder } => {
+                let root = self.build_root()?;
                 let path = self.build_entry(&path, true)?;
-                let folder = buildpaths::folder(&self.build_root()?, &folder, true)?;
+                let folder = buildpaths::folder(&root, &folder, true, true)?;
+                buildpaths::move_target_free(&path, &root, &folder)?;
                 self.call::<_, ()>("move_build", (path, folder))?;
                 Ok(list_changed())
             }
             Command::NewFolder { name } => {
-                let folder = buildpaths::folder(&self.build_root()?, &self.folder, true)?;
+                let folder = buildpaths::folder(&self.build_root()?, &self.folder, true, true)?;
                 self.call::<_, ()>("new_folder", (folder, name))?;
                 Ok(list_changed())
             }

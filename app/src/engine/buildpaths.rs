@@ -24,28 +24,38 @@ fn real_root(root: &str) -> Result<PathBuf> {
     fs::canonicalize(root).map_err(|_| anyhow!("no such build"))
 }
 
-/// Whether anything below `dir` is a link that leads out of `root` (a copy or a move would
-/// follow it and take the files it leads to)
-fn tree_escapes(dir: &Path, root: &Path) -> bool {
+/// Whether anything below `dir` is a link, or can't be read (a copy or a move would follow a
+/// link, and a chain of links can lead out of `root` in two hops or loop)
+fn tree_has_links(dir: &Path) -> bool {
     let Ok(read) = fs::read_dir(dir) else {
-        return false;
+        return true;
     };
-    read.filter_map(Result::ok).any(|entry| {
-        let path = entry.path();
-        let Ok(meta) = fs::symlink_metadata(&path) else {
-            return false;
+    read.into_iter().any(|entry| {
+        let Ok(entry) = entry else {
+            return true;
         };
-        if meta.file_type().is_symlink() {
-            return fs::canonicalize(&path).map_or(true, |real| !real.starts_with(root));
+        let path = entry.path();
+        match fs::symlink_metadata(&path) {
+            Err(_) => true,
+            Ok(meta) if meta.file_type().is_symlink() => true,
+            Ok(meta) => meta.is_dir() && tree_has_links(&path),
         }
-        meta.is_dir() && tree_escapes(&path, root)
+    })
+}
+
+/// Whether any part of `rel` below `base` is a link
+fn path_has_links(base: &Path, rel: &Path) -> bool {
+    let mut walk = base.to_path_buf();
+    rel.components().any(|part| {
+        walk.push(part);
+        fs::symlink_metadata(&walk).is_ok_and(|m| m.file_type().is_symlink())
     })
 }
 
 /// The Builds entry `path` names, as PoB spells it (`root` + the path below it), or the reason
 /// it is refused. `path` must be a build file or a folder that exists below `root`; a link is
-/// accepted only when its target is below `root` too. `walks` is true for operations that
-/// follow the links inside a folder (Copy and Move).
+/// accepted only when its target is below `root` too. `walks` is true for Copy and Move, which
+/// follow links: they refuse a link anywhere in the path or the tree.
 pub(crate) fn entry(root: &str, path: &Path, walks: bool) -> Result<String> {
     let root = root_dir(root);
     let root_real = real_root(&root)?;
@@ -65,6 +75,9 @@ pub(crate) fn entry(root: &str, path: &Path, walks: bool) -> Result<String> {
         .or_else(|| below(&root_real))
         .ok_or_else(outside)?;
     let name = rel.file_name().ok_or_else(outside)?;
+    if walks && path_has_links(&root_real, rel) {
+        return Err(outside());
+    }
     let parent = root_real.join(rel.parent().unwrap_or(Path::new("")));
     let parent_real = fs::canonicalize(&parent).map_err(|_| anyhow!("no such build"))?;
     let parent_rel = parent_real
@@ -78,7 +91,7 @@ pub(crate) fn entry(root: &str, path: &Path, walks: bool) -> Result<String> {
             return Err(outside());
         }
     }
-    if walks && full.is_dir() && tree_escapes(&full, &root_real) {
+    if walks && full.is_dir() && tree_has_links(&full) {
         return Err(outside());
     }
     let parent_rel = parent_rel
@@ -96,7 +109,8 @@ pub(crate) fn entry(root: &str, path: &Path, walks: bool) -> Result<String> {
 /// The Builds sub-path `folder` names, with a closing slash ("" for the root), or the reason it
 /// is refused. A folder that doesn't exist is an error when `must_exist`, and passes (unless it
 /// is spelled to escape) otherwise.
-pub(crate) fn folder(root: &str, folder: &str, must_exist: bool) -> Result<String> {
+/// `strict` refuses a link anywhere in the path.
+pub(crate) fn folder(root: &str, folder: &str, must_exist: bool, strict: bool) -> Result<String> {
     if folder.starts_with('/')
         || folder.starts_with('\\')
         || folder
@@ -116,6 +130,9 @@ pub(crate) fn folder(root: &str, folder: &str, must_exist: bool) -> Result<Strin
         Err(_) if !must_exist => return Ok(lexical()),
         Err(e) => return Err(e),
     };
+    if strict && path_has_links(&root_real, Path::new(folder)) {
+        return Err(outside());
+    }
     let joined = root_real.join(folder);
     let real = match fs::canonicalize(&joined) {
         Ok(real) => real,
@@ -132,6 +149,49 @@ pub(crate) fn folder(root: &str, folder: &str, must_exist: bool) -> Result<Strin
     } else {
         format!("{rel}/")
     })
+}
+
+/// Refuses a new name that is taken in the entry's folder, exactly or as a case variant, a
+/// link (also a dangling one) included: a rename or copy would replace or write through it.
+/// `entry` is the approved source; `rename` lets the entry's own name through when only its
+/// case changes.
+pub(crate) fn name_free(entry: &str, new_name: &str, rename: bool) -> Result<()> {
+    let taken = || anyhow!("a build with that name already exists");
+    let source = Path::new(entry);
+    let (Some(dir), Some(own)) = (source.parent(), source.file_name().and_then(|n| n.to_str()))
+    else {
+        return Err(anyhow!("no such build"));
+    };
+    let is_folder = fs::symlink_metadata(source).is_ok_and(|m| m.is_dir());
+    let target = if is_folder {
+        new_name.to_string()
+    } else {
+        format!("{new_name}.xml")
+    };
+    if rename && target == own {
+        return Err(taken());
+    }
+    let lower = target.to_lowercase();
+    for found in fs::read_dir(dir).map_err(|_| anyhow!("no such build"))? {
+        let found = found.map_err(|_| taken())?;
+        let name = found.file_name().to_string_lossy().into_owned();
+        if name.to_lowercase() == lower && !(rename && name == own) {
+            return Err(taken());
+        }
+    }
+    Ok(())
+}
+
+/// Refuses a move onto a name that is a link the move would replace
+pub(crate) fn move_target_free(entry: &str, root: &str, dest_folder: &str) -> Result<()> {
+    let Some(name) = Path::new(entry).file_name() else {
+        return Err(anyhow!("no such build"));
+    };
+    let target = Path::new(&root_dir(root)).join(dest_folder).join(name);
+    if fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(anyhow!("a build with that name already exists"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -226,6 +286,69 @@ mod tests {
     }
 
     #[test]
+    fn copy_and_move_refuse_every_link_in_the_path_or_tree() {
+        let tree = Tree::new("chain");
+        let root = tree.root();
+        // two hops: Builds/x/l -> Builds/y, Builds/y/out -> outside
+        fs::create_dir_all(tree.0.join("Builds/x")).unwrap();
+        fs::create_dir_all(tree.0.join("Builds/y")).unwrap();
+        symlink(tree.0.join("Builds/y"), tree.0.join("Builds/x/l")).unwrap();
+        symlink(tree.0.join("outside"), tree.0.join("Builds/y/out")).unwrap();
+        let x = tree.0.join("Builds/x");
+        assert_eq!(refusal(entry(&root, &x, true)), OUTSIDE);
+        assert!(
+            entry(&root, &x, false).is_ok(),
+            "rename and delete don't follow"
+        );
+        // a link to a folder inside Builds is a link too
+        symlink(tree.0.join("Builds/sub"), tree.0.join("Builds/inner")).unwrap();
+        assert_eq!(
+            refusal(entry(&root, &tree.0.join("Builds/inner/b.xml"), true)),
+            OUTSIDE
+        );
+        assert_eq!(
+            refusal(entry(&root, &tree.0.join("Builds/inner"), true)),
+            OUTSIDE
+        );
+        assert_eq!(refusal(folder(&root, "inner", true, true)), OUTSIDE);
+        assert!(folder(&root, "inner", true, false).is_ok());
+        // a loop
+        symlink(tree.0.join("Builds/loop"), tree.0.join("Builds/loop2")).unwrap();
+        fs::create_dir_all(tree.0.join("Builds/loop")).unwrap();
+        symlink(tree.0.join("Builds/loop"), tree.0.join("Builds/loop/self")).unwrap();
+        assert_eq!(
+            refusal(entry(&root, &tree.0.join("Builds/loop"), true)),
+            OUTSIDE
+        );
+    }
+
+    #[test]
+    fn names_are_free_only_when_nothing_has_them_in_any_case() {
+        let tree = Tree::new("names");
+        let a = format!("{}a.xml", tree.root());
+        let err = |r: Result<()>| r.expect_err("taken").to_string();
+        let taken = "a build with that name already exists";
+        fs::write(tree.0.join("Builds/Other.xml"), "o").unwrap();
+        symlink(
+            tree.0.join("outside/gone.xml"),
+            tree.0.join("Builds/dangling.xml"),
+        )
+        .unwrap();
+        assert!(name_free(&a, "fresh", false).is_ok());
+        assert_eq!(err(name_free(&a, "a", false)), taken);
+        assert_eq!(err(name_free(&a, "a", true)), taken);
+        assert_eq!(err(name_free(&a, "other", true)), taken, "a case variant");
+        assert_eq!(err(name_free(&a, "OTHER", false)), taken);
+        assert_eq!(
+            err(name_free(&a, "dangling", false)),
+            taken,
+            "a dangling link"
+        );
+        // only the case of its own name changes
+        assert!(name_free(&a, "A", true).is_ok());
+    }
+
+    #[test]
     fn a_folder_holding_a_link_out_is_refused_where_it_would_be_followed() {
         let tree = Tree::new("walk");
         let root = tree.root();
@@ -241,9 +364,9 @@ mod tests {
         let tree = Tree::new("folder");
         let root = tree.root();
         symlink(tree.0.join("outside"), tree.0.join("Builds/escape")).unwrap();
-        assert_eq!(folder(&root, "", true).unwrap(), "");
-        assert_eq!(folder(&root, "sub", true).unwrap(), "sub/");
-        assert_eq!(folder(&root, "sub/", true).unwrap(), "sub/");
+        assert_eq!(folder(&root, "", true, false).unwrap(), "");
+        assert_eq!(folder(&root, "sub", true, false).unwrap(), "sub/");
+        assert_eq!(folder(&root, "sub/", true, false).unwrap(), "sub/");
         for bad in [
             "..",
             "../outside",
@@ -253,12 +376,18 @@ mod tests {
             "escape",
             "escape/",
         ] {
-            assert_eq!(refusal(folder(&root, bad, true)), OUTSIDE, "{bad}");
+            assert_eq!(refusal(folder(&root, bad, true, false)), OUTSIDE, "{bad}");
         }
-        assert_eq!(refusal(folder(&root, "none", true)), "no such folder");
-        assert_eq!(refusal(folder(&root, "a.xml", true)), "no such folder");
+        assert_eq!(
+            refusal(folder(&root, "none", true, false)),
+            "no such folder"
+        );
+        assert_eq!(
+            refusal(folder(&root, "a.xml", true, false)),
+            "no such folder"
+        );
         // listing a folder that isn't there yet is allowed
-        assert_eq!(folder(&root, "none", false).unwrap(), "none/");
-        assert_eq!(refusal(folder(&root, "escape", false)), OUTSIDE);
+        assert_eq!(folder(&root, "none", false, false).unwrap(), "none/");
+        assert_eq!(refusal(folder(&root, "escape", false, false)), OUTSIDE);
     }
 }

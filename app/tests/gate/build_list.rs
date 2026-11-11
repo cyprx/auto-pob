@@ -7,7 +7,7 @@ use super::longtail_harness::{
     LongtailSession, misc_attributes, settings_folder, upstream_settings,
 };
 use super::{fixtures_dir, lock, pob_dir, upstream_lua};
-use auto_pob::engine::{Backend, BuildListView, BuildSort, Command};
+use auto_pob::engine::{Backend, BuildListView, BuildSort, Command, DeleteKind};
 use mlua::LuaSerdeExt;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -194,6 +194,7 @@ impl Upstream {
         let lua = upstream_lua(&pob_dir()).expect("upstream PoB");
         // the wrapper stubs the file functions: PoB's file system is ours (native.rs)
         auto_pob::engine::native::register(&lua, &pob_dir(), &dir).unwrap();
+        auto_pob::engine::native::set_builds_root(&lua, Some(&dir.join("Builds")));
         lua.load(include_str!("../fixtures/longtail_lib.lua"))
             .set_name("=longtail_lib")
             .exec()
@@ -253,6 +254,8 @@ struct Pair {
 
 /// What PoB says when it leaves a Save or Create button disabled, as the engine words it
 const NOT_OFFERED: &str = "PoB doesn't offer that here";
+/// What the engine says before PoB's Save is asked, for a name that is taken
+const TAKEN: &str = "a build with that name already exists";
 
 impl Pair {
     fn path(&self, rel: &str) -> PathBuf {
@@ -307,7 +310,10 @@ impl Pair {
         match (&upstream, engine) {
             (None, Ok(_)) => {}
             (Some(message), Err(e)) if message == "disabled" => {
-                assert_eq!(e.to_string(), NOT_OFFERED)
+                assert!(
+                    e.to_string() == NOT_OFFERED || e.to_string() == TAKEN,
+                    "{e}"
+                )
             }
             (Some(_), Err(_)) => {}
             (up, engine) => panic!("upstream {up:?} but the engine {:?}", engine.as_ref().err()),
@@ -378,12 +384,14 @@ impl Pair {
             .find(|e| e.path == self.path(rel))
             .unwrap_or_else(|| panic!("{rel} is not listed"));
         let prompt = entry.delete_prompt.clone();
+        let kind = entry.delete_kind();
         let (text, message): (String, Option<String>) =
             self.up.call("listDelete", (self.up.path(rel), true));
         assert_eq!(message, None);
         assert_eq!(prompt, text, "PoB's confirm text for {rel}");
         let result = self.s.run(Command::DeleteBuild {
             path: self.path(rel),
+            kind,
         });
         self.outcome(None, &result);
         prompt
@@ -468,14 +476,14 @@ fn build_list_ops() {
     t.same("copy a folder");
     assert!(t.path("subcopy/b.xml").is_file());
 
-    // PoB's refusals are PoB's: a taken name and the same name leave Save disabled
+    // a taken name and the same name leave PoB's Save disabled; the engine says why first
     let err = t
         .rename("dot.xml", "minion")
         .expect_err("taken")
         .to_string();
-    assert_eq!(err, NOT_OFFERED);
+    assert_eq!(err, TAKEN);
     let err = t.copy("dot.xml", "dot").expect_err("same").to_string();
-    assert_eq!(err, NOT_OFFERED);
+    assert_eq!(err, TAKEN);
     let err = t
         .new_folder("", "n")
         .expect_err("a folder that exists")
@@ -566,8 +574,14 @@ fn build_list_ops() {
             path: open.clone(),
             folder: String::new(),
         },
-        Command::DeleteBuild { path: open.clone() },
-        Command::DeleteBuild { path: t.path("n") },
+        Command::DeleteBuild {
+            path: open.clone(),
+            kind: DeleteKind::Build,
+        },
+        Command::DeleteBuild {
+            path: t.path("n"),
+            kind: DeleteKind::Folder,
+        },
         Command::RenameBuild {
             path: t.path("n"),
             name: "n9".into(),
@@ -589,6 +603,7 @@ fn build_list_ops() {
     assert!(t.path("n/a3copy.xml").is_file());
     t.s.run(Command::DeleteBuild {
         path: t.path("n/a3copy.xml"),
+        kind: DeleteKind::Build,
     })
     .expect("a build that isn't open");
     // a later Save still writes the original path
@@ -714,6 +729,7 @@ fn build_list_ops() {
     let err =
         t.s.run(Command::DeleteBuild {
             path: t.path("zdot.xml"),
+            kind: DeleteKind::Build,
         })
         .unwrap_err();
     assert_eq!(err.to_string(), "no such build");
@@ -726,6 +742,7 @@ fn build_list_ops() {
         set_mode(&t.path("n"), 0o555);
         let result = t.s.run(Command::DeleteBuild {
             path: t.path("n/a3[2].xml"),
+            kind: DeleteKind::Build,
         });
         let after_popups = t.s.open_popups();
         set_mode(&t.path("n"), 0o755);
@@ -777,21 +794,27 @@ fn build_list_ops() {
     for command in [
         Command::DeleteBuild {
             path: "/tmp/x.xml".into(),
+            kind: DeleteKind::Build,
         },
         Command::DeleteBuild {
             path: sentinel.clone(),
+            kind: DeleteKind::Build,
         },
         Command::DeleteBuild {
             path: format!("{builds_str}/../outside/sentinel.xml").into(),
+            kind: DeleteKind::Build,
         },
         Command::DeleteBuild {
             path: "a2.xml".into(),
+            kind: DeleteKind::Build,
         },
         Command::DeleteBuild {
             path: outside.clone(),
+            kind: DeleteKind::Build,
         },
         Command::DeleteBuild {
             path: t.builds.clone(),
+            kind: DeleteKind::Build,
         },
         Command::RenameBuild {
             path: sentinel.clone(),
@@ -849,9 +872,11 @@ fn build_list_ops() {
     for command in [
         Command::DeleteBuild {
             path: t.path("escape"),
+            kind: DeleteKind::Build,
         },
         Command::DeleteBuild {
             path: t.path("esc.xml"),
+            kind: DeleteKind::Build,
         },
         Command::RenameBuild {
             path: t.path("escape"),
@@ -892,6 +917,7 @@ fn build_list_ops() {
     .unwrap();
     t.s.run(Command::DeleteBuild {
         path: t.path("trap"),
+        kind: DeleteKind::Folder,
     })
     .expect("delete the trap");
     assert!(!t.path("trap").exists());
@@ -984,9 +1010,11 @@ fn build_list_no_silent_writes() {
         },
         Command::DeleteBuild {
             path: builds.join("gone.xml"),
+            kind: DeleteKind::Build,
         },
         Command::DeleteBuild {
             path: "/tmp/x.xml".into(),
+            kind: DeleteKind::Build,
         },
         Command::MoveBuild {
             path: builds.join("a.xml"),
@@ -1046,5 +1074,211 @@ fn build_list_no_silent_writes() {
     .unwrap();
     assert_eq!(tree(&s.user), after);
     assert_eq!(list(&mut s, "").sort, BuildSort::Level);
+    assert_eq!(s.open_popups(), 0);
+}
+
+/// Data-loss guards (the review's I1 to I4): a recursive delete is confined to Builds, a delete
+/// is the one the user was asked about, a rename or copy never replaces or writes through
+/// anything, and Move and Copy refuse any link.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn build_list_data_loss_guards() {
+    use std::os::unix::fs::symlink;
+    let _guard = lock();
+    let mut s = LongtailSession::start("build_list_guards", &session_settings(LIST_MODE));
+    let builds = settings_folder(&s.user).join("Builds");
+    seed(&builds);
+    let outside = settings_folder(&s.user).join("outside");
+    fs::create_dir_all(outside.join("deep")).unwrap();
+    fs::write(outside.join("sentinel.xml"), "sentinel").unwrap();
+    fs::write(outside.join("deep/more.txt"), "more").unwrap();
+    let outside_before = tree(&outside);
+    let err = |s: &mut LongtailSession, command: Command| {
+        let what = format!("{command:?}");
+        s.run(command).expect_err(&what).to_string()
+    };
+    let delete = |path: PathBuf, kind| Command::DeleteBuild { path, kind };
+
+    // I1: the native refuses a recursive delete anywhere but below Builds
+    let refused = "refused: outside the builds folder";
+    let try_remove = |s: &LongtailSession, path: &Path| -> (Option<bool>, Option<String>) {
+        s.backend
+            .lua
+            .globals()
+            .set("TARGET", path.display().to_string())
+            .unwrap();
+        s.eval("return RemoveDir(TARGET, true)")
+    };
+    assert_eq!(
+        try_remove(&s, &builds.join("sub")).1.as_deref(),
+        Some(refused),
+        "nothing armed"
+    );
+    assert!(builds.join("sub/b.xml").is_file());
+    // a command arms the root
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .unwrap();
+    s.run(Command::RenameBuild {
+        path: builds.join("dot.xml"),
+        name: "Dot".into(),
+    })
+    .expect("a case-only rename of its own name");
+    s.run(Command::RenameBuild {
+        path: builds.join("Dot.xml"),
+        name: "dot".into(),
+    })
+    .unwrap();
+    for path in [
+        settings_folder(&s.user),
+        outside.clone(),
+        builds.clone(),
+        builds.join("../outside"),
+    ] {
+        assert_eq!(
+            try_remove(&s, &path).1.as_deref(),
+            Some(refused),
+            "{path:?}"
+        );
+    }
+    symlink(&outside, builds.join("escape")).unwrap();
+    assert_eq!(
+        try_remove(&s, &builds.join("escape")).1.as_deref(),
+        Some(refused)
+    );
+    assert_eq!(tree(&outside), outside_before);
+    fs::remove_file(builds.join("escape")).unwrap();
+
+    // I2: a delete is the one the user was asked about
+    let sub = builds.join("sub");
+    let empty = builds.join("empty");
+    fs::write(empty.join("late.txt"), "arrived after the listing").unwrap();
+    let changed = "the folder changed; look again";
+    assert_eq!(
+        err(&mut s, delete(empty.clone(), DeleteKind::EmptyFolder)),
+        changed
+    );
+    assert!(empty.join("late.txt").is_file(), "the file survives");
+    assert_eq!(
+        err(&mut s, delete(sub.clone(), DeleteKind::EmptyFolder)),
+        changed
+    );
+    assert_eq!(err(&mut s, delete(sub.clone(), DeleteKind::Build)), changed);
+    assert!(sub.join("b.xml").is_file());
+    fs::remove_file(empty.join("late.txt")).unwrap();
+    assert_eq!(
+        err(&mut s, delete(empty.clone(), DeleteKind::Folder)),
+        changed
+    );
+    assert_eq!(
+        err(
+            &mut s,
+            delete(builds.join("a.xml"), DeleteKind::EmptyFolder)
+        ),
+        changed
+    );
+    assert!(empty.is_dir() && builds.join("a.xml").is_file());
+    assert_eq!(s.open_popups(), 0);
+
+    // I3: a name that is taken, in any case or as a dangling link, is never written
+    fs::write(builds.join("Zed.xml"), "Zed's bytes").unwrap();
+    let taken = "a build with that name already exists";
+    assert_eq!(
+        err(
+            &mut s,
+            Command::RenameBuild {
+                path: builds.join("dot.xml"),
+                name: "zed".into()
+            }
+        ),
+        taken
+    );
+    assert_eq!(
+        err(
+            &mut s,
+            Command::CopyBuild {
+                path: builds.join("dot.xml"),
+                name: "ZED".into()
+            }
+        ),
+        taken
+    );
+    assert_eq!(fs::read(builds.join("Zed.xml")).unwrap(), b"Zed's bytes");
+    symlink(outside.join("made.xml"), builds.join("dang.xml")).unwrap();
+    for command in [
+        Command::CopyBuild {
+            path: builds.join("dot.xml"),
+            name: "dang".into(),
+        },
+        Command::RenameBuild {
+            path: builds.join("dot.xml"),
+            name: "dang".into(),
+        },
+    ] {
+        assert_eq!(err(&mut s, command), taken);
+    }
+    symlink(outside.join("moved.xml"), sub.join("dot.xml")).unwrap();
+    assert_eq!(
+        err(
+            &mut s,
+            Command::MoveBuild {
+                path: builds.join("dot.xml"),
+                folder: "sub/".into()
+            }
+        ),
+        taken
+    );
+    assert!(builds.join("dot.xml").is_file());
+    fs::remove_file(builds.join("dang.xml")).unwrap();
+    fs::remove_file(sub.join("dot.xml")).unwrap();
+    assert_eq!(
+        tree(&outside),
+        outside_before,
+        "nothing was written through a link"
+    );
+
+    // I4: a chain of links, two hops out, is refused by Move and Copy
+    let escapes = "that path is outside the Builds folder";
+    fs::create_dir_all(builds.join("x")).unwrap();
+    fs::create_dir_all(builds.join("y")).unwrap();
+    symlink(builds.join("y"), builds.join("x/l")).unwrap();
+    symlink(&outside, builds.join("y/out")).unwrap();
+    symlink(&sub, builds.join("inner")).unwrap();
+    for command in [
+        Command::MoveBuild {
+            path: builds.join("x"),
+            folder: "sub/".into(),
+        },
+        Command::CopyBuild {
+            path: builds.join("x"),
+            name: "x2".into(),
+        },
+        Command::MoveBuild {
+            path: builds.join("a.xml"),
+            folder: "x/l/".into(),
+        },
+        Command::MoveBuild {
+            path: builds.join("inner/b.xml"),
+            folder: String::new(),
+        },
+        Command::CopyBuild {
+            path: builds.join("inner/b.xml"),
+            name: "b2".into(),
+        },
+        Command::MoveBuild {
+            path: builds.join("inner"),
+            folder: "empty/".into(),
+        },
+    ] {
+        let what = format!("{command:?}");
+        assert_eq!(err(&mut s, command), escapes, "{what}");
+    }
+    assert!(builds.join("x/l").is_symlink() && sub.join("b.xml").is_file());
+    assert_eq!(
+        tree(&outside),
+        outside_before,
+        "nothing was taken from or put in outside"
+    );
     assert_eq!(s.open_popups(), 0);
 }

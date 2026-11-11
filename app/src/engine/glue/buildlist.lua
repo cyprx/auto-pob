@@ -200,14 +200,31 @@ function glue.copy_build(path, name)
 	rename_or_copy(path, name, "copy")
 end
 
-function glue.delete_build(path)
+-- What PoB asks before each delete, by what the UI showed (`kind`): "build", "folder" (not
+-- empty) or "empty" (PoB asks nothing)
+local ASKS = {
+	build = "Are you sure you want to delete build:",
+	folder = "The folder is not empty.",
+}
+
+function glue.delete_build(path, kind)
 	with_entry(path, function(mode, list, build)
 		check_not_open(build)
+		if (kind == "build") == (build.folderName ~= nil) or not (kind == "build" or ASKS[kind] or kind == "empty") then
+			error("the folder changed; look again", 0)
+		end
 		local depth = #main().popups
 		press(mode.controls.delete)
 		check_error_popup(depth)
-		if #main().popups > depth then
+		local popups = main().popups
+		if #popups > depth then
+			-- only the question the user was shown is answered
+			if not (ASKS[kind] and popup_text(popups[1]):sub(1, #ASKS[kind]) == ASKS[kind]) then
+				error("the folder changed; look again", 0)
+			end
 			glue.confirm_popup("delete that build")
+		elseif kind ~= "empty" then
+			error("the folder changed; look again", 0)
 		end
 		-- PoB ignores what `os.remove` and the recursive RemoveDir answer
 		if exists(path) then
@@ -292,12 +309,14 @@ local function delete_prompt(mode, item)
 	end
 	local popups = main().popups
 	local depth = #popups
-	local real = RemoveDir
-	RemoveDir = function()
+	-- nothing PoB's Delete reaches may change a file here
+	local real = { RemoveDir, MakeDir, os.remove, os.rename }
+	local function nothing()
 		return true
 	end
+	RemoveDir, MakeDir, os.remove, os.rename = nothing, nothing, nothing, nothing
 	local ok, err = pcall(mode.controls.delete.onClick)
-	RemoveDir = real
+	RemoveDir, MakeDir, os.remove, os.rename = real[1], real[2], real[3], real[4]
 	local text = ""
 	if #popups > depth and popups[1].controls.confirm then
 		text = popup_text(popups[1])

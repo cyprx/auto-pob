@@ -2850,6 +2850,12 @@ mod tests {
     }
 
     #[test]
+    fn calcs_and_sidebar_counts_do_not_share_ids() {
+        let (app, _ctx) = notes_app();
+        assert_ne!(app.calcs.count_salt(), app.sidebar.count_salt());
+    }
+
+    #[test]
     fn calcs_count_typed_then_save_is_flushed() {
         let (mut app, ctx) = notes_app();
         let mut view = crate::engine::views::CalcsView::default();

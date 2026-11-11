@@ -1422,6 +1422,25 @@ fn the_panel_editors_do_nothing_while_the_raw_text_window_is_open() {
 }
 
 #[test]
+fn a_quality_typed_and_then_hidden_is_not_flushed() {
+    // the box vanished because the item changed: the edit must not follow to another item
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    h.type_into("quality", "15");
+    let mut view = display_view();
+    view.quality = None;
+    h.show_display(view);
+    assert!(h.ui.flush().is_empty(), "{:?}", h.ui.flush());
+
+    let mut h = rich();
+    h.type_into("catalyst_quality", "7");
+    let mut view = rich_view();
+    view.catalyst_quality = None;
+    h.show_display(view);
+    assert!(h.ui.flush().is_empty());
+}
+
+#[test]
 fn cancel_drops_a_quality_still_being_typed() {
     let mut h = Harness::new(sample());
     h.show_display(display_view());

@@ -99,6 +99,11 @@ fn count_command(key: &str, text: String) -> Command {
 }
 
 impl CalcsUi {
+    #[cfg(test)]
+    pub(crate) fn count_salt(&self) -> egui::Id {
+        self.counts.salt()
+    }
+
     /// A count typed and not sent yet, which goes out before whatever command comes next.
     pub fn flush(&mut self) -> Option<Command> {
         let (key, text) = self.counts.take_pending()?;
@@ -180,13 +185,8 @@ impl CalcsUi {
         }
         self.bd
             .drive(ui.ctx(), now, self.hovered.as_ref(), &mut out.queries);
-        // a count whose field wasn't drawn this frame is sent now
-        out.commands.extend(
-            self.counts
-                .end_frame()
-                .into_iter()
-                .map(|(key, text)| count_command(key, text)),
-        );
+        // a count whose field PoB hid belongs to a skill that is gone: not sent
+        self.counts.discard_undrawn();
         out
     }
 
@@ -769,6 +769,21 @@ mod tests {
         h.click("search");
         let sent = h.frame(vec![Event::Text("x".into())]);
         assert_eq!(debug(&sent), ["SetCalcsSearch { text: \"x\" }"]);
+    }
+
+    #[test]
+    fn a_count_typed_and_then_hidden_is_not_flushed() {
+        let mut view = sample(None);
+        view.selector.stages = Some("1".into());
+        let mut h = Harness::new(view);
+        h.click("stages");
+        h.frame(vec![Event::Text("3".into())]);
+        assert!(h.ui.counts.has_pending());
+        // the main skill changed and PoB hides the control
+        h.ui.on_snapshot(&Snapshot::Calcs(Arc::new(sample(None))));
+        let sent = h.frame(vec![]);
+        assert!(sent.is_empty(), "{sent:?}");
+        assert!(h.ui.flush().is_none());
     }
 
     #[test]

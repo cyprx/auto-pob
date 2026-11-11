@@ -35,6 +35,11 @@ fn count_command(key: &str, text: String) -> Command {
 }
 
 impl SidebarState {
+    #[cfg(test)]
+    pub(crate) fn count_salt(&self) -> egui::Id {
+        self.counts.salt()
+    }
+
     /// A count typed but not sent: the build has changes the engine doesn't know about yet.
     pub fn has_pending(&self) -> bool {
         self.counts.has_pending()
@@ -68,7 +73,7 @@ pub fn show(
     });
     let Some(stats) = stats else {
         ui.label("Calculating…");
-        out.extend(end_frame(state));
+        state.counts.discard_undrawn();
         return out;
     };
     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -80,18 +85,8 @@ pub fn show(
             rows(ui, "minion_stats", &stats.minion);
         }
     });
-    out.extend(end_frame(state));
+    state.counts.discard_undrawn();
     out
-}
-
-/// The counts whose boxes weren't drawn this frame, sent now.
-fn end_frame(state: &mut SidebarState) -> Vec<Command> {
-    state
-        .counts
-        .end_frame()
-        .into_iter()
-        .map(|(key, text)| count_command(key, text))
-        .collect()
 }
 
 /// PoB's main-skill controls above the stats; the ones PoB hides aren't drawn.
@@ -407,6 +402,20 @@ mod tests {
         // and a later blur doesn't send the abandoned text either
         sent.extend(h.click("group"));
         assert!(sent.is_empty(), "{sent:?}");
+    }
+
+    #[test]
+    fn a_count_typed_and_then_hidden_is_not_flushed() {
+        let mut h = counted("1");
+        h.click("stages");
+        h.type_text("3");
+        assert!(h.state.has_pending());
+        // the new main skill has no stage count
+        h.stats = view(base());
+        let sent = h.frame(vec![]);
+        assert!(sent.is_empty(), "{sent:?}");
+        assert!(!h.state.has_pending());
+        assert!(h.state.flush().is_none());
     }
 
     #[test]

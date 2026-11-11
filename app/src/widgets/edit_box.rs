@@ -39,6 +39,8 @@ pub struct EditBox {
     sent: String,
     /// Typed, still focused and not sent
     pending: bool,
+    /// The box has been drawn once, so `text` was seeded from the view
+    seeded: bool,
 }
 
 impl EditBox {
@@ -53,12 +55,13 @@ impl EditBox {
     ) -> (egui::Response, Option<String>) {
         let focused = ui.memory(|m| m.has_focus(id));
         // a box that lost focus this frame still holds its edit: the view must not replace it
-        if !focused && !busy && !self.pending {
+        if !focused && (!busy || !self.seeded) && !self.pending {
             self.text.clear();
             self.text.push_str(current);
             self.sent.clear();
             self.sent.push_str(current);
         }
+        self.seeded = true;
         if focused && let Some(filter) = opts.filter {
             ui.input_mut(|i| {
                 for event in &mut i.events {
@@ -115,6 +118,8 @@ impl EditBox {
     }
 }
 
+static NEXT_SALT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Boxes by key, for owners with many or changing fields.
 pub struct EditBoxes<K: Hash + Eq + Clone> {
     boxes: HashMap<K, EditBox>,
@@ -129,7 +134,11 @@ impl<K: Hash + Eq + Clone> Default for EditBoxes<K> {
         Self {
             boxes: HashMap::new(),
             drawn: HashSet::new(),
-            salt: egui::Id::unique("edit_boxes"),
+            // `Id::unique` hashes its source, so each owner needs its own number
+            salt: egui::Id::unique((
+                "edit_boxes",
+                NEXT_SALT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            )),
         }
     }
 }
@@ -169,6 +178,21 @@ impl<K: Hash + Eq + Clone> EditBoxes<K> {
             .filter(|(k, _)| !drawn.contains(*k))
             .filter_map(|(k, b)| b.take_pending().map(|text| (k.clone(), text)))
             .collect()
+    }
+
+    /// Drops the edits of boxes not drawn since the last `end_frame` or `discard_undrawn`: what
+    /// they were for (a skill, an item) is gone, so sending would hit another target.
+    pub fn discard_undrawn(&mut self) {
+        let drawn = std::mem::take(&mut self.drawn);
+        for (_, b) in self.boxes.iter_mut().filter(|(k, _)| !drawn.contains(*k)) {
+            b.discard();
+        }
+    }
+
+    /// The id salt, which keeps this owner's boxes apart from other owners' boxes.
+    #[cfg(test)]
+    pub(crate) fn salt(&self) -> egui::Id {
+        self.salt
     }
 
     pub fn has_pending(&self) -> bool {
@@ -400,6 +424,42 @@ mod tests {
         h.a.text.clear();
         h.type_text("x7y");
         assert_eq!(h.a.text, "7");
+    }
+
+    #[test]
+    fn a_box_seeds_from_the_view_on_its_first_draw_even_when_busy() {
+        let mut h = Harness::new("5");
+        assert_eq!(h.a.text, "5");
+        let mut fresh = Harness::new("1");
+        fresh.a = EditBox::default();
+        fresh.busy = true;
+        fresh.current = "8".into();
+        fresh.frame(vec![]);
+        assert_eq!(fresh.a.text, "8");
+        h.busy = true;
+        h.current = "6".into();
+        h.frame(vec![]);
+        assert_eq!(
+            h.a.text, "5",
+            "later, a busy engine's view doesn't replace it"
+        );
+    }
+
+    #[test]
+    fn two_owners_boxes_with_the_same_key_have_their_own_ids() {
+        let a = EditBoxes::<&'static str>::default();
+        let b = EditBoxes::<&'static str>::default();
+        assert_ne!(a.salt(), b.salt());
+    }
+
+    #[test]
+    fn discard_undrawn_drops_only_boxes_not_drawn() {
+        let mut boxes = EditBoxes::<&'static str>::default();
+        boxes.boxes.entry("gone").or_default().pending = true;
+        boxes.boxes.entry("here").or_default().pending = true;
+        boxes.drawn.insert("here");
+        boxes.discard_undrawn();
+        assert_eq!(boxes.pending_keys().collect::<Vec<_>>(), [&"here"]);
     }
 
     #[test]

@@ -38,7 +38,7 @@ pub struct SkillsUi {
     /// The text fields, by key; they send on Enter or blur
     boxes: EditBoxes<String>,
     /// The command each field with a pending edit would send, made when the edit was last seen
-    pending_commands: HashMap<String, Command>,
+    pending_commands: HashMap<String, (String, Command)>,
     /// A group with gems the user asked to delete
     confirm_delete: Option<usize>,
     confirm_delete_all: bool,
@@ -118,8 +118,15 @@ impl SkillsUi {
     /// The edit typed into a field that hasn't lost focus yet, so a Save or a tab change
     /// doesn't leave it behind.
     pub fn flush(&mut self) -> Option<Command> {
-        let (key, _) = self.boxes.take_pending()?;
-        self.pending_commands.remove(&key)
+        let (key, text) = self.boxes.take_pending()?;
+        self.pending_command(&key, &text)
+    }
+
+    /// The command for a flushed edit, which was made from the same text.
+    fn pending_command(&mut self, key: &str, text: &str) -> Option<Command> {
+        let (made_from, command) = self.pending_commands.remove(key)?;
+        debug_assert_eq!(made_from, text, "the command for {key} is stale");
+        Some(command)
     }
 
     pub fn on_snapshot(&mut self, snapshot: &Snapshot) {
@@ -248,8 +255,8 @@ impl SkillsUi {
         }
 
         // an edit whose field wasn't drawn this frame (another group was selected) is sent now
-        for (key, _) in self.boxes.end_frame() {
-            out.commands.extend(self.pending_commands.remove(&key));
+        for (key, text) in self.boxes.end_frame() {
+            out.commands.extend(self.pending_command(&key, &text));
         }
         // a group row hovered long enough asks for its tooltip
         match self.hover {
@@ -289,7 +296,7 @@ impl SkillsUi {
         match self.boxes.pending_text(&key.to_owned()) {
             Some(text) => {
                 self.pending_commands
-                    .insert(key.to_owned(), make(text.to_owned()));
+                    .insert(key.to_owned(), (text.to_owned(), make(text.to_owned())));
             }
             None => {
                 self.pending_commands.remove(key);

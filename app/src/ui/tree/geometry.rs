@@ -156,6 +156,8 @@ pub(super) mod tests {
             group_center: None,
             art: NodeArt::default(),
             ascendancy: None,
+            replaceable: false,
+            mastery_effects: false,
         }
     }
 

@@ -296,6 +296,12 @@ pub struct TreeNode {
     pub art: NodeArt,
     /// The ascendancy the node belongs to
     pub ascendancy: Option<String>,
+    /// Whether PoB's right-click offers to replace this node's modifier: a tattoo, a small
+    /// attribute, a "+30 to" attribute notable, or a keystone that isn't an expansion skill
+    /// (R18, PassiveTreeView.lua:519-526)
+    pub replaceable: bool,
+    /// Whether the node is a mastery with effects to choose from (R19)
+    pub mastery_effects: bool,
 }
 
 /// The build's state on the active tree.

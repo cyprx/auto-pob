@@ -63,7 +63,7 @@ fn button(kind: &PopupKind) -> String {
     }
 }
 
-fn ours_popup(s: &mut Session) -> PopupView {
+pub(crate) fn ours_popup(s: &mut Session) -> PopupView {
     s.backend
         .popup_view()
         .expect("popup view")
@@ -667,7 +667,7 @@ pub(crate) fn crafting_round_trip(name: &str, recipe: &ItemsRecipe, s: &mut Sess
 }
 
 /// Crafts an item through the Craft window, as the panel's button does
-fn craft_ours(s: &mut Session, rarity: &str, title: &str, kind: &str, base: &str) {
+pub(crate) fn craft_ours(s: &mut Session, rarity: &str, title: &str, kind: &str, base: &str) {
     s.run(Command::OpenPopup(PopupKind::Craft)).unwrap();
     for (name, wanted) in [("rarity", rarity), ("type", kind)] {
         let view = ours_popup(s);
@@ -712,7 +712,7 @@ fn craft_ours(s: &mut Session, rarity: &str, title: &str, kind: &str, base: &str
     .unwrap();
 }
 
-fn display(s: &mut Session) -> DisplayItemView {
+pub(crate) fn display(s: &mut Session) -> DisplayItemView {
     s.backend
         .display_item_view()
         .unwrap()

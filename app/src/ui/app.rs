@@ -1105,6 +1105,8 @@ mod tests {
                 group_center: None,
                 art: crate::engine::NodeArt::default(),
                 ascendancy: None,
+                replaceable: false,
+                mastery_effects: false,
             };
             Ok(crate::engine::TreeLayout {
                 version: "3_28".into(),

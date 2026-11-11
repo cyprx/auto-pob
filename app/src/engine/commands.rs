@@ -105,6 +105,9 @@ pub enum Command {
         id: u32,
     },
     ResetTree,
+    /// "Remove All Tattoos" on the Reset window: presses PoB's button, which adds no undo state
+    /// (R18).
+    RemoveAllTattoos,
     /// Chooses a mastery's effect, allocating the mastery when it isn't yet.
     SetMastery {
         node: u32,

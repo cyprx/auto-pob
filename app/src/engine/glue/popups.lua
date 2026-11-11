@@ -155,21 +155,34 @@ end
 -- Presses the panel's button for `kind` (`arg` is the second flag or the 1-based anoint
 -- slot) and keeps the popup it opens as the session.
 function glue.popup_open(kind, arg)
+	local open
 	if kind == "node_replacement" then
-		error("PoB doesn't offer that node for replacement", 0)
-	end
-	local name = OPENERS[kind]
-	if not name then
-		error(NOT_SHOWN, 0)
+		-- the right-click's body (PassiveTreeView.lua:519-533) without `buildFlag`, which
+		-- changes nothing: the node must pass PoB's rule; an allocated mastery is the effect
+		-- picker's, not this window's
+		local node = pob.build.spec.nodes[arg]
+		if not (node and (glue.node_replaceable(node)
+			or (glue.node_mastery_effects(node) and not node.alloc))) then
+			error("PoB doesn't offer that node for replacement", 0)
+		end
+		open = function()
+			pob.build.treeTab:ModifyNodePopup(node)
+		end
+	else
+		local name = OPENERS[kind]
+		if not name then
+			error(NOT_SHOWN, 0)
+		end
+		local control = items_tab().controls[name(arg)]
+		if not (control and control:IsShown() and control:IsEnabled()) then
+			error(NOT_SHOWN, 0)
+		end
+		open = control.onClick
 	end
 	local tab = items_tab()
-	local control = tab.controls[name(arg)]
-	if not (control and control:IsShown() and control:IsEnabled()) then
-		error(NOT_SHOWN, 0)
-	end
 	local popups = main().popups
 	local depth = #popups
-	local ok, err = pcall(control.onClick)
+	local ok, err = pcall(open)
 	local count = #popups - depth
 	local top = popups[1]
 	close_above(depth)
@@ -180,7 +193,8 @@ function glue.popup_open(kind, arg)
 		error("PoB didn't open that window", 0)
 	end
 	-- a failed open above left the session it found alone; this one replaces it (R4)
-	session = { popup = top, kind = KINDS[kind](arg), item = tab.displayItem, build = pob.build }
+	local shown = kind == "node_replacement" and { NodeReplacement = { node = arg } } or KINDS[kind](arg)
+	session = { popup = top, kind = shown, item = tab.displayItem, build = pob.build }
 end
 
 -- ---- Controls ----

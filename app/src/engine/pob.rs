@@ -621,6 +621,10 @@ impl PobBackend {
                 self.call::<_, ()>("reset_tree", ())?;
                 self.tree_edited()
             }
+            Command::RemoveAllTattoos => {
+                self.call::<_, ()>("remove_all_tattoos", ())?;
+                self.tree_edited()
+            }
             Command::SetMastery { node, effect } => {
                 self.call::<_, ()>("set_mastery", (node, effect))?;
                 self.tree_edited()
@@ -1085,7 +1089,7 @@ impl PobBackend {
                     PopupKind::AddModifier => ("add_modifier", 0),
                     PopupKind::AddImplicit => ("add_implicit", 0),
                     PopupKind::AddCrucible => ("add_crucible", 0),
-                    PopupKind::NodeReplacement { .. } => ("node_replacement", 0),
+                    PopupKind::NodeReplacement { node } => ("node_replacement", i64::from(node)),
                 };
                 // Enchant's flag is a boolean for the glue
                 if name == "enchant" {
@@ -1605,6 +1609,7 @@ mod tests {
                 gem_id: None,
             }),
             Command::OpenPopup(PopupKind::Craft),
+            Command::OpenPopup(PopupKind::NodeReplacement { node: 1 }),
             Command::SetPopupControl {
                 name: "rarity".into(),
                 value: PopupInput::Check(true),
@@ -1636,6 +1641,7 @@ mod tests {
         // anything that edits the item, the build or the tab does
         let ends = [
             Command::SortItems,
+            Command::RemoveAllTattoos,
             Command::PasteItem {
                 text: String::new(),
             },

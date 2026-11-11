@@ -42,6 +42,17 @@ function act.open_popup(button)
 	record({ cmd = "OpenPopup", kind = popupKind })
 end
 
+-- A right-click on a node PoB offers to replace (PassiveTreeView.lua:519-533): the window
+-- TreeTab:ModifyNodePopup opens. `touched` (tree_lib) remembers the node for checkpoints.
+function act.tattoo_open(node)
+	local depth = #main.popups
+	build.treeTab:ModifyNodePopup(node)
+	assert(#main.popups == depth + 1, "no window opened for node " .. node.id)
+	touched[node.id] = true
+	popupKind = { NodeReplacement = { node = node.id } }
+	record({ cmd = "OpenPopup", kind = popupKind })
+end
+
 -- a control of the open popup by name; a list's children are `parent.child`
 local function popupControl(name)
 	local popup = main.popups[1]

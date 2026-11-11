@@ -149,6 +149,15 @@ impl Affected {
         link: false,
     };
 
+    /// Nothing but the build list is asked for.
+    fn list_only(&self) -> bool {
+        let only_list = Affected {
+            list: self.list,
+            ..Affected::default()
+        };
+        *self == only_list
+    }
+
     fn merge(&mut self, other: Affected) {
         self.build |= other.build;
         self.list |= other.list;
@@ -187,6 +196,9 @@ pub trait Backend {
     fn recalculate(&mut self) -> anyhow::Result<()>;
     fn build_view(&mut self) -> anyhow::Result<BuildView>;
     fn build_list_view(&mut self) -> anyhow::Result<BuildListView>;
+    /// Whether a build is open. PoB can start on its build list with none initialised, and
+    /// every view but the list reads the build.
+    fn build_loaded(&mut self) -> anyhow::Result<bool>;
     fn stats_view(&mut self) -> anyhow::Result<StatsView>;
     fn config_view(&mut self) -> anyhow::Result<ConfigView>;
     fn tree_layout_view(&mut self) -> anyhow::Result<TreeLayout>;
@@ -247,6 +259,29 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
             },
         });
     }
+    // With no build open only the list can be answered; the rest would raise on a missing
+    // build, so they are dropped here, for every caller at once.
+    let flags = if flags.list_only() {
+        flags
+    } else {
+        match backend.build_loaded() {
+            Ok(true) => flags,
+            Ok(false) => Affected {
+                list: flags.list,
+                ..Affected::default()
+            },
+            Err(e) => {
+                send(Event::Error {
+                    seq,
+                    message: format!("{e:#}"),
+                });
+                Affected {
+                    list: flags.list,
+                    ..Affected::default()
+                }
+            }
+        }
+    };
     if flags.build {
         emit(seq, send, backend.build_view(), Snapshot::Build);
     }
@@ -812,6 +847,25 @@ mod tests {
         // Ready + 11 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items + DisplayItem; the channel disconnect means the
         // thread (and so every wake) is finished.
         assert_eq!(wakes.load(Ordering::SeqCst), 19);
+    }
+
+    #[test]
+    fn startup_without_a_build_sends_only_the_list() {
+        let (mut fake, _log) = Fake::new();
+        fake.build_loaded = false;
+        let engine = Engine::spawn_with(move |_send| Ok(Box::new(fake) as Box<dyn Backend>), || {});
+        engine.send(Command::Shutdown);
+        let mut kinds = Vec::new();
+        while let Ok(event) = engine.events.recv() {
+            match event {
+                Event::Snapshot { snapshot, .. } => {
+                    kinds.push(matches!(snapshot, Snapshot::BuildList(_)))
+                }
+                Event::Error { message, .. } => panic!("unexpected error: {message}"),
+                _ => {}
+            }
+        }
+        assert_eq!(kinds, vec![true], "only the build list goes out");
     }
 
     #[test]

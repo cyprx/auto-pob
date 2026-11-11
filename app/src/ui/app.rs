@@ -990,6 +990,10 @@ mod tests {
             })
         }
 
+        fn build_loaded(&mut self) -> anyhow::Result<bool> {
+            Ok(true)
+        }
+
         fn build_list_view(&mut self) -> anyhow::Result<BuildListView> {
             let entry = |name: &str, is_folder| BuildListEntry {
                 name: name.into(),

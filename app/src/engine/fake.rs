@@ -52,6 +52,8 @@ pub struct Fake {
     pub item_vanished: bool,
     /// `breakdown_view` fails with this message.
     pub fail_breakdown: Option<String>,
+    /// `build_loaded` answers this; PoB starts without a build when it was left on the list.
+    pub build_loaded: bool,
 }
 
 impl Fake {
@@ -69,6 +71,7 @@ impl Fake {
                 tooltip_vanished: false,
                 item_vanished: false,
                 fail_breakdown: None,
+                build_loaded: true,
             },
             log,
         )
@@ -173,6 +176,10 @@ impl Backend for Fake {
             can_undo: false,
             can_redo: false,
         })
+    }
+
+    fn build_loaded(&mut self) -> anyhow::Result<bool> {
+        Ok(self.build_loaded)
     }
 
     fn build_list_view(&mut self) -> anyhow::Result<BuildListView> {

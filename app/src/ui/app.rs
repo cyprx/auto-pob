@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use crate::engine::views::{BuildListView, BuildView, ConfigView, StatsView};
-use crate::engine::{BackgroundTask, Command, Engine, Event, Snapshot, Tab};
+use crate::engine::views::{BuildListView, BuildView, ConfigView, RequestsView, StatsView};
+use crate::engine::{BackgroundTask, Command, Engine, Event, ImportMode, Snapshot, Tab};
 use crate::game::Game;
 use crate::pob_files::DownloadProgress;
 use crate::theme;
@@ -11,9 +11,11 @@ use crate::ui::build::{self, BuildAction, BuildTab};
 use crate::ui::build_list::{BuildListUi, ListScreenAction};
 use crate::ui::calcs::{CalcsOutput, CalcsUi};
 use crate::ui::config::ConfigUi;
+use crate::ui::import::{Confirm, ImportOutput, ImportUi, Plan};
 use crate::ui::items::{ItemsOutput, ItemsUi};
 use crate::ui::notes::NotesUi;
 use crate::ui::popup::{self, PopupWindow};
+use crate::ui::requests;
 use crate::ui::skills::{SkillsOutput, SkillsUi};
 use crate::ui::tree::{TreeOutput, TreeTab};
 use crate::ui::unsaved::{Pending, PromptChoice, Resolution, needs_prompt, resolve};
@@ -36,6 +38,23 @@ struct SaveAsDialog {
     confirm_overwrite: bool,
     /// A `SaveAs` is on its way.
     waiting: bool,
+}
+
+/// A question asked before the tab or the pending line acts.
+struct AppConfirm {
+    message: String,
+    yes: &'static str,
+    no: &'static str,
+    then: ConfirmThen,
+}
+
+enum ConfirmThen {
+    /// Start a character import
+    Plan(Plan),
+    /// Send an import of a link or code into the open build
+    Send(Command),
+    /// Cancel a request
+    Cancel(u64),
 }
 
 /// A `Save` or `SaveAs` whose outcome we are waiting for.
@@ -83,6 +102,14 @@ pub struct AutoPobApp {
     text_seq: Option<u64>,
     sidebar: sidebar::SidebarState,
     notes: NotesUi,
+    import_ui: ImportUi,
+    /// The pending network requests (the finished ones are turned into notices)
+    requests: RequestsView,
+    confirm: Option<AppConfirm>,
+    /// The `ImportFromUrl` whose immediate answer replaces the build
+    import_seq: Option<u64>,
+    /// The latest snapshot of each kind at the latest seq, to put back after a reset (R14)
+    step: Vec<(u64, Snapshot)>,
     config_ui: ConfigUi,
     list_ui: BuildListUi,
 
@@ -132,6 +159,11 @@ impl AutoPobApp {
             text_seq: None,
             sidebar: sidebar::SidebarState::default(),
             notes: NotesUi::default(),
+            import_ui: ImportUi::default(),
+            requests: RequestsView::default(),
+            confirm: None,
+            import_seq: None,
+            step: Vec::new(),
             config_ui: ConfigUi::default(),
             list_ui: BuildListUi::default(),
             notices: Vec::new(),
@@ -171,6 +203,17 @@ impl AutoPobApp {
                 .to_owned(),
         );
         let is_notes = matches!(command, Command::SetNotes { .. });
+        let is_import = matches!(command, Command::ImportFromUrl { .. });
+        // the Import tab follows the answers to these
+        let echo = matches!(
+            command,
+            Command::SignIn
+                | Command::ExportShareCode
+                | Command::SetImportCode { .. }
+                | Command::ImportCharacter { .. }
+                | Command::ImportPublicCharacter { .. }
+        )
+        .then(|| command.clone());
         let is_close = matches!(command, Command::ClosePopup);
         let is_open = matches!(command, Command::OpenPopup(_));
         let seq = self.engine.send(command);
@@ -181,6 +224,12 @@ impl AutoPobApp {
             self.popup.close_sent(seq);
         }
         self.last_sent = seq;
+        if let Some(command) = echo {
+            self.import_ui.sent(seq, &command);
+        }
+        if is_import {
+            self.import_seq = Some(seq);
+        }
         if is_notes {
             self.notes.sent(seq);
         }
@@ -228,15 +277,23 @@ impl AutoPobApp {
                 // old build (and any late power events) dropped.
                 if self.entering.is_some_and(|e| seq >= e) {
                     self.entering = None;
-                    self.tree.reset();
-                    self.calcs.reset();
-                    self.skills.reset();
-                    self.items.reset();
-                    self.popup.reset();
-                    self.popup_tab = None;
-                    self.sidebar = sidebar::SidebarState::default();
-                    self.notes.reset();
+                    self.reset_build_state();
                 }
+                // an import that answered at once replaced the build: its first view comes
+                // before the new build's others
+                if matches!(snapshot, Snapshot::Build(_)) && self.import_seq == Some(seq) {
+                    self.import_seq = None;
+                    self.reset_for_new_build();
+                }
+                if self.step.first().is_some_and(|(s, _)| *s != seq) {
+                    self.step.clear();
+                }
+                if !matches!(snapshot, Snapshot::Requests(_)) {
+                    let kind = std::mem::discriminant(&snapshot);
+                    self.step.retain(|(_, s)| std::mem::discriminant(s) != kind);
+                    self.step.push((seq, snapshot.clone()));
+                }
+                self.import_ui.on_snapshot(&snapshot, seq);
                 match snapshot {
                     Snapshot::Build(view) => {
                         self.build = Some(view);
@@ -270,8 +327,9 @@ impl AutoPobApp {
                         self.items.on_snapshot_at(&snapshot, seq);
                     }
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
-                    // the pending-request line comes with the Import tab (Task 8)
-                    Snapshot::Requests(_) => {}
+                    Snapshot::Requests(view) => self.on_requests(&view, seq),
+                    // the Import tab keeps its own
+                    Snapshot::Share(_) | Snapshot::ShareCode(_) | Snapshot::Account(_) => {}
                     // power results of the build being left
                     Snapshot::NodePower(_) | Snapshot::PowerReport(_)
                         if self.entering.is_some() => {}
@@ -314,6 +372,54 @@ impl AutoPobApp {
         }
     }
 
+    /// Forgets the build's per-build UI state, as for another build.
+    fn reset_build_state(&mut self) {
+        self.tree.reset();
+        self.calcs.reset();
+        self.skills.reset();
+        self.items.reset();
+        self.popup.reset();
+        self.popup_tab = None;
+        self.sidebar = sidebar::SidebarState::default();
+        self.notes.reset();
+        self.import_ui.reset();
+    }
+
+    /// A network step replaced the build (R14): the build screen starts over, as for
+    /// `enter_build`.
+    fn reset_for_new_build(&mut self) {
+        self.entering = None;
+        self.screen = Screen::Build;
+        self.tab = BuildTab::default();
+        self.reset_build_state();
+    }
+
+    fn on_requests(&mut self, view: &RequestsView, seq: u64) {
+        self.requests = RequestsView {
+            pending: view.pending.clone(),
+            finished: Vec::new(),
+        };
+        for done in &view.finished {
+            // a cancel is the user's own doing
+            if let Some(error) = done.error.as_ref().filter(|_| !done.cancelled) {
+                self.notices.push(format!("{}: {error}", done.label));
+            }
+        }
+        if view.finished.iter().any(|f| f.new_build) {
+            self.reset_for_new_build();
+            // the step's views came before this one; the reset dropped them
+            let step: Vec<_> = std::mem::take(&mut self.step)
+                .into_iter()
+                .filter(|(s, _)| *s == seq)
+                .collect();
+            for (seq, snapshot) in step {
+                self.on_event(Event::Snapshot { seq, snapshot });
+            }
+            self.import_ui
+                .on_snapshot(&Snapshot::Requests(Arc::new(self.requests.clone())), seq);
+        }
+    }
+
     /// Shows a passive node on the tree tab.
     fn show_node(&mut self, id: u32, now: f64) {
         self.tab = BuildTab::Tree;
@@ -321,6 +427,10 @@ impl AutoPobApp {
     }
 
     fn on_error(&mut self, seq: u64, message: String) {
+        self.import_ui.on_error(seq);
+        if self.import_seq == Some(seq) {
+            self.import_seq = None;
+        }
         // the window stays open for another try (R4)
         self.popup.on_error(seq);
         if self.text_seq == Some(seq) {
@@ -412,6 +522,12 @@ impl AutoPobApp {
             }
             Pending::Open(path) => self.enter_build(Command::OpenBuild { path }),
             Pending::New => self.enter_build(Command::NewBuild),
+            Pending::ImportNew(url) => {
+                self.send(Command::ImportFromUrl {
+                    url,
+                    mode: ImportMode::NewBuild,
+                });
+            }
         }
     }
 
@@ -482,7 +598,7 @@ impl AutoPobApp {
             BuildTab::Items => Tab::Items,
             BuildTab::Calcs => Tab::Calcs,
             // the notes editor keeps its own history
-            BuildTab::Notes => return,
+            BuildTab::Notes | BuildTab::Import => return,
         };
         self.send(if redo {
             Command::Redo(tab)
@@ -533,7 +649,14 @@ impl AutoPobApp {
             return;
         }
 
+        if self.import_ui.take_focus() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+        for command in self.import_ui.take_ready() {
+            self.send(command);
+        }
         self.notices_panel(ui);
+        self.pending_panel(ui);
         match self.screen {
             Screen::List => self.list_screen(ui),
             Screen::Build => self.build_screen(ui),
@@ -586,6 +709,39 @@ impl AutoPobApp {
         }
     }
 
+    /// The pending-request line, on every screen.
+    fn pending_panel(&mut self, ui: &mut egui::Ui) {
+        if self.requests.pending.is_empty() {
+            return;
+        }
+        let mut cancel = None;
+        egui::Panel::bottom("pending_requests").show(ui, |ui| {
+            cancel = requests::show(ui, &self.requests);
+        });
+        if let Some(Command::CancelRequest { id }) = cancel {
+            let label = self
+                .requests
+                .pending
+                .iter()
+                .find(|p| p.id == id)
+                .map(|p| p.label.clone())
+                .unwrap_or_default();
+            // PoB signs out when a token refresh is cancelled, in both apps (they share
+            // Settings.xml)
+            if self.import_ui.cancel_signs_out(&label) {
+                self.confirm = Some(AppConfirm {
+                    message: "Cancelling now may sign you out of Path of Exile in both apps."
+                        .into(),
+                    yes: "Cancel request",
+                    no: "Keep waiting",
+                    then: ConfirmThen::Cancel(id),
+                });
+            } else {
+                self.send(Command::CancelRequest { id });
+            }
+        }
+    }
+
     fn list_screen(&mut self, ui: &mut egui::Ui) {
         let mut action = None;
         egui::CentralPanel::default().show(ui, |ui| match self.list.clone() {
@@ -622,6 +778,7 @@ impl AutoPobApp {
         let modal = self.prompt.is_some()
             || self.save_as.is_some()
             || self.import.is_some()
+            || self.confirm.is_some()
             || self.tree.has_dialog()
             || self.skills.has_dialog()
             || self.items.has_dialog()
@@ -660,6 +817,7 @@ impl AutoPobApp {
         let behind = self.behind();
         self.skills.set_modal(modal);
         self.items.set_modal(modal);
+        self.import_ui.set_modal(modal);
         let mut sidebar_commands = Vec::new();
         egui::Panel::left("stats_sidebar")
             .resizable(true)
@@ -678,6 +836,7 @@ impl AutoPobApp {
         let mut skills_out = SkillsOutput::default();
         let mut items_out = ItemsOutput::default();
         let mut notes_command = None;
+        let mut import_out = ImportOutput::default();
         let config = self.config.clone();
         egui::CentralPanel::default().show(ui, |ui| {
             build::tab_strip(ui, &mut self.tab);
@@ -700,6 +859,10 @@ impl AutoPobApp {
                     let now = ui.input(|i| i.time);
                     notes_command = self.notes.show(ui, now);
                 }
+                BuildTab::Import => {
+                    let now = epoch_now();
+                    import_out = self.import_ui.show(ui, behind, now);
+                }
                 BuildTab::Config => match &config {
                     Some(config) => {
                         config_commands = self.config_ui.show(ui, config, behind);
@@ -718,6 +881,12 @@ impl AutoPobApp {
         } else if self.tab != BuildTab::Notes {
             // leaving the tab
             self.flush_notes();
+        }
+        self.import_output(ui.ctx(), import_out);
+        if self.tab != BuildTab::Import
+            && let Some(command) = self.import_ui.leave()
+        {
+            self.send(command);
         }
         if self.tab != BuildTab::Tree {
             self.tree.close_dialog();
@@ -818,7 +987,85 @@ impl AutoPobApp {
         }
     }
 
+    /// Carries out what the Import tab asked for: commands, questions, the browser and the
+    /// clipboard (the engine does neither, R1).
+    fn import_output(&mut self, ctx: &egui::Context, out: ImportOutput) {
+        for command in out.commands {
+            self.send(command);
+        }
+        match out.confirm {
+            Some(Confirm::Ask { message, plan }) => {
+                let then = match plan.single() {
+                    Some(command) => ConfirmThen::Send(command),
+                    None => ConfirmThen::Plan(plan),
+                };
+                self.confirm = Some(AppConfirm {
+                    message: message.into(),
+                    yes: "Import",
+                    no: "Cancel",
+                    then,
+                });
+            }
+            Some(Confirm::NewBuild { url }) => self.request(Pending::ImportNew(url)),
+            None => {}
+        }
+        if let Some(url) = out.open_url {
+            ctx.open_url(egui::OpenUrl::new_tab(url));
+        }
+        if let Some(text) = out.copy {
+            ctx.copy_text(text);
+        }
+    }
+
+    fn confirm_dialog(&mut self, ctx: &egui::Context) {
+        let Some(confirm) = &self.confirm else {
+            return;
+        };
+        let mut choice = None;
+        egui::Window::new("Are you sure?")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(&confirm.message);
+                ui.horizontal(|ui| {
+                    let yes = ui.add(theme::primary_button(confirm.yes));
+                    crate::ui::import::mark(ui, "confirm_yes", &yes);
+                    if yes.clicked() {
+                        choice = Some(true);
+                    }
+                    let no = ui.button(confirm.no);
+                    crate::ui::import::mark(ui, "confirm_no", &no);
+                    if no.clicked() {
+                        choice = Some(false);
+                    }
+                });
+            });
+        let Some(yes) = choice else {
+            return;
+        };
+        let Some(confirm) = self.confirm.take() else {
+            return;
+        };
+        if !yes {
+            return;
+        }
+        match confirm.then {
+            ConfirmThen::Plan(plan) => {
+                let command = self.import_ui.begin(plan);
+                self.send(command);
+            }
+            ConfirmThen::Send(command) => {
+                self.send(command);
+            }
+            ConfirmThen::Cancel(id) => {
+                self.send(Command::CancelRequest { id });
+            }
+        }
+    }
+
     fn dialogs(&mut self, ctx: &egui::Context) {
+        self.confirm_dialog(ctx);
         self.prompt_dialog(ctx);
         self.save_as_dialog(ctx);
         self.import_dialog(ctx);
@@ -971,6 +1218,13 @@ impl AutoPobApp {
             self.import = None;
         }
     }
+}
+
+/// Seconds since the epoch, for the sign-in and retry countdowns.
+fn epoch_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
 impl eframe::App for AutoPobApp {
@@ -3789,5 +4043,548 @@ mod tests {
             "the window shows it: {:?}",
             app.notices
         );
+    }
+
+    // ---- the Import/Export tab and the pending line ------------------------------------
+
+    use crate::engine::views::{
+        AccountView, FinishedRequest, ImportCodeView, OAuthView, PendingRequest, ShareView, SiteRef,
+    };
+    use crate::ui::import::marked;
+
+    fn deliver(app: &mut AutoPobApp, snapshot: Snapshot) -> u64 {
+        let seq = app.last_sent.max(app.last_snapshot) + 1;
+        app.on_event(Event::Snapshot { seq, snapshot });
+        seq
+    }
+
+    fn requests_snapshot(pending: &[(u64, &str)], finished: Vec<FinishedRequest>) -> Snapshot {
+        Snapshot::Requests(Arc::new(RequestsView {
+            pending: pending
+                .iter()
+                .map(|(id, label)| PendingRequest {
+                    id: *id,
+                    label: (*label).into(),
+                })
+                .collect(),
+            finished,
+        }))
+    }
+
+    fn finished(id: u64, error: Option<&str>, cancelled: bool, new_build: bool) -> FinishedRequest {
+        FinishedRequest {
+            id,
+            label: "Fetching characters".into(),
+            error: error.map(str::to_owned),
+            cancelled,
+            new_build,
+        }
+    }
+
+    fn click_mark(app: &mut AutoPobApp, ctx: &egui::Context, key: &str) {
+        crate::ui::import::clear_marks();
+        frame(app, ctx, vec![]);
+        let pos = marked(key)
+            .unwrap_or_else(|| panic!("no widget {key}"))
+            .center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(app, ctx, vec![egui::Event::PointerMoved(pos)]);
+        frame(app, ctx, vec![button(true)]);
+        frame(app, ctx, vec![button(false)]);
+        frame(app, ctx, vec![]);
+    }
+
+    fn import_app() -> (AutoPobApp, egui::Context) {
+        let (mut app, ctx) = open_new_build();
+        app.build = Some(Arc::new(BuildView {
+            path: Some("/b/x.xml".into()),
+            ..(**app.build.as_ref().unwrap()).clone()
+        }));
+        app.tab = BuildTab::Import;
+        deliver(
+            &mut app,
+            Snapshot::Account(Arc::new(AccountView::default())),
+        );
+        deliver(
+            &mut app,
+            Snapshot::Share(Arc::new(ShareView {
+                sites: vec![SiteRef {
+                    id: "POBBin".into(),
+                    label: "pobb.in".into(),
+                }],
+                import: ImportCodeView {
+                    can_import_to_this_build: true,
+                    ..ImportCodeView::default()
+                },
+                ..ShareView::default()
+            })),
+        );
+        frame(&mut app, &ctx, vec![]);
+        (app, ctx)
+    }
+
+    /// Runs frames and collects what egui was asked to do besides drawing.
+    fn outputs_within(
+        app: &mut AutoPobApp,
+        ctx: &egui::Context,
+        frames: usize,
+    ) -> (Vec<String>, Vec<String>, bool) {
+        let (mut opened, mut copied, mut focus) = (Vec::new(), Vec::new(), false);
+        for _ in 0..frames {
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| app.show(ui));
+            for command in &output.platform_output.commands {
+                match command {
+                    egui::OutputCommand::OpenUrl(open) => opened.push(open.url.clone()),
+                    egui::OutputCommand::CopyText(text) => copied.push(text.clone()),
+                    _ => {}
+                }
+            }
+            focus |= output.viewport_output.values().any(|v| {
+                v.commands
+                    .iter()
+                    .any(|c| matches!(c, egui::ViewportCommand::Focus))
+            });
+            output.drop_without_applying_deltas();
+        }
+        (opened, copied, focus)
+    }
+
+    fn waiting_account(url: &str) -> AccountView {
+        AccountView {
+            oauth: OAuthView {
+                signing_in: true,
+                auth_url: Some(url.into()),
+                login_deadline: Some(i64::MAX),
+                ..OAuthView::default()
+            },
+            ..AccountView::default()
+        }
+    }
+
+    const AUTH: &str = "https://www.pathofexile.com/oauth/authorize?client_id=x";
+
+    #[test]
+    fn the_app_opens_the_auth_url_once_and_focuses_when_signed_in() {
+        let (mut app, ctx) = import_app();
+        click_mark(&mut app, &ctx, "sign_in");
+        assert_eq!(app.sent_log.last().map(String::as_str), Some("SignIn"));
+        let seq = app.last_sent;
+        for i in 0..3 {
+            app.on_event(Event::Snapshot {
+                seq: seq + i,
+                snapshot: Snapshot::Account(Arc::new(waiting_account(AUTH))),
+            });
+        }
+        let (opened, _, focus) = outputs_within(&mut app, &ctx, 3);
+        assert_eq!(opened, [AUTH]);
+        assert!(!focus, "still waiting for the browser");
+        let account = AccountView {
+            oauth: OAuthView {
+                signed_in: true,
+                ..OAuthView::default()
+            },
+            ..AccountView::default()
+        };
+        app.on_event(Event::Snapshot {
+            seq: seq + 5,
+            snapshot: Snapshot::Account(Arc::new(account)),
+        });
+        let (opened, _, focus) = outputs_within(&mut app, &ctx, 3);
+        assert!(opened.is_empty(), "{opened:?}");
+        assert!(focus, "the window comes back once the sign-in completes");
+        let (_, _, again) = outputs_within(&mut app, &ctx, 3);
+        assert!(!again);
+    }
+
+    #[test]
+    fn share_copy_and_ctrl_c_use_the_ui_clipboard_not_the_engine() {
+        let (mut app, ctx) = import_app();
+        deliver(
+            &mut app,
+            Snapshot::Share(Arc::new(ShareView {
+                sites: vec![SiteRef {
+                    id: "POBBin".into(),
+                    label: "pobb.in".into(),
+                }],
+                link: Some("https://pobb.in/abc".into()),
+                import: ImportCodeView::default(),
+                ..ShareView::default()
+            })),
+        );
+        frame(&mut app, &ctx, vec![]);
+        // the link only reaches the clipboard when the user presses Copy
+        let (_, copied, _) = outputs_within(&mut app, &ctx, 3);
+        assert!(copied.is_empty(), "{copied:?}");
+        click_mark(&mut app, &ctx, "copy_link_result");
+        // Ctrl+C on the tab asks for the code, then copies the answer
+        let before = app.sent_full.len();
+        frame(&mut app, &ctx, ctrl(egui::Key::C));
+        assert_eq!(sent_since(&app, before), ["ExportShareCode"]);
+        deliver(&mut app, Snapshot::ShareCode(Arc::new("eNrt".into())));
+        let (_, copied, _) = outputs_within(&mut app, &ctx, 3);
+        assert_eq!(copied, ["eNrt"]);
+        assert!(
+            app.sent_log.iter().all(|c| !c.contains("Copy")),
+            "the engine never copies: {:?}",
+            app.sent_log
+        );
+    }
+
+    #[test]
+    fn the_link_copy_button_copies_the_link() {
+        let (mut app, ctx) = import_app();
+        deliver(
+            &mut app,
+            Snapshot::Share(Arc::new(ShareView {
+                link: Some("https://pobb.in/abc".into()),
+                ..ShareView::default()
+            })),
+        );
+        crate::ui::import::clear_marks();
+        frame(&mut app, &ctx, vec![]);
+        let pos = marked("copy_link_result").unwrap().center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(pos)]);
+        frame(&mut app, &ctx, vec![button(true)]);
+        let mut copied = Vec::new();
+        for events in [vec![button(false)], vec![]] {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.show(ui),
+            );
+            copied.extend(
+                output
+                    .platform_output
+                    .commands
+                    .iter()
+                    .filter_map(|c| match c {
+                        egui::OutputCommand::CopyText(t) => Some(t.clone()),
+                        _ => None,
+                    }),
+            );
+            output.drop_without_applying_deltas();
+        }
+        assert_eq!(copied, ["https://pobb.in/abc"]);
+    }
+
+    #[test]
+    fn pending_line_cancels_by_id() {
+        let (mut app, ctx) = import_app();
+        deliver(
+            &mut app,
+            requests_snapshot(
+                &[(3, "Sharing on pobb.in"), (8, "Resolving PoEURL link")],
+                vec![],
+            ),
+        );
+        frame(&mut app, &ctx, vec![]);
+        assert!(marked("cancel:3").is_some() && marked("cancel:8").is_some());
+        let before = app.sent_full.len();
+        click_mark(&mut app, &ctx, "cancel:8");
+        assert_eq!(sent_since(&app, before), ["CancelRequest { id: 8 }"]);
+    }
+
+    #[test]
+    fn the_pending_line_shows_on_the_build_list_too() {
+        let (mut app, ctx) = started();
+        assert_eq!(app.screen, Screen::List);
+        deliver(
+            &mut app,
+            requests_snapshot(&[(4, "Fetching build from pobb.in")], vec![]),
+        );
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        click_mark(&mut app, &ctx, "cancel:4");
+        assert_eq!(sent_since(&app, before), ["CancelRequest { id: 4 }"]);
+        // and it goes when the request is over
+        deliver(&mut app, requests_snapshot(&[], vec![]));
+        crate::ui::import::clear_marks();
+        frame(&mut app, &ctx, vec![]);
+        assert!(marked("cancel:4").is_none());
+    }
+
+    #[test]
+    fn cancelling_an_oauth_fetch_asks_first() {
+        let (mut app, ctx) = import_app();
+        deliver(
+            &mut app,
+            Snapshot::Account(Arc::new(AccountView {
+                oauth: OAuthView {
+                    signed_in: true,
+                    busy: true,
+                    ..OAuthView::default()
+                },
+                ..AccountView::default()
+            })),
+        );
+        deliver(
+            &mut app,
+            requests_snapshot(&[(5, "Importing passive tree")], vec![]),
+        );
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        click_mark(&mut app, &ctx, "cancel:5");
+        assert!(app.confirm.as_ref().is_some_and(
+            |c| c.message == "Cancelling now may sign you out of Path of Exile in both apps."
+        ));
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        // keeping the request sends nothing
+        click_mark(&mut app, &ctx, "confirm_no");
+        assert!(app.confirm.is_none());
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        // confirming cancels it
+        click_mark(&mut app, &ctx, "cancel:5");
+        click_mark(&mut app, &ctx, "confirm_yes");
+        assert_eq!(sent_since(&app, before), ["CancelRequest { id: 5 }"]);
+    }
+
+    #[test]
+    fn cancelling_something_else_needs_no_question() {
+        let (mut app, ctx) = import_app();
+        deliver(&mut app, requests_snapshot(&[(6, "Signing in")], vec![]));
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        click_mark(&mut app, &ctx, "cancel:6");
+        assert!(app.confirm.is_none());
+        assert_eq!(sent_since(&app, before), ["CancelRequest { id: 6 }"]);
+    }
+
+    #[test]
+    fn cancelled_request_raises_no_notice() {
+        let (mut app, ctx) = import_app();
+        deliver(
+            &mut app,
+            requests_snapshot(&[], vec![finished(1, Some("Cancelled"), true, false)]),
+        );
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.notices.is_empty(), "{:?}", app.notices);
+        // a real failure does
+        deliver(
+            &mut app,
+            requests_snapshot(
+                &[],
+                vec![finished(2, Some("Timeout was reached"), false, false)],
+            ),
+        );
+        assert_eq!(app.notices, ["Fetching characters: Timeout was reached"]);
+        // and a success says nothing
+        deliver(
+            &mut app,
+            requests_snapshot(&[], vec![finished(3, None, false, false)]),
+        );
+        assert_eq!(app.notices.len(), 1);
+    }
+
+    #[test]
+    fn finished_new_build_enters_the_build_screen() {
+        let (mut app, ctx) = started();
+        assert_eq!(app.screen, Screen::List);
+        app.tab = BuildTab::Notes;
+        // one step: the new build's views, then the requests
+        let seq = app.last_sent.max(app.last_snapshot) + 1;
+        let build = BuildView {
+            name: "Imported".into(),
+            path: None,
+            class: "Witch".into(),
+            ascendancy: None,
+            level: 1,
+            unsaved: false,
+            can_undo: false,
+            can_redo: false,
+        };
+        let items = crate::engine::ItemsView {
+            can_undo: true,
+            ..Default::default()
+        };
+        for snapshot in [
+            Snapshot::Build(Arc::new(build)),
+            Snapshot::Items(Arc::new(items)),
+            requests_snapshot(&[], vec![finished(1, None, false, true)]),
+        ] {
+            app.on_event(Event::Snapshot { seq, snapshot });
+        }
+        assert_eq!(app.screen, Screen::Build);
+        assert_eq!(app.tab, BuildTab::Tree, "the build screen starts over");
+        assert!(app.entering.is_none());
+        assert_eq!(
+            app.build.as_ref().map(|b| b.name.as_str()),
+            Some("Imported")
+        );
+        // the views that came before the requests survive the reset
+        assert_eq!(app.items.history(), (true, false));
+        // a finished request without a new build leaves the screen alone
+        app.tab = BuildTab::Notes;
+        let seq = deliver(
+            &mut app,
+            requests_snapshot(&[], vec![finished(2, None, false, false)]),
+        );
+        assert!(seq > 0);
+        assert_eq!(app.tab, BuildTab::Notes);
+        frame(&mut app, &ctx, vec![]);
+    }
+
+    #[test]
+    fn a_new_build_resets_the_tab_state_of_the_old_one() {
+        let (mut app, _ctx) = import_app();
+        let old = crate::engine::ItemsView {
+            can_undo: true,
+            ..Default::default()
+        };
+        deliver(&mut app, Snapshot::Items(Arc::new(old)));
+        assert_eq!(app.items.history(), (true, false));
+        let seq = app.last_sent.max(app.last_snapshot) + 1;
+        for snapshot in [
+            Snapshot::Build(Arc::new((**app.build.as_ref().unwrap()).clone())),
+            requests_snapshot(&[], vec![finished(1, None, false, true)]),
+        ] {
+            app.on_event(Event::Snapshot { seq, snapshot });
+        }
+        assert_eq!(
+            app.items.history(),
+            (false, false),
+            "the old items are gone"
+        );
+        assert_eq!(app.tab, BuildTab::Tree);
+    }
+
+    #[test]
+    fn restart_clears_pending() {
+        let (mut app, ctx) = started();
+        deliver(&mut app, requests_snapshot(&[(4, "Signing in")], vec![]));
+        frame(&mut app, &ctx, vec![]);
+        assert!(marked("cancel:4").is_some());
+        app.restart();
+        assert!(app.requests.pending.is_empty());
+        crate::ui::import::clear_marks();
+        frame(&mut app, &ctx, vec![]);
+        assert!(marked("cancel:4").is_none());
+    }
+
+    fn valid_share() -> Snapshot {
+        Snapshot::Share(Arc::new(ShareView {
+            import: ImportCodeView {
+                text: "https://pobb.in/abc".into(),
+                valid: true,
+                detail: "URL is valid (pobb.in)".into(),
+                can_import_to_this_build: true,
+                ..ImportCodeView::default()
+            },
+            ..ShareView::default()
+        }))
+    }
+
+    #[test]
+    fn new_build_import_prompts_for_unsaved_changes() {
+        let (mut app, ctx) = import_app();
+        deliver(&mut app, valid_share());
+        frame(&mut app, &ctx, vec![]);
+        app.build = Some(Arc::new(BuildView {
+            unsaved: true,
+            ..(**app.build.as_ref().unwrap()).clone()
+        }));
+        let before = app.sent_full.len();
+        click_mark(&mut app, &ctx, "import_code");
+        assert_eq!(
+            app.prompt,
+            Some(Pending::ImportNew("https://pobb.in/abc".into()))
+        );
+        assert!(
+            sent_since(&app, before)
+                .iter()
+                .all(|c| !c.contains("ImportFromUrl")),
+            "nothing is imported before the answer"
+        );
+        // once the build is saved it goes at once
+        app.prompt = None;
+        app.build = Some(Arc::new(BuildView {
+            unsaved: false,
+            ..(**app.build.as_ref().unwrap()).clone()
+        }));
+        click_mark(&mut app, &ctx, "import_code");
+        assert!(app.prompt.is_none());
+        assert_eq!(
+            sent_since(&app, before),
+            ["ImportFromUrl { url: \"https://pobb.in/abc\", mode: NewBuild }"]
+        );
+    }
+
+    #[test]
+    fn this_build_import_asks_then_replaces_the_build_screen() {
+        let (mut app, ctx) = import_app();
+        deliver(&mut app, valid_share());
+        frame(&mut app, &ctx, vec![]);
+        click_mark(&mut app, &ctx, "mode:this");
+        let before = app.sent_full.len();
+        click_mark(&mut app, &ctx, "import_code");
+        assert!(app.confirm.as_ref().is_some_and(|c| c.message
+            == "Importing to the current build will erase ALL existing data for this build."));
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        click_mark(&mut app, &ctx, "confirm_yes");
+        assert_eq!(
+            sent_since(&app, before),
+            ["ImportFromUrl { url: \"https://pobb.in/abc\", mode: ThisBuild }"]
+        );
+        // a code imports at once: its Build view, at the command's seq, starts the screen over
+        assert_eq!(app.tab, BuildTab::Import);
+        let seq = app.last_sent;
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::Build(Arc::new((**app.build.as_ref().unwrap()).clone())),
+        });
+        assert_eq!(app.tab, BuildTab::Tree);
+        // not again for the next view
+        app.tab = BuildTab::Import;
+        app.on_event(Event::Snapshot {
+            seq: seq + 1,
+            snapshot: Snapshot::Build(Arc::new((**app.build.as_ref().unwrap()).clone())),
+        });
+        assert_eq!(app.tab, BuildTab::Import);
+    }
+
+    #[test]
+    fn a_character_import_into_a_built_tree_asks_first() {
+        let (mut app, ctx) = import_app();
+        let account = AccountView {
+            oauth: OAuthView {
+                signed_in: true,
+                fetched: true,
+                leagues: vec!["Standard".into(), "Any".into()],
+                characters: vec![crate::engine::views::CharacterEntry {
+                    name: "Alice".into(),
+                    class: "Witch".into(),
+                    level: 90,
+                    league: "Standard".into(),
+                }],
+                ..OAuthView::default()
+            },
+            ..AccountView::default()
+        };
+        deliver(&mut app, Snapshot::Account(Arc::new(account)));
+        app.import_ui.tree_used_for_test();
+        frame(&mut app, &ctx, vec![]);
+        click_mark(&mut app, &ctx, "char:Alice");
+        let before = app.sent_full.len();
+        click_mark(&mut app, &ctx, "import_character");
+        assert!(app.confirm.as_ref().is_some_and(
+            |c| c.message == "Importing the passive tree will overwrite your current tree."
+        ));
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        click_mark(&mut app, &ctx, "confirm_yes");
+        let sent = sent_since(&app, before);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(sent[0].contains("Tree { delete_jewels: true }"), "{sent:?}");
     }
 }

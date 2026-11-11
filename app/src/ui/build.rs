@@ -21,10 +21,12 @@ pub enum BuildTab {
     Calcs,
     Config,
     Notes,
+    Import,
 }
 
 impl BuildTab {
-    /// The Config, Tree, Skills, Items and Calcs tabs have undo history; the notes editor has its own.
+    /// The Config, Tree, Skills, Items and Calcs tabs have undo history; the notes editor has its
+    /// own and the Import/Export tab has none.
     pub fn has_undo(self) -> bool {
         matches!(
             self,
@@ -88,5 +90,6 @@ pub fn tab_strip(ui: &mut egui::Ui, tab: &mut BuildTab) {
         ui.selectable_value(tab, BuildTab::Calcs, "Calcs");
         ui.selectable_value(tab, BuildTab::Config, "Config");
         ui.selectable_value(tab, BuildTab::Notes, "Notes");
+        ui.selectable_value(tab, BuildTab::Import, "Import/Export");
     });
 }

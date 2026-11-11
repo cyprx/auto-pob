@@ -5,16 +5,16 @@
 #   ruled_out = the R# (SP7 plan) or D-# (ledger) ruling that drops it
 #   gap       = the task that closes it (Task 16 fails while any gap is left)
 # plus an optional note. A widget's own scroll bars and +/-/x buttons share its status.
-# Rows marked NEW FINDING await the controller's ruling (Task 2 report).
+# NF-n rows are new findings from the Task 2 audit; the controller ruled all of them in scope.
 
 # ---- controls ----
 
 [controls."build.ascendDrop"]
-ported = "app/src/ui/tree/toolbar.rs Ascendancy combo"
-note = "on the Tree tab, not the top bar"
+gap = "Task 12"
+note = "controller ruling: full parity; in the top bar on every tab, as PoB; today ported app/src/ui/tree/toolbar.rs Ascendancy combo; on the Tree tab, not the top bar"
 
 [controls."build.ascendDrop.scrollBar"]
-ported = "app/src/ui/tree/toolbar.rs Ascendancy combo"
+gap = "Task 12"
 note = "part of build.ascendDrop"
 
 [controls."build.back"]
@@ -52,11 +52,11 @@ gap = "Task 12"
 note = "part of build.characterLevel"
 
 [controls."build.classDrop"]
-ported = "app/src/ui/tree/toolbar.rs Class combo"
-note = "on the Tree tab, not the top bar"
+gap = "Task 12"
+note = "controller ruling: full parity; in the top bar on every tab, as PoB; today ported app/src/ui/tree/toolbar.rs Class combo; on the Tree tab, not the top bar"
 
 [controls."build.classDrop.scrollBar"]
-ported = "app/src/ui/tree/toolbar.rs Class combo"
+gap = "Task 12"
 note = "part of build.classDrop"
 
 [controls."build.levelScalingButton"]
@@ -182,8 +182,8 @@ ported = "app/src/ui/build.rs tab_strip"
 ported = "app/src/ui/build.rs tab_strip"
 
 [controls."build.pointDisplay"]
-ported = "app/src/ui/tree/toolbar.rs Points and Ascendancy counts"
-note = "shown on the Tree tab only"
+gap = "Task 12"
+note = "controller ruling: full parity; in the top bar on every tab, as PoB; today ported app/src/ui/tree/toolbar.rs Points and Ascendancy counts; shown on the Tree tab only"
 
 [controls."build.save"]
 ported = "app/src/ui/build.rs top_bar Save"
@@ -212,7 +212,7 @@ note = "layout anchor"
 
 [controls."build.warnings"]
 gap = "Task 12"
-note = "NEW FINDING NF-1: PoB's N Warnings line under the stats (too many points, unmet requirements, warnFunc lines) is not shown"
+note = "NF-1 (new finding, in scope by controller ruling): PoB's N Warnings line under the stats (too many points, unmet requirements, warnFunc lines) is not shown"
 
 [controls."calcs.#CalcSectionControl"]
 gap = "Task 13"
@@ -622,11 +622,11 @@ note = "part of compare.compareSpecSelect"
 
 [controls."compare.compareTreeSetLabel"]
 gap = "Task 9"
-note = "NEW FINDING NF-9: not in R6's control list"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list"
 
 [controls."compare.compareTreeSetSelect"]
 gap = "Task 9"
-note = "NEW FINDING NF-9: not in R6's control list; same function as compareSpecSelect (their tree set)"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; same function as compareSpecSelect (their tree set)"
 
 [controls."compare.compareTreeSetSelect.scrollBar"]
 gap = "Task 9"
@@ -634,11 +634,11 @@ note = "part of compare.compareTreeSetSelect"
 
 [controls."compare.configPrimarySetLabel"]
 gap = "Task 9"
-note = "NEW FINDING NF-9: not in R6's control list"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list"
 
 [controls."compare.configPrimarySetSelect"]
 gap = "Task 9"
-note = "NEW FINDING NF-9: not in R6's control list; switches our own config set from the Compare tab"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; switches our own config set from the Compare tab"
 
 [controls."compare.configPrimarySetSelect.scrollBar"]
 gap = "Task 9"
@@ -646,7 +646,7 @@ note = "part of compare.configPrimarySetSelect"
 
 [controls."compare.configSearchEdit"]
 gap = "Task 9"
-note = "NEW FINDING NF-9: not in R6's control list; R25 already has Ctrl+F on Compare Config, so the box is implied"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; R25 already has Ctrl+F on Compare Config, so the box is implied"
 
 [controls."compare.configSearchEdit.buttonClear"]
 gap = "Task 9"
@@ -662,7 +662,7 @@ note = "part of compare.configSearchEdit"
 
 [controls."compare.configToggleBtn"]
 gap = "Task 9"
-note = "NEW FINDING NF-9: not in R6's control list; Show All Configurations in the Config view"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; Show All Configurations in the Config view"
 
 [controls."compare.copyConfigBtn"]
 gap = "Task 9"
@@ -694,7 +694,7 @@ note = "layout anchor of the side-by-side footer"
 
 [controls."compare.leftSpecSelect"]
 gap = "Task 9"
-note = "NEW FINDING NF-9: not in R6's control list; switches our own tree set from the Compare tree header"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; switches our own tree set from the Compare tree header"
 
 [controls."compare.leftSpecSelect.scrollBar"]
 gap = "Task 9"
@@ -702,7 +702,7 @@ note = "part of compare.leftSpecSelect"
 
 [controls."compare.leftTreeSearch"]
 gap = "Task 9"
-note = "NEW FINDING NF-9: not in R6's control list; tree search, side by side"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; tree search, side by side"
 
 [controls."compare.leftTreeSearch.buttonClear"]
 gap = "Task 9"
@@ -718,7 +718,7 @@ note = "part of compare.leftTreeSearch"
 
 [controls."compare.leftVersionSelect"]
 gap = "Task 9"
-note = "NEW FINDING NF-9: not in R6's control list; converts our tree version from the Compare tab"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; converts our tree version from the Compare tab"
 
 [controls."compare.leftVersionSelect.scrollBar"]
 gap = "Task 9"
@@ -726,7 +726,7 @@ note = "part of compare.leftVersionSelect"
 
 [controls."compare.overlayTreeSearch"]
 gap = "Task 9"
-note = "NEW FINDING NF-9: not in R6's control list; tree search in the overlay view"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; tree search in the overlay view"
 
 [controls."compare.overlayTreeSearch.buttonClear"]
 gap = "Task 9"
@@ -754,11 +754,11 @@ note = "part of compare.primaryItemSetSelect"
 
 [controls."compare.primaryTreeSetLabel"]
 gap = "Task 9"
-note = "NEW FINDING NF-9: not in R6's control list"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list"
 
 [controls."compare.primaryTreeSetSelect"]
 gap = "Task 9"
-note = "NEW FINDING NF-9: not in R6's control list; switches our own tree set from the Compare tab"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; switches our own tree set from the Compare tab"
 
 [controls."compare.primaryTreeSetSelect.scrollBar"]
 gap = "Task 9"
@@ -870,7 +870,7 @@ note = "layout anchor of the side-by-side footer"
 
 [controls."compare.rightSpecSelect"]
 gap = "Task 9"
-note = "NEW FINDING NF-9: not in R6's control list; same function as compareSpecSelect, in the tree header"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; same function as compareSpecSelect, in the tree header"
 
 [controls."compare.rightSpecSelect.scrollBar"]
 gap = "Task 9"
@@ -878,7 +878,7 @@ note = "part of compare.rightSpecSelect"
 
 [controls."compare.rightTreeSearch"]
 gap = "Task 9"
-note = "NEW FINDING NF-9: not in R6's control list; tree search, side by side"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; tree search, side by side"
 
 [controls."compare.rightTreeSearch.buttonClear"]
 gap = "Task 9"
@@ -894,7 +894,7 @@ note = "part of compare.rightTreeSearch"
 
 [controls."compare.rightVersionSelect"]
 gap = "Task 9"
-note = "NEW FINDING NF-9: not in R6's control list; converts their tree version"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; converts their tree version"
 
 [controls."compare.rightVersionSelect.scrollBar"]
 gap = "Task 9"
@@ -960,7 +960,7 @@ ported = "app/src/ui/config.rs remove custom mod group"
 
 [controls."config.#CustomModBlockControl.enableCheck"]
 gap = "Task 13"
-note = "box ported (config.rs); NEW FINDING NF-10: its Enabling this group will give you what-if tooltip is not"
+note = "box ported (config.rs); NF-10 (new finding, in scope by controller ruling): its Enabling this group will give you what-if tooltip is not"
 
 [controls."config.#CustomModBlockControl.textEdit"]
 ported = "app/src/ui/config.rs custom mod group text"
@@ -1033,7 +1033,7 @@ ported = "app/src/ui/config.rs set combo"
 
 [controls."config.setManage"]
 gap = "Task 13"
-note = "New, Rename and Delete ported (config.rs); NEW FINDING NF-4: no Copy and no reorder of config sets"
+note = "New, Rename and Delete ported (config.rs); NF-4 (new finding, in scope by controller ruling): no Copy and no reorder of config sets"
 
 [controls."config.setSelect"]
 ported = "app/src/ui/config.rs set combo"
@@ -1190,7 +1190,7 @@ ported = "app/src/ui/import.rs sign-in import"
 
 [controls."import.siteAccountHistory"]
 gap = "Task 13"
-note = "NEW FINDING NF-8: PoB's recent account names dropdown is not shown (PublicView.history exists but the UI ignores it)"
+note = "NF-8 (new finding, in scope by controller ruling): PoB's recent account names dropdown is not shown (PublicView.history exists but the UI ignores it)"
 
 [controls."import.siteAccountHistory.scrollBar"]
 gap = "Task 13"
@@ -1218,8 +1218,8 @@ ported = "app/src/ui/import.rs import by account name"
 ported = "app/src/ui/import.rs import by account name"
 
 [controls."import.siteAccountNameMissingDiscriminator"]
-ported = "app/src/ui/import.rs Start"
-note = "PoB's text comes back as the error (glue/import.lua)"
+gap = "Task 13"
+note = "controller ruling: full parity; PoB's label and disabled Start; today ported app/src/ui/import.rs Start; PoB's text comes back as the error (glue/import.lua)"
 
 [controls."import.siteAccountNameUnicode"]
 ported = "app/src/ui/import.rs"
@@ -1233,8 +1233,8 @@ ported = "app/src/ui/import.rs import by account name"
 note = "part of import.siteAccountRealm"
 
 [controls."import.siteCharBanditNote"]
-ported = "app/src/ui/import.rs"
-note = "UNCERTAIN: hint only; PoB bandit tip text is not shown"
+gap = "Task 13"
+note = "controller ruling: full parity; show PoB's bandit tip; today ported app/src/ui/import.rs; hint only; PoB bandit tip text is not shown"
 
 [controls."import.siteCharClose"]
 ported = "app/src/ui/import.rs import by account name"
@@ -1285,7 +1285,7 @@ ported = "app/src/ui/import.rs import by account name"
 
 [controls."import.siteRemoveAccount"]
 gap = "Task 13"
-note = "NEW FINDING NF-8: no way to remove an account from that history"
+note = "NF-8 (new finding, in scope by controller ruling): no way to remove an account from that history"
 
 [controls."items.#ItemSlotControl"]
 gap = "Task 13"
@@ -1706,244 +1706,244 @@ ported = "app/src/ui/items/display.rs socket colours"
 note = "part of items.displayItemSocket6"
 
 [controls."items.displayItemStackedMutatedCheckbox1"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedMutatedCheckbox10"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedMutatedCheckbox11"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedMutatedCheckbox12"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedMutatedCheckbox13"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedMutatedCheckbox14"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedMutatedCheckbox15"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedMutatedCheckbox16"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedMutatedCheckbox17"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedMutatedCheckbox18"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedMutatedCheckbox19"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedMutatedCheckbox2"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedMutatedCheckbox20"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedMutatedCheckbox3"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedMutatedCheckbox4"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedMutatedCheckbox5"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedMutatedCheckbox6"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedMutatedCheckbox7"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedMutatedCheckbox8"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedMutatedCheckbox9"]
-ported = "app/src/ui/items/display.rs Foulborn"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine1"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine10"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine11"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine12"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine13"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine14"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine15"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine16"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine17"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine18"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine19"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine2"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine20"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine3"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine4"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine5"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine6"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine7"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine8"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeLine9"]
-ported = "app/src/ui/items/display.rs range line combo"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider1"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider10"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider11"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider12"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider13"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider14"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider15"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider16"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider17"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider18"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider19"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider2"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider20"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider3"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider4"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider5"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider6"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider7"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider8"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemStackedRangeSlider9"]
-ported = "app/src/ui/items/display.rs range slider"
-note = "PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+gap = "Task 13"
+note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
 
 [controls."items.displayItemTip"]
 ported = "app/src/ui/items/display.rs empty-panel hint"
@@ -1970,7 +1970,7 @@ ported = "app/src/ui/items/display.rs Edit (text_window.rs)"
 
 [controls."items.itemList"]
 gap = "Task 13"
-note = "list, sort, drag, Delete and Ctrl+C ported (items/list.rs); NEW FINDING NF-16: Ctrl+click equips a row into its slot and Ctrl+Shift+click into the second slot"
+note = "list, sort, drag, Delete and Ctrl+C ported (items/list.rs); NF-16 (new finding, in scope by controller ruling): Ctrl+click equips a row into its slot and Ctrl+Shift+click into the second slot"
 
 [controls."items.itemList.delete"]
 ported = "app/src/ui/items/list.rs Delete"
@@ -2063,11 +2063,11 @@ note = "part of items.setSelect"
 
 [controls."items.sharedItemList"]
 gap = "Task 13"
-note = "NEW FINDING NF-2: PoB's shared items (kept in Settings.xml, across builds) are not shown"
+note = "NF-2 (new finding, in scope by controller ruling): PoB's shared items (kept in Settings.xml, across builds) are not shown"
 
 [controls."items.sharedItemList.delete"]
 gap = "Task 13"
-note = "NEW FINDING NF-2"
+note = "NF-2 (new finding, in scope by controller ruling)"
 
 [controls."items.sharedItemList.scrollBarH"]
 gap = "Task 13"
@@ -2081,19 +2081,19 @@ note = "part of items.sharedItemList"
 ported = "app/src/ui/items/slots.rs"
 
 [controls."items.specButton"]
-ported = "app/src/ui/tree/toolbar.rs spec manager"
-note = "UNCERTAIN: as items.specSelect"
+gap = "Task 13"
+note = "controller ruling: full parity; PoB's tree selector on the Items tab; today ported app/src/ui/tree/toolbar.rs spec manager; as items.specSelect"
 
 [controls."items.specLabel"]
-ported = "app/src/ui/tree/toolbar.rs"
-note = "label of items.specSelect"
+gap = "Task 13"
+note = "controller ruling: full parity; PoB's tree selector on the Items tab; today ported app/src/ui/tree/toolbar.rs; label of items.specSelect"
 
 [controls."items.specSelect"]
-ported = "app/src/ui/tree/toolbar.rs spec combo"
-note = "UNCERTAIN: PoB repeats the tree selector on the Items tab; ours is on the Tree tab only"
+gap = "Task 13"
+note = "controller ruling: full parity; PoB's tree selector on the Items tab; today ported app/src/ui/tree/toolbar.rs spec combo; PoB repeats the tree selector on the Items tab; ours is on the Tree tab only"
 
 [controls."items.specSelect.scrollBar"]
-ported = "app/src/ui/tree/toolbar.rs spec combo"
+gap = "Task 13"
 note = "part of items.specSelect"
 
 [controls."items.uniqueDB"]
@@ -2143,11 +2143,11 @@ ported = "app/src/ui/items/slots.rs weapon set I/II"
 
 [controls."list.buildList"]
 gap = "Task 6"
-note = "browsing ported (build_list.rs); drag to folders, Ctrl+X/V and the row menu are Task 6 (R16); NEW FINDING NF-13: F2, Enter, the Delete key and Ctrl+C then Ctrl+V into another folder"
+note = "browsing ported (build_list.rs); drag to folders, Ctrl+X/V and the row menu are Task 6 (R16); NF-13 (new finding, in scope by controller ruling): F2, Enter, the Delete key and Ctrl+C then Ctrl+V into another folder"
 
 [controls."list.buildList.path"]
-ported = "app/src/ui/build_list.rs Builds/<folder> header and .. row"
-note = "UNCERTAIN: PoB's path segments are clickable; ours goes up one level at a time"
+gap = "Task 6"
+note = "controller ruling: full parity; clickable path segments; today ported app/src/ui/build_list.rs Builds/<folder> header and .. row; PoB's path segments are clickable; ours goes up one level at a time"
 
 [controls."list.buildList.scrollBarH"]
 gap = "Task 6"
@@ -2270,8 +2270,8 @@ ported = "app/src/ui/notes.rs colour buttons"
 ported = "app/src/ui/notes.rs colour buttons"
 
 [controls."notes.notesDesc"]
-ported = "egui Ctrl+Plus / Ctrl+Minus / Ctrl+0 zoom"
-note = "UNCERTAIN: egui zooms the whole window, PoB only the notes text"
+gap = "Task 13"
+note = "controller ruling: full parity; notes-only text zoom (Ctrl +/-/0, Ctrl+scroll); today ported egui Ctrl+Plus / Ctrl+Minus / Ctrl+0 zoom; egui zooms the whole window, PoB only the notes text"
 
 [controls."notes.rare"]
 ported = "app/src/ui/notes.rs colour buttons"
@@ -2923,7 +2923,7 @@ note = "part of skills.groupLabel"
 
 [controls."skills.groupList"]
 gap = "Task 14"
-note = "list, drag reorder, context menu and Ctrl+C/V are ported (skills/groups.rs); NEW FINDING NF-11: Ctrl+click (enable) and Ctrl+right-click (Full DPS) on a row are not"
+note = "list, drag reorder, context menu and Ctrl+C/V are ported (skills/groups.rs); NF-11 (new finding, in scope by controller ruling): Ctrl+click (enable) and Ctrl+right-click (Full DPS) on a row are not"
 
 [controls."skills.groupList.delete"]
 ported = "app/src/ui/skills/groups.rs Delete"
@@ -3049,7 +3049,7 @@ note = "timeless jewel search (R17)"
 
 [controls."tree.nodePowerMaxDepthCustom"]
 gap = "Task 13"
-note = "NEW FINDING NF-6: no custom heat map depth"
+note = "NF-6 (new finding, in scope by controller ruling): no custom heat map depth"
 
 [controls."tree.nodePowerMaxDepthCustom.buttonDown"]
 gap = "Task 13"
@@ -3083,11 +3083,11 @@ ported = "app/src/ui/tree/power_report.rs"
 
 [controls."tree.powerReportList.filterSelect"]
 gap = "Task 13"
-note = "NEW FINDING NF-5: no Show Unallocated / Clusters / Allocated filter; our list shows every row"
+note = "NF-5 (new finding, in scope by controller ruling): no Show Unallocated / Clusters / Allocated filter; our list shows every row"
 
 [controls."tree.powerReportList.masteryCheck"]
 gap = "Task 13"
-note = "NEW FINDING NF-5: no Show Masteries toggle"
+note = "NF-5 (new finding, in scope by controller ruling): no Show Masteries toggle"
 
 [controls."tree.powerReportList.scrollBarH"]
 ported = "app/src/ui/tree/power_report.rs"
@@ -3145,7 +3145,7 @@ note = "part of tree.treeSearch"
 
 [controls."tree.versionSelect"]
 gap = "Task 13"
-note = "NEW FINDING NF-7: we convert only to the latest version; PoB's dropdown converts to any listed version"
+note = "NF-7 (new finding, in scope by controller ruling): we convert only to the latest version; PoB's dropdown converts to any listed version"
 
 [controls."tree.versionSelect.scrollBar"]
 gap = "Task 13"
@@ -3190,8 +3190,8 @@ ported = "app/src/ui/import.rs confirm"
 note = "PoB's text"
 
 [popups."Class Change"]
-ported = "app/src/ui/tree/toolbar.rs class change confirm (Connect path / Reset)"
-note = "UNCERTAIN: the canvas site (another class ascendancy node clicked, PassiveTreeView:474) errors in the glue and SP2 routes it through SelectClass"
+gap = "Task 13"
+note = "controller ruling: full parity; the canvas site (another class ascendancy start clicked) must ask as PoB does; today ported app/src/ui/tree/toolbar.rs class change confirm (Connect path / Reset); the canvas site (another class ascendancy node clicked, PassiveTreeView:474) errors in the glue and SP2 routes it through SelectClass"
 
 [popups."CompareBuySimilar:531"]
 gap = "Task 10"
@@ -3247,7 +3247,7 @@ note = "R17"
 
 [popups."Game Version"]
 ruled_out = "R3"
-note = "pending Open check 14: our open path must refuse those builds with PoB text, or this becomes a gap"
+note = "pending Open check 14: our open path must refuse those builds with PoB text, or this becomes a gap; provisional ruling until Open check 14 runs"
 
 [popups."Import Comparison Build"]
 gap = "Task 9"
@@ -3277,8 +3277,8 @@ ported = "each feature's own confirm"
 note = "OpenConfirmPopup body; every confirm title is its own row"
 
 [popups."Main:1747"]
-ported = "app/src/ui/app.rs save error"
-note = "OpenCloudErrorPopup: a failed save shows our error; PoB's OneDrive hint is Windows-only"
+gap = "Task 6"
+note = "controller ruling: full parity; PoB's cloud-folder save error text; today ported app/src/ui/app.rs save error; OpenCloudErrorPopup: a failed save shows our error; PoB's OneDrive hint is Windows-only"
 
 [popups."Manage Config Sets"]
 gap = "Task 13"
@@ -3290,7 +3290,7 @@ note = "item sets ported (items/sets.rs); the popup's shared item set list is NF
 
 [popups."Manage Passive Trees"]
 gap = "Task 13"
-note = "New, Rename and Delete ported (tree/toolbar.rs); NEW FINDING NF-3: no Copy and no reorder of trees"
+note = "New, Rename and Delete ported (tree/toolbar.rs); NF-3 (new finding, in scope by controller ruling): no Copy and no reorder of trees"
 
 [popups."Manage Skill Sets"]
 gap = "Task 13"
@@ -3332,7 +3332,7 @@ ported = "app/src/ui/tree/toolbar.rs Reset tree and Remove all tattoos confirms"
 
 [popups."Save"]
 gap = "Task 6"
-note = "name entry ported (app.rs save-as dialog); NEW FINDING NF-15: PoB picks the folder in a folder list with New Folder and sort, ours saves into the folder the list last showed"
+note = "name entry ported (app.rs save-as dialog); NF-15 (new finding, in scope by controller ruling): PoB picks the folder in a folder list with New Folder and sort, ours saves into the folder the list last showed"
 
 [popups."Save As"]
 gap = "Task 6"
@@ -3516,7 +3516,7 @@ note = "PoB presses the popup's escape button, which closes it"
 
 [keys."popup.RETURN"]
 gap = "Task 14"
-note = "NEW FINDING NF-12: Enter doesn't press a PoB popup session's default button (save, go, search, convert...)"
+note = "NF-12 (new finding, in scope by controller ruling): Enter doesn't press a PoB popup session's default button (save, go, search, convert...)"
 
 [keys."skills.v"]
 ported = "app/src/ui/skills/mod.rs Ctrl+V paste"
@@ -3545,7 +3545,7 @@ note = "Ctrl+F (R25)"
 
 [keys."tree.LEFTBUTTON"]
 gap = "Task 14"
-note = "click to allocate and drag to pan ported (tree/canvas.rs); NEW FINDING NF-17: Shift-held path tracing and Ctrl+click zoom are not"
+note = "click to allocate and drag to pan ported (tree/canvas.rs); NF-17 (new finding, in scope by controller ruling): Shift-held path tracing and Ctrl+click zoom are not"
 
 [keys."tree.m"]
 gap = "Task 14"

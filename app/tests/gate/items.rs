@@ -309,6 +309,13 @@ const EXTRA_ITEMS: &str = r#"
         "Rarity: RARE\nGrim Bow\nCrude Bow\nImplicits: 0\nAdds 3 to 9 Physical Damage\n+22 to maximum Life",
         "Rarity: RARE\nDoom Ward\nCobalt Jewel\nImplicits: 0\n+7 to Intelligence\n+9 to maximum Life",
         "Rarity: RARE\nSoul Eye\nGhastly Eye Jewel\nImplicits: 0\n+9 to maximum Life",
+        -- two influences, one influence, synthesised, foil, and Memory Strands (PoB gives
+        -- its line a background image, ItemsTab.lua:4610)
+        "Rarity: RARE\nDusk Loop\nIron Ring\nShaper Item\nElder Item\nImplicits: 0\n+31 to maximum Life",
+        "Rarity: RARE\nHunter Loop\nIron Ring\nHunter Item\nImplicits: 0\n+32 to maximum Life",
+        "Rarity: RARE\nSynth Loop\nIron Ring\nSynthesised Item\nImplicits: 0\n+33 to maximum Life",
+        "Rarity: UNIQUE\nFoil Heart\nGlorious Plate\nFoil Unique (Gold)\nImplicits: 0\n+101 to maximum Life",
+        "Rarity: RARE\nMemory Loop\nIron Ring\nMemory Strands: 40\nImplicits: 0\n+34 to maximum Life",
     }
     for _, text in ipairs(texts) do
         local item = new("Item", text)
@@ -330,15 +337,23 @@ fn upstream_tooltip(lua: &mlua::Lua, code: &str) -> Option<serde_json::Value> {
     }
 }
 
-/// Compares every item's list tooltip and the tooltip of every slot that lists it. Returns how
-/// many were compared, how many had an "Equipping this item in" line, and the largest one.
-fn compare_tooltips(
-    s: &mut Session,
-    lua: &mlua::Lua,
-    what: &str,
-) -> (usize, usize, Vec<ItemTooltipLine>) {
+/// What the compared tooltips held.
+#[derive(Default)]
+struct Seen {
+    compared: usize,
+    /// with an "Equipping this item in" line
+    equipping: usize,
+    /// with at least one influence
+    influences: usize,
+    foil: usize,
+    /// with a line that has a background
+    background: usize,
+}
+
+/// Compares every item's list tooltip and the tooltip of every slot that lists it.
+fn compare_tooltips(s: &mut Session, lua: &mlua::Lua, what: &str) -> Seen {
     let view = s.backend.items_view().unwrap();
-    let (mut compared, mut equipping, mut longest) = (0, 0, Vec::new());
+    let mut seen = Seen::default();
     for item in &view.items {
         let mut queries = vec![(None, format!("listTooltip({})", item.id))];
         for slot in view
@@ -375,18 +390,26 @@ fn compare_tooltips(
                         matches!(line, ItemTooltipLine::Line { text, .. }
                             if text.contains("Equipping this item in"))
                     });
-                    equipping += usize::from(has_equipping);
-                    if lines.len() > longest.len() {
-                        longest = lines.clone();
-                    }
-                    compared += 1;
+                    seen.equipping += usize::from(has_equipping);
+                    seen.influences += usize::from(!ours.tooltip.influences.is_empty());
+                    seen.foil += usize::from(ours.tooltip.foil.is_some());
+                    seen.background += usize::from(lines.iter().any(|line| {
+                        matches!(
+                            line,
+                            ItemTooltipLine::Line {
+                                background: Some(_),
+                                ..
+                            }
+                        )
+                    }));
+                    seen.compared += 1;
                 }
                 (None, None) => {}
                 (ours, theirs) => panic!("{label}: ours {ours:?}, upstream {theirs:?}"),
             }
         }
     }
-    (compared, equipping, longest)
+    seen
 }
 
 #[test]
@@ -410,15 +433,25 @@ fn item_tooltips_match_pob() {
     }
 
     let started = std::time::Instant::now();
-    let (compared, equipping, _) = compare_tooltips(&mut s, &lua, "stat differences on");
-    eprintln!("{compared} tooltips compared in {:?}", started.elapsed());
-    assert!(compared > 40, "only {compared} tooltips");
+    let on = compare_tooltips(&mut s, &lua, "stat differences on");
+    eprintln!(
+        "{} tooltips compared in {:?}",
+        on.compared,
+        started.elapsed()
+    );
+    assert!(on.compared > 40, "only {} tooltips", on.compared);
+    let equipping = on.equipping;
     assert!(equipping > 0, "no tooltip compares with the equipped item");
+    // the header fields and line backgrounds are compared in non-default states too
+    assert!(on.influences > 0, "no tooltip has an influence");
+    assert!(on.foil > 0, "no tooltip has a foil type");
+    assert!(on.background > 0, "no tooltip has a line background");
 
     // PoB's Ctrl+D body: the toggle only
     on_both(&s, &lua, "BUILD.itemsTab.showStatDifferences = false");
-    let (compared, equipping_off, _) = compare_tooltips(&mut s, &lua, "stat differences off");
-    assert!(compared > 40);
+    let off = compare_tooltips(&mut s, &lua, "stat differences off");
+    let equipping_off = off.equipping;
+    assert!(off.compared > 40);
     assert!(
         equipping_off < equipping,
         "the comparison should go with the toggle"
@@ -444,6 +477,30 @@ fn item_tooltips_match_pob() {
         .id;
     assert!(ask(&mut s, kaom, Some("Ring 1")).is_none());
     assert!(ask(&mut s, kaom, Some("Body Armour")).is_some());
+
+    // an item that exists but is filtered out of the item list has no list tooltip (R3)
+    on_both(
+        &s,
+        &lua,
+        "BUILD.itemsTab.controls.itemList.controls.loadoutFilter:SetSel(3)",
+    );
+    let filtered = s.backend.items_view().unwrap();
+    let hidden = filtered
+        .items
+        .iter()
+        .find(|item| !filtered.listed.contains(&item.id))
+        .expect("the filter hides an item");
+    assert!(ask(&mut s, hidden.id, None).is_none());
+    assert!(upstream_tooltip(&lua, &format!("return listTooltip({})", hidden.id)).is_none());
+    // while a listed one still has it, and the same item still has its slot tooltip
+    assert!(ask(&mut s, filtered.listed[0], None).is_some());
+    let slot = filtered
+        .slots
+        .iter()
+        .find(|slot| slot.choices.contains(&hidden.id));
+    if let Some(slot) = slot {
+        assert!(ask(&mut s, hidden.id, Some(&slot.name)).is_some());
+    }
 }
 
 #[test]
@@ -541,9 +598,22 @@ fn copy_item_matches_pob() {
         assert_eq!(ours.text, theirs, "{}", item.name);
         assert!(copy_is_saved(&s), "Copy not restored after {}", item.name);
     }
-    // a failure puts Copy back too
+    // an unknown id fails before Copy is swapped
     assert!(s.backend.item_text(9999).is_err());
     assert!(copy_is_saved(&s), "Copy not restored after an unknown id");
+    // an item whose copy fails after Copy is swapped (BuildRaw raises): Copy is put back and
+    // the error comes out
+    s.backend
+        .lua
+        .load(&format!(
+            "pob.build.itemsTab.items[{}].BuildRaw = function() error('boom', 0) end",
+            view.items[0].id
+        ))
+        .exec()
+        .unwrap();
+    let error = s.backend.item_text(view.items[0].id).unwrap_err();
+    assert!(error.to_string().contains("boom"), "{error}");
+    assert!(copy_is_saved(&s), "Copy not restored after a failing copy");
     // and the item list is untouched by copying
     assert_eq!(s.backend.items_view().unwrap(), view);
 }

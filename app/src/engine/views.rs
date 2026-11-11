@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::commands::{GemSearchQuery, GemTooltipQuery};
+use super::commands::{GemSearchQuery, GemTooltipQuery, ItemTooltipQuery};
 
 use serde::{Deserialize, Serialize};
 
@@ -617,6 +617,117 @@ pub struct CalcsView {
     pub can_redo: bool,
 }
 
+/// The Items tab: the build's items, the equipment slots and the item sets.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ItemsView {
+    /// In PoB's order (`itemOrderList`)
+    #[serde(default)]
+    pub items: Vec<ItemEntry>,
+    /// The item list's loadout filter
+    #[serde(default)]
+    pub list_filter: DropList,
+    /// The ids the list shows under its filter, in order
+    #[serde(default)]
+    pub listed: Vec<u32>,
+    /// The list can be reordered (no filter is on)
+    #[serde(default)]
+    pub can_reorder: bool,
+    /// In PoB's order (`orderedSlots`)
+    #[serde(default)]
+    pub slots: Vec<SlotView>,
+    #[serde(default)]
+    pub sets: Vec<ItemSetEntry>,
+    pub active_set: u32,
+    /// The active set shows its swap weapons
+    #[serde(default)]
+    pub second_weapon_set: bool,
+    #[serde(default)]
+    pub show_stat_differences: bool,
+    #[serde(default)]
+    pub can_undo: bool,
+    #[serde(default)]
+    pub can_redo: bool,
+}
+
+/// One item of the build.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ItemEntry {
+    pub id: u32,
+    pub name: String,
+    pub base: String,
+    pub rarity: String,
+    /// PoB's colour code for the rarity
+    pub colour: String,
+    /// The list row's text, with the "(Unused)" or "(Used in ...)" marker and PoB's colour codes
+    pub display_label: String,
+    /// The slot PoB would equip it in first
+    #[serde(default)]
+    pub primary_slot: Option<String>,
+    /// The first slot it is equipped in (in this set, or in another one)
+    #[serde(default)]
+    pub equipped: Option<EquippedIn>,
+    /// The title of another set that has it as an abyss jewel
+    #[serde(default)]
+    pub abyss_set: Option<String>,
+    /// The title of another tree that has it socketed
+    #[serde(default)]
+    pub tree: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EquippedIn {
+    pub slot: String,
+    pub label: String,
+    /// The title of the set, when it isn't the active one
+    #[serde(default)]
+    pub set: Option<String>,
+}
+
+/// One equipment slot, with PoB's own dropdown for it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SlotView {
+    /// PoB's slot name, e.g. "Ring 2" or "Jewel 26725"
+    pub name: String,
+    pub label: String,
+    pub kind: SlotKind,
+    /// The slot an abyssal socket belongs to
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// The tree node of a jewel socket
+    #[serde(default)]
+    pub node: Option<u32>,
+    /// PoB shows the slot
+    pub shown: bool,
+    /// PoB lets the dropdown be used (it has an item to choose)
+    pub enabled: bool,
+    /// The equipped item's id, 0 for none
+    pub selected: u32,
+    /// The ids the dropdown offers after "None"
+    #[serde(default)]
+    pub choices: Vec<u32>,
+    /// The flask's activation box, for a flask slot
+    #[serde(default)]
+    pub flask_active: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SlotKind {
+    #[default]
+    Gear,
+    Swap,
+    Abyssal,
+    Flask,
+    Graft,
+    Jewel,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ItemSetEntry {
+    pub id: u32,
+    /// "Default" for a set with no title
+    pub title: String,
+}
+
 /// One of the selector's dropdowns. Labels keep PoB's colour codes.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DropList {
@@ -942,4 +1053,135 @@ mod tests {
         assert_eq!(view.level, 90);
         assert!(view.can_redo);
     }
+}
+
+/// PoB's tooltip for an item (`AddItemTooltip` on a `Tooltip`), as data.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemTooltip {
+    /// The rarity, as PoB's `tooltipHeader`
+    #[serde(default)]
+    pub header: Option<String>,
+    /// PoB's `influenceHeader1` and `influenceHeader2`, where set
+    #[serde(default)]
+    pub influences: Vec<String>,
+    /// PoB's `foilType`
+    #[serde(default)]
+    pub foil: Option<String>,
+    /// The border colour code
+    #[serde(default)]
+    pub colour: Option<String>,
+    #[serde(default)]
+    pub lines: Vec<ItemTooltipLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ItemTooltipLine {
+    Line {
+        size: u32,
+        text: String,
+        #[serde(default)]
+        font: Option<String>,
+        #[serde(default)]
+        center: bool,
+        #[serde(default)]
+        background: Option<String>,
+        /// The mod line a click on this line toggles (the display item only)
+        #[serde(default)]
+        mod_line: Option<ModLineRef>,
+    },
+    Separator {
+        separator: u32,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ModLineList {
+    Enchant,
+    Scourge,
+    Implicit,
+    Explicit,
+    Crucible,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModLineRef {
+    pub list: ModLineList,
+    /// 0-based
+    pub index: usize,
+}
+
+/// The answer to an `ItemTooltip` query.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemTooltipView {
+    pub query: ItemTooltipQuery,
+    pub tooltip: ItemTooltip,
+}
+
+/// The answer to a `CopyItem` query: the text PoB copies, with its `\r\n` line ends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemText {
+    pub id: u32,
+    pub text: String,
+}
+
+/// The item on the display panel (PoB's `displayItem`) with the controls PoB shows for it.
+/// Each optional part is present only while PoB shows its control.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DisplayItemView {
+    /// The item's id in the build; none for an item that isn't in the build yet
+    pub id: Option<u32>,
+    pub name: String,
+    pub base: String,
+    /// PoB's rarity name ("RARE")
+    pub rarity: String,
+    /// What PoB's "Edit..." popup opens with: the rarity dropdown (0 Normal ... 4 Relic) and
+    /// the item text without its Rarity line
+    pub edit_rarity: usize,
+    pub edit_text: String,
+    /// "Save" for an item in the build, "Add to build" for a new one
+    pub save_label: String,
+    pub version: Option<DropList>,
+    #[serde(default)]
+    pub variants: Vec<VariantView>,
+    #[serde(default)]
+    pub sockets: Vec<SocketView>,
+    pub can_add_socket: bool,
+    /// The two influence dropdowns, or none
+    #[serde(default)]
+    pub influences: Vec<DropList>,
+    pub quality: Option<String>,
+    pub catalyst: Option<DropList>,
+    pub catalyst_quality: Option<String>,
+    #[serde(default)]
+    pub range_lines: Vec<RangeLineView>,
+    pub tooltip: ItemTooltip,
+}
+
+/// One of the six variant dropdowns
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct VariantView {
+    /// 0..=5
+    pub control: usize,
+    pub list: DropList,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SocketView {
+    /// "R", "G", "B" or "W"
+    pub colour: String,
+    pub shown: bool,
+    /// Linked to the next socket; none for the last one
+    pub linked: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RangeLineView {
+    pub label: String,
+    pub range: Option<f64>,
+    pub slider: bool,
+    /// A Foulborn box next to the line
+    pub mutable: bool,
+    pub mutated: bool,
 }

@@ -173,29 +173,6 @@ local function show_group(index)
 end
 glue.skills_show_group = show_group
 
--- Runs `fn`, then closes every popup it left open, also when it fails.
-local function in_popups(fn)
-	local popups = pob.main.main.popups
-	local depth = #popups
-	local ok, err = pcall(fn)
-	while #popups > depth do
-		pob.main.main:ClosePopup()
-	end
-	if not ok then
-		error(err, 0)
-	end
-end
-
--- Presses the confirm button of the newest popup
-local function confirm_popup(what)
-	local popup = pob.main.main.popups[1]
-	local button = popup and popup.controls.confirm
-	if not (button and button.onClick) then
-		error("couldn't " .. what, 0)
-	end
-	button.onClick()
-end
-
 -- SkillListControl's New button (SkillListControl.lua:38-52)
 function glue.skills_add_group()
 	skills_tab().controls.groupList.controls.new.onClick()
@@ -209,12 +186,12 @@ function glue.skills_delete_group(index)
 	end
 	local list = skills_tab().controls.groupList
 	list.selIndex, list.selValue = index, group
-	in_popups(function()
+	glue.in_popups(function()
 		local popups = #pob.main.main.popups
 		list:OnSelDelete(index, group)
 		-- a group with no gems goes without asking
 		if #pob.main.main.popups > popups then
-			confirm_popup("delete the socket group")
+			glue.confirm_popup("delete the socket group")
 		end
 	end)
 end
@@ -225,9 +202,9 @@ function glue.skills_delete_all()
 	if #list.list == 0 then
 		return
 	end
-	in_popups(function()
+	glue.in_popups(function()
 		list.controls.deleteAll.onClick()
-		confirm_popup("delete the socket groups")
+		glue.confirm_popup("delete the socket groups")
 	end)
 end
 
@@ -267,25 +244,9 @@ function glue.skills_paste(text)
 	end
 end
 
--- Types into an edit control as PoB's EditControl would (R3)
-local function type_into(control, text)
-	text = text:gsub("\r", "")
-	local typed = text
-	text = text:gsub(control.filterPattern, "")
-	-- everything was filtered out: EditControl:Insert does nothing
-	if typed ~= "" and text == "" then
-		return false
-	end
-	if control.limit and #text > control.limit then
-		error("the text is too long", 0)
-	end
-	control:SetText(text, true)
-	return true
-end
-
 function glue.skills_set_label(index, text)
 	local _, c = show_group(index)
-	type_into(c.groupLabel, text)
+	glue.type_into(c.groupLabel, text)
 end
 
 -- The slot dropdown (SkillsTab.lua:168); `slot` is nil for "None"
@@ -303,19 +264,14 @@ function glue.skills_set_slot(index, slot)
 	error("unknown slot " .. tostring(slot), 0)
 end
 
-local function press_check(control, on)
-	control.state = on
-	control.changeFunc(on)
-end
-
 function glue.skills_set_enabled(index, on)
 	local _, c = show_group(index)
-	press_check(c.groupEnabled, on)
+	glue.press_check(c.groupEnabled, on)
 end
 
 function glue.skills_set_full_dps(index, on)
 	local _, c = show_group(index)
-	press_check(c.includeInFullDPS, on)
+	glue.press_check(c.includeInFullDPS, on)
 end
 
 -- SkillListControl:OnSelCopy -> SkillsTab:CopySocketGroup (SkillsTab.lua:667-678). The global
@@ -400,12 +356,12 @@ end
 
 function glue.skills_set_gem_level(group_index, slot_index, text)
 	local _, slot = gem_slot(group_index, slot_index)
-	type_into(slot.level, text)
+	glue.type_into(slot.level, text)
 end
 
 function glue.skills_set_gem_quality(group_index, slot_index, text)
 	local _, slot = gem_slot(group_index, slot_index)
-	type_into(slot.quality, text)
+	glue.type_into(slot.quality, text)
 end
 
 function glue.skills_set_gem_count(group_index, slot_index, text)
@@ -413,7 +369,7 @@ function glue.skills_set_gem_count(group_index, slot_index, text)
 	if not slot.count:IsShown() then
 		error("this gem has no count", 0)
 	end
-	type_into(slot.count, text)
+	glue.type_into(slot.count, text)
 end
 
 function glue.skills_set_gem_enabled(group_index, slot_index, on)
@@ -422,7 +378,7 @@ function glue.skills_set_gem_enabled(group_index, slot_index, on)
 	if not group.gemList[slot_index].gemData then
 		error("the gem isn't in PoB's data", 0)
 	end
-	press_check(slot.enabled, on)
+	glue.press_check(slot.enabled, on)
 end
 
 function glue.skills_set_gem_toggle(group_index, slot_index, which, on)
@@ -431,7 +387,7 @@ function glue.skills_set_gem_toggle(group_index, slot_index, which, on)
 	if not control:IsShown() then
 		error("this gem has no such toggle", 0)
 	end
-	press_check(control, on)
+	glue.press_check(control, on)
 end
 
 function glue.skills_delete_gem(group_index, slot_index)
@@ -450,42 +406,10 @@ local function set_index(id)
 	error("no such skill set", 0)
 end
 
--- Opens the Manage Skill Sets popup (SkillsTab.lua:1415), calls `fn(list)` with its
--- SkillSetListControl and closes what is left open.
 local function with_set_list(fn)
-	in_popups(function()
+	glue.with_set_list("skill set", function()
 		skills_tab():OpenSkillSetManagePopup()
-		for _, control in pairs(pob.main.main.popups[1].controls) do
-			if control.controls and control.controls.new and control.OnSelDelete then
-				return fn(control)
-			end
-		end
-		error("couldn't open the skill set list", 0)
-	end)
-end
-
-local function check_title(title)
-	if not title:gsub("\r", ""):match("%S") then
-		error("the skill set needs a name", 0)
-	end
-end
-
--- Types the title into the name popup `RenameSet` opened and presses Save (Save stays disabled
--- until the name has a visible character). When that fails, Cancel is pressed, which drops a
--- set that New or Copy had already made.
-local function save_name(title)
-	local popup = pob.main.main.popups[1]
-	local ok, applied = pcall(type_into, popup.controls.edit, title)
-	if ok and applied and popup.controls.save.enabled then
-		popup.controls.save.onClick()
-		return
-	end
-	popup.controls.cancel.onClick()
-	if not ok then
-		error(applied, 0)
-	end
-	-- the filter emptied the title, or Save stayed disabled: either way it is blank
-	check_title("")
+	end, fn)
 end
 
 -- Draw's sync of the set dropdown (SkillsTab.lua:646-654), then the user's pick
@@ -506,20 +430,20 @@ end
 
 -- The New button and the name popup (SkillSetListControl.lua:41-43, 36-58)
 function glue.skills_new_set(title)
-	check_title(title)
+	glue.check_title("skill set", title)
 	with_set_list(function(list)
 		list.controls.new.onClick()
-		save_name(title)
+		glue.save_name("skill set", title)
 	end)
 end
 
 -- The Rename button and the name popup
 function glue.skills_rename_set(id, title)
 	set_index(id)
-	check_title(title)
+	glue.check_title("skill set", title)
 	with_set_list(function(list)
 		list:RenameSet(skills_tab().skillSets[id])
-		save_name(title)
+		glue.save_name("skill set", title)
 	end)
 	glue.frame()
 end
@@ -527,11 +451,11 @@ end
 -- The Copy button and the name popup (SkillSetListControl.lua:11-29)
 function glue.skills_copy_set(id, title)
 	local index = set_index(id)
-	check_title(title)
+	glue.check_title("skill set", title)
 	with_set_list(function(list)
 		list.selIndex, list.selValue = index, id
 		list.controls.copy.onClick()
-		save_name(title)
+		glue.save_name("skill set", title)
 	end)
 end
 
@@ -544,14 +468,14 @@ function glue.skills_delete_set(id)
 	with_set_list(function(list)
 		list.selIndex, list.selValue = index, id
 		list:OnSelDelete(index, id)
-		confirm_popup("delete the skill set")
+		glue.confirm_popup("delete the skill set")
 	end)
 end
 
 -- ---- Gem options (R18) ----
 
 function glue.skills_option_check(name, on)
-	press_check(skills_tab().controls[name], on)
+	glue.press_check(skills_tab().controls[name], on)
 end
 
 function glue.skills_option_drop(name, index)
@@ -563,7 +487,7 @@ function glue.skills_option_drop(name, index)
 end
 
 function glue.skills_option_quality(text)
-	type_into(skills_tab().controls.defaultQuality, text)
+	glue.type_into(skills_tab().controls.defaultQuality, text)
 end
 
 -- ---- Item groups, imbued supports, Optimise Sockets and tooltips ----
@@ -574,7 +498,7 @@ function glue.skills_set_group_count(index, text)
 	if not c.groupCount:IsShown() then
 		error("only a socket group an item grants has a count", 0)
 	end
-	type_into(c.groupCount, text)
+	glue.type_into(c.groupCount, text)
 end
 
 -- The Imbued Support box and its x button (SkillsTab.lua:289-343); `gem_id` is nil to clear

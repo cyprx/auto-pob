@@ -8,11 +8,12 @@ use std::time::Duration;
 
 use crate::pob_files::DownloadProgress;
 
-use super::commands::{Command, GemTooltipQuery};
+use super::commands::{Command, GemTooltipQuery, ItemTooltipQuery};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, GemSearchView,
-    GemTooltipView, GroupTooltipView, NodePower, NodeTooltip, NotesView, PowerReport, SkillsView,
-    SocketGroupText, StatsView, TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, DisplayItemView,
+    GemSearchView, GemTooltipView, GroupTooltipView, ItemText, ItemTooltipView, ItemsView,
+    NodePower, NodeTooltip, NotesView, PowerReport, SkillsView, SocketGroupText, StatsView,
+    TreeLayout, TreeState,
 };
 
 #[derive(Debug, Clone)]
@@ -30,10 +31,15 @@ pub enum Snapshot {
     TreeLink(Arc<String>),
     Calcs(Arc<CalcsView>),
     Skills(Arc<SkillsView>),
+    Items(Arc<ItemsView>),
+    /// The display item; `None` while nothing is displayed
+    DisplayItem(Option<Arc<DisplayItemView>>),
     SocketGroupText(Arc<SocketGroupText>),
     GroupTooltip(Arc<GroupTooltipView>),
     GemSearch(Arc<GemSearchView>),
     GemTooltip(Arc<GemTooltipView>),
+    ItemTooltip(Arc<ItemTooltipView>),
+    ItemText(Arc<ItemText>),
     Notes(Arc<NotesView>),
 }
 
@@ -87,6 +93,10 @@ pub struct Affected {
     pub calcs: bool,
     /// The Skills tab changed
     pub skills: bool,
+    /// The Items tab changed
+    pub items: bool,
+    /// The Items tab's display item changed
+    pub display_item: bool,
     /// The build's notes changed
     pub notes: bool,
     /// Node power changed (a background step ran)
@@ -105,6 +115,10 @@ pub struct Affected {
     pub group_tooltip: Option<usize>,
     /// This gem tooltip was requested; the latest request wins
     pub gem_tooltip: Option<GemTooltipQuery>,
+    /// This item tooltip was requested; the latest request wins
+    pub item_tooltip: Option<ItemTooltipQuery>,
+    /// The text PoB copies for this item was requested; the latest request wins
+    pub item_text: Option<u32>,
     /// The tree link was requested
     pub link: bool,
 }
@@ -120,6 +134,8 @@ impl Affected {
         recalc: false,
         calcs: true,
         skills: true,
+        items: true,
+        display_item: true,
         notes: true,
         power: false,
         gem_search: false,
@@ -129,6 +145,8 @@ impl Affected {
         group_text: None,
         group_tooltip: None,
         gem_tooltip: None,
+        item_tooltip: None,
+        item_text: None,
         link: false,
     };
 
@@ -151,6 +169,8 @@ impl Affected {
         self.recalc |= other.recalc;
         self.calcs |= other.calcs;
         self.skills |= other.skills;
+        self.items |= other.items;
+        self.display_item |= other.display_item;
         self.notes |= other.notes;
         self.power |= other.power;
         self.gem_search |= other.gem_search;
@@ -164,6 +184,10 @@ impl Affected {
         if other.gem_tooltip.is_some() {
             self.gem_tooltip = other.gem_tooltip;
         }
+        if other.item_tooltip.is_some() {
+            self.item_tooltip = other.item_tooltip;
+        }
+        self.item_text = other.item_text.or(self.item_text);
         self.link |= other.link;
     }
 }
@@ -182,6 +206,9 @@ pub trait Backend {
     fn tree_state_view(&mut self) -> anyhow::Result<TreeState>;
     fn calcs_view(&mut self) -> anyhow::Result<CalcsView>;
     fn skills_view(&mut self) -> anyhow::Result<SkillsView>;
+    fn items_view(&mut self) -> anyhow::Result<ItemsView>;
+    /// The item on the display panel, or none
+    fn display_item_view(&mut self) -> anyhow::Result<Option<DisplayItemView>>;
     fn notes_view(&mut self) -> anyhow::Result<NotesView>;
     /// What copying this socket group writes; an error for a group that doesn't exist or can't be copied.
     fn socket_group_text(&mut self, group: usize) -> anyhow::Result<SocketGroupText>;
@@ -200,6 +227,12 @@ pub trait Backend {
     fn gem_search_view(&mut self) -> anyhow::Result<Option<GemSearchView>>;
     /// A gem tooltip. A failure is answered with empty lines (R15).
     fn gem_tooltip_view(&mut self, query: &GemTooltipQuery) -> anyhow::Result<GemTooltipView>;
+    /// `None`: the item or slot is gone
+    fn item_tooltip_view(
+        &mut self,
+        query: &ItemTooltipQuery,
+    ) -> anyhow::Result<Option<ItemTooltipView>>;
+    fn item_text(&mut self, id: u32) -> anyhow::Result<ItemText>;
     fn node_power_view(&mut self) -> anyhow::Result<NodePower>;
     fn power_report_view(&mut self) -> anyhow::Result<PowerReport>;
     /// `Ok(None)` when the node no longer exists: nothing is sent.
@@ -277,6 +310,22 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
     }
     if flags.skills {
         emit(seq, send, backend.skills_view(), Snapshot::Skills);
+    }
+    if flags.items {
+        emit(seq, send, backend.items_view(), Snapshot::Items);
+    }
+    // unlike the gem search, "nothing displayed" is an answer too
+    if flags.display_item {
+        match backend.display_item_view() {
+            Ok(view) => send(Event::Snapshot {
+                seq,
+                snapshot: Snapshot::DisplayItem(view.map(Arc::new)),
+            }),
+            Err(e) => send(Event::Error {
+                seq,
+                message: format!("{e:#}"),
+            }),
+        }
     }
     if flags.notes {
         emit(seq, send, backend.notes_view(), Snapshot::Notes);
@@ -364,6 +413,23 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
             seq,
             snapshot: Snapshot::GemTooltip(Arc::new(view)),
         });
+    }
+    if let Some(query) = &flags.item_tooltip {
+        match backend.item_tooltip_view(query) {
+            Ok(Some(view)) => send(Event::Snapshot {
+                seq,
+                snapshot: Snapshot::ItemTooltip(Arc::new(view)),
+            }),
+            // a vanished item or slot sends nothing
+            Ok(None) => {}
+            Err(e) => send(Event::Error {
+                seq,
+                message: format!("{e:#}"),
+            }),
+        }
+    }
+    if let Some(id) = flags.item_text {
+        emit(seq, send, backend.item_text(id), Snapshot::ItemText);
     }
     if flags.link {
         emit(seq, send, backend.tree_link_view(), Snapshot::TreeLink);
@@ -474,6 +540,8 @@ fn run_loop_with_delay(
             affected.tree = true;
             affected.calcs = true;
             affected.skills = true;
+            affected.items = true;
+            affected.display_item = true;
         }
         send_snapshots(backend, last_seq, affected, send);
         if shutdown {
@@ -621,6 +689,43 @@ mod tests {
     }
 
     #[test]
+    fn recalc_sends_items_view() {
+        let (mut fake, _log) = Fake::new();
+        let events = run_queued(&mut fake, vec![set_config()]);
+        let items = snapshots(&events)
+            .into_iter()
+            .filter(|(_, s)| matches!(s, Snapshot::Items(_)))
+            .count();
+        assert_eq!(items, 1);
+    }
+
+    #[test]
+    fn recalc_sends_display_item() {
+        let (mut fake, _log) = Fake::new();
+        let events = run_queued(&mut fake, vec![set_config()]);
+        let shown = snapshots(&events)
+            .into_iter()
+            .filter(|(_, s)| matches!(s, Snapshot::DisplayItem(_)))
+            .count();
+        assert_eq!(shown, 1);
+    }
+
+    #[test]
+    fn display_item_none_is_sent() {
+        // unlike the gem search, "nothing is displayed" is an answer (R10)
+        let (mut fake, _log) = Fake::new();
+        let events = run_queued(&mut fake, vec![Command::CancelDisplayItem { if_id: None }]);
+        let shown: Vec<_> = snapshots(&events)
+            .into_iter()
+            .filter_map(|(_, s)| match s {
+                Snapshot::DisplayItem(view) => Some(view.is_none()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(shown, [true]);
+    }
+
+    #[test]
     fn queued_commands_share_one_recalculation() {
         let (mut fake, log) = Fake::new();
         let events = run_queued(&mut fake, (0..5).map(|_| set_config()).collect());
@@ -669,6 +774,8 @@ mod tests {
                     Snapshot::Tree(_) => "tree",
                     Snapshot::Calcs(_) => "calcs",
                     Snapshot::Skills(_) => "skills",
+                    Snapshot::Items(_) => "items",
+                    Snapshot::DisplayItem(_) => "display_item",
                     Snapshot::Notes(_) => "notes",
                     other => panic!("unexpected {other:?}"),
                 }
@@ -678,7 +785,16 @@ mod tests {
         assert_eq!(
             kinds,
             [
-                "build", "list", "stats", "config", "tree", "calcs", "skills", "notes"
+                "build",
+                "list",
+                "stats",
+                "config",
+                "tree",
+                "calcs",
+                "skills",
+                "items",
+                "display_item",
+                "notes"
             ]
         );
     }
@@ -710,12 +826,14 @@ mod tests {
         assert_eq!(log.lock().unwrap().set_configs, 1);
         // The command before Shutdown still produced its snapshots, tagged with Shutdown's seq.
         let snaps = snapshots(&events);
-        assert_eq!(snaps.len(), 5);
+        assert_eq!(snaps.len(), 7);
         assert!(matches!(snaps[0], (2, Snapshot::Stats(_))));
         assert!(matches!(snaps[1], (2, Snapshot::Config(_))));
         assert!(matches!(snaps[2], (2, Snapshot::Tree(_))));
         assert!(matches!(snaps[3], (2, Snapshot::Calcs(_))));
         assert!(matches!(snaps[4], (2, Snapshot::Skills(_))));
+        assert!(matches!(snaps[5], (2, Snapshot::Items(_))));
+        assert!(matches!(snaps[6], (2, Snapshot::DisplayItem(_))));
     }
 
     #[test]
@@ -761,9 +879,9 @@ mod tests {
         assert_eq!(stats_seq, Some(3));
         assert_eq!(config_seq, Some(3));
         assert_eq!(log.lock().unwrap().set_configs, 2);
-        // Ready + 9 initial snapshots + Stats + Config + Tree + Calcs + Skills; the channel disconnect means the
+        // Ready + 11 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items + DisplayItem; the channel disconnect means the
         // thread (and so every wake) is finished.
-        assert_eq!(wakes.load(Ordering::SeqCst), 15);
+        assert_eq!(wakes.load(Ordering::SeqCst), 19);
     }
 
     #[test]
@@ -783,6 +901,34 @@ mod tests {
             }
         }
         assert_eq!(kinds, vec![true], "only the build list goes out");
+    }
+
+    #[test]
+    fn item_queries_without_a_build_send_nothing() {
+        let queries = || {
+            vec![
+                Command::ItemTooltip(ItemTooltipQuery { id: 1, slot: None }),
+                Command::CopyItem { id: 1 },
+            ]
+        };
+        let kinds = |events: &[Event]| {
+            snapshots(events)
+                .into_iter()
+                .filter(|(_, s)| matches!(s, Snapshot::ItemTooltip(_) | Snapshot::ItemText(_)))
+                .count()
+        };
+        // with a build both are answered
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(&mut fake, queries());
+        assert_eq!(kinds(&events), 2);
+        assert_eq!(log.lock().unwrap().item_tooltips.len(), 1);
+        // with none, neither reaches the backend
+        let (mut fake, log) = Fake::new();
+        fake.build_loaded = false;
+        let events = run_queued(&mut fake, queries());
+        assert_eq!(kinds(&events), 0);
+        assert!(log.lock().unwrap().item_tooltips.is_empty());
+        assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
     }
 
     #[test]
@@ -1003,6 +1149,52 @@ mod tests {
             .collect();
         assert_eq!(tooltips, [3]);
         assert_eq!(log.lock().unwrap().tooltips, [3]);
+    }
+
+    fn item_query(id: u32) -> crate::engine::ItemTooltipQuery {
+        crate::engine::ItemTooltipQuery {
+            id,
+            slot: Some("Ring 1".into()),
+        }
+    }
+
+    #[test]
+    fn only_latest_item_tooltip_runs() {
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(
+            &mut fake,
+            vec![
+                Command::ItemTooltip(item_query(1)),
+                Command::ItemTooltip(item_query(2)),
+            ],
+        );
+        let tooltips: Vec<_> = snapshots(&events)
+            .into_iter()
+            .filter_map(|(_, s)| match s {
+                Snapshot::ItemTooltip(t) => Some(t.query.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tooltips, [item_query(2)]);
+        assert_eq!(log.lock().unwrap().item_tooltips, [item_query(2)]);
+    }
+
+    #[test]
+    fn vanished_item_tooltip_sends_nothing() {
+        let (mut fake, log) = Fake::new();
+        fake.item_vanished = true;
+        let events = run_queued(&mut fake, vec![Command::ItemTooltip(item_query(1))]);
+        assert_eq!(log.lock().unwrap().item_tooltips.len(), 1, "it was asked");
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                Event::Snapshot {
+                    snapshot: Snapshot::ItemTooltip(_),
+                    ..
+                } | Event::Error { .. }
+            )),
+            "{events:?}"
+        );
     }
 
     #[test]

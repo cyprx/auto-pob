@@ -1,13 +1,15 @@
 //! Starts Path of Building's Lua with our own bootstrap.
 
 use super::commands::{
-    Command, ConfigValue, GemSearchQuery, GemTarget, GemToggle, GemTooltipQuery, SkillOption, Tab,
+    Command, ConfigValue, GemSearchQuery, GemTarget, GemToggle, GemTooltipQuery, ItemTooltipQuery,
+    SkillOption, SocketColour, Tab,
 };
 use super::run::{Affected, Backend, BackgroundTask, Engine, Event};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, GemRow, GemSearchView,
-    GemTooltipView, GroupTooltipView, NodePower, NodeTooltip, NotesView, PowerReport, SkillsView,
-    SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
+    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, DisplayItemView,
+    GemRow, GemSearchView, GemTooltipView, GroupTooltipView, ItemText, ItemTooltip,
+    ItemTooltipView, ItemsView, ModLineList, NodePower, NodeTooltip, NotesView, PowerReport,
+    SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -101,8 +103,10 @@ impl PobBackend {
             ("@glue/tree.lua", include_str!("glue/tree.lua")),
             ("@glue/power.lua", include_str!("glue/power.lua")),
             ("@glue/calcs.lua", include_str!("glue/calcs.lua")),
+            ("@glue/controls.lua", include_str!("glue/controls.lua")),
             ("@glue/skills.lua", include_str!("glue/skills.lua")),
             ("@glue/gems.lua", include_str!("glue/gems.lua")),
+            ("@glue/items.lua", include_str!("glue/items.lua")),
             ("@glue/notes.lua", include_str!("glue/notes.lua")),
         ] {
             lua.load(source)
@@ -178,6 +182,18 @@ impl PobBackend {
         })
     }
 
+    /// A change to the items or the slots: a jewel change can rebuild cluster subgraphs, so the
+    /// tree layout is checked too (R17).
+    fn items_edited(&self) -> Result<Affected> {
+        Ok(Affected {
+            build: true,
+            items: true,
+            recalc: true,
+            tree_layout: self.layout_changed()?,
+            ..Affected::default()
+        })
+    }
+
     /// A build that is opened or replaced starts with the heat map off.
     fn reset_heatmap(&mut self) {
         self.heatmap_on = false;
@@ -221,6 +237,24 @@ fn skills_changed() -> Affected {
         build: true,
         skills: true,
         recalc: true,
+        ..Affected::default()
+    }
+}
+
+/// A change that sets no `buildFlag` (sort, move): the glue ran a frame, which refreshes
+/// `unsaved` (R17).
+fn items_listed() -> Affected {
+    Affected {
+        build: true,
+        items: true,
+        ..Affected::default()
+    }
+}
+
+/// A change to the display item only: PoB counts none of it as an edit of the build (R10).
+fn display_changed() -> Affected {
+    Affected {
+        display_item: true,
         ..Affected::default()
     }
 }
@@ -299,6 +333,14 @@ impl PobBackend {
             }
             // ended above
             Command::CloseGemSearch => Ok(Affected::default()),
+            Command::ItemTooltip(query) => Ok(Affected {
+                item_tooltip: Some(query),
+                ..Affected::default()
+            }),
+            Command::CopyItem { id } => Ok(Affected {
+                item_text: Some(id),
+                ..Affected::default()
+            }),
             Command::GemTooltip(query) => Ok(Affected {
                 gem_tooltip: Some(query),
                 ..Affected::default()
@@ -722,6 +764,186 @@ impl PobBackend {
                 self.call::<_, ()>("skills_redo", ())?;
                 Ok(skills_changed())
             }
+            Command::SortItems => {
+                self.call::<_, ()>("items_sort", ())?;
+                Ok(items_listed())
+            }
+            Command::DeleteItem { id, confirmed } => {
+                self.call::<_, ()>("items_delete", (id, confirmed))?;
+                self.items_edited()
+            }
+            Command::DeleteUnusedItems => {
+                self.call::<_, ()>("items_delete_unused", ())?;
+                self.items_edited()
+            }
+            Command::DeleteAllItems => {
+                self.call::<_, ()>("items_delete_all", ())?;
+                self.items_edited()
+            }
+            Command::MoveItem { from, to } => {
+                let (Some(lua_from), Some(lua_to)) = (from.checked_add(1), to.checked_add(1))
+                else {
+                    return Err(anyhow!("no such item"));
+                };
+                self.call::<_, ()>("items_move", (lua_from, lua_to))?;
+                Ok(items_listed())
+            }
+            Command::SetItemListFilter { index } => {
+                self.call::<_, ()>("items_set_filter", index + 1)?;
+                Ok(Affected {
+                    items: true,
+                    ..Affected::default()
+                })
+            }
+            Command::EquipItem { slot, id } => {
+                self.call::<_, ()>("items_equip", (slot, id))?;
+                self.items_edited()
+            }
+            Command::SetFlaskActive { slot, on } => {
+                self.call::<_, ()>("items_set_flask", (slot, on))?;
+                self.items_edited()
+            }
+            Command::SelectWeaponSet { second } => {
+                self.call::<_, ()>("items_select_weapon_set", second)?;
+                self.items_edited()
+            }
+            Command::SelectItemSet { id } => {
+                self.call::<_, ()>("items_select_set", id)?;
+                self.items_edited()
+            }
+            Command::NewItemSet { title } => {
+                self.call::<_, ()>("items_new_set", title)?;
+                self.items_edited()
+            }
+            Command::CopyItemSet { id, title } => {
+                self.call::<_, ()>("items_copy_set", (id, title))?;
+                self.items_edited()
+            }
+            Command::DeleteItemSet { id } => {
+                self.call::<_, ()>("items_delete_set", id)?;
+                self.items_edited()
+            }
+            Command::RenameItemSet { id, title } => {
+                self.call::<_, ()>("items_rename_set", (id, title))?;
+                Ok(items_listed())
+            }
+            Command::MoveItemSet { from, to } => {
+                let (Some(lua_from), Some(lua_to)) = (from.checked_add(1), to.checked_add(1))
+                else {
+                    return Err(anyhow!("no such item set"));
+                };
+                self.call::<_, ()>("items_move_set", (lua_from, lua_to))?;
+                // PoB's drop onto the same place changes nothing
+                if from == to {
+                    return Ok(Affected::default());
+                }
+                Ok(items_listed())
+            }
+            Command::PasteItem { text } => {
+                self.call::<_, ()>("display_paste", text)?;
+                Ok(display_changed())
+            }
+            Command::EditItem { id } => {
+                self.call::<_, ()>("display_edit", id)?;
+                Ok(display_changed())
+            }
+            Command::SetDisplayItemText { rarity, text } => {
+                self.call::<_, ()>("display_set_text", (rarity, text))?;
+                Ok(display_changed())
+            }
+            Command::CancelDisplayItem { if_id } => {
+                self.call::<_, ()>("display_cancel", if_id)?;
+                Ok(display_changed())
+            }
+            Command::SaveDisplayItem => {
+                self.call::<_, ()>("display_save", ())?;
+                Ok(Affected {
+                    display_item: true,
+                    ..self.items_edited()?
+                })
+            }
+            Command::SetShowStatDifferences { on } => {
+                let changed: bool = self.call("display_show_differences", on)?;
+                Ok(Affected {
+                    items: true,
+                    display_item: true,
+                    recalc: changed,
+                    ..Affected::default()
+                })
+            }
+            Command::SetItemVariant { control, index } => {
+                self.call::<_, ()>("display_variant", (control, index + 1))?;
+                Ok(display_changed())
+            }
+            Command::SetItemVersion { index } => {
+                self.call::<_, ()>("display_version", index + 1)?;
+                Ok(display_changed())
+            }
+            Command::SetItemQuality { text } => {
+                self.call::<_, ()>("display_quality", text)?;
+                Ok(display_changed())
+            }
+            Command::SetItemInfluence { which, index } => {
+                self.call::<_, ()>("display_influence", (which, index + 1))?;
+                Ok(display_changed())
+            }
+            Command::SetItemCatalyst { index } => {
+                self.call::<_, ()>("display_catalyst", index + 1)?;
+                Ok(display_changed())
+            }
+            Command::SetItemCatalystQuality { text } => {
+                self.call::<_, ()>("display_catalyst_quality", text)?;
+                Ok(display_changed())
+            }
+            Command::SetItemSocket { index, colour } => {
+                let colour = match colour {
+                    SocketColour::R => "R",
+                    SocketColour::G => "G",
+                    SocketColour::B => "B",
+                    SocketColour::W => "W",
+                };
+                self.call::<_, ()>("display_socket", (index + 1, colour))?;
+                Ok(display_changed())
+            }
+            Command::SetItemSocketLink { index, linked } => {
+                self.call::<_, ()>("display_link", (index + 1, linked))?;
+                Ok(display_changed())
+            }
+            Command::AddItemSocket => {
+                self.call::<_, ()>("display_add_socket", ())?;
+                Ok(display_changed())
+            }
+            Command::SetRangeLine { line, value } => {
+                self.call::<_, ()>("display_range", (line + 1, value))?;
+                Ok(display_changed())
+            }
+            Command::SetRangeLineMutated { line, on } => {
+                self.call::<_, ()>("display_mutated", (line + 1, on))?;
+                Ok(display_changed())
+            }
+            Command::ToggleModLine { line } => {
+                let list = match line.list {
+                    ModLineList::Enchant => "enchant",
+                    ModLineList::Scourge => "scourge",
+                    ModLineList::Implicit => "implicit",
+                    ModLineList::Explicit => "explicit",
+                    ModLineList::Crucible => "crucible",
+                };
+                self.call::<_, ()>("display_toggle_mod", (list, line.index + 1))?;
+                Ok(Affected {
+                    display_item: true,
+                    recalc: true,
+                    ..Affected::default()
+                })
+            }
+            Command::Undo(Tab::Items) => {
+                self.call::<_, ()>("items_undo", ())?;
+                self.items_edited()
+            }
+            Command::Redo(Tab::Items) => {
+                self.call::<_, ()>("items_redo", ())?;
+                self.items_edited()
+            }
             Command::Undo(Tab::Config) => {
                 self.call::<_, ()>("undo", "config")?;
                 Ok(config_changed())
@@ -799,6 +1021,14 @@ impl Backend for PobBackend {
 
     fn skills_view(&mut self) -> Result<SkillsView> {
         self.view("skills_view", ())
+    }
+
+    fn items_view(&mut self) -> Result<ItemsView> {
+        self.view("items_view", ())
+    }
+
+    fn display_item_view(&mut self) -> Result<Option<DisplayItemView>> {
+        self.view("display_item_view", ())
     }
 
     fn socket_group_text(&mut self, group: usize) -> Result<SocketGroupText> {
@@ -933,6 +1163,20 @@ impl Backend for PobBackend {
             query: query.clone(),
             lines: found.lines,
         })
+    }
+
+    fn item_tooltip_view(&mut self, query: &ItemTooltipQuery) -> Result<Option<ItemTooltipView>> {
+        let found: Option<ItemTooltip> =
+            self.view("item_tooltip", (query.id, query.slot.clone()))?;
+        Ok(found.map(|tooltip| ItemTooltipView {
+            query: query.clone(),
+            tooltip,
+        }))
+    }
+
+    fn item_text(&mut self, id: u32) -> Result<ItemText> {
+        let text: String = self.call("item_copy", id)?;
+        Ok(ItemText { id, text })
     }
 
     fn node_power_view(&mut self) -> Result<NodePower> {

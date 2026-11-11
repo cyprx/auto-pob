@@ -25,6 +25,20 @@ pub struct ListSort {
     pub ascending: bool,
 }
 
+/// Where a dragged row ends up, as `ListControl`'s drop does it. `hovered` is the row the
+/// pointer is over and `below` whether it is in that row's lower half. `None` when the drop
+/// changes nothing (the gap is right above or right below the dragged row).
+pub fn drop_index(from: usize, hovered: usize, below: bool) -> Option<usize> {
+    let gap = hovered + usize::from(below);
+    if gap == from || gap == from + 1 {
+        None
+    } else if gap > from {
+        Some(gap - 1)
+    } else {
+        Some(gap)
+    }
+}
+
 const ROW_HEIGHT: f32 = 20.0;
 
 /// The sort the user chose by clicking a header of the list with this `id`, if any.

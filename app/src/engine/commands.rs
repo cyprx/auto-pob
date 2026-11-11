@@ -2,7 +2,18 @@
 
 use std::path::PathBuf;
 
-use super::views::CellRef;
+use serde::{Deserialize, Serialize};
+
+use super::views::{CellRef, ModLineRef};
+
+/// A socket's colour on the display item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketColour {
+    R,
+    G,
+    B,
+    W,
+}
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -300,6 +311,164 @@ pub enum Command {
         group: usize,
     },
 
+    /// A query: what hovering an item shows (R3), answered as an `ItemTooltip`; the latest one
+    /// in a batch is answered. A vanished item or slot sends nothing.
+    ItemTooltip(ItemTooltipQuery),
+    /// A query: the text PoB copies for the item (R14), answered as an `ItemText`; the latest
+    /// one in a batch is answered. The engine never touches the system clipboard.
+    CopyItem {
+        id: u32,
+    },
+
+    /// The item list's Sort button.
+    SortItems,
+    /// Deletes the item (PoB's Delete button, confirmed when the item is in use). An item the
+    /// list filter hides is `no such item`.
+    DeleteItem {
+        id: u32,
+        /// The user has been asked about an item in use. PoB's own confirm popup, when it
+        /// opens and this is false, is refused (the item may have been equipped since the
+        /// UI last looked).
+        confirmed: bool,
+    },
+    /// "Del Unused" has no confirmation in PoB.
+    DeleteUnusedItems,
+    /// "Del All", confirmed; a no-op with an empty list.
+    DeleteAllItems,
+    /// Positions are 0-based in `ItemsView.items`; `to` is the item's final position. Refused
+    /// while the list is filtered.
+    MoveItem {
+        from: usize,
+        to: usize,
+    },
+    /// The list's loadout filter; `index` is 0-based in `ItemsView.list_filter`.
+    SetItemListFilter {
+        index: usize,
+    },
+    /// The slot's dropdown, by PoB's slot name; `None` is "None".
+    EquipItem {
+        slot: String,
+        id: Option<u32>,
+    },
+    /// A flask's checkbox.
+    SetFlaskActive {
+        slot: String,
+        on: bool,
+    },
+    /// The weapon set buttons "I" (`false`) and "II" (`true`).
+    SelectWeaponSet {
+        second: bool,
+    },
+
+    /// Ctrl+V on the Items tab (R10): the text becomes the display item, like PoB's
+    /// `CreateDisplayItemFromRaw`. Text with no item base is `PoB couldn't read that item`.
+    PasteItem {
+        text: String,
+    },
+    /// The item list's double click: the item goes to the display panel for editing.
+    EditItem {
+        id: u32,
+    },
+    /// PoB's "Edit..." / "Create custom..." popup: `rarity` is its dropdown (0 Normal ... 4
+    /// Relic), `text` the item without its Rarity line. Refused like a paste when PoB's Save
+    /// is disabled.
+    SetDisplayItemText {
+        rarity: usize,
+        text: String,
+    },
+    /// The panel's Save / Add to build button.
+    SaveDisplayItem,
+    /// The panel's Cancel button. With `if_id`, it only cancels while the item with that id is
+    /// displayed (a clean-up of a deleted item's display must not hit another item); without,
+    /// it is the user's own Cancel and an empty panel is an error.
+    CancelDisplayItem {
+        if_id: Option<u32>,
+    },
+    /// Ctrl+D (R13): saved with the build, not undoable, not unsaved.
+    SetShowStatDifferences {
+        on: bool,
+    },
+
+    /// One of the six variant dropdowns (`DisplayItemView.variants[..].control`, 0..=5), legacy
+    /// or grouped; `index` is 0-based in its list (R11).
+    SetItemVariant {
+        control: usize,
+        index: usize,
+    },
+    /// The version dropdown of an item with variant groups.
+    SetItemVersion {
+        index: usize,
+    },
+    /// The quality box; the box filters digits and takes at most two.
+    SetItemQuality {
+        text: String,
+    },
+    /// One of the two influence dropdowns (`which` 0 or 1).
+    SetItemInfluence {
+        which: usize,
+        index: usize,
+    },
+    SetItemCatalyst {
+        index: usize,
+    },
+    SetItemCatalystQuality {
+        text: String,
+    },
+    /// Socket `index` (0-based) takes a colour.
+    SetItemSocket {
+        index: usize,
+        colour: SocketColour,
+    },
+    /// The link after socket `index`.
+    SetItemSocketLink {
+        index: usize,
+        linked: bool,
+    },
+    /// The "+" button.
+    AddItemSocket,
+    /// A range slider: `line` indexes `DisplayItemView.range_lines`; `value` is 0..=1.
+    SetRangeLine {
+        line: usize,
+        value: f64,
+    },
+    /// The Foulborn box next to a line.
+    SetRangeLineMutated {
+        line: usize,
+        on: bool,
+    },
+    /// A click on a tooltip line of the display item (R4).
+    ToggleModLine {
+        line: ModLineRef,
+    },
+
+    /// Picks the item set in PoB's set dropdown, by PoB's id.
+    SelectItemSet {
+        id: u32,
+    },
+    /// The set manager's New button and the name popup. A blank title is refused.
+    NewItemSet {
+        title: String,
+    },
+    /// The set manager's Rename button.
+    RenameItemSet {
+        id: u32,
+        title: String,
+    },
+    /// The set manager's Copy button, which asks for the copy's title.
+    CopyItemSet {
+        id: u32,
+        title: String,
+    },
+    /// The set manager's Delete button, confirmed; the last set can't go.
+    DeleteItemSet {
+        id: u32,
+    },
+    /// Positions are 0-based in `ItemsView.sets`; `to` is the set's final position.
+    MoveItemSet {
+        from: usize,
+        to: usize,
+    },
+
     /// Opens or replaces the gem picker's search (R9); the latest one in a batch is answered
     /// as a `GemSearch`. While it is open PoB's DPS sort runs in the background.
     SearchGems(GemSearchQuery),
@@ -384,6 +553,14 @@ pub struct GemTooltipQuery {
     pub gem_id: Option<String>,
 }
 
+/// An item tooltip: `slot: None` is a hover in the item list, `Some(name)` a hover over that
+/// slot or one of its dropdown entries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemTooltipQuery {
+    pub id: u32,
+    pub slot: Option<String>,
+}
+
 /// A Vaal gem's two "Enable <skill>" toggles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GemToggle {
@@ -397,6 +574,7 @@ pub enum Tab {
     Tree,
     Calcs,
     Skills,
+    Items,
 }
 
 /// The dropdowns of the Calcs selector.

@@ -11,6 +11,7 @@ use crate::ui::build::{self, BuildAction, BuildTab};
 use crate::ui::build_list::{BuildListUi, ListScreenAction};
 use crate::ui::calcs::{CalcsOutput, CalcsUi};
 use crate::ui::config::ConfigUi;
+use crate::ui::items::{ItemsOutput, ItemsUi};
 use crate::ui::notes::NotesUi;
 use crate::ui::skills::{SkillsOutput, SkillsUi};
 use crate::ui::tree::{TreeOutput, TreeTab};
@@ -72,6 +73,9 @@ pub struct AutoPobApp {
     tree: TreeTab,
     calcs: CalcsUi,
     skills: SkillsUi,
+    items: ItemsUi,
+    /// The seq of the raw item text last sent, to keep its window open on an error
+    text_seq: Option<u64>,
     sidebar: sidebar::SidebarState,
     notes: NotesUi,
     config_ui: ConfigUi,
@@ -117,6 +121,8 @@ impl AutoPobApp {
             tree: TreeTab::default(),
             calcs: CalcsUi::default(),
             skills: SkillsUi::default(),
+            items: ItemsUi::default(),
+            text_seq: None,
             sidebar: sidebar::SidebarState::default(),
             notes: NotesUi::default(),
             config_ui: ConfigUi::default(),
@@ -205,6 +211,7 @@ impl AutoPobApp {
                     self.tree.reset();
                     self.calcs.reset();
                     self.skills.reset();
+                    self.items.reset();
                     self.sidebar = sidebar::SidebarState::default();
                     self.notes.reset();
                 }
@@ -227,6 +234,10 @@ impl AutoPobApp {
                     | Snapshot::GroupTooltip(_)
                     | Snapshot::GemSearch(_)
                     | Snapshot::GemTooltip(_) => self.skills.on_snapshot(&snapshot),
+                    Snapshot::Items(_)
+                    | Snapshot::DisplayItem(_)
+                    | Snapshot::ItemTooltip(_)
+                    | Snapshot::ItemText(_) => self.items.on_snapshot_at(&snapshot, seq),
                     Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
@@ -262,6 +273,11 @@ impl AutoPobApp {
     }
 
     fn on_error(&mut self, seq: u64, message: String) {
+        if self.text_seq == Some(seq) {
+            self.text_seq = None;
+            // the raw-text window stays open for another try
+            self.items.text_refused();
+        }
         if self.entering == Some(seq) {
             // the build never opened; go back to where the user was
             self.entering = None;
@@ -315,6 +331,9 @@ impl AutoPobApp {
             self.send(command);
         }
         if let Some(command) = self.skills.flush() {
+            self.send(command);
+        }
+        for command in self.items.flush() {
             self.send(command);
         }
     }
@@ -404,6 +423,7 @@ impl AutoPobApp {
             BuildTab::Config => Tab::Config,
             BuildTab::Tree => Tab::Tree,
             BuildTab::Skills => Tab::Skills,
+            BuildTab::Items => Tab::Items,
             BuildTab::Calcs => Tab::Calcs,
             // the notes editor keeps its own history
             BuildTab::Notes => return,
@@ -543,7 +563,8 @@ impl AutoPobApp {
             || self.save_as.is_some()
             || self.import.is_some()
             || self.tree.has_dialog()
-            || self.skills.has_dialog();
+            || self.skills.has_dialog()
+            || self.items.has_dialog();
         // a focused button or row doesn't take Ctrl+Z from the tab
         let typing = ui.ctx().text_edit_focused();
         let mut action = None;
@@ -569,6 +590,7 @@ impl AutoPobApp {
             let history = match self.tab {
                 BuildTab::Tree => self.tree.history(),
                 BuildTab::Skills => self.skills.history(),
+                BuildTab::Items => self.items.history(),
                 BuildTab::Calcs => self.calcs.history(),
                 _ => (view.can_undo, view.can_redo),
             };
@@ -576,6 +598,7 @@ impl AutoPobApp {
         });
         let behind = self.behind();
         self.skills.set_modal(modal);
+        self.items.set_modal(modal);
         let mut sidebar_commands = Vec::new();
         egui::Panel::left("stats_sidebar")
             .resizable(true)
@@ -592,6 +615,7 @@ impl AutoPobApp {
         let mut tree_out = TreeOutput::default();
         let mut calcs_out = CalcsOutput::default();
         let mut skills_out = SkillsOutput::default();
+        let mut items_out = ItemsOutput::default();
         let mut notes_command = None;
         let config = self.config.clone();
         egui::CentralPanel::default().show(ui, |ui| {
@@ -602,6 +626,10 @@ impl AutoPobApp {
                 BuildTab::Skills => {
                     let now = ui.input(|i| i.time);
                     skills_out = self.skills.show(ui, now, behind);
+                }
+                BuildTab::Items => {
+                    let now = ui.input(|i| i.time);
+                    items_out = self.items.show(ui, now, behind);
                 }
                 BuildTab::Calcs => calcs_out = self.calcs.show(ui, behind),
                 BuildTab::Notes => {
@@ -638,6 +666,25 @@ impl AutoPobApp {
             if let Some(command) = self.skills.close_dialogs() {
                 self.send(command);
             }
+        }
+        if self.tab != BuildTab::Items {
+            // leaving the tab sends an edit still being typed and closes its dialogs
+            for command in self.items.flush() {
+                self.send(command);
+            }
+            self.items.close_dialogs();
+        }
+        for command in items_out.commands {
+            let is_text = matches!(command, Command::SetDisplayItemText { .. });
+            let seq = self.send(command);
+            if is_text {
+                self.text_seq = Some(seq);
+                self.items.text_sent(seq);
+            }
+        }
+        // questions never leave the app waiting
+        for query in items_out.queries {
+            self.engine.send(query);
         }
         for command in skills_out.commands {
             self.send(command);
@@ -1060,6 +1107,14 @@ mod tests {
             Ok(crate::engine::SkillsView::default())
         }
 
+        fn items_view(&mut self) -> anyhow::Result<crate::engine::ItemsView> {
+            Ok(crate::engine::ItemsView::default())
+        }
+
+        fn display_item_view(&mut self) -> anyhow::Result<Option<crate::engine::DisplayItemView>> {
+            Ok(None)
+        }
+
         fn socket_group_text(
             &mut self,
             group: usize,
@@ -1146,6 +1201,23 @@ mod tests {
             Ok(crate::engine::GemTooltipView {
                 query: query.clone(),
                 lines: vec![],
+            })
+        }
+
+        fn item_tooltip_view(
+            &mut self,
+            query: &crate::engine::ItemTooltipQuery,
+        ) -> anyhow::Result<Option<crate::engine::ItemTooltipView>> {
+            Ok(Some(crate::engine::ItemTooltipView {
+                query: query.clone(),
+                tooltip: crate::engine::ItemTooltip::default(),
+            }))
+        }
+
+        fn item_text(&mut self, id: u32) -> anyhow::Result<crate::engine::ItemText> {
+            Ok(crate::engine::ItemText {
+                id,
+                text: String::new(),
             })
         }
 
@@ -2023,6 +2095,260 @@ mod tests {
             ),
         );
         assert_eq!(sent_since(&app, before), ["Undo(Skills)", "Redo(Skills)"]);
+    }
+
+    fn items_app() -> (AutoPobApp, egui::Context) {
+        let (mut app, ctx) = tree_app();
+        app.on_event(Event::Snapshot {
+            seq: 90,
+            snapshot: Snapshot::Items(Arc::new(crate::ui::items::tests::sample())),
+        });
+        app.tab = BuildTab::Items;
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        (app, ctx)
+    }
+
+    fn click_item_key(app: &mut AutoPobApp, ctx: &egui::Context, key: &str) {
+        let pos = app.items.rect(key).center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![],
+        ] {
+            frame(app, ctx, events);
+        }
+    }
+
+    fn display_with_quality() -> crate::engine::DisplayItemView {
+        crate::engine::DisplayItemView {
+            id: Some(2),
+            name: "Kaom's Heart".into(),
+            save_label: "Save".into(),
+            quality: Some("2".into()),
+            ..Default::default()
+        }
+    }
+
+    /// The items tab with a quality typed ("25") but not sent.
+    fn items_app_typing() -> (AutoPobApp, egui::Context) {
+        let (mut app, ctx) = items_app();
+        app.on_event(Event::Snapshot {
+            seq: 91,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(display_with_quality()))),
+        });
+        frame(&mut app, &ctx, vec![]);
+        click_item_key(&mut app, &ctx, "quality");
+        frame(&mut app, &ctx, vec![egui::Event::Text("5".into())]);
+        frame(&mut app, &ctx, vec![]);
+        (app, ctx)
+    }
+
+    const QUALITY: &str = "SetItemQuality { text: \"25\" }";
+
+    #[test]
+    fn a_typed_quality_is_sent_when_leaving_the_items_tab() {
+        let (mut app, ctx) = items_app_typing();
+        let before = app.sent_full.len();
+        app.tab = BuildTab::Notes;
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(sent_since(&app, before), [QUALITY]);
+    }
+
+    #[test]
+    fn a_typed_quality_precedes_save_as_save_and_build_changes() {
+        let (mut app, _ctx) = items_app_typing();
+        let before = app.sent_full.len();
+        app.open_save_as(None);
+        app.send_save_as(false);
+        let sent = sent_since(&app, before);
+        assert_eq!(sent[0], QUALITY);
+        assert!(sent[1].starts_with("SaveAs"), "{sent:?}");
+
+        let (mut app, _ctx) = items_app_typing();
+        let before = app.sent_full.len();
+        app.save(None);
+        assert_eq!(sent_since(&app, before)[0], QUALITY);
+
+        let (mut app, ctx) = items_app_typing();
+        let before = app.sent_full.len();
+        app.run_action(&ctx, Pending::BackToList);
+        let sent = sent_since(&app, before);
+        assert_eq!(sent[0], QUALITY);
+        assert!(sent[1].starts_with("ListBuilds"), "{sent:?}");
+
+        let (mut app, ctx) = items_app_typing();
+        let before = app.sent_full.len();
+        app.run_action(&ctx, Pending::Open("/b/y.xml".into()));
+        let sent = sent_since(&app, before);
+        assert_eq!(sent[0], QUALITY);
+        assert!(sent[1].starts_with("OpenBuild"), "{sent:?}");
+
+        let (mut app, ctx) = items_app_typing();
+        let before = app.sent_full.len();
+        app.run_action(&ctx, Pending::Close);
+        assert_eq!(sent_since(&app, before)[0], QUALITY);
+    }
+
+    #[test]
+    fn the_raw_text_window_follows_the_text_commands_seq() {
+        let (mut app, ctx) = items_app();
+        app.on_event(Event::Snapshot {
+            seq: 91,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(display_with_quality()))),
+        });
+        frame(&mut app, &ctx, vec![]);
+        click_item_key(&mut app, &ctx, "edit");
+        let before = app.sent_full.len();
+        click_item_key(&mut app, &ctx, "text_save");
+        assert!(sent_since(&app, before)[0].starts_with("SetDisplayItemText"));
+        let seq = app.text_seq.expect("the text command's seq is remembered");
+        assert_eq!(seq, app.last_sent);
+        let open = |app: &AutoPobApp| app.items.text_window_open();
+
+        // a view from before it leaves the window open
+        app.on_event(Event::Snapshot {
+            seq: seq - 1,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(display_with_quality()))),
+        });
+        assert!(open(&app));
+        // its error keeps it open over its own views
+        app.on_event(Event::Error {
+            seq,
+            message: "bad item".into(),
+        });
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(display_with_quality()))),
+        });
+        assert!(open(&app));
+        // another command's error doesn't matter; a resend succeeding closes it
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        click_item_key(&mut app, &ctx, "text_save");
+        assert!(sent_since(&app, before)[0].starts_with("SetDisplayItemText"));
+        let seq = app.text_seq.unwrap();
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(display_with_quality()))),
+        });
+        assert!(!open(&app));
+    }
+
+    #[test]
+    fn ctrl_z_on_items_sends_items_undo() {
+        let (mut app, ctx) = items_app();
+        // a focused row must not count as typing
+        let pos = app.items.rect("row_1").center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        assert!(ctx.egui_wants_keyboard_input() && !ctx.text_edit_focused());
+        let before = app.sent_full.len();
+        frame(&mut app, &ctx, ctrl(egui::Key::Z));
+        frame(
+            &mut app,
+            &ctx,
+            key_with(
+                egui::Key::Z,
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            ),
+        );
+        assert_eq!(sent_since(&app, before), ["Undo(Items)", "Redo(Items)"]);
+    }
+
+    #[test]
+    fn ctrl_z_does_nothing_while_the_raw_text_window_is_open() {
+        let (mut app, ctx) = items_app();
+        app.on_event(Event::Snapshot {
+            seq: 91,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(display_with_quality()))),
+        });
+        frame(&mut app, &ctx, vec![]);
+        click_item_key(&mut app, &ctx, "edit");
+        assert!(app.items.text_window_open());
+        // focus is outside the window's text box
+        assert!(!ctx.text_edit_focused());
+        let before = app.sent_full.len();
+        frame(&mut app, &ctx, ctrl(egui::Key::Z));
+        frame(
+            &mut app,
+            &ctx,
+            key_with(
+                egui::Key::Z,
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            ),
+        );
+        assert_eq!(sent_since(&app, before), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_vanished_display_item_is_cancelled_while_another_tab_shows() {
+        let (mut app, ctx) = items_app();
+        app.tab = BuildTab::Tree;
+        frame(&mut app, &ctx, vec![]);
+        app.on_event(Event::Snapshot {
+            seq: 91,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(crate::engine::DisplayItemView {
+                id: Some(2),
+                ..Default::default()
+            }))),
+        });
+        let mut gone = crate::ui::items::tests::sample();
+        gone.items.retain(|e| e.id != 2);
+        app.on_event(Event::Snapshot {
+            seq: 92,
+            snapshot: Snapshot::Items(Arc::new(gone)),
+        });
+        let before = app.sent_full.len();
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(
+            sent_since(&app, before),
+            ["CancelDisplayItem { if_id: Some(2) }"]
+        );
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(sent_since(&app, before).len(), 1);
+    }
+
+    #[test]
+    fn leaving_the_items_tab_closes_its_dialogs() {
+        let (mut app, ctx) = items_app();
+        let pos = app.items.rect("manage").center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        assert!(app.items.has_dialog());
+        app.tab = BuildTab::Notes;
+        frame(&mut app, &ctx, vec![]);
+        assert!(!app.items.has_dialog());
     }
 
     #[test]

@@ -19,6 +19,8 @@ use std::{
 
 #[path = "gate/calcs.rs"]
 mod calcs;
+#[path = "gate/items.rs"]
+mod items;
 #[path = "gate/skills.rs"]
 mod skills;
 

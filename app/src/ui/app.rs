@@ -20,6 +20,7 @@ use crate::ui::skills::{SkillsOutput, SkillsUi};
 use crate::ui::tree::{TreeOutput, TreeTab};
 use crate::ui::unsaved::{Pending, PromptChoice, Resolution, needs_prompt, resolve};
 use crate::ui::{sidebar, startup};
+use crate::update_notice::Release;
 use eframe::egui;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +113,11 @@ pub struct AutoPobApp {
     import_seq: Option<u64>,
     config_ui: ConfigUi,
     list_ui: BuildListUi,
+    /// A `pob://` link from the command line, asked about once the engine is ready (R4)
+    startup_link: Option<String>,
+    /// The release check's answer, and the newer release it found (until dismissed)
+    release_rx: Option<std::sync::mpsc::Receiver<Release>>,
+    release: Option<Release>,
 
     notices: Vec<String>,
     pending_save: Option<PendingSave>,
@@ -165,6 +171,9 @@ impl AutoPobApp {
             import_seq: None,
             config_ui: ConfigUi::default(),
             list_ui: BuildListUi::default(),
+            startup_link: None,
+            release_rx: None,
+            release: None,
             notices: Vec::new(),
             pending_save: None,
             save_as: None,
@@ -177,6 +186,20 @@ impl AutoPobApp {
             #[cfg(test)]
             sent_full: Vec::new(),
         }
+    }
+
+    /// A `pob://` link to import after the user confirms it.
+    #[must_use]
+    pub fn with_startup_link(mut self, link: Option<String>) -> Self {
+        self.startup_link = link;
+        self
+    }
+
+    /// Shows a banner when the release check finds a newer release.
+    #[must_use]
+    pub fn with_release_check(mut self, rx: std::sync::mpsc::Receiver<Release>) -> Self {
+        self.release_rx = Some(rx);
+        self
     }
 
     fn restart(&mut self) {
@@ -656,6 +679,12 @@ impl AutoPobApp {
         if let Some(url) = self.import_ui.take_open_url() {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
+        self.ask_about_startup_link();
+        if let Some(rx) = &self.release_rx
+            && let Ok(release) = rx.try_recv()
+        {
+            self.release = Some(release);
+        }
         self.notices_panel(ui);
         self.pending_panel(ui);
         match self.screen {
@@ -663,6 +692,52 @@ impl AutoPobApp {
             Screen::Build => self.build_screen(ui),
         }
         self.dialogs(&ctx);
+    }
+
+    /// The `pob://` argument never imports by itself: the user is asked first (R4).
+    fn ask_about_startup_link(&mut self) {
+        if self.confirm.is_some() {
+            return;
+        }
+        if let Some(link) = self.startup_link.take() {
+            self.confirm = Some(AppConfirm {
+                message: format!("Import the build from this link?\n{link}"),
+                yes: "Yes",
+                no: "No",
+                then: ConfirmThen::Send(Command::ImportFromUrl {
+                    url: link,
+                    mode: ImportMode::NewBuild,
+                }),
+            });
+        }
+    }
+
+    /// The release banner at the top of the build list.
+    fn release_banner(&mut self, ui: &mut egui::Ui) {
+        let Some(release) = &self.release else {
+            return;
+        };
+        let mut dismiss = false;
+        let mut open = false;
+        egui::Panel::top("release_banner").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(format!("auto-pob v{} is available", release.version));
+                let link = ui.link("See the release");
+                crate::ui::import::mark(ui, "release_link", &link);
+                open = link.clicked();
+                let close = ui.small_button("\u{00d7}");
+                crate::ui::import::mark(ui, "release_dismiss", &close);
+                dismiss = close.clicked();
+            });
+        });
+        if open {
+            ui.ctx()
+                .open_url(egui::OpenUrl::new_tab(release.url.clone()));
+        }
+        if dismiss {
+            self.release = None;
+            self.release_rx = None;
+        }
     }
 
     fn stopped_screen(&mut self, ui: &mut egui::Ui) {
@@ -744,6 +819,7 @@ impl AutoPobApp {
     }
 
     fn list_screen(&mut self, ui: &mut egui::Ui) {
+        self.release_banner(ui);
         let mut action = None;
         egui::CentralPanel::default().show(ui, |ui| match self.list.clone() {
             Some(view) => action = self.list_ui.show(ui, &view),
@@ -1200,17 +1276,17 @@ impl AutoPobApp {
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.label("Paste a PoB share code:");
+                ui.label("Paste a PoB share code or a build link:");
                 ui.add(
                     egui::TextEdit::multiline(text)
                         .desired_rows(4)
                         .desired_width(400.0),
                 );
                 ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(!text.trim().is_empty(), theme::primary_button("Import"))
-                        .clicked()
-                    {
+                    let go =
+                        ui.add_enabled(!text.trim().is_empty(), theme::primary_button("Import"));
+                    crate::ui::import::mark(ui, "list_import", &go);
+                    if go.clicked() {
                         import = true;
                     }
                     if ui.button("Cancel").clicked() {
@@ -1221,11 +1297,26 @@ impl AutoPobApp {
         if import {
             let code = std::mem::take(text);
             self.import = None;
-            self.enter_build(Command::ImportShareCode { code });
+            if is_link(&code) {
+                // the list stays until the engine reports a new build (R15)
+                self.request(Pending::ImportNew(code.trim().to_owned()));
+            } else {
+                self.enter_build(Command::ImportShareCode { code });
+            }
         } else if cancel {
             self.import = None;
         }
     }
+}
+
+/// Text the list's import sends as a link (http(s) or pob:) rather than as a share code.
+fn is_link(text: &str) -> bool {
+    let text = text.trim();
+    let starts = |prefix: &str| {
+        text.get(..prefix.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(prefix))
+    };
+    starts("http") || starts("pob:")
 }
 
 /// Seconds since the epoch, for the sign-in and retry countdowns.
@@ -4694,5 +4785,112 @@ mod tests {
         });
         let (opened, _, _) = outputs_within(&mut app, &ctx, 3);
         assert_eq!(opened, [AUTH]);
+    }
+
+    // ---- the list's link import, the startup link and the release banner ----------------
+
+    #[test]
+    fn startup_link_asks_before_importing() {
+        let (mut app, ctx) = fake_app();
+        app = app.with_startup_link(Some("pob://pobbin/abc".into()));
+        pump_until(&mut app, &ctx, "list", |a| a.ready && a.list.is_some());
+        crate::ui::import::clear_marks();
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.confirm.as_ref().is_some_and(|c| {
+            c.message == "Import the build from this link?\npob://pobbin/abc"
+        }));
+        assert!(
+            app.sent_full.iter().all(|c| !c.contains("ImportFromUrl")),
+            "nothing is imported before the answer"
+        );
+        click_mark(&mut app, &ctx, "confirm_yes");
+        assert!(app.confirm.is_none());
+        assert_eq!(
+            app.sent_full
+                .iter()
+                .filter(|c| c.contains("ImportFromUrl"))
+                .collect::<Vec<_>>(),
+            [r#"ImportFromUrl { url: "pob://pobbin/abc", mode: NewBuild }"#]
+        );
+    }
+
+    #[test]
+    fn startup_link_no_drops_it() {
+        let (mut app, ctx) = fake_app();
+        app = app.with_startup_link(Some("pob://pobbin/abc".into()));
+        pump_until(&mut app, &ctx, "list", |a| a.ready && a.list.is_some());
+        click_mark(&mut app, &ctx, "confirm_no");
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        assert!(app.confirm.is_none());
+        assert!(app.startup_link.is_none());
+        assert!(app.sent_full.iter().all(|c| !c.contains("ImportFromUrl")));
+    }
+
+    #[test]
+    fn list_import_of_a_link_stays_on_the_list_until_new_build() {
+        let (mut app, ctx) = started();
+        for text in ["https://pobb.in/abc", "  POB://pobbin/abc "] {
+            let before = app.sent_full.len();
+            app.import = Some(text.into());
+            frame(&mut app, &ctx, vec![]);
+            click_mark(&mut app, &ctx, "list_import");
+            assert_eq!(
+                sent_since(&app, before),
+                [format!(
+                    "ImportFromUrl {{ url: {:?}, mode: NewBuild }}",
+                    text.trim()
+                )]
+            );
+            assert_eq!(app.screen, Screen::List);
+            assert!(app.entering.is_none());
+        }
+        deliver(
+            &mut app,
+            requests_snapshot(&[(7, "Importing a build")], vec![]),
+        );
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.screen, Screen::List, "still waiting");
+        deliver(
+            &mut app,
+            requests_snapshot(&[], vec![finished(7, None, false, true)]),
+        );
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.screen, Screen::Build);
+        // other text stays a share code
+        let (mut app, ctx) = started();
+        let before = app.sent_full.len();
+        app.import = Some("eNrtvQ".into());
+        frame(&mut app, &ctx, vec![]);
+        click_mark(&mut app, &ctx, "list_import");
+        assert!(sent_since(&app, before)[0].starts_with("ImportShareCode"));
+    }
+
+    #[test]
+    fn banner_dismisses() {
+        let (mut app, ctx) = started();
+        let (tx, rx) = std::sync::mpsc::channel();
+        app = app.with_release_check(rx);
+        crate::ui::import::clear_marks();
+        frame(&mut app, &ctx, vec![]);
+        assert!(marked("release_dismiss").is_none());
+        tx.send(Release {
+            version: "9.9.9".into(),
+            url: "https://github.com/cyprx/auto-pob/releases/tag/v9.9.9".into(),
+        })
+        .unwrap();
+        click_mark(&mut app, &ctx, "release_link");
+        let (opened, _, _) = outputs_within(&mut app, &ctx, 1);
+        assert!(opened.is_empty());
+        assert!(app.release.is_some());
+        click_mark(&mut app, &ctx, "release_dismiss");
+        assert!(app.release.is_none());
+        crate::ui::import::clear_marks();
+        frame(&mut app, &ctx, vec![]);
+        assert!(
+            marked("release_dismiss").is_none(),
+            "hidden for the session"
+        );
     }
 }

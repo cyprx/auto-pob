@@ -7,6 +7,9 @@ use crate::ui::tree::Rects;
 use crate::widgets::{item_tooltip_ui_with, pob_text};
 use eframe::egui;
 
+/// PoB's quality boxes hold two characters.
+const QUALITY_DIGITS: usize = 2;
+
 /// A text box that sends on Enter or blur; Esc reverts.
 #[derive(Default)]
 pub(super) struct TextBox {
@@ -31,9 +34,23 @@ impl TextBox {
             self.text = current.to_owned();
             self.sent = current.to_owned();
         }
+        if ui.memory(|m| m.has_focus(id)) {
+            // PoB's box takes digits only (filter `%D`), so a letter is dropped as typed
+            ui.input_mut(|i| {
+                for event in &mut i.events {
+                    match event {
+                        egui::Event::Text(t) | egui::Event::Paste(t) => {
+                            t.retain(|c| c.is_ascii_digit());
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        }
         let response = ui.add(
             egui::TextEdit::singleline(&mut self.text)
                 .id(id)
+                .char_limit(QUALITY_DIGITS)
                 .desired_width(40.0),
         );
         rects.note(&response, || key.to_owned());
@@ -46,6 +63,12 @@ impl TextBox {
         }
         self.pending = response.has_focus() && self.text != self.sent;
         send
+    }
+
+    /// Drops what is being typed, as when the item is cancelled.
+    fn discard(&mut self) {
+        self.pending = false;
+        self.sent = self.text.clone();
     }
 
     fn take_pending(&mut self) -> Option<String> {
@@ -82,6 +105,12 @@ impl DisplayState {
             commands.push(Command::SetItemCatalystQuality { text });
         }
         commands
+    }
+
+    /// Forgets the typed edits waiting for Enter or blur: the item they were for is going.
+    fn discard_pending(&mut self) {
+        self.quality.discard();
+        self.catalyst_quality.discard();
     }
 
     /// A new view of the display item arrived.
@@ -152,6 +181,12 @@ fn colour(name: &str) -> Option<SocketColour> {
 
 /// The buttons when nothing is displayed.
 pub fn show_empty(ui: &mut egui::Ui, state: &mut DisplayState) {
+    // PoB's popup is modal: nothing else on the panel works while the window is open
+    let enabled = state.text_window.is_none();
+    ui.add_enabled_ui(enabled, |ui| show_empty_inner(ui, state));
+}
+
+fn show_empty_inner(ui: &mut egui::Ui, state: &mut DisplayState) {
     ui.horizontal(|ui| {
         let create = ui.button("Create custom\u{2026}");
         state.rects.note(&create, || "create".into());
@@ -164,10 +199,29 @@ pub fn show_empty(ui: &mut egui::Ui, state: &mut DisplayState) {
 }
 
 /// Draws the panel for the item; returns the commands.
-pub fn show(ui: &mut egui::Ui, view: &DisplayItemView, state: &mut DisplayState) -> Vec<Command> {
+/// `busy`: the engine hasn't caught up with what was sent.
+pub fn show(
+    ui: &mut egui::Ui,
+    view: &DisplayItemView,
+    state: &mut DisplayState,
+    busy: bool,
+) -> Vec<Command> {
+    // PoB's popup is modal: no editor works while the raw-text window is open
+    let enabled = state.text_window.is_none();
+    ui.add_enabled_ui(enabled, |ui| panel(ui, view, state, busy))
+        .inner
+}
+
+fn panel(
+    ui: &mut egui::Ui,
+    view: &DisplayItemView,
+    state: &mut DisplayState,
+    busy: bool,
+) -> Vec<Command> {
     let mut out = Vec::new();
     ui.horizontal_wrapped(|ui| {
-        let save = ui.button(&view.save_label);
+        // a Save on an item the engine is still deleting would orphan it
+        let save = ui.add_enabled(!busy, egui::Button::new(&view.save_label));
         state.rects.note(&save, || "save".into());
         if save.clicked() {
             // a box still being typed in goes first
@@ -177,17 +231,26 @@ pub fn show(ui: &mut egui::Ui, view: &DisplayItemView, state: &mut DisplayState)
         let edit = ui.button("Edit\u{2026}");
         state.rects.note(&edit, || "edit".into());
         if edit.clicked() {
-            state.text_window = Some(TextWindow {
-                rarity: view.edit_rarity,
-                text: view.edit_text.clone(),
-                creating: false,
-            });
-            state.submitted = None;
+            // the window opens on the view's text, which lacks a box still being typed in: that
+            // edit goes first and the click is refused, so the next one opens the new text
+            let pending = state.take_pending();
+            if pending.is_empty() {
+                state.text_window = Some(TextWindow {
+                    rarity: view.edit_rarity,
+                    text: view.edit_text.clone(),
+                    creating: false,
+                });
+                state.submitted = None;
+            } else {
+                out.extend(pending);
+            }
         }
         let cancel = ui.button("Cancel");
         state.rects.note(&cancel, || "cancel".into());
         if cancel.clicked() {
-            out.push(Command::CancelDisplayItem);
+            // the item is going: an edit still being typed must not follow the cancel
+            state.discard_pending();
+            out.push(Command::CancelDisplayItem { if_id: None });
         }
     });
 

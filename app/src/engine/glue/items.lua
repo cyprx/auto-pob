@@ -120,6 +120,11 @@ local mod_line_lists = {
 	{ "crucible", "crucibleModLines" },
 }
 
+local MOD_LINE_FIELDS = {}
+for _, entry in ipairs(mod_line_lists) do
+	MOD_LINE_FIELDS[entry[1]] = entry[2]
+end
+
 local function mod_line_ref(item, mod_line)
 	for _, entry in ipairs(mod_line_lists) do
 		for i, candidate in ipairs(item[entry[2]]) do
@@ -248,7 +253,8 @@ end
 
 -- The Delete button, which runs `OnSelDelete` on the selected row. A row the filter hides
 -- can't be selected (R8). PoB asks first when the item is in use.
-function glue.items_delete(id)
+-- `confirmed`: the user was asked about an item in use; PoB's popup is refused otherwise.
+function glue.items_delete(id, confirmed)
 	local tab = items_tab()
 	local list = synced_list()
 	local index = position(list.list, id)
@@ -260,6 +266,10 @@ function glue.items_delete(id)
 		local depth = #popups
 		list:OnSelDelete(index, id)
 		if #popups > depth then
+			if not confirmed then
+				-- in_popups closes the popup
+				error("the item is in use; confirm the deletion first", 0)
+			end
 			glue.confirm_popup("delete the item")
 		end
 	end)
@@ -390,40 +400,10 @@ local function set_position(id)
 	return position_of
 end
 
--- Opens the Manage Item Sets popup (ItemsTab.lua:2506), calls `fn(list)` with its
--- ItemSetListControl and closes what is left open. The shared list beside it is built too.
 local function with_set_list(fn)
-	glue.in_popups(function()
+	glue.with_set_list("item set", function()
 		items_tab():OpenItemSetManagePopup()
-		local list = pob.main.main.popups[1].controls.setList
-		if not list then
-			error("couldn't open the item set list", 0)
-		end
-		return fn(list)
-	end)
-end
-
-local function check_title(title)
-	if not title:gsub("\r", ""):match("%S") then
-		error("the item set needs a name", 0)
-	end
-end
-
--- Types the title into the name popup `RenameSet` opened and presses Save (it stays disabled
--- until the name has a visible character). When that fails, Cancel is pressed, which drops a
--- set that New or Copy had already made.
-local function save_name(title)
-	local popup = pob.main.main.popups[1]
-	local ok, applied = pcall(glue.type_into, popup.controls.edit, title)
-	if ok and applied and popup.controls.save.enabled then
-		popup.controls.save.onClick()
-		return
-	end
-	popup.controls.cancel.onClick()
-	if not ok then
-		error(applied, 0)
-	end
-	check_title("")
+	end, fn)
 end
 
 -- Draw's sync of the set dropdown (ItemsTab.lua:1508-1516), then the user's pick
@@ -444,20 +424,20 @@ end
 
 -- The New button and the name popup
 function glue.items_new_set(title)
-	check_title(title)
+	glue.check_title("item set", title)
 	with_set_list(function(list)
 		list.controls.new.onClick()
-		save_name(title)
+		glue.save_name("item set", title)
 	end)
 end
 
 -- The Rename button and the name popup
 function glue.items_rename_set(id, title)
 	set_position(id)
-	check_title(title)
+	glue.check_title("item set", title)
 	with_set_list(function(list)
 		list:RenameSet(items_tab().itemSets[id])
-		save_name(title)
+		glue.save_name("item set", title)
 	end)
 	glue.frame()
 end
@@ -465,11 +445,11 @@ end
 -- The Copy button and the name popup
 function glue.items_copy_set(id, title)
 	local index = set_position(id)
-	check_title(title)
+	glue.check_title("item set", title)
 	with_set_list(function(list)
 		list.selIndex, list.selValue = index, id
 		list.controls.copy.onClick()
-		save_name(title)
+		glue.save_name("item set", title)
 	end)
 end
 
@@ -551,6 +531,12 @@ table.insert(display_sections, function(tab, item, out)
 	end)
 end)
 
+-- the legacy variant dropdowns and the variant groups' ones, by `control` 0..5
+local VARIANT_CONTROLS = {
+	"displayItemVariant", "displayItemAltVariant", "displayItemAltVariant2",
+	"displayItemAltVariant3", "displayItemAltVariant4", "displayItemAltVariant5",
+}
+
 -- the version and the shown variant dropdowns
 table.insert(display_sections, function(tab, item, out)
 	local c = tab.controls
@@ -558,11 +544,7 @@ table.insert(display_sections, function(tab, item, out)
 		out.version = drop_view(c.displayItemVersion)
 	end
 	out.variants = {}
-	local names = {
-		"displayItemVariant", "displayItemAltVariant", "displayItemAltVariant2",
-		"displayItemAltVariant3", "displayItemAltVariant4", "displayItemAltVariant5",
-	}
-	for i, name in ipairs(names) do
+	for i, name in ipairs(VARIANT_CONTROLS) do
 		if c[name]:IsShown() then
 			table.insert(out.variants, { control = i - 1, list = drop_view(c[name]) })
 		end
@@ -701,8 +683,12 @@ function glue.display_save()
 end
 
 -- The panel's Cancel button
-function glue.display_cancel()
+function glue.display_cancel(if_id)
 	local tab = items_tab()
+	if if_id and not (tab.displayItem and tab.displayItem.id == if_id) then
+		-- the item this was meant for is no longer displayed
+		return
+	end
 	if not tab.displayItem then
 		error("no item is being viewed", 0)
 	end
@@ -752,11 +738,6 @@ local function pick_entry(control, index)
 	end
 	control:SetSel(index)
 end
-
-local VARIANT_CONTROLS = {
-	"displayItemVariant", "displayItemAltVariant", "displayItemAltVariant2",
-	"displayItemAltVariant3", "displayItemAltVariant4", "displayItemAltVariant5",
-}
 
 -- `control` is 0..5; both the legacy dropdowns and the variant groups' ones call
 -- SelectDisplayItemVariant
@@ -887,14 +868,6 @@ function glue.display_mutated(line, on)
 		glue.press_check(box, on)
 	end
 end
-
-local MOD_LINE_FIELDS = {
-	enchant = "enchantModLines",
-	scourge = "scourgeModLines",
-	implicit = "implicitModLines",
-	explicit = "explicitModLines",
-	crucible = "crucibleModLines",
-}
 
 -- A click on a line of the display tooltip (ItemsTab.lua:1521-1539) calls
 -- ToggleDisplayItemModLine; only a line that PoB's tooltip carries the mod line on is a click

@@ -326,6 +326,10 @@ pub enum Command {
     /// list filter hides is `no such item`.
     DeleteItem {
         id: u32,
+        /// The user has been asked about an item in use. PoB's own confirm popup, when it
+        /// opens and this is false, is refused (the item may have been equipped since the
+        /// UI last looked).
+        confirmed: bool,
     },
     /// "Del Unused" has no confirmation in PoB.
     DeleteUnusedItems,
@@ -374,8 +378,12 @@ pub enum Command {
     },
     /// The panel's Save / Add to build button.
     SaveDisplayItem,
-    /// The panel's Cancel button.
-    CancelDisplayItem,
+    /// The panel's Cancel button. With `if_id`, it only cancels while the item with that id is
+    /// displayed (a clean-up of a deleted item's display must not hit another item); without,
+    /// it is the user's own Cancel and an empty panel is an error.
+    CancelDisplayItem {
+        if_id: Option<u32>,
+    },
     /// Ctrl+D (R13): saved with the build, not undoable, not unsaved.
     SetShowStatDifferences {
         on: bool,

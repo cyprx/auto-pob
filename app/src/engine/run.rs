@@ -714,7 +714,7 @@ mod tests {
     fn display_item_none_is_sent() {
         // unlike the gem search, "nothing is displayed" is an answer (R10)
         let (mut fake, _log) = Fake::new();
-        let events = run_queued(&mut fake, vec![Command::CancelDisplayItem]);
+        let events = run_queued(&mut fake, vec![Command::CancelDisplayItem { if_id: None }]);
         let shown: Vec<_> = snapshots(&events)
             .into_iter()
             .filter_map(|(_, s)| match s {
@@ -901,6 +901,34 @@ mod tests {
             }
         }
         assert_eq!(kinds, vec![true], "only the build list goes out");
+    }
+
+    #[test]
+    fn item_queries_without_a_build_send_nothing() {
+        let queries = || {
+            vec![
+                Command::ItemTooltip(ItemTooltipQuery { id: 1, slot: None }),
+                Command::CopyItem { id: 1 },
+            ]
+        };
+        let kinds = |events: &[Event]| {
+            snapshots(events)
+                .into_iter()
+                .filter(|(_, s)| matches!(s, Snapshot::ItemTooltip(_) | Snapshot::ItemText(_)))
+                .count()
+        };
+        // with a build both are answered
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(&mut fake, queries());
+        assert_eq!(kinds(&events), 2);
+        assert_eq!(log.lock().unwrap().item_tooltips.len(), 1);
+        // with none, neither reaches the backend
+        let (mut fake, log) = Fake::new();
+        fake.build_loaded = false;
+        let events = run_queued(&mut fake, queries());
+        assert_eq!(kinds(&events), 0);
+        assert!(log.lock().unwrap().item_tooltips.is_empty());
+        assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
     }
 
     #[test]

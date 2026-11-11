@@ -143,13 +143,15 @@ impl ItemsUi {
                     ui.close();
                 }
                 // PoB deletes the unused items without asking
-                let unused = ui.button("Delete unused");
+                // PoB enables both on the shown (filtered) list being non-empty
+                let any = !view.listed.is_empty();
+                let unused = ui.add_enabled(any, egui::Button::new("Delete unused"));
                 self.rects.note(&unused, || "menu_delete_unused".into());
                 if unused.clicked() {
                     out.commands.push(Command::DeleteUnusedItems);
                     ui.close();
                 }
-                let all = ui.add_enabled(!view.items.is_empty(), egui::Button::new("Delete all"));
+                let all = ui.add_enabled(any, egui::Button::new("Delete all"));
                 self.rects.note(&all, || "menu_delete_all".into());
                 if all.clicked() {
                     self.confirm_delete_all = true;
@@ -242,18 +244,16 @@ impl ItemsUi {
         if ui.input(|inp| inp.key_pressed(egui::Key::Delete)) {
             match delete_prompt(entry) {
                 Some(text) => self.confirm_delete = Some((entry.id, text)),
-                None => out.commands.push(Command::DeleteItem { id: entry.id }),
+                None => out.commands.push(Command::DeleteItem {
+                    id: entry.id,
+                    confirmed: false,
+                }),
             }
         }
     }
 
     /// The confirms for Delete and Delete all.
-    pub(super) fn dialogs(
-        &mut self,
-        ctx: &egui::Context,
-        _view: &ItemsView,
-        out: &mut ItemsOutput,
-    ) {
+    pub(super) fn dialogs(&mut self, ctx: &egui::Context, out: &mut ItemsOutput) {
         if let Some((id, text)) = self.confirm_delete.clone() {
             let mut choice = None;
             egui::Window::new("Delete Item")
@@ -274,7 +274,10 @@ impl ItemsUi {
                     });
                 });
             if choice == Some(true) {
-                out.commands.push(Command::DeleteItem { id });
+                out.commands.push(Command::DeleteItem {
+                    id,
+                    confirmed: true,
+                });
             }
             if choice.is_some() {
                 self.confirm_delete = None;

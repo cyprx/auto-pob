@@ -98,6 +98,8 @@ struct Harness {
     copied: Vec<String>,
     /// A text field above the tab, with focus
     field: Option<String>,
+    /// The engine is behind
+    busy: bool,
 }
 
 fn debug(commands: &[Command]) -> Vec<String> {
@@ -115,6 +117,7 @@ impl Harness {
             step: 0.2,
             copied: Vec::new(),
             field: None,
+            busy: false,
         };
         h.frame(vec![]);
         h
@@ -130,13 +133,14 @@ impl Harness {
         };
         let mut out = ItemsOutput::default();
         let time = self.time;
+        let busy = self.busy;
         let output = self.ctx.run_ui(input, |ui| {
             if let Some(text) = &mut self.field {
                 let field = ui.add(egui::TextEdit::singleline(text).id_salt("field"));
                 field.request_focus();
             }
             // egui may run a frame twice; each pass's output counts
-            let pass = self.ui.show(ui, time, false);
+            let pass = self.ui.show(ui, time, busy);
             out.commands.extend(pass.commands);
             out.queries.extend(pass.queries);
         });
@@ -377,7 +381,10 @@ fn delete_equipped_item_asks_first() {
         "a confirm opened"
     );
     let o = h.click("confirm_delete");
-    assert_eq!(debug(&o.commands), ["DeleteItem { id: 2 }"]);
+    assert_eq!(
+        debug(&o.commands),
+        ["DeleteItem { id: 2, confirmed: true }"]
+    );
 
     // an abyss jewel used in another set asks too
     let mut h = Harness::new(sample());
@@ -389,7 +396,10 @@ fn delete_equipped_item_asks_first() {
     let mut h = Harness::new(sample());
     h.click("row_1");
     let o = h.key(Key::Delete, Modifiers::NONE);
-    assert_eq!(debug(&o.commands), ["DeleteItem { id: 1 }"]);
+    assert_eq!(
+        debug(&o.commands),
+        ["DeleteItem { id: 1, confirmed: false }"]
+    );
 }
 
 #[test]
@@ -622,7 +632,7 @@ fn deleting_the_displayed_item_cancels_the_display() {
     h.ui.on_snapshot(&Snapshot::Items(Arc::new(gone)));
     h.ui.on_snapshot(&displayed(Some(2)));
     let o = h.frame(vec![]);
-    assert_eq!(debug(&o.commands), ["CancelDisplayItem"]);
+    assert_eq!(debug(&o.commands), ["CancelDisplayItem { if_id: Some(2) }"]);
     let o = h.frame(vec![]);
     assert!(o.commands.is_empty(), "cancelled once");
     h.ui.on_snapshot(&displayed(Some(2)));
@@ -719,7 +729,10 @@ fn keys_act_on_the_selected_item_after_a_reorder() {
         o.queries
     );
     let o = h.key(Key::Delete, Modifiers::NONE);
-    assert_eq!(debug(&o.commands), ["DeleteItem { id: 1 }"]);
+    assert_eq!(
+        debug(&o.commands),
+        ["DeleteItem { id: 1, confirmed: false }"]
+    );
 }
 
 #[test]
@@ -727,7 +740,10 @@ fn a_second_delete_with_nothing_selected_does_nothing() {
     let mut h = Harness::new(sample());
     h.click("row_1");
     let o = h.key(Key::Delete, Modifiers::NONE);
-    assert_eq!(debug(&o.commands), ["DeleteItem { id: 1 }"]);
+    assert_eq!(
+        debug(&o.commands),
+        ["DeleteItem { id: 1, confirmed: false }"]
+    );
     // the engine's view no longer has it; the equipped item slid under the focused row
     let mut view = (*h.view()).clone();
     view.items.retain(|e| e.id != 1);
@@ -746,7 +762,10 @@ fn keys_act_on_the_selected_item_after_a_sort() {
     h.click("row_1");
     h.reorder(&[4, 3, 2, 1]);
     let o = h.key(Key::Delete, Modifiers::NONE);
-    assert_eq!(debug(&o.commands), ["DeleteItem { id: 1 }"]);
+    assert_eq!(
+        debug(&o.commands),
+        ["DeleteItem { id: 1, confirmed: false }"]
+    );
 }
 
 #[test]
@@ -766,7 +785,10 @@ fn flush_sends_a_pending_cancel_once() {
     let mut gone = sample();
     gone.items.retain(|e| e.id != 2);
     h.ui.on_snapshot(&Snapshot::Items(Arc::new(gone)));
-    assert_eq!(debug(&h.ui.flush()), ["CancelDisplayItem"]);
+    assert_eq!(
+        debug(&h.ui.flush()),
+        ["CancelDisplayItem { if_id: Some(2) }"]
+    );
     assert!(h.ui.flush().is_empty());
     assert!(h.frame(vec![]).commands.is_empty(), "not sent twice");
 }
@@ -1252,7 +1274,10 @@ fn the_catalyst_quality_box_sends_on_enter_reverts_on_escape_and_flushes() {
 fn cancel_sends_cancel_display_item() {
     let mut h = Harness::new(sample());
     h.show_display(display_view());
-    assert_eq!(debug(&h.click("cancel").commands), ["CancelDisplayItem"]);
+    assert_eq!(
+        debug(&h.click("cancel").commands),
+        ["CancelDisplayItem { if_id: None }"]
+    );
 }
 
 #[test]
@@ -1328,4 +1353,162 @@ fn the_panel_stays_inside_the_window() {
     for (key, r) in &h.ui.display.rects.map {
         assert!(r.right() <= 1200.0, "{key} ends at {}", r.right());
     }
+}
+
+// ---- the final review's fixes ---------------------------------------------------------------
+
+#[test]
+fn an_orphan_cancel_is_dropped_when_another_item_is_displayed() {
+    let displayed = |id| {
+        Snapshot::DisplayItem(Some(Arc::new(DisplayItemView {
+            id,
+            ..DisplayItemView::default()
+        })))
+    };
+    let mut gone = sample();
+    gone.items.retain(|e| e.id != 2);
+    gone.listed.retain(|id| *id != 2);
+    // item 2 is deleted, then the user pastes: the batch ends with the new item (no id)
+    let mut h = Harness::new(sample());
+    h.ui.on_snapshot(&displayed(Some(2)));
+    h.ui.on_snapshot(&Snapshot::Items(Arc::new(gone.clone())));
+    h.ui.on_snapshot(&displayed(None));
+    assert!(h.ui.flush().is_empty());
+    assert!(h.frame(vec![]).commands.is_empty(), "the paste is kept");
+    // another list item displayed instead
+    let mut h = Harness::new(sample());
+    h.ui.on_snapshot(&displayed(Some(2)));
+    h.ui.on_snapshot(&Snapshot::Items(Arc::new(gone)));
+    h.ui.on_snapshot(&displayed(Some(1)));
+    assert!(h.frame(vec![]).commands.is_empty());
+}
+
+#[test]
+fn the_raw_text_window_counts_as_a_dialog_and_blocks_the_shortcuts() {
+    let mut h = Harness::new(sample());
+    h.click("row_1");
+    h.show_display(display_view());
+    // without the window, the keys act
+    let o = h.frame(vec![Event::Paste("Rarity: Rare".into())]);
+    assert_eq!(debug(&o.commands), ["PasteItem { text: \"Rarity: Rare\" }"]);
+    let o = h.key(Key::D, Modifiers::COMMAND);
+    assert_eq!(debug(&o.commands), ["SetShowStatDifferences { on: true }"]);
+    h.click("row_1");
+    assert!(!h.ui.has_dialog());
+
+    h.ui.display.text_window = Some(text_window::TextWindow::create());
+    assert!(h.ui.has_dialog());
+    let o = h.frame(vec![Event::Paste("Rarity: Rare".into())]);
+    assert!(o.commands.is_empty(), "{:?}", o.commands);
+    let o = h.key(Key::D, Modifiers::COMMAND);
+    assert!(o.commands.is_empty(), "{:?}", o.commands);
+    let o = h.key(Key::Delete, Modifiers::NONE);
+    assert!(o.commands.is_empty(), "{:?}", o.commands);
+}
+
+#[test]
+fn the_panel_editors_do_nothing_while_the_raw_text_window_is_open() {
+    let mut h = rich();
+    h.ui.display.text_window = Some(text_window::TextWindow::create());
+    // park the window out of the way so a click lands on the editor itself
+    h.frame(vec![]);
+    for key in ["save", "cancel", "tip_line_0", "add_socket", "edit"] {
+        let o = h.click(key);
+        assert!(o.commands.is_empty(), "{key}: {:?}", o.commands);
+    }
+    h.ui.display.text_window = None;
+    let o = h.click("cancel");
+    assert_eq!(debug(&o.commands), ["CancelDisplayItem { if_id: None }"]);
+}
+
+#[test]
+fn cancel_drops_a_quality_still_being_typed() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    h.type_into("quality", "15");
+    let pos = h.drect("cancel").center();
+    h.frame(vec![Event::PointerMoved(pos)]);
+    let mut commands = h.button(pos, true).commands;
+    commands.extend(h.button(pos, false).commands);
+    commands.extend(h.frame(vec![]).commands);
+    assert_eq!(debug(&commands), ["CancelDisplayItem { if_id: None }"]);
+    assert!(h.ui.flush().is_empty(), "nothing is left pending");
+
+    let mut h = rich();
+    h.type_into("catalyst_quality", "7");
+    let pos = h.drect("cancel").center();
+    h.frame(vec![Event::PointerMoved(pos)]);
+    let mut commands = h.button(pos, true).commands;
+    commands.extend(h.button(pos, false).commands);
+    commands.extend(h.frame(vec![]).commands);
+    assert_eq!(debug(&commands), ["CancelDisplayItem { if_id: None }"]);
+    assert!(h.ui.flush().is_empty());
+}
+
+#[test]
+fn edit_sends_a_quality_still_being_typed_and_opens_on_the_next_click() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    h.type_into("quality", "15");
+    let pos = h.drect("edit").center();
+    h.frame(vec![Event::PointerMoved(pos)]);
+    let mut commands = h.button(pos, true).commands;
+    commands.extend(h.button(pos, false).commands);
+    commands.extend(h.frame(vec![]).commands);
+    assert_eq!(debug(&commands), ["SetItemQuality { text: \"15\" }"]);
+    assert!(
+        h.ui.display.text_window.is_none(),
+        "the window would show the old quality"
+    );
+    // the engine's view has the quality now
+    let mut view = display_view();
+    view.quality = Some("15".into());
+    view.edit_text = "Quality: +15%".into();
+    h.show_display(view);
+    let o = h.click("edit");
+    assert!(o.commands.is_empty());
+    assert_eq!(
+        h.ui.display.text_window.as_ref().map(|w| w.text.as_str()),
+        Some("Quality: +15%")
+    );
+}
+
+#[test]
+fn save_is_disabled_while_the_engine_is_busy() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    h.busy = true;
+    h.frame(vec![]);
+    assert!(h.click("save").commands.is_empty());
+    h.busy = false;
+    h.frame(vec![]);
+    assert_eq!(debug(&h.click("save").commands), ["SaveDisplayItem"]);
+}
+
+#[test]
+fn the_quality_boxes_take_two_digits_only() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    h.type_into("quality", "2a05");
+    assert_eq!(h.ui.display.quality.text, "20");
+    h.type_into("quality", "x");
+    assert_eq!(h.ui.display.quality.text, "20", "a letter is ignored");
+    let mut h = rich();
+    h.type_into("catalyst_quality", "123");
+    assert_eq!(h.ui.display.catalyst_quality.text, "12");
+}
+
+#[test]
+fn delete_all_and_unused_follow_the_shown_list() {
+    let mut view = sample();
+    view.listed.clear();
+    let mut h = Harness::new(view);
+    h.click("menu");
+    assert!(h.click("menu_delete_unused").commands.is_empty());
+    h.click("menu");
+    h.click("menu_delete_all");
+    assert!(
+        !h.ui.has_dialog(),
+        "Delete all is disabled for an empty list"
+    );
 }

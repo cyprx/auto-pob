@@ -920,7 +920,10 @@ impl ItemsAction {
     fn command(&self) -> Option<Command> {
         Some(match self.clone() {
             ItemsAction::SortItems => Command::SortItems,
-            ItemsAction::DeleteItem { id } => Command::DeleteItem { id },
+            ItemsAction::DeleteItem { id } => Command::DeleteItem {
+                id,
+                confirmed: true,
+            },
             ItemsAction::DeleteUnusedItems => Command::DeleteUnusedItems,
             ItemsAction::DeleteAllItems => Command::DeleteAllItems,
             ItemsAction::MoveItem { from, to } => Command::MoveItem { from, to },
@@ -944,7 +947,7 @@ impl ItemsAction {
                 Command::SetDisplayItemText { rarity, text }
             }
             ItemsAction::SaveDisplayItem => Command::SaveDisplayItem,
-            ItemsAction::CancelDisplayItem => Command::CancelDisplayItem,
+            ItemsAction::CancelDisplayItem => Command::CancelDisplayItem { if_id: None },
             ItemsAction::SetShowStatDifferences { on } => Command::SetShowStatDifferences { on },
             ItemsAction::SetItemVariant { control, index } => {
                 Command::SetItemVariant { control, index }
@@ -1189,6 +1192,38 @@ fn run_items_recipe(name: &str) -> (ItemsRecipe, Session) {
                         affected.display_item,
                         "{name}: {action:?} doesn't flag the display item"
                     );
+                }
+                // the UI's list, slots and sets go stale unless these are flagged
+                if matches!(
+                    action,
+                    ItemsAction::SortItems
+                        | ItemsAction::DeleteItem { .. }
+                        | ItemsAction::DeleteUnusedItems
+                        | ItemsAction::DeleteAllItems
+                        | ItemsAction::MoveItem { .. }
+                        | ItemsAction::SetItemListFilter { .. }
+                        | ItemsAction::EquipItem { .. }
+                        | ItemsAction::SetFlaskActive { .. }
+                        | ItemsAction::SelectWeaponSet { .. }
+                        | ItemsAction::SelectItemSet { .. }
+                        | ItemsAction::NewItemSet { .. }
+                        | ItemsAction::RenameItemSet { .. }
+                        | ItemsAction::CopyItemSet { .. }
+                        | ItemsAction::DeleteItemSet { .. }
+                        | ItemsAction::MoveItemSet { .. }
+                ) && !matches!(action, ItemsAction::MoveItemSet { from, to } if from == to)
+                {
+                    assert!(
+                        affected.items,
+                        "{name}: {action:?} doesn't flag the Items view"
+                    );
+                    // everything but the list filter marks the build unsaved
+                    if !matches!(action, ItemsAction::SetItemListFilter { .. }) {
+                        assert!(
+                            affected.build,
+                            "{name}: {action:?} doesn't flag the build view"
+                        );
+                    }
                 }
                 assert_eq!(open_popups(&s), 0, "{name}: {action:?} left a popup open");
                 // the loop sends the display item after a batch that flags it or recalculates,
@@ -1503,7 +1538,33 @@ fn item_slot_errors() {
         },
         "empty",
     );
-    refuse(&mut s, Command::DeleteItem { id: 9999 }, "no such item");
+    // an item in use is deleted only once the user has been asked: PoB's own popup is refused
+    // and closed, and the item stays
+    refuse(
+        &mut s,
+        Command::DeleteItem {
+            id: kaom,
+            confirmed: false,
+        },
+        "confirm the deletion",
+    );
+    assert_eq!(open_popups(&s), 0, "the refused delete left a popup open");
+    assert!(
+        s.backend
+            .items_view()
+            .unwrap()
+            .items
+            .iter()
+            .any(|i| i.id == kaom)
+    );
+    refuse(
+        &mut s,
+        Command::DeleteItem {
+            id: 9999,
+            confirmed: true,
+        },
+        "no such item",
+    );
     refuse(
         &mut s,
         Command::SetItemListFilter { index: 99 },
@@ -1517,7 +1578,14 @@ fn item_slot_errors() {
         Command::MoveItem { from: 0, to: 1 },
         "can't be reordered",
     );
-    refuse(&mut s, Command::DeleteItem { id: kaom }, "no such item");
+    refuse(
+        &mut s,
+        Command::DeleteItem {
+            id: kaom,
+            confirmed: true,
+        },
+        "no such item",
+    );
     s.run(Command::SetItemListFilter { index: 0 }).unwrap();
 
     refuse(
@@ -1873,8 +1941,11 @@ fn bad_item_text_is_an_error() {
     assert!(error.to_string().contains("no such rarity"), "{error}");
     assert_eq!(display(&mut s), Some(shown));
     // no item: Save and Cancel are refused
-    s.run(Command::CancelDisplayItem).unwrap();
-    for command in [Command::SaveDisplayItem, Command::CancelDisplayItem] {
+    s.run(Command::CancelDisplayItem { if_id: None }).unwrap();
+    for command in [
+        Command::SaveDisplayItem,
+        Command::CancelDisplayItem { if_id: None },
+    ] {
         let error = s.run(command).unwrap_err();
         assert!(
             error.to_string().contains("no item is being viewed"),
@@ -1920,7 +1991,7 @@ fn display_edits_are_not_unsaved() {
         !unsaved_after_frame(&mut s),
         "editing the text is not an edit"
     );
-    s.run(Command::CancelDisplayItem).unwrap();
+    s.run(Command::CancelDisplayItem { if_id: None }).unwrap();
     assert!(display(&mut s).is_none());
     assert!(!unsaved_after_frame(&mut s), "cancel is not an edit");
     // Ctrl+D is saved with the build but doesn't mark it
@@ -2275,15 +2346,60 @@ fn display_edit_errors() {
     s.run(Command::SetItemVersion { index: 0 }).unwrap();
 
     // and with the item gone again
-    s.run(Command::CancelDisplayItem).unwrap();
+    s.run(Command::CancelDisplayItem { if_id: None }).unwrap();
     every_command(&mut s);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_conditional_cancel_only_cancels_the_item_it_names() {
+    let _guard = lock();
+    let (mut s, _lua) = gear_sessions("display-conditional-cancel");
+    let items = s.backend.items_view().unwrap().items;
+    let (first, other) = (items[0].id, items[1].id);
+    s.run(Command::EditItem { id: first }).unwrap();
+    assert_eq!(display(&mut s).unwrap().id, Some(first));
+    // another item's clean-up leaves it alone, with no error
+    s.run(Command::CancelDisplayItem { if_id: Some(other) })
+        .unwrap();
+    assert_eq!(display(&mut s).unwrap().id, Some(first));
+    // a pasted item has no id, so a clean-up for a listed item leaves it alone too
+    s.run(Command::PasteItem {
+        text: "Rarity: RARE\nDoom Plate\nGlorious Plate\nImplicits: 0\n+50 to maximum Life".into(),
+    })
+    .unwrap();
+    assert_eq!(display(&mut s).unwrap().id, None);
+    s.run(Command::CancelDisplayItem { if_id: Some(first) })
+        .unwrap();
+    assert!(display(&mut s).is_some(), "the pasted item was cancelled");
+    // the user's own Cancel is unconditional, and the named one cancels what it names
+    s.run(Command::CancelDisplayItem { if_id: None }).unwrap();
+    assert!(display(&mut s).is_none());
+    s.run(Command::EditItem { id: first }).unwrap();
+    s.run(Command::CancelDisplayItem { if_id: Some(first) })
+        .unwrap();
+    assert!(display(&mut s).is_none());
+    // and with nothing displayed it is no error, unlike the user's Cancel
+    s.run(Command::CancelDisplayItem { if_id: Some(first) })
+        .unwrap();
+    assert!(
+        s.run(Command::CancelDisplayItem { if_id: None }).is_err(),
+        "an empty panel's own Cancel is refused"
+    );
 }
 
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn items_round_trip() {
     let _guard = lock();
-    for name in ["paste_equip", "sets", "display_edits"] {
+    for name in [
+        "paste_equip",
+        "sets",
+        "display_edits",
+        "flasks_jewels",
+        "variants",
+        "delete_sort",
+    ] {
         let (recipe, mut s) = run_items_recipe(name);
         s.run(Command::Save).unwrap();
         let saved = s.backend.build_view().unwrap().path.expect("a saved build");
@@ -2291,9 +2407,17 @@ fn items_round_trip() {
         let lua = upstream_with_items_lib(&saved, &recipe.base);
         let reloaded = upstream_json(&lua);
         // the undo history and what the list shows are not saved
+        // `flasks_jewels` leaves the live slots apart from the saved file's: PoB's undo
+        // restores only the sets' flask copies (R12), and a socket whose node went is
+        // labelled from the live tree. Its slots are not compared; the saved sets' flasks are,
+        // below, and the jewels and item texts as for every recipe.
+        let live_slots = name != "flasks_jewels";
         let saved_part = |mut value: serde_json::Value| {
             for key in ["can_undo", "can_redo", "list_filter"] {
                 value.as_object_mut().unwrap().remove(key);
+            }
+            if !live_slots {
+                value.as_object_mut().unwrap().remove("slots");
             }
             value
         };
@@ -2309,6 +2433,20 @@ fn items_round_trip() {
         assert_eq!(ours_raws, raws, "{name}: our item text");
         assert_eq!(ours_jewels, jewels, "{name}: our jewels");
         assert!(!raws.is_empty(), "{name}: no items");
+        // the flasks that are on, by set (an untouched set holds no slot entries yet)
+        let flasks = |lua: &mlua::Lua, build: &str| -> BTreeMap<String, bool> {
+            lua_value(
+                lua,
+                &format!(
+                    "local out = {{}} for id, set in pairs({build}.itemsTab.itemSets) do for slot, entry in pairs(set) do if type(entry) == 'table' and entry.active then out[id .. '/' .. slot] = true end end end return out"
+                ),
+            )
+        };
+        assert_eq!(
+            flasks(&s.backend.lua, "pob.build"),
+            flasks(&lua, "build"),
+            "{name}: the saved sets' flasks"
+        );
     }
 }
 
@@ -2402,7 +2540,7 @@ fn no_silent_writes_items() {
             rarity: 2,
             text: armour.replace("Rarity: RARE\n", ""),
         },
-        Command::CancelDisplayItem,
+        Command::CancelDisplayItem { if_id: None },
         Command::PasteItem {
             text: variant.into(),
         },
@@ -2425,9 +2563,12 @@ fn no_silent_writes_items() {
         },
         Command::SaveDisplayItem,
         Command::EditItem { id: first },
-        Command::CancelDisplayItem,
+        Command::CancelDisplayItem { if_id: None },
         // deleting
-        Command::DeleteItem { id: spare },
+        Command::DeleteItem {
+            id: spare,
+            confirmed: true,
+        },
         Command::DeleteUnusedItems,
         Command::DeleteItemSet { id: second_set },
         Command::DeleteAllItems,

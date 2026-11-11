@@ -59,7 +59,9 @@ pub struct ItemsUi {
     display: display::DisplayState,
     /// The display item whose list entry vanished, already cancelled
     cancelled: Option<u32>,
-    cancel_display: bool,
+    /// The display item to cancel: its list entry has gone. The cancel names it, so it does
+    /// nothing if another item is displayed by then.
+    cancel_display: Option<u32>,
     /// An app-level dialog is open, so shortcuts are left alone
     modal: bool,
     pub(crate) rects: Rects,
@@ -84,7 +86,10 @@ impl ItemsUi {
 
     /// A confirm or the set manager is open, so shortcuts are left alone.
     pub fn has_dialog(&self) -> bool {
-        self.confirm_delete.is_some() || self.confirm_delete_all || self.sets.is_open()
+        self.confirm_delete.is_some()
+            || self.confirm_delete_all
+            || self.sets.is_open()
+            || self.display.text_window.is_some()
     }
 
     /// Closes the dialogs, as when the user leaves the tab.
@@ -103,12 +108,13 @@ impl ItemsUi {
     /// then the cancel of a display item whose list entry has gone.
     pub fn flush(&mut self) -> Vec<Command> {
         let mut commands = self.display.take_pending();
-        if std::mem::take(&mut self.cancel_display) {
-            commands.push(Command::CancelDisplayItem);
+        if let Some(id) = self.cancel_display.take() {
+            commands.push(Command::CancelDisplayItem { if_id: Some(id) });
         }
         commands
     }
 
+    #[cfg(test)]
     pub fn text_window_open(&self) -> bool {
         self.display.text_window.is_some()
     }
@@ -165,6 +171,10 @@ impl ItemsUi {
                 if self.cancelled != self.display_id {
                     self.cancelled = None;
                 }
+                // a different item is displayed now: the cancel was for the old one
+                if self.cancel_display.is_some() && self.cancel_display != self.display_id {
+                    self.cancel_display = None;
+                }
                 self.check_orphan();
             }
             Snapshot::ItemTooltip(t) => {
@@ -189,7 +199,7 @@ impl ItemsUi {
             && !view.items.iter().any(|e| e.id == id)
         {
             self.cancelled = Some(id);
-            self.cancel_display = true;
+            self.cancel_display = Some(id);
         }
     }
 
@@ -212,7 +222,7 @@ impl ItemsUi {
     }
 
     /// `busy`: the engine hasn't caught up with what was sent.
-    pub fn show(&mut self, ui: &mut egui::Ui, now: f64, _busy: bool) -> ItemsOutput {
+    pub fn show(&mut self, ui: &mut egui::Ui, now: f64, busy: bool) -> ItemsOutput {
         let mut out = ItemsOutput::default();
         let Some(view) = self.view.clone() else {
             ui.spinner();
@@ -221,8 +231,9 @@ impl ItemsUi {
         if let Some(text) = self.clipboard.take() {
             ui.ctx().copy_text(text);
         }
-        if std::mem::take(&mut self.cancel_display) {
-            out.commands.push(Command::CancelDisplayItem);
+        if let Some(id) = self.cancel_display.take() {
+            out.commands
+                .push(Command::CancelDisplayItem { if_id: Some(id) });
         }
         self.hovered_now = None;
         self.shortcuts(ui, &view, &mut out);
@@ -239,13 +250,13 @@ impl ItemsUi {
             .show(ui, |ui| match self.display_view.clone() {
                 Some(d) => out
                     .commands
-                    .extend(display::show(ui, &d, &mut self.display)),
+                    .extend(display::show(ui, &d, &mut self.display, busy)),
                 None => display::show_empty(ui, &mut self.display),
             });
         egui::CentralPanel::default().show(ui, |ui| self.item_list(ui, &view, &mut out));
 
         let ctx = ui.ctx().clone();
-        self.dialogs(&ctx, &view, &mut out);
+        self.dialogs(&ctx, &mut out);
         out.commands.extend(self.display.text_window(&ctx));
         self.sets_window(&ctx, &view, &mut out);
 

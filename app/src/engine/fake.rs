@@ -138,7 +138,7 @@ impl Fake {
                 item_text: Some(id),
                 ..Affected::default()
             }),
-            Command::CancelDisplayItem => Ok(Affected {
+            Command::CancelDisplayItem { .. } => Ok(Affected {
                 display_item: true,
                 ..Affected::default()
             }),

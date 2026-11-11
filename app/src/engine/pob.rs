@@ -768,8 +768,8 @@ impl PobBackend {
                 self.call::<_, ()>("items_sort", ())?;
                 Ok(items_listed())
             }
-            Command::DeleteItem { id } => {
-                self.call::<_, ()>("items_delete", id)?;
+            Command::DeleteItem { id, confirmed } => {
+                self.call::<_, ()>("items_delete", (id, confirmed))?;
                 self.items_edited()
             }
             Command::DeleteUnusedItems => {
@@ -781,7 +781,11 @@ impl PobBackend {
                 self.items_edited()
             }
             Command::MoveItem { from, to } => {
-                self.call::<_, ()>("items_move", (from + 1, to + 1))?;
+                let (Some(lua_from), Some(lua_to)) = (from.checked_add(1), to.checked_add(1))
+                else {
+                    return Err(anyhow!("no such item"));
+                };
+                self.call::<_, ()>("items_move", (lua_from, lua_to))?;
                 Ok(items_listed())
             }
             Command::SetItemListFilter { index } => {
@@ -847,8 +851,8 @@ impl PobBackend {
                 self.call::<_, ()>("display_set_text", (rarity, text))?;
                 Ok(display_changed())
             }
-            Command::CancelDisplayItem => {
-                self.call::<_, ()>("display_cancel", ())?;
+            Command::CancelDisplayItem { if_id } => {
+                self.call::<_, ()>("display_cancel", if_id)?;
                 Ok(display_changed())
             }
             Command::SaveDisplayItem => {

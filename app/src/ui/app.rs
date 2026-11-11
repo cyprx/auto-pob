@@ -2132,12 +2132,12 @@ mod tests {
             id: Some(2),
             name: "Kaom's Heart".into(),
             save_label: "Save".into(),
-            quality: Some("20".into()),
+            quality: Some("2".into()),
             ..Default::default()
         }
     }
 
-    /// The items tab with a quality typed ("205") but not sent.
+    /// The items tab with a quality typed ("25") but not sent.
     fn items_app_typing() -> (AutoPobApp, egui::Context) {
         let (mut app, ctx) = items_app();
         app.on_event(Event::Snapshot {
@@ -2151,7 +2151,7 @@ mod tests {
         (app, ctx)
     }
 
-    const QUALITY: &str = "SetItemQuality { text: \"205\" }";
+    const QUALITY: &str = "SetItemQuality { text: \"25\" }";
 
     #[test]
     fn a_typed_quality_is_sent_when_leaving_the_items_tab() {
@@ -2275,6 +2275,31 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_z_does_nothing_while_the_raw_text_window_is_open() {
+        let (mut app, ctx) = items_app();
+        app.on_event(Event::Snapshot {
+            seq: 91,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(display_with_quality()))),
+        });
+        frame(&mut app, &ctx, vec![]);
+        click_item_key(&mut app, &ctx, "edit");
+        assert!(app.items.text_window_open());
+        // focus is outside the window's text box
+        assert!(!ctx.text_edit_focused());
+        let before = app.sent_full.len();
+        frame(&mut app, &ctx, ctrl(egui::Key::Z));
+        frame(
+            &mut app,
+            &ctx,
+            key_with(
+                egui::Key::Z,
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            ),
+        );
+        assert_eq!(sent_since(&app, before), Vec::<String>::new());
+    }
+
+    #[test]
     fn a_vanished_display_item_is_cancelled_while_another_tab_shows() {
         let (mut app, ctx) = items_app();
         app.tab = BuildTab::Tree;
@@ -2294,7 +2319,10 @@ mod tests {
         });
         let before = app.sent_full.len();
         frame(&mut app, &ctx, vec![]);
-        assert_eq!(sent_since(&app, before), ["CancelDisplayItem"]);
+        assert_eq!(
+            sent_since(&app, before),
+            ["CancelDisplayItem { if_id: Some(2) }"]
+        );
         frame(&mut app, &ctx, vec![]);
         assert_eq!(sent_since(&app, before).len(), 1);
     }

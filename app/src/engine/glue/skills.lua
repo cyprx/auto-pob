@@ -406,42 +406,10 @@ local function set_index(id)
 	error("no such skill set", 0)
 end
 
--- Opens the Manage Skill Sets popup (SkillsTab.lua:1415), calls `fn(list)` with its
--- SkillSetListControl and closes what is left open.
 local function with_set_list(fn)
-	glue.in_popups(function()
+	glue.with_set_list("skill set", function()
 		skills_tab():OpenSkillSetManagePopup()
-		for _, control in pairs(pob.main.main.popups[1].controls) do
-			if control.controls and control.controls.new and control.OnSelDelete then
-				return fn(control)
-			end
-		end
-		error("couldn't open the skill set list", 0)
-	end)
-end
-
-local function check_title(title)
-	if not title:gsub("\r", ""):match("%S") then
-		error("the skill set needs a name", 0)
-	end
-end
-
--- Types the title into the name popup `RenameSet` opened and presses Save (Save stays disabled
--- until the name has a visible character). When that fails, Cancel is pressed, which drops a
--- set that New or Copy had already made.
-local function save_name(title)
-	local popup = pob.main.main.popups[1]
-	local ok, applied = pcall(glue.type_into, popup.controls.edit, title)
-	if ok and applied and popup.controls.save.enabled then
-		popup.controls.save.onClick()
-		return
-	end
-	popup.controls.cancel.onClick()
-	if not ok then
-		error(applied, 0)
-	end
-	-- the filter emptied the title, or Save stayed disabled: either way it is blank
-	check_title("")
+	end, fn)
 end
 
 -- Draw's sync of the set dropdown (SkillsTab.lua:646-654), then the user's pick
@@ -462,20 +430,20 @@ end
 
 -- The New button and the name popup (SkillSetListControl.lua:41-43, 36-58)
 function glue.skills_new_set(title)
-	check_title(title)
+	glue.check_title("skill set", title)
 	with_set_list(function(list)
 		list.controls.new.onClick()
-		save_name(title)
+		glue.save_name("skill set", title)
 	end)
 end
 
 -- The Rename button and the name popup
 function glue.skills_rename_set(id, title)
 	set_index(id)
-	check_title(title)
+	glue.check_title("skill set", title)
 	with_set_list(function(list)
 		list:RenameSet(skills_tab().skillSets[id])
-		save_name(title)
+		glue.save_name("skill set", title)
 	end)
 	glue.frame()
 end
@@ -483,11 +451,11 @@ end
 -- The Copy button and the name popup (SkillSetListControl.lua:11-29)
 function glue.skills_copy_set(id, title)
 	local index = set_index(id)
-	check_title(title)
+	glue.check_title("skill set", title)
 	with_set_list(function(list)
 		list.selIndex, list.selValue = index, id
 		list.controls.copy.onClick()
-		save_name(title)
+		glue.save_name("skill set", title)
 	end)
 end
 

@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use super::commands::{
     ControlTooltipQuery, GemSearchQuery, GemTooltipQuery, ItemDb, ItemTooltipQuery, PopupKind,
+    Realm,
 };
 
 use serde::{Deserialize, Serialize};
@@ -1344,4 +1345,202 @@ pub struct RangeLineView {
     /// A Foulborn box next to the line
     pub mutable: bool,
     pub mutated: bool,
+}
+
+/// The network requests: the pending ones in the order they began, and the ones finished since
+/// the last view, each sent once (R10).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RequestsView {
+    #[serde(default)]
+    pub pending: Vec<PendingRequest>,
+    #[serde(default)]
+    pub finished: Vec<FinishedRequest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingRequest {
+    pub id: u64,
+    /// What the request does, such as `Fetching characters` (R10)
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinishedRequest {
+    pub id: u64,
+    pub label: String,
+    /// Why it failed: PoB's message, curl's, or `Cancelled` (R25)
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub cancelled: bool,
+    /// A callback of the request initialised a new build (R14)
+    #[serde(default)]
+    pub new_build: bool,
+}
+
+/// The Import/Export tab's build sharing: the sites Share offers, the last link it made, and
+/// PoB's import box (R16, R17).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ShareView {
+    /// The sites Share uploads to, in PoB's dropdown order
+    #[serde(default)]
+    pub sites: Vec<SiteRef>,
+    /// The site chosen last in this build, if any
+    #[serde(default)]
+    pub last_site: Option<String>,
+    /// The link the last Share made, until the code box changes
+    #[serde(default)]
+    pub link: Option<String>,
+    /// A Share is uploading
+    #[serde(default)]
+    pub sharing: bool,
+    pub import: ImportCodeView,
+}
+
+/// A build site by PoB's id (`"POBBin"`) and the name it shows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SiteRef {
+    pub id: String,
+    pub label: String,
+}
+
+/// PoB's import box as it stands.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ImportCodeView {
+    pub text: String,
+    /// PoB's validator accepts the text
+    pub valid: bool,
+    /// PoB's verdict, such as `URL is valid (pobb.in)`, with colour codes stripped
+    #[serde(default)]
+    pub detail: String,
+    /// The id of the site the text names
+    #[serde(default)]
+    pub site: Option<String>,
+    /// A link is being fetched
+    pub fetching: bool,
+    /// The open build has a file, so it can be replaced
+    pub can_import_to_this_build: bool,
+}
+
+/// The Import/Export tab's account import (R18, R19).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccountView {
+    #[serde(default)]
+    pub oauth: OAuthView,
+    #[serde(default)]
+    pub public: PublicView,
+}
+
+/// PoB's sign-in with Path of Exile, as its section shows it (R18). It never holds a token
+/// (R21): only whether there is one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OAuthView {
+    #[serde(default)]
+    pub signed_in: bool,
+    /// PoB's login timer runs (`oauthTimer`)
+    #[serde(default)]
+    pub signing_in: bool,
+    /// The sign-in link PoB asked to open, while it waits for the redirect (R1)
+    #[serde(default)]
+    pub auth_url: Option<String>,
+    /// When PoB gives up waiting for the redirect (epoch seconds)
+    #[serde(default)]
+    pub login_deadline: Option<i64>,
+    /// The realm drop-down
+    pub realm: Realm,
+    /// The realm's characters have been fetched (PoB's Fetch button then says "Fetched")
+    #[serde(default)]
+    pub fetched: bool,
+    /// The league drop-down in PoB's order, ending in "Any" (`league: None`)
+    #[serde(default)]
+    pub leagues: Vec<String>,
+    /// The realm's characters, in PoB's order (lowercase name)
+    #[serde(default)]
+    pub characters: Vec<CharacterEntry>,
+    /// PoB's "Character import status", with colour codes stripped
+    #[serde(default)]
+    pub status: String,
+    /// PoB's error line (`oauthErrCode`)
+    #[serde(default)]
+    pub error: Option<String>,
+    /// When PoB's rate limiter lets the next fetch go (epoch seconds)
+    #[serde(default)]
+    pub retry_at: Option<i64>,
+    /// A fetch or import runs (`oauthLoading`)
+    #[serde(default)]
+    pub busy: bool,
+}
+
+impl Default for OAuthView {
+    fn default() -> Self {
+        OAuthView {
+            signed_in: false,
+            signing_in: false,
+            auth_url: None,
+            login_deadline: None,
+            realm: Realm::Pc,
+            fetched: false,
+            leagues: Vec::new(),
+            characters: Vec::new(),
+            status: String::new(),
+            error: None,
+            retry_at: None,
+            busy: false,
+        }
+    }
+}
+
+/// PoB's import by account name: the box, its history and the characters it listed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PublicView {
+    /// The account name box
+    pub account: String,
+    pub realm: Realm,
+    /// The accounts PoB remembers, in its order
+    #[serde(default)]
+    pub history: Vec<String>,
+    pub stage: PublicStage,
+    /// The league drop-down's entries in PoB's order, ending in the label "All" (which is
+    /// `league: None` in `ImportPublicCharacter`); empty before a list
+    #[serde(default)]
+    pub leagues: Vec<String>,
+    /// Every character of the account, in PoB's order (lowercase name); empty before a list
+    #[serde(default)]
+    pub characters: Vec<CharacterEntry>,
+    /// PoB's "Character import status" line, with colour codes stripped
+    #[serde(default)]
+    pub status: String,
+}
+
+impl Default for PublicView {
+    fn default() -> Self {
+        PublicView {
+            account: String::new(),
+            realm: Realm::Pc,
+            history: Vec::new(),
+            stage: PublicStage::EnterAccount,
+            leagues: Vec::new(),
+            characters: Vec::new(),
+            status: String::new(),
+        }
+    }
+}
+
+/// PoB's `charImportMode` of the account name import.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PublicStage {
+    EnterAccount,
+    Fetching,
+    SelectCharacter,
+    Importing,
+}
+
+/// A character of the listed account, as PoB's list shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CharacterEntry {
+    pub name: String,
+    /// GGG's `class`: the ascendancy when there is one
+    pub class: String,
+    pub level: u32,
+    pub league: String,
 }

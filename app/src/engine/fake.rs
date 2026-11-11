@@ -1,19 +1,22 @@
 //! Recording fake backend for engine tests.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+
+use pob_runtime::net::Waker;
 
 use super::commands::{
     Command, ControlTooltipQuery, GemSearchQuery, GemTooltipQuery, ItemTooltipQuery, PopupKind,
 };
-use super::pob::{ends_item_db, ends_popup_session};
+use super::pob::{CancelScope, cancels_requests, ends_item_db, ends_popup_session};
 use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Event};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, ControlTooltipView,
-    DisplayItemView, DropList, GemSearchView, GemTooltipView, GroupTooltipView, ItemDbView,
-    ItemText, ItemTooltip, ItemTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, Points,
-    PopupView, PowerReport, SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout,
-    TreeState,
+    AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView,
+    ControlTooltipView, DisplayItemView, DropList, GemSearchView, GemTooltipView, GroupTooltipView,
+    ItemDbView, ItemText, ItemTooltip, ItemTooltipView, ItemsView, NodePower, NodeTooltip,
+    NotesView, PendingRequest, Points, PopupView, PowerReport, RequestsView, ShareView, SkillsView,
+    SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
 };
 
 #[derive(Default, Debug)]
@@ -36,6 +39,13 @@ pub struct Log {
     pub item_tooltips: Vec<ItemTooltipQuery>,
     pub control_tooltips: Vec<ControlTooltipQuery>,
     pub releases: usize,
+    /// Cancels and applied commands, in order: `cancel <id>`, `apply <command>`
+    pub requests: Vec<String>,
+    /// Share codes asked for
+    pub share_codes: usize,
+    /// Share views asked for
+    pub share_views: usize,
+    pub applies: usize,
 }
 
 /// One scripted background step: what it affects, or the error it fails with.
@@ -76,6 +86,17 @@ pub struct Fake {
     pub fail_breakdown: Option<String>,
     /// `build_loaded` answers this; PoB starts without a build when it was left on the list.
     pub build_loaded: bool,
+    /// A subscript has something to deliver: `Network` is offered while this is set, and a
+    /// Network step clears it.
+    pub net_ready: Arc<AtomicBool>,
+    /// Pending requests: id and scope ("build" or "list")
+    pub pending: Vec<(u64, &'static str)>,
+    /// The waker the engine gave
+    pub waker: Option<Waker>,
+    /// The short link `short_tree_link_view` answers once
+    pub short_link: Option<String>,
+    /// A Network step reports that it changed the build and asks for a recalculation
+    pub network_recalc: bool,
 }
 
 impl Fake {
@@ -101,6 +122,11 @@ impl Fake {
                 popup: None,
                 fail_breakdown: None,
                 build_loaded: true,
+                net_ready: Arc::default(),
+                pending: Vec::new(),
+                waker: None,
+                short_link: None,
+                network_recalc: false,
             },
             log,
         )
@@ -190,6 +216,39 @@ impl Fake {
                 link: true,
                 ..Affected::default()
             }),
+            Command::ShrinkTreeLink => Ok(Affected {
+                short_link: true,
+                requests: true,
+                ..Affected::default()
+            }),
+            Command::SetImportCode { .. } | Command::ShareBuild { .. } => Ok(Affected {
+                share: true,
+                requests: true,
+                ..Affected::default()
+            }),
+            Command::ImportFromUrl { .. } => Ok(Affected {
+                share: true,
+                requests: true,
+                ..Affected::default()
+            }),
+            Command::ListPublicCharacters { .. }
+            | Command::ImportPublicCharacter { .. }
+            | Command::SignIn
+            | Command::ListCharacters { .. }
+            | Command::ImportCharacter { .. } => Ok(Affected {
+                account: true,
+                requests: true,
+                ..Affected::default()
+            }),
+            Command::ClosePublicCharacters | Command::SignOut => Ok(Affected {
+                account: true,
+                ..Affected::default()
+            }),
+            Command::ExportShareCode => Ok(Affected {
+                share: true,
+                share_code: true,
+                ..Affected::default()
+            }),
             _ => Ok(Affected::default()),
         }
     }
@@ -197,6 +256,21 @@ impl Fake {
 
 impl Backend for Fake {
     fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
+        if let Some(scope) = cancels_requests(&command) {
+            let mut log = self.log.lock().unwrap();
+            self.pending.retain(|&(id, request_scope)| {
+                let cancel = scope == CancelScope::All || request_scope == "build";
+                if cancel {
+                    log.requests.push(format!("cancel {id}"));
+                }
+                !cancel
+            });
+        }
+        {
+            let mut log = self.log.lock().unwrap();
+            log.applies += 1;
+            log.requests.push(format!("apply {command:?}"));
+        }
         let ends = ends_popup_session(&command);
         let ends_db = ends_item_db(&command);
         let mut affected = self.apply_command(command)?;
@@ -309,7 +383,9 @@ impl Backend for Fake {
     }
 
     fn next_background(&self) -> Option<BackgroundTask> {
-        if !self.gem_background.lock().unwrap().is_empty() {
+        if self.net_ready.load(Ordering::SeqCst) {
+            Some(BackgroundTask::Network)
+        } else if !self.gem_background.lock().unwrap().is_empty() {
             Some(BackgroundTask::GemDps)
         } else if !self.anoint_background.lock().unwrap().is_empty() {
             Some(BackgroundTask::AnointSort)
@@ -327,10 +403,28 @@ impl Backend for Fake {
         task: BackgroundTask,
         send: &dyn Fn(Event),
     ) -> anyhow::Result<Affected> {
+        if task == BackgroundTask::Network {
+            self.net_ready.store(false, Ordering::SeqCst);
+            let steps = {
+                let mut log = self.log.lock().unwrap();
+                log.steps += 1;
+                log.step_tasks.push(task);
+                log.steps
+            };
+            if let Some(on_step) = &mut self.on_step {
+                on_step(steps);
+            }
+            return Ok(Affected {
+                requests: true,
+                recalc: self.network_recalc,
+                ..Affected::default()
+            });
+        }
         if task == BackgroundTask::ItemDb {
             send(Event::Progress { task, percent: 50 });
         }
         let queue = match task {
+            BackgroundTask::Network => unreachable!("handled above"),
             BackgroundTask::GemDps => self.gem_background.clone(),
             BackgroundTask::AnointSort => self.anoint_background.clone(),
             BackgroundTask::ItemDb => self.item_db_background.clone(),
@@ -503,6 +597,42 @@ impl Backend for Fake {
 
     fn tree_link_view(&mut self) -> anyhow::Result<String> {
         Ok("https://example.test/tree".into())
+    }
+
+    fn short_tree_link_view(&mut self) -> anyhow::Result<Option<String>> {
+        Ok(self.short_link.take())
+    }
+
+    fn share_view(&mut self) -> anyhow::Result<ShareView> {
+        self.log.lock().unwrap().share_views += 1;
+        Ok(ShareView::default())
+    }
+
+    fn account_view(&mut self) -> anyhow::Result<AccountView> {
+        Ok(AccountView::default())
+    }
+
+    fn share_code(&mut self) -> anyhow::Result<String> {
+        self.log.lock().unwrap().share_codes += 1;
+        Ok("fake-code".into())
+    }
+
+    fn requests_view(&mut self) -> anyhow::Result<RequestsView> {
+        Ok(RequestsView {
+            pending: self
+                .pending
+                .iter()
+                .map(|&(id, _)| PendingRequest {
+                    id,
+                    label: format!("request {id}"),
+                })
+                .collect(),
+            finished: vec![],
+        })
+    }
+
+    fn set_waker(&mut self, wake: Waker) {
+        self.waker = Some(wake);
     }
 
     fn release_memory(&mut self) {

@@ -9,6 +9,8 @@ pub enum Pending {
     BackToList,
     Open(PathBuf),
     New,
+    /// Import a link or code as a new build, replacing the one open
+    ImportNew(String),
 }
 
 /// The user's answer to the Save / Don't save / Cancel dialog.

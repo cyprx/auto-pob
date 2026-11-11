@@ -4,7 +4,9 @@
 //! use an existing PoB folder instead, and `AUTO_POB_USER_DIR` to keep builds and settings
 //! somewhere other than the default.
 
-use auto_pob::{engine::Engine, game::Game, theme, ui::AutoPobApp};
+use auto_pob::{
+    engine::Engine, game::Game, pob_link_from_args, theme, ui::AutoPobApp, update_notice,
+};
 use directories::BaseDirs;
 use eframe::egui;
 use std::path::PathBuf;
@@ -41,7 +43,12 @@ fn main() -> eframe::Result {
                     ctx.request_repaint()
                 })
             };
-            Ok(Box::new(AutoPobApp::new(Box::new(spawn))))
+            let mut app = AutoPobApp::new(Box::new(spawn))
+                .with_startup_link(pob_link_from_args(std::env::args()));
+            if update_notice::enabled() {
+                app = app.with_release_check(update_notice::spawn_check(cc.egui_ctx.clone()));
+            }
+            Ok(Box::new(app))
         }),
     )
 }

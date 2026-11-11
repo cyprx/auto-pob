@@ -1,6 +1,6 @@
 use mlua::{Lua, Result as LuaResult, Table};
 
-use crate::pob::modules::luacurl::easy::EasyHandle;
+use crate::modules::luacurl::easy::EasyHandle;
 
 mod constants;
 mod easy;

@@ -108,6 +108,36 @@ numbers are PoB's numbers.
   magic, rare, unique, the elements, strength, dexterity, intelligence) at the cursor or
   around the selection. Preview shows the text with the colours applied. Edits are sent to the
   build half a second after you stop typing.
+- **Network** (Import/Export tab and the build list): PoB's own import and sharing code, run in
+  the background so the app stays usable while a request is out.
+  - Import a build from a link: Maxroll, pob.codes, pobb.in, poe.ninja, poedb, Pastebin and Rentry. Paste the link into the import box; PoB says whether
+    it recognises it. Import it as a new build, or into the open build when that build has a
+    file. The build list takes a link too.
+  - Share the open build to Maxroll, pob.codes, pobb.in, poe.ninja or poedb (the sites that
+    accept uploads) and copy the link it gives you.
+  - Resolve a PoEURL tree link when importing a tree, and shorten a tree link with PoEURL.
+  - Import from your account name (public profiles): list the characters, pick one, and import
+    its passive tree and items.
+  - Sign in with Path of Exile (the same login as PoB) to list your characters and import them,
+    with the same buttons and rate limiting as PoB. Sign-in tokens live in PoB's `Settings.xml`,
+    so the classic app and auto-pob share them: signing out in either one signs out both.
+  - A `pob://` link can be given on the command line. A pending request shows a line with a Cancel button; cancelling shows PoB's own failure text.
+  - Browser: when the app needs your browser (the sign-in page), it opens it from the app. If
+    that doesn't work, copy the link shown and open it yourself.
+  - Nothing is sent unless you ask. Opening a build, switching tabs and typing in the import
+    box send nothing; a request starts only when you press a button (or pass a link).
+  - The release notice is opt-in: start the app with `AUTO_POB_UPDATE_CHECK=1` and it looks at
+    this repository's latest release once and tells you if there is a newer one. It never
+    updates anything.
+  - Limits:
+    - A request that gets "unauthorised" refreshes your sign-in token at most twice. Past that
+      it stops with an error and does not retry, where PoB itself would keep trying.
+    - Cancelling while a token refresh is in progress can leave you signed out (the token is
+      shared with the classic app); sign in again.
+    - PoEURL may be offline. If it is, the PoEURL features show PoB's failure text.
+    - The sign-in redirect listens on local ports 49082 to 49084, so it can't run while
+      another PoB or auto-pob holds all of them.
+    - Trade queries and PoB's Archives are not included, and PoB's own self-update stays off.
 - **Shortcuts**: Ctrl+S saves. Ctrl+Z undoes and Ctrl+Y (or Ctrl+Shift+Z) redoes, on the
   Tree, Skills, Items, Config and Calcs tabs. Each tab has its own history. They wait while a dialog is open.
 
@@ -120,11 +150,13 @@ cargo run -p auto-pob --release
 On first run it downloads PoB 2.67.2 (about 600 MB) into
 `<data dir>/auto-pob/poe1/pob-2.67.2`, where `<data dir>` is the platform data folder
 (`~/.local/share` on Linux). A `.complete` marker is written last, so an interrupted
-download is redone. This is the only network access.
+download is redone. Apart from that, the app only touches the network when you ask it to (see
+the Network section).
 
 | Variable | Effect |
 |---|---|
 | `AUTO_POB_POB_DIR` | Use this PoB folder instead of the pinned download (no download). |
+| `AUTO_POB_UPDATE_CHECK` | Set to `1` to look for a newer auto-pob release when the app starts. Off by default. |
 | `AUTO_POB_USER_DIR` | Keep `Builds/` and `Settings.xml` here instead of `<data dir>/RustyPathOfBuilding1/userdata/`. |
 
 auto-pob shares `Builds/` and `Settings.xml` with the classic app

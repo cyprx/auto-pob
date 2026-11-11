@@ -755,8 +755,66 @@ function glue.convert_all_specs(version)
 	end)
 end
 
+-- The short link a finished PoEURL shrink produced, until it is taken (R20).
+local short_link
+
+function glue.short_link_ready()
+	return short_link ~= nil
+end
+
+function glue.take_short_link()
+	local link = short_link
+	short_link = nil
+	return link
+end
+
+-- A request that presses `control` of a detached popup (R20, R11). The popup belongs to the
+-- request, so PoB's callbacks still find it on `main.popups` when they run, close it
+-- themselves (a tree that was added) or leave their message on it. Returns the request id.
+local function press_in_popup(label, popup, control, opts)
+	if not control:IsShown() or not control:IsEnabled() then
+		main_module():ClosePopup()
+		error("PoB doesn't offer that here", 0)
+	end
+	opts.popup = popup
+	local id, message = glue.net_begin(label, opts, control.onClick)
+	if not id then
+		error(message or "couldn't start the request", 0)
+	end
+	return id
+end
+
+-- The Import button on a poeurl.com link resolves it in a subscript (TreeTab.lua:741-771).
+local function resolve_short_link(tab, title, url)
+	tab:OpenImportPopup()
+	local popup = main_module().popups[1]
+	local controls = popup.controls
+	-- typed in, so the Import button enables itself
+	controls.name:SetText(title, true)
+	controls.edit:SetText(url, true)
+	return press_in_popup("Resolving PoEURL link", popup, controls.import, {})
+end
+
+-- The Export popup's "Shrink with PoEURL" button (TreeTab.lua:813-840). When the request has
+-- finished, the popup's link box holds the short link.
+function glue.shrink_tree_link()
+	short_link = nil
+	local tab = pob.build.treeTab
+	tab:OpenExportPopup()
+	local popup = main_module().popups[1]
+	local controls = popup.controls
+	return press_in_popup("Shrinking tree link", popup, controls.shrink, {
+		done = function(req)
+			if controls.shrink.label == "Done" and not req.error and controls.edit.buf:match("^http://poeurl%.com/") then
+				short_link = controls.edit.buf
+			end
+		end,
+	})
+end
+
 -- The Import Tree popup (TreeTab.lua:682-811) adds a tree and activates it. Its Import button
--- picks the link format; poeurl.com links are resolved over the network.
+-- picks the link format; poeurl.com links are resolved over the network and return the
+-- request's id, the others return nothing once the tree is added.
 function glue.import_tree_link(title, url)
 	if not title:match("%S") then
 		error("the tree needs a name", 0)
@@ -764,10 +822,10 @@ function glue.import_tree_link(title, url)
 	if not url:match("%S") then
 		error("paste a tree link", 0)
 	end
-	if url:match("poeurl%.com/") then
-		error("short links need the network; paste the full link", 0)
-	end
 	local tab = pob.build.treeTab
+	if url:match("poeurl%.com/") then
+		return resolve_short_link(tab, title, url)
+	end
 	local count, active = #tab.specList, tab.activeSpec
 	local function plain(text)
 		return (tostring(text or ""):gsub("%^x%x%x%x%x%x%x", ""):gsub("%^%d", ""))

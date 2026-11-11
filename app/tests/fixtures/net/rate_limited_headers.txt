@@ -1,0 +1,5 @@
+X-Rate-Limit-Policy: character-list-request-limit
+X-Rate-Limit-Rules: Account
+X-Rate-Limit-Account: 2:10:60
+X-Rate-Limit-Account-State: 3:10:60
+Retry-After: 60

@@ -22,6 +22,9 @@ local function error_reason(message)
 	return table.concat(lines, " ")
 end
 
+-- For the other glue files: a prompt's reason (R11)
+glue.error_reason = error_reason
+
 local function frame()
 	-- The tree view calculates node power in a frame when the heat map is on
 	-- (PassiveTreeView.lua:773-776); here `glue.power_step` does that, a slice at a time, so a
@@ -141,6 +144,9 @@ function glue.list_builds(subPath)
 	return result
 end
 
+-- For the import glue: switches mode and runs a frame, as opening a build does.
+glue.enter_build = enter_build
+
 function glue.new_build()
 	enter_build(false, "Unnamed build")
 end
@@ -153,7 +159,7 @@ end
 function glue.import_code(code)
 	code = code:gsub("^%s+", ""):gsub("%s+$", "")
 	if code:sub(1, 4):lower() == "http" then
-		error("links need the network features, which aren't available yet", 0)
+		error("that's a link; use Import from URL", 0)
 	end
 	local ok, xml = pcall(function()
 		return Inflate(common.base64.decode((code:gsub("-", "+"):gsub("_", "/"))))

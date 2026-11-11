@@ -1,6 +1,7 @@
 use mlua::{Lua, MultiValue, Result as LuaResult};
 
-use crate::pob::{Context, subscript::SubscriptManager};
+use crate::pob::Context;
+use pob_runtime::subscript::SubscriptManager;
 
 pub fn launch_subscript(
     l: &Lua,
@@ -37,6 +38,9 @@ pub fn is_subscript_running(l: &Lua, subscript_id: u64) -> LuaResult<bool> {
     Ok(manager.is_running(subscript_id))
 }
 
-pub fn abort_subscript(_: &Lua, _subscript_id: u64) -> LuaResult<()> {
-    unimplemented!()
+pub fn abort_subscript(l: &Lua, subscript_id: u64) -> LuaResult<()> {
+    l.app_data_mut::<SubscriptManager>()
+        .unwrap()
+        .abort(subscript_id);
+    Ok(())
 }

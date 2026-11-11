@@ -1,0 +1,427 @@
+{
+  "character": {
+    "id": "c0ffee01",
+    "name": "GateOne",
+    "realm": "pc",
+    "class": "Juggernaut",
+    "league": "Mirage Gate",
+    "level": 90,
+    "experience": 2427633571,
+    "equipment": [
+      {
+        "verified": false,
+        "w": 2,
+        "h": 3,
+        "icon": "x",
+        "league": "Mirage Gate",
+        "id": "2d9a4b6c8e0f1a3b5c7d9e0f2a4b6c8d0e1f3a5b7c9d0e2f4a6b8c0d1e3f5a7b",
+        "sockets": [
+          {
+            "group": 0,
+            "attr": "S",
+            "sColour": "R"
+          },
+          {
+            "group": 0,
+            "attr": "S",
+            "sColour": "R"
+          },
+          {
+            "group": 0,
+            "attr": "D",
+            "sColour": "G"
+          },
+          {
+            "group": 0,
+            "attr": "I",
+            "sColour": "B"
+          }
+        ],
+        "name": "Doom Shell",
+        "typeLine": "Astral Plate",
+        "identified": true,
+        "ilvl": 84,
+        "properties": [
+          {
+            "name": "Armour",
+            "values": [
+              [
+                "711",
+                1
+              ]
+            ],
+            "displayMode": 0,
+            "type": 16
+          }
+        ],
+        "requirements": [
+          {
+            "name": "Level",
+            "values": [
+              [
+                "62",
+                0
+              ]
+            ],
+            "displayMode": 0
+          },
+          {
+            "name": "Str",
+            "values": [
+              [
+                "180",
+                0
+              ]
+            ],
+            "displayMode": 1
+          }
+        ],
+        "implicitMods": [],
+        "explicitMods": [
+          "+92 to maximum Life",
+          "+38% to Fire Resistance",
+          "+31% to Cold Resistance",
+          "12% increased Armour"
+        ],
+        "frameType": 2,
+        "x": 0,
+        "y": 0,
+        "inventoryId": "BodyArmour",
+        "socketedItems": [
+          {
+            "verified": false,
+            "w": 1,
+            "h": 1,
+            "icon": "https://web.poecdn.com/gen/image/gate/Gem.png",
+            "support": false,
+            "league": "Mirage Gate",
+            "id": "0000000000000000000000000000ab00",
+            "name": "",
+            "typeLine": "Boneshatter",
+            "identified": true,
+            "properties": [
+              {
+                "name": "Level",
+                "values": [
+                  [
+                    "20",
+                    1
+                  ]
+                ],
+                "displayMode": 0
+              },
+              {
+                "name": "Quality",
+                "values": [
+                  [
+                    "+20%",
+                    1
+                  ]
+                ],
+                "displayMode": 0
+              }
+            ],
+            "frameType": 4,
+            "socket": 0,
+            "colour": "R",
+            "inventoryId": "BodyArmour"
+          },
+          {
+            "verified": false,
+            "w": 1,
+            "h": 1,
+            "icon": "https://web.poecdn.com/gen/image/gate/Gem.png",
+            "support": true,
+            "league": "Mirage Gate",
+            "id": "0000000000000000000000000000ab01",
+            "name": "",
+            "typeLine": "Brutality Support",
+            "identified": true,
+            "properties": [
+              {
+                "name": "Level",
+                "values": [
+                  [
+                    "20",
+                    1
+                  ]
+                ],
+                "displayMode": 0
+              },
+              {
+                "name": "Quality",
+                "values": [
+                  [
+                    "+0%",
+                    1
+                  ]
+                ],
+                "displayMode": 0
+              }
+            ],
+            "frameType": 4,
+            "socket": 1,
+            "colour": "R",
+            "inventoryId": "BodyArmour"
+          }
+        ]
+      },
+      {
+        "verified": false,
+        "w": 1,
+        "h": 1,
+        "icon": "x",
+        "league": "Mirage Gate",
+        "id": "3e0b5c7d9f1a2b4c6d8e0f1a3b5c7d9e1f2a4b6c8d0e1f3a5b7c9d1e2f4a6b8c",
+        "name": "Ventor's Gamble",
+        "typeLine": "Gold Ring",
+        "identified": true,
+        "ilvl": 80,
+        "properties": [],
+        "requirements": [
+          {
+            "name": "Level",
+            "values": [
+              [
+                "12",
+                0
+              ]
+            ],
+            "displayMode": 0
+          }
+        ],
+        "implicitMods": [
+          "6% increased Rarity of Items found"
+        ],
+        "explicitMods": [
+          "+40 to maximum Life",
+          "+25% to Fire Resistance"
+        ],
+        "frameType": 3,
+        "x": 0,
+        "y": 0,
+        "inventoryId": "Ring"
+      },
+      {
+        "verified": false,
+        "w": 1,
+        "h": 2,
+        "icon": "x",
+        "league": "Mirage Gate",
+        "id": "4f1c6d8e0a2b3c5d7e9f1a2b4c6d8e0f2a3b5c7d9e1f2a4b6c8d0e2f3a5b7c9d",
+        "name": "",
+        "typeLine": "Sanctified Divine Life Flask of Staunching",
+        "identified": true,
+        "ilvl": 84,
+        "properties": [
+          {
+            "name": "Quality",
+            "values": [
+              [
+                "+0%",
+                1
+              ]
+            ],
+            "displayMode": 0,
+            "type": 6
+          }
+        ],
+        "requirements": [
+          {
+            "name": "Level",
+            "values": [
+              [
+                "27",
+                0
+              ]
+            ],
+            "displayMode": 0
+          }
+        ],
+        "explicitMods": [
+          "Immunity to Bleeding and Corrupted Blood during Effect"
+        ],
+        "frameType": 1,
+        "x": 0,
+        "y": 0,
+        "inventoryId": "Flask"
+      },
+      {
+        "verified": false,
+        "w": 1,
+        "h": 3,
+        "icon": "x",
+        "league": "Mirage Gate",
+        "id": "5a2d7e9f1b3c4d6e8f0a2b3c5d7e9f1a3b4c6d8e0f2a3b5c7d9e1f3a4b6c8d0e",
+        "name": "Gale Crusher",
+        "typeLine": "Stone Hammer",
+        "identified": true,
+        "ilvl": 83,
+        "properties": [
+          {
+            "name": "One Handed Mace",
+            "values": [],
+            "displayMode": 0
+          },
+          {
+            "name": "Physical Damage",
+            "values": [
+              [
+                "15-27",
+                1
+              ]
+            ],
+            "displayMode": 0,
+            "type": 1
+          },
+          {
+            "name": "Attacks per Second",
+            "values": [
+              [
+                "1.30",
+                1
+              ]
+            ],
+            "displayMode": 0,
+            "type": 13
+          }
+        ],
+        "requirements": [
+          {
+            "name": "Level",
+            "values": [
+              [
+                "10",
+                0
+              ]
+            ],
+            "displayMode": 0
+          }
+        ],
+        "implicitMods": [
+          "15% reduced Enemy Stun Threshold"
+        ],
+        "explicitMods": [
+          "Adds 12 to 20 Physical Damage",
+          "18% increased Physical Damage"
+        ],
+        "frameType": 2,
+        "x": 0,
+        "y": 0,
+        "inventoryId": "Weapon"
+      },
+      {
+        "verified": false,
+        "w": 1,
+        "h": 3,
+        "icon": "x",
+        "league": "Mirage Gate",
+        "id": "6b3e8f0a2c4d5e7f9a1b3c4d6e8f0a2b4c5d7e9f1a3b4c6d8e0f2a4b5c7d9e1f",
+        "name": "Swap Smasher",
+        "typeLine": "Stone Hammer",
+        "identified": true,
+        "ilvl": 83,
+        "properties": [
+          {
+            "name": "One Handed Mace",
+            "values": [],
+            "displayMode": 0
+          },
+          {
+            "name": "Physical Damage",
+            "values": [
+              [
+                "15-27",
+                1
+              ]
+            ],
+            "displayMode": 0,
+            "type": 1
+          }
+        ],
+        "requirements": [
+          {
+            "name": "Level",
+            "values": [
+              [
+                "10",
+                0
+              ]
+            ],
+            "displayMode": 0
+          }
+        ],
+        "implicitMods": [
+          "15% reduced Enemy Stun Threshold"
+        ],
+        "explicitMods": [
+          "Adds 6 to 9 Fire Damage",
+          "14% increased Fire Damage"
+        ],
+        "frameType": 2,
+        "x": 0,
+        "y": 0,
+        "inventoryId": "Weapon2"
+      }
+    ],
+    "passives": {
+      "hashes": [
+        26523,
+        24155,
+        25168,
+        6446,
+        33988,
+        15086,
+        23881,
+        30335,
+        1550,
+        32480,
+        44606,
+        5430,
+        31628,
+        7828,
+        40535,
+        19261,
+        10221,
+        27166,
+        9511,
+        2550,
+        11596,
+        26725
+      ],
+      "hashes_ex": [],
+      "mastery_effects": {
+        "11596": 37132
+      },
+      "jewel_data": {},
+      "skill_overrides": {},
+      "alternate_ascendancy": 0,
+      "bandit_choice": "Alira",
+      "pantheon_major": "Lunaris",
+      "pantheon_minor": "Shakari"
+    },
+    "jewels": [
+      {
+        "verified": false,
+        "w": 1,
+        "h": 1,
+        "icon": "https://web.poecdn.com/gen/image/gate/CobaltJewel.png",
+        "league": "Mirage Gate",
+        "id": "1c8f3a0d5be24e6f9a7d3c2b4e5f6071a8b9c0d1e2f30415263748596a7b8c9d",
+        "name": "Doom Core",
+        "typeLine": "Cobalt Jewel",
+        "identified": true,
+        "ilvl": 84,
+        "properties": [],
+        "explicitMods": [
+          "10% increased maximum Life",
+          "+12% to Fire Resistance"
+        ],
+        "frameType": 2,
+        "x": 0,
+        "y": 0,
+        "inventoryId": "PassiveJewels"
+      }
+    ]
+  }
+}

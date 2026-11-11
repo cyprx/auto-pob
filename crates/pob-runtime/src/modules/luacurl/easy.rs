@@ -1,10 +1,45 @@
 use curl::easy::{Easy, IpResolve};
 use mlua::{
-    Error as LuaError, IntoLua, Lua, LuaString, RegistryKey, Result as LuaResult, UserData,
-    UserDataMethods,
+    Error as LuaError, IntoLua, Lua, LuaString, MultiValue, RegistryKey, Result as LuaResult,
+    UserData, UserDataMethods,
+};
+use std::time::{Duration, Instant};
+
+use crate::{
+    modules::luacurl::constants,
+    net::{CancelFlag, Canned, NetConfig, Recorded, Transport},
 };
 
-use crate::pob::modules::luacurl::constants;
+/// The error object `perform` returns, like Lua-cURL's: `err:msg()` is curl's text.
+struct CurlError {
+    msg: String,
+    code: i64,
+}
+
+impl UserData for CurlError {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("msg", |_, this, ()| Ok(this.msg.clone()));
+        methods.add_method("no", |_, this, ()| Ok(this.code));
+        methods.add_meta_method("__tostring", |_, this, ()| Ok(this.msg.clone()));
+    }
+}
+
+/// curl's code for `CURLE_OPERATION_TIMEDOUT`.
+const CURLE_OPERATION_TIMEDOUT: i64 = 28;
+/// curl's code for `CURLE_COULDNT_CONNECT`, standing in for canned failures.
+const CURLE_COULDNT_CONNECT: i64 = 7;
+const CURLE_ABORTED_BY_CALLBACK: i64 = 42;
+
+/// What `getinfo` answers after a canned `perform`.
+#[derive(Default)]
+struct CannedInfo {
+    status: u32,
+    redirect_url: Option<String>,
+    size: f64,
+}
+
+/// How often a canned delay checks the cancel flag.
+const CANNED_SLICE: Duration = Duration::from_millis(20);
 
 /// Helper for constructing a `mlua::Error::BadArgument`
 fn bad_argument(to: impl Into<String>, pos: usize, cause: &'static str) -> LuaError {
@@ -65,19 +100,41 @@ fn callback_size(data_len: usize, results: &mlua::MultiValue) -> usize {
     }
 }
 
+type Resolved = Option<(mlua::Function, Option<mlua::Value>)>;
+
+/// Calls a write or header callback with `data`.
+fn call_callback(
+    function: &mlua::Function,
+    context: &Option<mlua::Value>,
+    argument: LuaString,
+) -> LuaResult<MultiValue> {
+    match context {
+        Some(context) => function.call::<MultiValue>((context.clone(), argument)),
+        None => function.call::<MultiValue>(argument),
+    }
+}
+
 #[derive(Default)]
 pub struct EasyHandle {
     easy: Option<Easy>,
     write_callback: Option<Callback>,
     header_callback: Option<Callback>,
+    // what the canned transport records
+    url: Option<String>,
+    /// Whether libcurl would send a POST: `OPT_POST`, or `OPT_POSTFIELDS` which implies it.
+    post: bool,
+    post_fields: Vec<u8>,
+    headers: Vec<String>,
+    proxy: Option<String>,
+    ip_resolve: Option<i64>,
+    canned: Option<CannedInfo>,
 }
 
 impl EasyHandle {
     pub fn new() -> Self {
         Self {
             easy: Some(Easy::new()),
-            write_callback: None,
-            header_callback: None,
+            ..Self::default()
         }
     }
 
@@ -103,7 +160,10 @@ impl EasyHandle {
     // TODO: handling of `value` might not be 100% correct w.r.t. casting and mapping
     // of number values to arguments of `easy` methods. extract to helper functions.
     pub fn set_option(&mut self, option: i64, value: mlua::Value) -> LuaResult<()> {
-        let easy = self.curl()?;
+        let easy = self
+            .easy
+            .as_mut()
+            .ok_or_else(|| LuaError::runtime("curl handle is closed"))?;
 
         match option {
             constants::OPT_ACCEPT_ENCODING => {
@@ -130,9 +190,13 @@ impl EasyHandle {
                 }?;
 
                 let mut list = curl::easy::List::new();
+                let mut recorded = Vec::new();
                 for header in headers.sequence_values::<String>() {
-                    list.append(&header?).map_err(LuaError::external)?;
+                    let header = header?;
+                    list.append(&header).map_err(LuaError::external)?;
+                    recorded.push(header);
                 }
+                self.headers = recorded;
 
                 easy.http_headers(list).map_err(LuaError::external)?;
             }
@@ -144,6 +208,10 @@ impl EasyHandle {
                     _ => Err(bad_argument("setopt", 1, "number or boolean expected")),
                 }?;
                 easy.ip_resolve(resolve).map_err(LuaError::external)?;
+                self.ip_resolve = match value {
+                    mlua::Value::Integer(n) => Some(n),
+                    _ => None,
+                };
             }
             constants::OPT_POST => {
                 let enable = match value {
@@ -153,6 +221,7 @@ impl EasyHandle {
                     _ => Err(bad_argument("setopt", 1, "number or boolean expected")),
                 }?;
                 easy.post(enable).map_err(LuaError::external)?;
+                self.post = enable;
             }
             constants::OPT_POSTFIELDS => {
                 let data = match value {
@@ -160,6 +229,9 @@ impl EasyHandle {
                     _ => Err(bad_argument("setopt", 1, "string expected")),
                 }?;
                 easy.post_fields_copy(&data).map_err(LuaError::external)?;
+                // libcurl: POSTFIELDS makes the request a POST
+                self.post = true;
+                self.post_fields = data.to_vec();
             }
             constants::OPT_PROXY => {
                 let proxy = match value {
@@ -167,6 +239,7 @@ impl EasyHandle {
                     _ => Err(bad_argument("setopt", 1, "string expected")),
                 }?;
                 easy.proxy(&proxy).map_err(LuaError::external)?;
+                self.proxy = Some(proxy.to_string());
             }
             constants::OPT_SSL_VERIFYHOST => {
                 let verify = match value {
@@ -199,6 +272,7 @@ impl EasyHandle {
                     _ => Err(bad_argument("setopt", 1, "string expected")),
                 }?;
                 easy.url(&url).map_err(LuaError::external)?;
+                self.url = Some(url.to_string());
             }
             _ => unimplemented!("Unsupported `setopt` option: {option}"),
         }
@@ -243,7 +317,7 @@ impl EasyHandle {
         Ok(())
     }
 
-    fn perform(&mut self, lua: &Lua) -> LuaResult<()> {
+    fn perform(&mut self, lua: &Lua) -> LuaResult<MultiValue> {
         let write_fn = self
             .write_callback
             .as_ref()
@@ -256,8 +330,58 @@ impl EasyHandle {
             .map(|callback| callback.resolve(lua))
             .transpose()?;
 
+        // fail closed: a state nobody configured must not reach the network
+        let Some(config) = lua.app_data_ref::<NetConfig>().map(|config| config.clone()) else {
+            return Err(LuaError::runtime(
+                "network is not configured for this Lua state",
+            ));
+        };
+        let cancel = lua
+            .app_data_ref::<CancelFlag>()
+            .map(|flag| flag.clone())
+            .unwrap_or_default();
+
+        let outcome = match &config.transport {
+            Transport::Curl => self.perform_curl(lua, &config, cancel, write_fn, header_fn)?,
+            Transport::Canned(_) => {
+                self.perform_canned(lua, &config, cancel, write_fn, header_fn)?
+            }
+        };
+
+        match outcome {
+            Ok(()) => Ok(MultiValue::from_vec(vec![mlua::Value::Boolean(true)])),
+            Err(error) => Ok(MultiValue::from_vec(vec![
+                mlua::Value::Nil,
+                mlua::Value::UserData(lua.create_userdata(error)?),
+            ])),
+        }
+    }
+
+    fn perform_curl(
+        &mut self,
+        lua: &Lua,
+        config: &NetConfig,
+        cancel: CancelFlag,
+        write_fn: Resolved,
+        header_fn: Resolved,
+    ) -> LuaResult<Result<(), CurlError>> {
+        let easy = self.curl()?;
+        if let Some(connect_timeout) = config.connect_timeout {
+            easy.connect_timeout(connect_timeout)
+                .map_err(LuaError::external)?;
+        }
+        if let Some(timeout) = config.timeout {
+            easy.timeout(timeout).map_err(LuaError::external)?;
+        }
+        easy.progress(true).map_err(LuaError::external)?;
+
         let transfer_result = {
-            let mut transfer = self.curl()?.transfer();
+            let mut transfer = easy.transfer();
+
+            // curl calls this at least once a second, whatever the transfer is doing
+            transfer
+                .progress_function(move |_, _, _, _| !cancel.is_set())
+                .map_err(LuaError::external)?;
 
             if let Some((function, context)) = write_fn {
                 transfer
@@ -266,14 +390,7 @@ impl EasyHandle {
                             return Ok(0);
                         };
 
-                        let result = match &context {
-                            Some(context) => {
-                                function.call::<mlua::MultiValue>((context.clone(), argument))
-                            }
-                            None => function.call::<mlua::MultiValue>(argument),
-                        };
-
-                        match result {
+                        match call_callback(&function, &context, argument) {
                             Ok(results) => Ok(callback_size(data.len(), &results)),
                             Err(_) => Ok(0),
                         }
@@ -288,14 +405,9 @@ impl EasyHandle {
                             return false;
                         };
 
-                        match &context {
-                            Some(context) => {
-                                function.call::<mlua::MultiValue>((context.clone(), argument))
-                            }
-                            None => function.call::<mlua::MultiValue>(argument),
-                        }
-                        .map(|results| callback_size(data.len(), &results) == data.len())
-                        .unwrap_or(false)
+                        call_callback(&function, &context, argument)
+                            .map(|results| callback_size(data.len(), &results) == data.len())
+                            .unwrap_or(false)
                     })
                     .map_err(LuaError::external)?;
             }
@@ -303,11 +415,139 @@ impl EasyHandle {
             transfer.perform()
         };
 
-        transfer_result.map_err(LuaError::external)?;
-        Ok(())
+        Ok(transfer_result.map_err(|e| CurlError {
+            msg: e.description().to_string(),
+            code: e.code() as i64,
+        }))
+    }
+
+    fn perform_canned(
+        &mut self,
+        lua: &Lua,
+        config: &NetConfig,
+        cancel: CancelFlag,
+        write_fn: Resolved,
+        header_fn: Resolved,
+    ) -> LuaResult<Result<(), CurlError>> {
+        let Transport::Canned(web) = &config.transport else {
+            unreachable!("perform_canned runs only for the canned transport");
+        };
+        self.canned = Some(CannedInfo::default());
+
+        let url = self.url.clone().unwrap_or_default();
+        let request = Recorded {
+            method: if self.post { "POST" } else { "GET" }.to_string(),
+            url: url.clone(),
+            headers: self.headers.clone(),
+            body: if self.post {
+                self.post_fields.clone()
+            } else {
+                Vec::new()
+            },
+            proxy: self.proxy.clone(),
+            ip_resolve: self.ip_resolve,
+        };
+        let Some(Canned {
+            status,
+            headers,
+            body,
+            delay,
+            fail,
+        }) = web.serve(request)
+        else {
+            return Ok(Err(CurlError {
+                msg: format!("no canned response for {url}"),
+                code: CURLE_COULDNT_CONNECT,
+            }));
+        };
+
+        // the delay stands for a slow server: it runs into the timeout or the cancel flag
+        let times_out_at = config.timeout.filter(|t| delay > *t);
+        let start = Instant::now();
+        loop {
+            let elapsed = start.elapsed();
+            if cancel.is_set() {
+                return Ok(Err(CurlError {
+                    msg: "Callback aborted".into(),
+                    code: CURLE_ABORTED_BY_CALLBACK,
+                }));
+            }
+            if times_out_at.is_some_and(|t| elapsed >= t) {
+                return Ok(Err(CurlError {
+                    msg: "Timeout was reached".into(),
+                    code: CURLE_OPERATION_TIMEDOUT,
+                }));
+            }
+            if elapsed >= delay {
+                break;
+            }
+            let until = times_out_at.unwrap_or(delay);
+            std::thread::sleep(CANNED_SLICE.min(until.saturating_sub(elapsed)));
+        }
+
+        if let Some(message) = fail {
+            return Ok(Err(CurlError {
+                msg: message,
+                code: CURLE_COULDNT_CONNECT,
+            }));
+        }
+
+        self.canned = Some(CannedInfo {
+            status,
+            redirect_url: headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("location"))
+                .map(|(_, value)| value.clone()),
+            size: body.len() as f64,
+        });
+
+        if let Some((function, context)) = header_fn {
+            let mut lines = vec![format!("HTTP/1.1 {status}\r\n")];
+            lines.extend(headers.iter().map(|(n, v)| format!("{n}: {v}\r\n")));
+            lines.push("\r\n".to_string());
+            for line in lines {
+                let accepted = lua
+                    .create_string(&line)
+                    .and_then(|argument| call_callback(&function, &context, argument))
+                    .map(|results| callback_size(line.len(), &results) == line.len())
+                    .unwrap_or(false);
+                if !accepted {
+                    return Ok(Err(CurlError {
+                        msg: "Failed writing header".into(),
+                        code: 23,
+                    }));
+                }
+            }
+        }
+
+        if let Some((function, context)) = write_fn
+            && !body.is_empty()
+        {
+            let written = lua
+                .create_string(&body)
+                .and_then(|argument| call_callback(&function, &context, argument))
+                .map(|results| callback_size(body.len(), &results))
+                .unwrap_or(0);
+            if written != body.len() {
+                return Ok(Err(CurlError {
+                    msg: "Failed writing received data to disk/application".into(),
+                    code: 23,
+                }));
+            }
+        }
+
+        Ok(Ok(()))
     }
 
     fn get_info(&mut self, lua: &Lua, info: i64) -> LuaResult<mlua::Value> {
+        if let Some(canned) = &self.canned {
+            return match info {
+                constants::INFO_REDIRECT_URL => canned.redirect_url.clone().into_lua(lua),
+                constants::INFO_RESPONSE_CODE => canned.status.into_lua(lua),
+                constants::INFO_SIZE_DOWNLOAD => canned.size.into_lua(lua),
+                _ => unimplemented!("Unsupported `getinfo` key: {info}"),
+            };
+        }
         let easy = self.curl()?;
 
         match info {

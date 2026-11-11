@@ -1,21 +1,23 @@
 //! Starts Path of Building's Lua with our own bootstrap.
 
 use super::commands::{
-    Command, ConfigValue, ControlTooltipQuery, GemSearchQuery, GemTarget, GemToggle,
-    GemTooltipQuery, ItemDb, ItemDbQuery, ItemTooltipQuery, PopupInput, PopupKind, SkillOption,
-    SocketColour, Tab,
+    CharacterPart, Command, ConfigValue, ControlTooltipQuery, GemSearchQuery, GemTarget, GemToggle,
+    GemTooltipQuery, ImportMode, ItemDb, ItemDbQuery, ItemTooltipQuery, PopupInput, PopupKind,
+    SkillOption, SocketColour, Tab,
 };
+use super::net::{Dispatch, NetHandle};
 use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Engine, Event};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, ControlTooltipView,
-    DisplayItemView, GemRow, GemSearchView, GemTooltipView, GroupTooltipView, ItemDbView, ItemText,
-    ItemTooltip, ItemTooltipView, ItemsView, ModLineList, NodePower, NodeTooltip, NotesView,
-    PopupView, PowerReport, SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout,
-    TreeState,
+    AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView,
+    ControlTooltipView, DisplayItemView, GemRow, GemSearchView, GemTooltipView, GroupTooltipView,
+    ItemDbView, ItemText, ItemTooltip, ItemTooltipView, ItemsView, ModLineList, NodePower,
+    NodeTooltip, NotesView, PopupView, PowerReport, RequestsView, ShareView, SkillsView,
+    SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
 use mlua::{FromLuaMulti, IntoLuaMulti, Lua, LuaSerdeExt};
+use pob_runtime::net::{NetConfig, Waker};
 use std::path::{Path, PathBuf};
 
 pub struct PobBackend {
@@ -49,6 +51,8 @@ pub struct PobBackend {
     item_db_ended: bool,
     /// Lua's heap after the last memory release, in bytes
     released_lua_bytes: usize,
+    /// The subscripts of PoB's requests (R4, R9)
+    net: NetHandle,
 }
 
 /// Runs before the bootstrap.
@@ -94,13 +98,26 @@ pub(crate) fn new_lua(pob_dir: &Path) -> Result<Lua> {
 }
 
 impl PobBackend {
-    /// Starts PoB from `pob_dir`, keeping its user data in `user_dir`.
+    /// Starts PoB from `pob_dir`, keeping its user data in `user_dir`; requests go out
+    /// through curl with the app's timeouts (R7).
     pub fn start(game: Game, pob_dir: &Path, user_dir: &Path) -> Result<PobBackend> {
+        PobBackend::start_with(game, pob_dir, user_dir, NetConfig::app())
+    }
+
+    /// `start` with the requests' timeouts and transport given (tests use the canned one).
+    pub fn start_with(
+        game: Game,
+        pob_dir: &Path,
+        user_dir: &Path,
+        net: NetConfig,
+    ) -> Result<PobBackend> {
         // mlua's error isn't Send + Sync, which anyhow requires; keep its message instead
         let lua_error = |e: mlua::Error| anyhow!("{e}");
 
         let lua = new_lua(pob_dir)?;
         super::native::register(&lua, pob_dir, user_dir).map_err(lua_error)?;
+        // before the bootstrap: its first frame already initialises a build (R4)
+        let net = super::net::register(&lua, pob_dir, net).map_err(lua_error)?;
         lua.load(include_str!("bootstrap.lua"))
             .set_name("@bootstrap.lua")
             .exec()
@@ -122,6 +139,8 @@ impl PobBackend {
             ("@glue/popups.lua", include_str!("glue/popups.lua")),
             ("@glue/itemdb.lua", include_str!("glue/itemdb.lua")),
             ("@glue/notes.lua", include_str!("glue/notes.lua")),
+            ("@glue/net.lua", include_str!("glue/net.lua")),
+            ("@glue/import.lua", include_str!("glue/import.lua")),
         ] {
             lua.load(source)
                 .set_name(name)
@@ -145,7 +164,13 @@ impl PobBackend {
             item_db_failed: false,
             item_db_ended: false,
             released_lua_bytes: 0,
+            net,
         })
+    }
+
+    /// The subscripts and launch gate of this PoB (for the gate harness).
+    pub fn net_handle(&self) -> &NetHandle {
+        &self.net
     }
 
     /// Calls `glue.<name>(args)`, keeping only the error message.
@@ -227,6 +252,90 @@ impl PobBackend {
         Ok(())
     }
 
+    /// Leaving or replacing the build (R14): ends the popup session, the item database
+    /// (`Ended`) and the gem search, and turns the heat map off. Returns what to tell the UI.
+    fn left_build(&mut self) -> Result<Affected> {
+        let mut affected = Affected::default();
+        self.reset_heatmap();
+        if self.call::<_, bool>("popup_end", ())? {
+            affected.popup = true;
+        }
+        if self.item_db.take().is_some() {
+            self.item_db_failed = false;
+            self.item_db_ended = true;
+            self.call::<_, ()>("item_db_close", ())?;
+            affected.item_db = true;
+        }
+        let live = self.gem_search.clone();
+        self.end_gem_search()?;
+        if live.is_some() {
+            self.gem_ended = live;
+            affected.gem_search = true;
+        }
+        Ok(affected)
+    }
+
+    /// Cancels the pending requests (R12, R13): every one, or only the build's.
+    fn cancel_all_requests(&mut self, scope: CancelScope) -> Result<()> {
+        let scope = match scope {
+            CancelScope::All => None,
+            CancelScope::Build => Some("build"),
+        };
+        self.call::<_, ()>("net_cancel_all", scope)
+    }
+
+    /// Cancels one request: its subscripts are aborted, then each goes through PoB's failure
+    /// path with "Cancelled" (R12).
+    fn cancel_request(&mut self, id: u64) -> Result<()> {
+        let live: Vec<u64> = self.call("net_live_ids", id)?;
+        for sub in &live {
+            self.net.abort(*sub);
+        }
+        for sub in live {
+            self.call::<_, ()>("net_fail", (sub, "Cancelled"))?;
+        }
+        Ok(())
+    }
+
+    /// What the network callbacks since the last call did to the build (R14), plus the
+    /// requests view.
+    fn network_affected(&mut self) -> Result<Affected> {
+        #[derive(serde::Deserialize)]
+        struct Effects {
+            rebuilt: bool,
+            edited: bool,
+        }
+        // a callback that made a new build cancels every other request first (R13), so no late
+        // result lands on it; the cancelled entries go out with this step's requests view
+        self.call::<_, ()>("net_cancel_replaced", ())?;
+        let effects: Effects = self.view("net_take_effects", ())?;
+        let mut affected = if effects.rebuilt {
+            let mut affected = self.left_build()?;
+            affected.merge(self.all_views()?);
+            // the build was initialised inside a callback, not in a frame (the loop calculates)
+            affected.recalc = true;
+            affected
+        } else if effects.edited {
+            Affected {
+                build: true,
+                tree: true,
+                items: true,
+                skills: true,
+                config: true,
+                recalc: true,
+                tree_layout: self.layout_changed()?,
+                ..Affected::default()
+            }
+        } else {
+            Affected::default()
+        };
+        affected.requests = true;
+        // a request of the account import ends with PoB's status and stage changed
+        affected.account = true;
+        affected.short_link = self.call("short_link_ready", ())?;
+        Ok(affected)
+    }
+
     fn view<T: serde::de::DeserializeOwned>(
         &self,
         name: &str,
@@ -298,6 +407,46 @@ fn lua_target(lua: &Lua, target: GemTarget) -> Result<mlua::Value> {
     })
 }
 
+/// Which pending requests a command cancels before it acts (R13).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CancelScope {
+    /// Every request: the build is replaced
+    All,
+    /// Only `scope = "build"` ones: the build is left for the list, where a list-started
+    /// import goes on
+    Build,
+}
+
+pub(crate) fn cancels_requests(command: &Command) -> Option<CancelScope> {
+    match command {
+        Command::OpenBuild { .. }
+        | Command::NewBuild
+        | Command::ImportShareCode { .. }
+        | Command::ImportFromUrl { .. } => Some(CancelScope::All),
+        Command::ListBuilds { .. } => Some(CancelScope::Build),
+        _ => None,
+    }
+}
+
+/// The import mode as the glue spells it.
+fn mode_name(mode: ImportMode) -> &'static str {
+    match mode {
+        ImportMode::ThisBuild => "this",
+        ImportMode::NewBuild => "new",
+    }
+}
+
+/// Commands that leave or replace the build (R14).
+fn leaves_build(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::ListBuilds { .. }
+            | Command::NewBuild
+            | Command::OpenBuild { .. }
+            | Command::ImportShareCode { .. }
+    )
+}
+
 /// Commands that close the item database panel: its own Close, or leaving the build (R21).
 pub(crate) fn ends_item_db(command: &Command) -> bool {
     matches!(
@@ -363,11 +512,42 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::CopySocketGroup { .. }
             | Command::PreviewNode { .. }
             | Command::ExportTreeLink
+            // a shrink only reads the tree and asks the network (R20)
+            | Command::ShrinkTreeLink
+            // sharing reads the build and asks the network; the import box is PoB's own (R16, R17)
+            | Command::SetImportCode { .. }
+            | Command::ShareBuild { .. }
+            // a link replaces the build only when it arrives, and a code ends the session
+            // itself (`left_build`)
+            | Command::ImportFromUrl { .. }
+            | Command::ExportShareCode
+            | Command::ListPublicCharacters { .. }
+            | Command::ImportPublicCharacter { .. }
+            | Command::ClosePublicCharacters
+            | Command::SignIn
+            | Command::SignOut
+            | Command::ListCharacters { .. }
+            | Command::ImportCharacter { .. }
             // the tree search's debounce can land after a node-replacement open: it changes
             // neither the item nor the build
             | Command::SetTreeSearch { .. }
+            // a cancel runs PoB's failure path, which leaves the build alone (R12)
+            | Command::CancelRequest { .. }
+            | Command::Wake
             | Command::Shutdown
     )
+}
+
+/// A part of a character import as the glue takes it: the button and its options.
+fn part_args(part: &CharacterPart) -> (&'static str, bool, bool, bool) {
+    match *part {
+        CharacterPart::Tree { delete_jewels } => ("tree", delete_jewels, false, false),
+        CharacterPart::ItemsAndSkills {
+            clear_items,
+            clear_skills,
+            ignore_weapon_swap,
+        } => ("items", clear_items, clear_skills, ignore_weapon_swap),
+    }
 }
 
 /// What `glue.popup_press` reports.
@@ -496,6 +676,87 @@ impl PobBackend {
                 self.call::<_, ()>("import_code", code)?;
                 self.all_views()
             }
+            Command::SetImportCode { text } => {
+                self.call::<_, ()>("set_import_code", text)?;
+                Ok(Affected {
+                    share: true,
+                    ..Affected::default()
+                })
+            }
+            Command::ImportFromUrl { url, mode } => {
+                let mode = mode_name(mode);
+                // a link is a request, finished by a later Network step; a code imports at once
+                let request: Option<u64> = self.call("import_from_url", (url, mode))?;
+                let mut affected = match request {
+                    Some(_) => self.network_affected()?,
+                    // a code replaced the build at once; a link does so only when its request
+                    // ends (`network_affected`), and a failed fetch keeps the build as it was
+                    None => {
+                        let mut affected = self.left_build()?;
+                        affected.merge(self.all_views()?);
+                        affected
+                    }
+                };
+                affected.share = true;
+                Ok(affected)
+            }
+            Command::ShareBuild { site } => {
+                self.call::<_, u64>("share_build", site)?;
+                let mut affected = self.network_affected()?;
+                affected.share = true;
+                Ok(affected)
+            }
+            // the box is emptied, as PoB's Copy button does, so a link showing is gone
+            Command::ExportShareCode => Ok(Affected {
+                share: true,
+                share_code: true,
+                ..Affected::default()
+            }),
+            Command::ListPublicCharacters { account, realm } => {
+                self.call::<_, u64>("list_public_characters", (account, realm.pob_id()))?;
+                self.network_affected()
+            }
+            Command::ImportPublicCharacter { league, name, part } => {
+                let (kind, a, b, c) = part_args(&part);
+                self.call::<_, u64>("import_public_character", (league, name, kind, a, b, c))?;
+                self.network_affected()
+            }
+            Command::ClosePublicCharacters => {
+                self.call::<_, ()>("close_public_characters", ())?;
+                Ok(Affected {
+                    account: true,
+                    ..Affected::default()
+                })
+            }
+            Command::SignIn => {
+                self.call::<_, u64>("sign_in", ())?;
+                self.network_affected()
+            }
+            Command::SignOut => {
+                self.call::<_, ()>("sign_out", ())?;
+                Ok(Affected {
+                    account: true,
+                    ..Affected::default()
+                })
+            }
+            // nothing may be fetched (the list is there, or PoB's limiter answered at once)
+            Command::ListCharacters { realm } => {
+                self.call::<_, Option<u64>>("list_characters", realm.pob_id())?;
+                self.network_affected()
+            }
+            Command::ImportCharacter {
+                realm,
+                league,
+                name,
+                part,
+            } => {
+                let (kind, a, b, c) = part_args(&part);
+                self.call::<_, Option<u64>>(
+                    "import_character",
+                    (realm.pob_id(), league, name, kind, a, b, c),
+                )?;
+                self.network_affected()
+            }
             Command::Save => {
                 self.call::<_, ()>("save", ())?;
                 // PoB's save rewrites the notes' `^_` escapes
@@ -520,8 +781,12 @@ impl PobBackend {
                     ..Affected::default()
                 })
             }
-            // run_loop handles Shutdown before applying commands; nothing to do here
-            Command::Shutdown => Ok(Affected::default()),
+            // run_loop handles Shutdown before applying commands, and never applies Wake
+            Command::Shutdown | Command::Wake => Ok(Affected::default()),
+            Command::CancelRequest { id } => {
+                self.cancel_request(id)?;
+                self.network_affected()
+            }
             Command::PreviewNode { id } => Ok(Affected {
                 preview: Some(id),
                 ..Affected::default()
@@ -534,6 +799,10 @@ impl PobBackend {
                 link: true,
                 ..Affected::default()
             }),
+            Command::ShrinkTreeLink => {
+                self.call::<_, u64>("shrink_tree_link", ())?;
+                self.network_affected()
+            }
             Command::SetTreeSearch { text } => {
                 self.call::<_, ()>("set_tree_search", text)?;
                 Ok(Affected {
@@ -660,8 +929,12 @@ impl PobBackend {
                 self.spec_edited(true)
             }
             Command::ImportTreeLink { title, url } => {
-                self.call::<_, ()>("import_tree_link", (title, url))?;
-                self.spec_edited(true)
+                // a PoEURL link is a request; the tree is added when its step runs (R20)
+                let request: Option<u64> = self.call("import_tree_link", (title, url))?;
+                match request {
+                    Some(_) => self.network_affected(),
+                    None => self.spec_edited(true),
+                }
             }
             Command::Undo(Tab::Tree) => {
                 self.call::<_, ()>("tree_undo", ())?;
@@ -1184,7 +1457,29 @@ impl Backend for PobBackend {
         let closes = matches!(command, Command::CloseGemSearch);
         let ends_popup = ends_popup_session(&command);
         let ends_db = ends_item_db(&command);
+        let leaves = leaves_build(&command);
+        // a late result must never land on another build (R13); the cancelled entries go out
+        // with the command's views
+        // text PoB's box rejects changes nothing, so it cancels nothing either (R13)
+        if let Command::ImportFromUrl { url, mode } = &command {
+            let mode = mode_name(*mode);
+            self.call::<_, ()>("import_check", (url.clone(), mode))?;
+        }
+        let cancelled = match cancels_requests(&command) {
+            Some(scope) => {
+                self.cancel_all_requests(scope)?;
+                Some(self.network_affected()?)
+            }
+            None => None,
+        };
         let mut affected = self.apply_command(command, send)?;
+        if let Some(cancelled) = cancelled {
+            affected.merge(cancelled);
+        }
+        if leaves {
+            affected.merge(self.left_build()?);
+            return Ok(affected);
+        }
         // any other command may change what the popup is about, so it ends the session once
         // it went through, and the window is told (R4); a failed one changed nothing
         if ends_popup && self.call::<_, bool>("popup_end", ())? {
@@ -1274,6 +1569,11 @@ impl Backend for PobBackend {
     }
 
     fn next_background(&self) -> Option<BackgroundTask> {
+        // only while a subscript has something to deliver: a pending request alone never
+        // spins the loop (R9)
+        if self.net.has_ready() {
+            return Some(BackgroundTask::Network);
+        }
         if self.gem_search.is_some()
             && !self.gem_failed
             && self.call::<_, bool>("gem_dps_pending", ()).unwrap_or(false)
@@ -1310,6 +1610,11 @@ impl Backend for PobBackend {
             rejected: Option<String>,
         }
         match task {
+            BackgroundTask::Network => {
+                // a callback's failure finishes its request; the step itself goes on (R25)
+                self.net.service(&self.lua, Dispatch::Glue)?;
+                self.network_affected()
+            }
             BackgroundTask::NodePower => {
                 let step: Step = match self.view("power_step", ()) {
                     Ok(step) => step,
@@ -1565,6 +1870,30 @@ impl Backend for PobBackend {
     fn tree_link_view(&mut self) -> Result<String> {
         self.call("tree_link", ())
     }
+
+    fn short_tree_link_view(&mut self) -> Result<Option<String>> {
+        self.call("take_short_link", ())
+    }
+
+    fn requests_view(&mut self) -> Result<RequestsView> {
+        self.view("requests_view", ())
+    }
+
+    fn share_view(&mut self) -> Result<ShareView> {
+        self.view("share_view", ())
+    }
+
+    fn share_code(&mut self) -> Result<String> {
+        self.call("share_code", ())
+    }
+
+    fn account_view(&mut self) -> Result<AccountView> {
+        self.view("account_view", ())
+    }
+
+    fn set_waker(&mut self, wake: Waker) {
+        self.net.set_waker(wake);
+    }
 }
 
 impl Engine {
@@ -1643,6 +1972,7 @@ mod tests {
                 search_mode: 0,
             }),
             Command::CloseItemDb,
+            Command::CancelRequest { id: 1 },
         ];
         for command in keeps {
             assert!(
@@ -1675,6 +2005,121 @@ mod tests {
                 ends_popup_session(&command),
                 "{command:?} keeps the session"
             );
+        }
+    }
+
+    #[test]
+    fn build_change_cancels_pending_requests() {
+        use crate::engine::fake::Fake;
+        // R13: replacing the build cancels every request, before the command acts; going to
+        // the list cancels only the build's own
+        let replacing = [
+            Command::OpenBuild {
+                path: "a.xml".into(),
+            },
+            Command::NewBuild,
+            Command::ImportShareCode { code: "x".into() },
+        ];
+        for command in replacing {
+            let (mut fake, log) = Fake::new();
+            fake.pending = vec![(1, "build"), (2, "list")];
+            let shown = format!("apply {command:?}");
+            let _ = fake.apply(command, &|_| {});
+            assert_eq!(
+                log.lock().unwrap().requests,
+                ["cancel 1", "cancel 2", &shown]
+            );
+            assert!(fake.pending.is_empty());
+        }
+        let (mut fake, log) = Fake::new();
+        fake.pending = vec![(1, "build"), (2, "list")];
+        let _ = fake.apply(
+            Command::ListBuilds {
+                folder: String::new(),
+            },
+            &|_| {},
+        );
+        assert_eq!(
+            log.lock().unwrap().requests,
+            ["cancel 1", "apply ListBuilds { folder: \"\" }"]
+        );
+        assert_eq!(fake.pending, [(2, "list")]);
+        // anything else cancels nothing
+        let (mut fake, log) = Fake::new();
+        fake.pending = vec![(1, "build")];
+        let _ = fake.apply(Command::Save, &|_| {});
+        assert_eq!(log.lock().unwrap().requests, ["apply Save"]);
+    }
+
+    #[test]
+    fn import_from_url_cancels_pending_first() {
+        use crate::engine::ImportMode;
+        use crate::engine::fake::Fake;
+        // R13: either mode replaces the build, so every request is cancelled before it acts
+        for mode in [ImportMode::ThisBuild, ImportMode::NewBuild] {
+            let (mut fake, log) = Fake::new();
+            fake.pending = vec![(1, "build"), (2, "list")];
+            let command = Command::ImportFromUrl {
+                url: "https://pobb.in/x".into(),
+                mode,
+            };
+            let shown = format!("apply {command:?}");
+            let _ = fake.apply(command, &|_| {});
+            assert_eq!(
+                log.lock().unwrap().requests,
+                ["cancel 1", "cancel 2", &shown]
+            );
+            assert!(fake.pending.is_empty());
+        }
+        // it leaves the build only once something replaced it (a code at once, a link when its
+        // request ends), not when the command is applied
+        assert!(!leaves_build(&Command::ImportFromUrl {
+            url: String::new(),
+            mode: ImportMode::NewBuild
+        }));
+        // a share only reads the build
+        assert_eq!(
+            cancels_requests(&Command::ShareBuild {
+                site: "POBBin".into()
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn account_import_commands_neither_cancel_nor_leave_the_build() {
+        use crate::engine::{CharacterPart, Realm};
+        let commands = [
+            Command::ListPublicCharacters {
+                account: "A#1234".into(),
+                realm: Realm::Pc,
+            },
+            Command::ImportPublicCharacter {
+                league: None,
+                name: "A".into(),
+                part: CharacterPart::Tree {
+                    delete_jewels: true,
+                },
+            },
+            Command::ClosePublicCharacters,
+            Command::SignIn,
+            Command::SignOut,
+            Command::ListCharacters { realm: Realm::Xbox },
+            Command::ImportCharacter {
+                realm: Realm::Pc,
+                league: Some("Standard".into()),
+                name: "A".into(),
+                part: CharacterPart::ItemsAndSkills {
+                    clear_items: true,
+                    clear_skills: true,
+                    ignore_weapon_swap: false,
+                },
+            },
+        ];
+        for command in commands {
+            assert_eq!(cancels_requests(&command), None, "{command:?}");
+            assert!(!leaves_build(&command), "{command:?}");
+            assert!(!ends_popup_session(&command), "{command:?}");
         }
     }
 

@@ -5,7 +5,7 @@ use std::{fs::File, io::Read};
 
 use mlua::{Integer as LuaInteger, Lua, Result as LuaResult, Table, UserData, UserDataMethods};
 
-use crate::pob::modules::luazip::archive::{ZipArchive, ZipFile};
+use crate::modules::luazip::archive::{ZipArchive, ZipFile};
 
 mod archive;
 

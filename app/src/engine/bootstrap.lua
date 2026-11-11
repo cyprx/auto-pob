@@ -1,6 +1,7 @@
 -- Our startup for Path of Building, based on its HeadlessWrapper.lua.
 -- Differences: native Inflate/Deflate/NewFileSearch/paths, ConPrintf logs, startup
--- errors raise, LaunchSubScript returns nil, and the result is exposed as `pob`.
+-- errors raise, native subscripts that launch only inside a request (net.rs), PoB never
+-- updates itself, and the result is exposed as `pob`.
 -- It runs inside our embedded LuaJIT (mlua) with native Rust helpers for the host functions.
 
 
@@ -100,9 +101,8 @@ function GetRuntimePath()
 end
 -- RemoveDir is native (Rust)
 function SetWorkDir(path) end
-function LaunchSubScript(scriptText, funcList, subList, ...) return nil end
-function AbortSubScript(ssID) end
-function IsSubScriptRunning(ssID) end
+-- LaunchSubScript, AbortSubScript and IsSubScriptRunning are native (net.rs): a launch outside
+-- a request returns nil (R4)
 function LoadModule(fileName, ...)
 	if not fileName:match("%.lua") then
 		fileName = fileName .. ".lua"
@@ -141,7 +141,14 @@ function ConPrintTable(tbl, noRecurse) end
 function ConExecute(cmd) end
 function ConClear() end
 function SpawnProcess(cmdName, args) end
-function OpenURL(url) end
+-- The engine never opens a browser: the glue records the sign-in link for the UI (R1)
+function OpenURL(url)
+	if glue and glue.on_open_url then
+		glue.on_open_url(url)
+	end
+end
+-- PoEAPI raises the window after signing in; the UI does that itself (R1)
+function SetForeground() end
 function SetProfiling(isEnabled) end
 function Restart() end
 function Exit() end
@@ -157,7 +164,8 @@ end
 
 local l_require = require
 function require(name)
-	-- Hack to stop it looking for lcurl, which we don't really need
+	-- Hack to stop it looking for lcurl: only subscripts get it, so nothing on the engine
+	-- thread can block on the network (R3)
 	if name == "lcurl.safe" then
 		return
 	end
@@ -166,6 +174,9 @@ end
 
 
 dofile("Launch.lua")
+
+-- PoB never updates itself (R2): launch:OnInit checks at start and launch:OnFrame every 12 h.
+launch.CheckForUpdate = function() end
 
 -- The pinned PoB ships a repository-style manifest, so Launch.lua turns on devMode, and
 -- Main:Init then keeps the user's data (builds, settings) inside the PoB folder. We want

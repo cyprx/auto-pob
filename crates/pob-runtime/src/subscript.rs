@@ -1,5 +1,6 @@
 use crate::{
-    pob::modules,
+    modules,
+    net::{CancelFlag, NetConfig, SharedWaker, Waker, wake},
     util::{append_lua_package_dir, fix_script_header},
 };
 use anyhow::{Result, anyhow};
@@ -7,13 +8,28 @@ use mlua::{Integer, IntoLuaMulti, Lua, MultiValue, Number, Value};
 use std::{
     ops::DerefMut,
     path::PathBuf,
-    sync::mpsc::{Receiver, Sender, channel},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc::{Receiver, Sender, channel},
+    },
     thread::JoinHandle,
     time::{Duration, Instant},
 };
 
 /// How long to wait for a subscript's next call after replying to one of its blocking calls.
 const FOLLOW_UP_WAIT: Duration = Duration::from_millis(1);
+
+impl SubscriptEvent {
+    /// Id of the subscript that produced the event.
+    pub fn id(&self) -> u64 {
+        match self {
+            SubscriptEvent::Call { id, .. }
+            | SubscriptEvent::Finished { id, .. }
+            | SubscriptEvent::Error { id, .. } => *id,
+        }
+    }
+}
 
 /// A unit of work produced by advancing the running subscripts.
 pub enum SubscriptEvent {
@@ -39,9 +55,52 @@ pub enum SubscriptEvent {
 pub struct SubscriptManager {
     next_id: u64,
     scripts: Vec<Subscript>,
+    net: NetConfig,
+    waker: SharedWaker,
+    /// Ids aborted since the last [`Self::process`]: their events are discarded.
+    aborted: Vec<u64>,
 }
 
 impl SubscriptManager {
+    /// A manager whose subscripts use `net` for timeouts and transport.
+    pub fn with_config(net: NetConfig) -> SubscriptManager {
+        SubscriptManager {
+            net,
+            ..SubscriptManager::default()
+        }
+    }
+
+    /// Sets a function called from subscript threads on each call sent and when a thread ends
+    /// (also when it panics). Applies to running subscripts too.
+    pub fn set_waker(&mut self, waker: Waker) {
+        *self.waker.lock().unwrap() = Some(waker);
+    }
+
+    /// Stops the subscript with the given id: curl and the socket shim notice within a moment
+    /// and fail, and the manager forgets the subscript, so its result and calls are discarded.
+    /// Returns `false` if it is not running.
+    pub fn abort(&mut self, id: u64) -> bool {
+        // events of `id` already taken by `process` are discarded too
+        self.aborted.push(id);
+        let Some(index) = self.scripts.iter().position(|s| s.id == id) else {
+            return false;
+        };
+        // dropping the subscript sets its cancel flag
+        self.scripts.remove(index);
+        true
+    }
+
+    /// Returns `true` if [`Self::process`] would produce an event: a subscript has finished or
+    /// has a call waiting.
+    pub fn has_ready(&self) -> bool {
+        self.scripts.iter().any(Subscript::is_ready)
+    }
+
+    /// Ids of the running subscripts.
+    pub fn running_ids(&self) -> Vec<u64> {
+        self.scripts.iter().map(|s| s.id).collect()
+    }
+
     /// Starts a new subscript running `script_text` on its own thread and returns the id it was
     /// assigned.
     pub fn push(
@@ -62,6 +121,8 @@ impl SubscriptManager {
             nonblocking_calls,
             arguments,
             script_dir,
+            self.net.clone(),
+            self.waker.clone(),
         );
         self.scripts.push(subscript);
         id
@@ -69,6 +130,7 @@ impl SubscriptManager {
 
     /// Advances all running subscripts by one step.
     pub fn process(&mut self) -> Vec<SubscriptEvent> {
+        self.aborted.clear();
         let mut events = vec![];
 
         self.scripts.retain_mut(|subscript| {
@@ -98,7 +160,15 @@ impl SubscriptManager {
             && subscript.pending_call.is_none()
         {
             subscript.pending_call = subscript.call_rx.recv_timeout(timeout).ok();
+            if subscript.pending_call.is_some() {
+                subscript.queued.fetch_sub(1, Ordering::AcqRel);
+            }
         }
+    }
+
+    /// Whether the subscript was aborted after the last [`Self::process`] produced its events.
+    pub fn was_aborted(&self, id: u64) -> bool {
+        self.aborted.contains(&id)
     }
 
     /// Returns `true` if at least one subscript is running.
@@ -129,6 +199,22 @@ enum SubscriptCall {
     },
 }
 
+/// Queues `call` for the main thread and wakes it.
+fn send_call(
+    call_tx: &Sender<SubscriptCall>,
+    queued: &AtomicUsize,
+    waker: &SharedWaker,
+    call: SubscriptCall,
+) -> Result<()> {
+    queued.fetch_add(1, Ordering::AcqRel);
+    if let Err(e) = call_tx.send(call) {
+        queued.fetch_sub(1, Ordering::AcqRel);
+        return Err(anyhow!("{e}"));
+    }
+    wake(waker);
+    Ok(())
+}
+
 /// A Lua script running on its own thread, in a separate `Lua` instance.
 pub struct Subscript {
     id: u64,
@@ -140,6 +226,33 @@ pub struct Subscript {
     /// Used for stats logging
     started: Instant,
     calls_serviced: u32,
+    /// Set by [`SubscriptManager::abort`]; read by curl's progress callback and the socket shim.
+    cancel: Arc<AtomicBool>,
+    /// Set by the thread's last act, just before it wakes the main loop.
+    done: Arc<AtomicBool>,
+    /// Calls sent by the thread and not yet received.
+    queued: Arc<AtomicUsize>,
+}
+
+/// Marks a subscript thread as done and wakes the main loop, even when the thread panics.
+struct ThreadEnd {
+    done: Arc<AtomicBool>,
+    waker: SharedWaker,
+}
+
+impl Drop for ThreadEnd {
+    fn drop(&mut self) {
+        self.done.store(true, Ordering::Release);
+        wake(&self.waker);
+    }
+}
+
+impl Drop for Subscript {
+    /// Dropping a subscript (an abort, or its manager going away) cancels its transfers and
+    /// socket waits, which frees any listener port.
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
 }
 
 // Subscripts are lua scripts that are executed in their own instance on a separate thread.
@@ -156,6 +269,7 @@ impl Subscript {
     /// Spawns a new thread, creates a fresh `Lua` instance on it, registers proxy functions for
     /// `blocking_calls` and `nonblocking_calls`, and starts running `script_text` with
     /// `arguments`.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: u64,
         script_text: String,
@@ -163,10 +277,23 @@ impl Subscript {
         nonblocking_calls: Vec<String>,
         arguments: NativeMultiValue,
         script_dir: PathBuf,
+        net: NetConfig,
+        waker: SharedWaker,
     ) -> Self {
         let (call_tx, call_rx) = channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicBool::new(false));
+        let queued = Arc::new(AtomicUsize::new(0));
 
+        let thread_cancel = cancel.clone();
+        let thread_queued = queued.clone();
+        let thread_done = done.clone();
         let handle = std::thread::spawn(move || {
+            // declared first so it drops last, after the Lua state
+            let _end = ThreadEnd {
+                done: thread_done,
+                waker: waker.clone(),
+            };
             profiling::register_thread!(format!("Subscript {id} Thread"));
 
             // unsafe required to load C modules (curl)
@@ -174,6 +301,8 @@ impl Subscript {
             append_lua_package_dir(&lua, &script_dir.join("lua"))?;
 
             // register modules
+            lua.set_app_data(net);
+            lua.set_app_data(CancelFlag(thread_cancel));
             modules::register(&lua)?;
 
             // register a proxy for each allowed blocking call.
@@ -181,17 +310,22 @@ impl Subscript {
             // sends back the return values
             for function_name in blocking_calls {
                 let call_tx = call_tx.clone();
+                let queued = thread_queued.clone();
+                let waker = waker.clone();
                 lua.globals().set(
                     function_name.clone(),
                     lua.create_function(move |_, args: MultiValue| {
                         let (reply_tx, reply_rx) = channel();
-                        call_tx
-                            .send(SubscriptCall::Blocking {
+                        send_call(
+                            &call_tx,
+                            &queued,
+                            &waker,
+                            SubscriptCall::Blocking {
                                 function_name: function_name.clone(),
                                 arguments: args.try_into()?,
                                 reply_tx,
-                            })
-                            .map_err(|e| anyhow!("{e}"))?;
+                            },
+                        )?;
                         let return_values = reply_rx.recv().map_err(|e| anyhow!("{e}"))??;
                         Ok(return_values)
                     })?,
@@ -202,15 +336,20 @@ impl Subscript {
             // forwards the call to the main thread and returns immediately
             for function_name in nonblocking_calls {
                 let call_tx = call_tx.clone();
+                let queued = thread_queued.clone();
+                let waker = waker.clone();
                 lua.globals().set(
                     function_name.clone(),
                     lua.create_function(move |_, args: MultiValue| {
-                        call_tx
-                            .send(SubscriptCall::NonBlocking {
+                        send_call(
+                            &call_tx,
+                            &queued,
+                            &waker,
+                            SubscriptCall::NonBlocking {
                                 function_name: function_name.clone(),
                                 arguments: args.try_into()?,
-                            })
-                            .map_err(|e| anyhow!("{e}"))?;
+                            },
+                        )?;
                         Ok(())
                     })?,
                 )?;
@@ -229,18 +368,29 @@ impl Subscript {
             pending_call: None,
             started: Instant::now(),
             calls_serviced: 0,
+            cancel,
+            done,
+            queued,
         }
+    }
+
+    /// Receives the next queued call, if any.
+    fn try_recv_call(&self) -> Option<SubscriptCall> {
+        let call = self.call_rx.try_recv().ok()?;
+        self.queued.fetch_sub(1, Ordering::AcqRel);
+        Some(call)
+    }
+
+    /// A finished thread, or a call waiting to be taken.
+    fn is_ready(&self) -> bool {
+        self.is_finished() || self.pending_call.is_some() || self.queued.load(Ordering::Acquire) > 0
     }
 
     /// Collects a pending `SubscriptCall` into `events`.
     ///
     /// Returns `false` if there was no pending call.
     fn take_call(&mut self, events: &mut Vec<SubscriptEvent>) -> bool {
-        let Some(call) = self
-            .pending_call
-            .take()
-            .or_else(|| self.call_rx.try_recv().ok())
-        else {
+        let Some(call) = self.pending_call.take().or_else(|| self.try_recv_call()) else {
             // no pending call, or thread disconnected which is handled on join
             return false;
         };
@@ -271,13 +421,14 @@ impl Subscript {
     }
 
     fn is_finished(&self) -> bool {
-        self.handle.as_ref().is_some_and(JoinHandle::is_finished)
+        self.done.load(Ordering::Acquire)
+            || self.handle.as_ref().is_some_and(JoinHandle::is_finished)
     }
 
     /// Joins the subscript's finished thread and returns the resulting `SubscriptEvent`.
     fn join(&mut self) -> SubscriptEvent {
         log::info!(
-            target: crate::stats::TARGET,
+            target: crate::STATS_TARGET,
             "subscript {} finished in {:.1}ms after {} main-thread calls",
             self.id,
             self.started.elapsed().as_secs_f64() * 1000.0,
@@ -330,6 +481,10 @@ where
 
         let mut awaiting_follow_up = Vec::new();
         for event in events {
+            // a handler may have aborted a subscript whose events are still in this batch
+            if manager().was_aborted(event.id()) {
+                continue;
+            }
             if let SubscriptEvent::Call {
                 id,
                 reply_tx: Some(_),
@@ -377,6 +532,16 @@ pub enum NativeValue {
 /// subscript's Lua instance.
 #[derive(Debug)]
 pub struct NativeMultiValue(Vec<NativeValue>);
+
+impl NativeMultiValue {
+    pub fn new(values: Vec<NativeValue>) -> Self {
+        Self(values)
+    }
+
+    pub fn values(&self) -> &[NativeValue] {
+        &self.0
+    }
+}
 
 impl TryFrom<Value> for NativeValue {
     type Error = anyhow::Error;

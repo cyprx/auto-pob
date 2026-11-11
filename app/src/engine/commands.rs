@@ -15,6 +15,47 @@ pub enum SocketColour {
     W,
 }
 
+/// Where an import from a link or code goes (R16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ImportMode {
+    /// Replaces the open build; only for a build with a file
+    ThisBuild,
+    /// Opens a new, unsaved build
+    NewBuild,
+}
+
+/// A platform of PoB's account import (PoB's ids `"PC"`, `"XBOX"`, `"SONY"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Realm {
+    Pc,
+    Xbox,
+    Sony,
+}
+
+impl Realm {
+    /// PoB's id for the realm drop-down
+    pub fn pob_id(self) -> &'static str {
+        match self {
+            Realm::Pc => "PC",
+            Realm::Xbox => "XBOX",
+            Realm::Sony => "SONY",
+        }
+    }
+}
+
+/// What an account import takes from a character: PoB's two buttons and their options.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum CharacterPart {
+    /// "Passive Tree and Jewels"
+    Tree { delete_jewels: bool },
+    /// "Items and Skills"
+    ItemsAndSkills {
+        clear_items: bool,
+        clear_skills: bool,
+        ignore_weapon_swap: bool,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub enum Command {
     /// Sub-path relative to the Builds folder; "" is the root.
@@ -28,6 +69,57 @@ pub enum Command {
     ImportShareCode {
         code: String,
     },
+    /// Pastes into PoB's import box, whose validator runs live; the verdict is in
+    /// `ShareView.import` (R16).
+    SetImportCode {
+        text: String,
+    },
+    /// Imports from a build site's link, a `pob://` link or a share code (R15, R16). A link is
+    /// a network request; a code imports at once.
+    ImportFromUrl {
+        url: String,
+        mode: ImportMode,
+    },
+    /// Uploads the build to a build site (a network request); the new link comes in
+    /// `ShareView.link` (R17).
+    ShareBuild {
+        site: String,
+    },
+    /// Lists an account's public characters: PoB's "Import By Account Name" Start button (R19).
+    /// A request; `AccountView.public` follows it.
+    ListPublicCharacters {
+        account: String,
+        realm: Realm,
+    },
+    /// Imports a part of a listed character (R18, R19): a request. `league` `None` is PoB's
+    /// "All" entry, which `PublicView.leagues` lists last as the label "All".
+    ImportPublicCharacter {
+        league: Option<String>,
+        name: String,
+        part: CharacterPart,
+    },
+    /// PoB's Close button: back to the account box (R19)
+    ClosePublicCharacters,
+    /// PoB's "Authorize with Path of Exile" (shown only when signed out): a request whose
+    /// sign-in link comes in `OAuthView.auth_url`, for the UI to open (R1).
+    SignIn,
+    /// PoB's "Logout from Path of Exile API": PoB forgets the tokens and saves its settings.
+    SignOut,
+    /// Selects the realm and presses Fetch when PoB offers it, once per realm (R18). A request,
+    /// unless the realm's list is there already or PoB's rate limiter answers at once.
+    ListCharacters {
+        realm: Realm,
+    },
+    /// Imports a part of a signed-in account's character (R18): a request, unless PoB's rate
+    /// limiter answers at once. `league` `None` is PoB's "Any".
+    ImportCharacter {
+        realm: Realm,
+        league: Option<String>,
+        name: String,
+        part: CharacterPart,
+    },
+    /// Ask for the build's share code: PoB's Generate button, no network (R17).
+    ExportShareCode,
     Save,
     SaveAs {
         folder: String,
@@ -86,6 +178,9 @@ pub enum Command {
     },
     /// Ask for the active tree's link.
     ExportTreeLink,
+    /// Shrinks the active tree's link with PoEURL (a network request). The short link comes
+    /// as `Snapshot::TreeLink` when the request finishes (R20).
+    ShrinkTreeLink,
 
     /// Allocates the node and the path to it (an ascendancy node switches ascendancy first).
     AllocNode {
@@ -551,6 +646,13 @@ pub enum Command {
 
     Undo(Tab),
     Redo(Tab),
+    /// Stops a pending network request: its subscripts are aborted and PoB's own failure path
+    /// runs with "Cancelled" (R12).
+    CancelRequest {
+        id: u64,
+    },
+    /// Internal: a subscript thread woke the loop. The loop never applies it (R9).
+    Wake,
     Shutdown,
 }
 

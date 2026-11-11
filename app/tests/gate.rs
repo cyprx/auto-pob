@@ -27,6 +27,10 @@ mod item_db;
 mod items;
 #[path = "gate/items_harness.rs"]
 mod items_harness;
+#[path = "gate/net_harness.rs"]
+mod net_harness;
+#[path = "gate/network.rs"]
+mod network;
 #[path = "gate/skills.rs"]
 mod skills;
 #[path = "gate/tattoos.rs"]
@@ -221,7 +225,11 @@ impl Session {
         let user =
             std::env::temp_dir().join(format!("auto-pob-gate-{test}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&user);
-        let backend = PobBackend::start(Game::Poe1, &pob_dir(), &user).expect("starting PoB");
+        // an empty canned web: a request a test did not mean to make fails with
+        // `no canned response` instead of reaching the internet
+        let net = net_harness::canned(&net_harness::canned_web());
+        let backend =
+            PobBackend::start_with(Game::Poe1, &pob_dir(), &user, net).expect("starting PoB");
         Session { backend, user }
     }
 
@@ -405,7 +413,10 @@ fn import_share_code_trims_and_rejects_urls() {
             code: "https://pobb.in/abc".into(),
         })
         .unwrap_err();
-    assert!(format!("{err:#}").contains("network features"), "{err:#}");
+    assert!(
+        format!("{err:#}").contains("that's a link; use Import from URL"),
+        "{err:#}"
+    );
 }
 
 fn save_as(name: &str, overwrite: bool) -> Command {
@@ -642,8 +653,9 @@ fn engine_starting_on_the_build_list_raises_no_errors() {
         match engine.events.recv_timeout(left) {
             Ok(Event::Error { message, .. }) => panic!("error on the list: {message}"),
             Ok(Event::Snapshot { snapshot, .. }) => {
+                // the list and the requests need no build (R10)
                 assert!(
-                    matches!(snapshot, Snapshot::BuildList(_)),
+                    matches!(snapshot, Snapshot::BuildList(_) | Snapshot::Requests(_)),
                     "a build view went out with no build open"
                 )
             }
@@ -2646,13 +2658,6 @@ fn spec_command_errors() {
                 keep_copy: false,
             },
             "the tree already uses that version",
-        ),
-        (
-            Command::ImportTreeLink {
-                title: "Short".into(),
-                url: "http://poeurl.com/dABz".into(),
-            },
-            "short links need the network; paste the full link",
         ),
         (
             Command::ImportTreeLink {

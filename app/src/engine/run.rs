@@ -10,11 +10,13 @@ use crate::pob_files::DownloadProgress;
 
 use super::commands::{Command, ControlTooltipQuery, GemTooltipQuery, ItemTooltipQuery};
 use super::views::{
-    BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView, ControlTooltipView,
-    DisplayItemView, GemSearchView, GemTooltipView, GroupTooltipView, ItemDbView, ItemText,
-    ItemTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, PopupView, PowerReport,
-    SkillsView, SocketGroupText, StatsView, TreeLayout, TreeState,
+    AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView,
+    ControlTooltipView, DisplayItemView, GemSearchView, GemTooltipView, GroupTooltipView,
+    ItemDbView, ItemText, ItemTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, PopupView,
+    PowerReport, RequestsView, ShareView, SkillsView, SocketGroupText, StatsView, TreeLayout,
+    TreeState,
 };
+use pob_runtime::net::Waker;
 
 #[derive(Debug, Clone)]
 pub enum Snapshot {
@@ -46,12 +48,23 @@ pub enum Snapshot {
     ItemTooltip(Arc<ItemTooltipView>),
     ItemText(Arc<ItemText>),
     Notes(Arc<NotesView>),
+    /// The pending and newly finished network requests; sent with or without a build (R10)
+    Requests(Arc<RequestsView>),
+    /// The build sharing and import box of the Import/Export tab (R16, R17)
+    Share(Arc<ShareView>),
+    /// The build's share code, answering `ExportShareCode` (R17)
+    ShareCode(Arc<String>),
+    /// The Import/Export tab's account import (R18, R19)
+    Account(Arc<AccountView>),
 }
 
 /// Long-running work the engine does between commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackgroundTask {
-    /// The gem picker's DPS sort; it goes first whenever it has work (R12)
+    /// Finished subscripts and their calls; first, as its steps are short and their latency
+    /// shows. Offered only while one is ready, so a pending request never spins the loop (R9)
+    Network,
+    /// The gem picker's DPS sort; it goes first among the calculations whenever it has work (R12)
     GemDps,
     /// The Anoint window's stat sort; it goes after the gem picker's, before node power (R20)
     AnointSort,
@@ -136,10 +149,20 @@ pub struct Affected {
     pub item_text: Option<u32>,
     /// The tree link was requested
     pub link: bool,
+    /// A PoEURL shrink finished: `short_tree_link_view` has the short link (R20)
+    pub short_link: bool,
+    /// The network requests changed: one began, finished or was cancelled (R10)
+    pub requests: bool,
+    /// The import box or the sharing state changed (R16, R17); build-only
+    pub share: bool,
+    /// The share code was requested (R17); build-only
+    pub share_code: bool,
+    /// The account import changed (R18, R19); build-only
+    pub account: bool,
 }
 
 impl Affected {
-    pub(crate) const ALL_VIEWS: Affected = Affected {
+    pub const ALL_VIEWS: Affected = Affected {
         build: true,
         list: true,
         stats: true,
@@ -166,18 +189,28 @@ impl Affected {
         control_tooltip: None,
         item_text: None,
         link: false,
+        short_link: false,
+        requests: true,
+        share: true,
+        share_code: false,
+        account: true,
     };
 
-    /// Nothing but the build list is asked for.
-    fn list_only(&self) -> bool {
-        let only_list = Affected {
-            list: self.list,
-            ..Affected::default()
-        };
-        *self == only_list
+    /// Only views that need no build are asked for: the build list and the requests (R10).
+    fn list_safe_only(&self) -> bool {
+        *self == self.list_safe()
     }
 
-    fn merge(&mut self, other: Affected) {
+    /// The views of these flags that need no build.
+    fn list_safe(&self) -> Affected {
+        Affected {
+            list: self.list,
+            requests: self.requests,
+            ..Affected::default()
+        }
+    }
+
+    pub(crate) fn merge(&mut self, other: Affected) {
         self.build |= other.build;
         self.list |= other.list;
         self.stats |= other.stats;
@@ -212,6 +245,11 @@ impl Affected {
         }
         self.item_text = other.item_text.or(self.item_text);
         self.link |= other.link;
+        self.short_link |= other.short_link;
+        self.requests |= other.requests;
+        self.share |= other.share;
+        self.share_code |= other.share_code;
+        self.account |= other.account;
     }
 }
 
@@ -284,12 +322,27 @@ pub trait Backend {
     /// Empty sections when the cell is gone or has no breakdown.
     fn breakdown_view(&mut self, cell: &CellRef) -> anyhow::Result<BreakdownView>;
     fn tree_link_view(&mut self) -> anyhow::Result<String>;
+    /// The short link a finished PoEURL shrink produced, or `None` once taken (R20).
+    fn short_tree_link_view(&mut self) -> anyhow::Result<Option<String>>;
+    /// The Import/Export tab's sharing state and import box (R16, R17)
+    fn share_view(&mut self) -> anyhow::Result<ShareView>;
+    /// The build's share code: PoB's Generate button, no network (R17)
+    fn share_code(&mut self) -> anyhow::Result<String>;
+    /// The Import/Export tab's account import (R18, R19)
+    fn account_view(&mut self) -> anyhow::Result<AccountView>;
     /// Hands back the memory the last busy stretch left behind. The loop calls it once it has
     /// been idle for a while after work, never between a background job's steps.
     fn release_memory(&mut self);
+    /// The pending network requests and the ones finished since the last call (R10)
+    fn requests_view(&mut self) -> anyhow::Result<RequestsView>;
+    /// Gives the backend a way to wake the loop from other threads (R9). Called once, after
+    /// `start`.
+    fn set_waker(&mut self, _wake: Waker) {}
 }
 
-fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &dyn Fn(Event)) {
+/// Sends the snapshots `flags` asks for, as the loop does after a command or a background
+/// step (the gate also reads them, to check what reaches the UI).
+pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &dyn Fn(Event)) {
     fn emit<T>(
         seq: u64,
         send: &dyn Fn(Event),
@@ -307,29 +360,28 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
             },
         });
     }
-    // With no build open only the list can be answered; the rest would raise on a missing
-    // build, so they are dropped here, for every caller at once.
-    let flags = if flags.list_only() {
+    // With no build open only the list and the requests can be answered; the rest would raise
+    // on a missing build, so they are dropped here, for every caller at once.
+    let flags = if flags.list_safe_only() {
         flags
     } else {
         match backend.build_loaded() {
             Ok(true) => flags,
-            Ok(false) => Affected {
-                list: flags.list,
-                ..Affected::default()
-            },
+            Ok(false) => flags.list_safe(),
             Err(e) => {
                 send(Event::Error {
                     seq,
                     message: format!("{e:#}"),
                 });
-                Affected {
-                    list: flags.list,
-                    ..Affected::default()
-                }
+                flags.list_safe()
             }
         }
     };
+    // The requests go first: one that finished with a new build tells the UI to start over
+    // (`new_build`), and the new build's views must come after that, not before.
+    if flags.requests {
+        emit(seq, send, backend.requests_view(), Snapshot::Requests);
+    }
     if flags.build {
         emit(seq, send, backend.build_view(), Snapshot::Build);
     }
@@ -522,6 +574,55 @@ fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send: &d
     if flags.link {
         emit(seq, send, backend.tree_link_view(), Snapshot::TreeLink);
     }
+    if flags.short_link {
+        match backend.short_tree_link_view() {
+            Ok(Some(link)) => emit(seq, send, Ok(link), Snapshot::TreeLink),
+            // already taken: nothing to send
+            Ok(None) => {}
+            Err(e) => send(Event::Error {
+                seq,
+                message: format!("{e:#}"),
+            }),
+        }
+    }
+    if flags.share {
+        emit(seq, send, backend.share_view(), Snapshot::Share);
+    }
+    if flags.share_code {
+        emit(seq, send, backend.share_code(), Snapshot::ShareCode);
+    }
+    if flags.account {
+        emit(seq, send, backend.account_view(), Snapshot::Account);
+    }
+}
+
+/// Recalculates once when `affected` asks for it, and adds the views that depend on the result.
+fn recalculate_if_asked(
+    backend: &mut dyn Backend,
+    affected: &mut Affected,
+    seq: u64,
+    send: &dyn Fn(Event),
+) {
+    if !affected.recalc {
+        return;
+    }
+    if let Err(e) = backend.recalculate() {
+        send(Event::Error {
+            seq,
+            message: format!("{e:#}"),
+        });
+    }
+    // Config visibility depends on the calculation.
+    affected.stats = true;
+    affected.config = true;
+    // Allocated points and the paths between them depend on the calculation too.
+    affected.tree = true;
+    affected.calcs = true;
+    affected.skills = true;
+    affected.items = true;
+    affected.display_item = true;
+    // Draw restarts an open list on a new output revision (R14)
+    affected.item_db = true;
 }
 
 /// Processes commands until `Shutdown` or until every sender is gone.
@@ -564,7 +665,11 @@ fn run_loop_with_delay(
                 Err(TryRecvError::Empty) => {
                     worked = true;
                     match backend.background_step(task, send) {
-                        Ok(affected) => send_snapshots(backend, last_seq, affected, send),
+                        Ok(mut affected) => {
+                            // a network step that edited or replaced the build (R14)
+                            recalculate_if_asked(backend, &mut affected, last_seq, send);
+                            send_snapshots(backend, last_seq, affected, send);
+                        }
                         Err(e) => send(Event::BackgroundFailed {
                             task,
                             message: format!("{e:#}"),
@@ -595,6 +700,12 @@ fn run_loop_with_delay(
         while let Ok(next) = commands.try_recv() {
             batch.push(next);
         }
+        // a wake only gets the loop round to `next_background`; it is never applied and has no
+        // seq of its own (R9)
+        batch.retain(|(_, command)| !matches!(command, Command::Wake));
+        if batch.is_empty() {
+            continue;
+        }
         let mut affected = Affected::default();
         let mut shutdown = false;
         for (seq, command) in batch {
@@ -614,25 +725,7 @@ fn run_loop_with_delay(
                 }
             }
         }
-        if affected.recalc {
-            if let Err(e) = backend.recalculate() {
-                send(Event::Error {
-                    seq: last_seq,
-                    message: format!("{e:#}"),
-                });
-            }
-            // Config visibility depends on the calculation.
-            affected.stats = true;
-            affected.config = true;
-            // Allocated points and the paths between them depend on the calculation too.
-            affected.tree = true;
-            affected.calcs = true;
-            affected.skills = true;
-            affected.items = true;
-            affected.display_item = true;
-            // Draw restarts an open list on a new output revision (R14)
-            affected.item_db = true;
-        }
+        recalculate_if_asked(backend, &mut affected, last_seq, send);
         send_snapshots(backend, last_seq, affected, send);
         if shutdown {
             return;
@@ -649,7 +742,18 @@ impl Drop for AliveGuard {
     }
 }
 
-/// UI-side handle to the engine thread. Use from the UI thread only.
+/// Tells whether an engine thread still runs, also after its [`Engine`] is gone.
+#[derive(Clone)]
+pub struct Liveness(Arc<AtomicBool>);
+
+impl Liveness {
+    pub fn is_alive(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// UI-side handle to the engine thread. Use from the UI thread only. Dropping it shuts the
+/// thread down.
 pub struct Engine {
     commands: Sender<(u64, Command)>,
     next_seq: Cell<u64>,
@@ -665,8 +769,9 @@ impl Engine {
         start: impl FnOnce(&dyn Fn(Event)) -> anyhow::Result<Box<dyn Backend>> + Send + 'static,
         wake_ui: impl Fn() + Send + 'static,
     ) -> Engine {
-        let (command_tx, command_rx) = mpsc::channel();
+        let (command_tx, command_rx) = mpsc::channel::<(u64, Command)>();
         let (event_tx, event_rx) = mpsc::channel();
+        let wake_tx = command_tx.clone();
         let alive = Arc::new(AtomicBool::new(true));
         let thread_alive = alive.clone();
         std::thread::spawn(move || {
@@ -686,6 +791,10 @@ impl Engine {
                     return;
                 }
             };
+            // subscript threads wake the loop through the command channel (R9)
+            backend.set_waker(Arc::new(move || {
+                let _ = wake_tx.send((0, Command::Wake));
+            }));
             send(Event::Ready);
             let initial = Affected {
                 tree_layout: true,
@@ -714,6 +823,19 @@ impl Engine {
     /// False once the engine thread has exited.
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::SeqCst)
+    }
+
+    /// A handle that answers `is_alive` after this `Engine` is dropped.
+    pub fn liveness(&self) -> Liveness {
+        Liveness(self.alive.clone())
+    }
+}
+
+impl Drop for Engine {
+    /// The waker keeps a sender of the command channel, so the loop would never see it
+    /// disconnect: the thread is told to stop instead (R9).
+    fn drop(&mut self) {
+        self.send(Command::Shutdown);
     }
 }
 
@@ -868,6 +990,9 @@ mod tests {
                     Snapshot::DisplayItem(_) => "display_item",
                     Snapshot::Popup(_) => "popup",
                     Snapshot::Notes(_) => "notes",
+                    Snapshot::Requests(_) => "requests",
+                    Snapshot::Share(_) => "share",
+                    Snapshot::Account(_) => "account",
                     other => panic!("unexpected {other:?}"),
                 }
             })
@@ -876,6 +1001,7 @@ mod tests {
         assert_eq!(
             kinds,
             [
+                "requests",
                 "build",
                 "list",
                 "stats",
@@ -886,7 +1012,9 @@ mod tests {
                 "items",
                 "display_item",
                 "popup",
-                "notes"
+                "notes",
+                "share",
+                "account"
             ]
         );
     }
@@ -971,9 +1099,9 @@ mod tests {
         assert_eq!(stats_seq, Some(3));
         assert_eq!(config_seq, Some(3));
         assert_eq!(log.lock().unwrap().set_configs, 2);
-        // Ready + 12 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items + DisplayItem; the channel disconnect means the
+        // Ready + 15 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items + DisplayItem; the channel disconnect means the
         // thread (and so every wake) is finished.
-        assert_eq!(wakes.load(Ordering::SeqCst), 20);
+        assert_eq!(wakes.load(Ordering::SeqCst), 23);
     }
 
     #[test]
@@ -985,14 +1113,21 @@ mod tests {
         let mut kinds = Vec::new();
         while let Ok(event) = engine.events.recv() {
             match event {
-                Event::Snapshot { snapshot, .. } => {
-                    kinds.push(matches!(snapshot, Snapshot::BuildList(_)))
-                }
+                Event::Snapshot { snapshot, .. } => kinds.push(match snapshot {
+                    Snapshot::BuildList(_) => "list",
+                    Snapshot::Requests(_) => "requests",
+                    _ => "other",
+                }),
                 Event::Error { message, .. } => panic!("unexpected error: {message}"),
                 _ => {}
             }
         }
-        assert_eq!(kinds, vec![true], "only the build list goes out");
+        // the requests need no build either (R10)
+        assert_eq!(
+            kinds,
+            ["requests", "list"],
+            "only the list-safe views go out"
+        );
     }
 
     #[test]
@@ -1795,6 +1930,245 @@ mod tests {
         assert_eq!(log.lock().unwrap().gem_restarts, 0, "a search alone");
         run_queued(&mut fake, vec![set_config()]);
         assert_eq!(log.lock().unwrap().gem_restarts, 1);
+    }
+
+    #[test]
+    fn wake_is_not_applied_and_keeps_seq() {
+        let (mut fake, log) = Fake::new();
+        let (tx, rx) = mpsc::channel();
+        tx.send((5, set_config())).unwrap();
+        tx.send((0, Command::Wake)).unwrap();
+        drop(tx);
+        let events = RefCell::new(Vec::new());
+        run_loop(&mut fake, &rx, &|e| events.borrow_mut().push(e));
+        let events = events.into_inner();
+        assert_eq!(log.lock().unwrap().applies, 1, "Wake was applied");
+        let seqs: Vec<u64> = snapshots(&events).iter().map(|(seq, _)| *seq).collect();
+        assert!(!seqs.is_empty());
+        assert!(seqs.iter().all(|&seq| seq == 5), "{seqs:?}");
+    }
+
+    #[test]
+    fn pending_request_does_not_spin_the_loop() {
+        // Review Focus 5: a request waits (pending, nothing ready), so the loop sleeps
+        let (mut fake, log) = Fake::new();
+        fake.pending = vec![(1, "build")];
+        let ready = fake.net_ready.clone();
+        let (tx, rx) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            run_loop(&mut fake, &rx, &|_| {});
+        });
+        std::thread::sleep(Duration::from_millis(500));
+        {
+            let log = log.lock().unwrap();
+            assert_eq!(log.steps, 0, "the loop stepped while nothing was ready");
+            assert_eq!(log.applies, 0);
+        }
+        // a subscript finished: its thread wakes the loop
+        ready.store(true, Ordering::SeqCst);
+        tx.send((0, Command::Wake)).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while log.lock().unwrap().steps == 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        {
+            let log = log.lock().unwrap();
+            assert_eq!(log.step_tasks, [BackgroundTask::Network]);
+            assert_eq!(log.applies, 0, "Wake was applied");
+        }
+        tx.send((1, Command::Shutdown)).unwrap();
+        thread.join().unwrap();
+    }
+
+    #[test]
+    fn network_runs_before_gem_dps() {
+        let (mut fake, log) = Fake::new();
+        fake.gem_background
+            .lock()
+            .unwrap()
+            .extend((0..2).map(|_| step_affecting_gems()));
+        fake.net_ready.store(true, Ordering::SeqCst);
+        let events = run_until_idle(&mut fake, vec![Command::SearchGems(gem_query(""))], 3);
+        use BackgroundTask::{GemDps, Network};
+        assert_eq!(log.lock().unwrap().step_tasks, [Network, GemDps, GemDps]);
+        let requests = snapshots(&events)
+            .iter()
+            .filter(|(_, s)| matches!(s, Snapshot::Requests(_)))
+            .count();
+        assert_eq!(requests, 1, "the Network step sends the requests");
+    }
+
+    #[test]
+    fn network_step_that_edits_the_build_recalculates() {
+        // a request's callback replaced the build (R14); the loop calculates it, as it does
+        // for a command that asks, and the views that depend on the result follow
+        let (mut fake, log) = Fake::new();
+        fake.net_ready.store(true, Ordering::SeqCst);
+        fake.network_recalc = true;
+        let events = run_until_idle(&mut fake, vec![], 1);
+        assert_eq!(log.lock().unwrap().recalculations, 1);
+        assert_eq!(count_of(&events, |s| matches!(s, Snapshot::Stats(_))), 1);
+        // a step that asks for nothing recalculates nothing
+        let (mut fake, log) = Fake::new();
+        fake.net_ready.store(true, Ordering::SeqCst);
+        let events = run_until_idle(&mut fake, vec![], 1);
+        assert_eq!(log.lock().unwrap().recalculations, 0);
+        assert_eq!(count_of(&events, |s| matches!(s, Snapshot::Stats(_))), 0);
+    }
+
+    #[test]
+    fn requests_view_is_sent_without_a_build() {
+        let flags = Affected {
+            requests: true,
+            stats: true,
+            ..Affected::default()
+        };
+        let kinds = |build_loaded: bool| {
+            let (mut fake, _log) = Fake::new();
+            fake.build_loaded = build_loaded;
+            let events = RefCell::new(Vec::new());
+            send_snapshots(&mut fake, 1, flags.clone(), &|e| {
+                events.borrow_mut().push(e)
+            });
+            snapshots(&events.into_inner())
+                .iter()
+                .map(|(_, s)| match s {
+                    Snapshot::Stats(_) => "stats",
+                    Snapshot::Requests(_) => "requests",
+                    _ => "other",
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(kinds(true), ["requests", "stats"]);
+        assert_eq!(kinds(false), ["requests"]);
+    }
+
+    #[test]
+    fn requests_come_before_the_views_of_a_new_build() {
+        // a request that finished with a new build tells the UI to start over, so the build's
+        // views follow it
+        let (mut fake, _log) = Fake::new();
+        let events = RefCell::new(Vec::new());
+        send_snapshots(&mut fake, 1, Affected::ALL_VIEWS, &|e| {
+            events.borrow_mut().push(e)
+        });
+        let kinds: Vec<_> = snapshots(&events.into_inner())
+            .iter()
+            .map(|(_, s)| matches!(s, Snapshot::Requests(_)))
+            .collect();
+        assert!(kinds[0], "Requests is the step's first snapshot");
+        assert_eq!(kinds.iter().filter(|k| **k).count(), 1);
+    }
+
+    fn count_of(events: &[Event], wanted: fn(&Snapshot) -> bool) -> usize {
+        snapshots(events).iter().filter(|(_, s)| wanted(s)).count()
+    }
+
+    #[test]
+    fn share_code_query_latest_wins() {
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(
+            &mut fake,
+            vec![
+                Command::ExportShareCode,
+                Command::ExportShareCode,
+                Command::ExportShareCode,
+            ],
+        );
+        assert_eq!(
+            count_of(&events, |s| matches!(s, Snapshot::ShareCode(_))),
+            1
+        );
+        // the box is emptied, so the link showing is gone: the share view follows
+        assert_eq!(count_of(&events, |s| matches!(s, Snapshot::Share(_))), 1);
+        assert_eq!(log.lock().unwrap().share_codes, 1);
+        // a later batch asks again
+        let events = run_queued(&mut fake, vec![Command::ExportShareCode]);
+        assert_eq!(
+            count_of(&events, |s| matches!(s, Snapshot::ShareCode(_))),
+            1
+        );
+        assert_eq!(log.lock().unwrap().share_codes, 2);
+    }
+
+    #[test]
+    fn share_views_masked_without_a_build() {
+        let queries = || {
+            vec![
+                Command::SetImportCode { text: "x".into() },
+                Command::ExportShareCode,
+            ]
+        };
+        let shares = |events: &[Event]| {
+            count_of(events, |s| {
+                matches!(s, Snapshot::Share(_) | Snapshot::ShareCode(_))
+            })
+        };
+        // with a build both are answered
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(&mut fake, queries());
+        assert_eq!(shares(&events), 2);
+        assert_eq!(log.lock().unwrap().share_codes, 1);
+        // with none, neither reaches the backend; the requests view still does
+        let (mut fake, log) = Fake::new();
+        fake.build_loaded = false;
+        let events = run_queued(&mut fake, queries());
+        assert_eq!(shares(&events), 0);
+        assert_eq!(log.lock().unwrap().share_codes, 0);
+        assert_eq!(log.lock().unwrap().share_views, 0);
+        assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
+        assert_eq!(count_of(&events, |s| matches!(s, Snapshot::Requests(_))), 1);
+    }
+
+    #[test]
+    fn short_link_is_sent_once_as_a_tree_link() {
+        let (mut fake, _log) = Fake::new();
+        fake.short_link = Some("http://poeurl.com/gAtE".into());
+        let flags = Affected {
+            short_link: true,
+            ..Affected::default()
+        };
+        let mut sent = Vec::new();
+        for _ in 0..2 {
+            let events = RefCell::new(Vec::new());
+            send_snapshots(&mut fake, 1, flags.clone(), &|e| {
+                events.borrow_mut().push(e)
+            });
+            sent.push(
+                snapshots(&events.into_inner())
+                    .iter()
+                    .filter_map(|(_, s)| match s {
+                        Snapshot::TreeLink(link) => Some(link.to_string()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+            );
+        }
+        assert_eq!(sent, [vec!["http://poeurl.com/gAtE".to_string()], vec![]]);
+    }
+
+    #[test]
+    fn dropping_the_engine_ends_its_thread() {
+        // the fake keeps the waker, and with it a sender of the command channel (R9)
+        let (fake, _log) = Fake::new();
+        let engine = Engine::spawn_with(move |_send| Ok(Box::new(fake) as Box<dyn Backend>), || {});
+        // Ready comes after the waker is set
+        loop {
+            match engine.events.recv_timeout(Duration::from_secs(5)) {
+                Ok(Event::Ready) => break,
+                Ok(_) => {}
+                Err(e) => panic!("no Ready: {e}"),
+            }
+        }
+        let alive = engine.liveness();
+        assert!(alive.is_alive());
+        drop(engine);
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        while alive.is_alive() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!alive.is_alive(), "the engine thread outlived its Engine");
     }
 
     #[test]

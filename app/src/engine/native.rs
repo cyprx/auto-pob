@@ -9,6 +9,35 @@ use std::{
     time::{Instant, UNIX_EPOCH},
 };
 
+const REDACTED: &str = "<redacted>";
+
+/// PoB's own lines, without the user's data (R21): a URL becomes `<redacted>`, and so does
+/// what follows `/character/`, `/account/` or a `?` (PoEAPI logs "Failed to download
+/// /character/<name>: ...").
+pub(crate) fn redact(line: &str) -> String {
+    line.split_inclusive(char::is_whitespace)
+        .map(|piece| {
+            let word = piece.trim_end_matches(char::is_whitespace);
+            let space = &piece[word.len()..];
+            let kept = if word.contains("://") {
+                REDACTED.to_string()
+            } else if let Some(at) = ["/character/", "/account/", "?"]
+                .iter()
+                .filter_map(|mark| word.find(mark).map(|i| i + mark.len()))
+                .min()
+            {
+                // the sentence's own punctuation stays
+                let tail = &word[at..];
+                let punct = &tail[tail.trim_end_matches([':', ',', ';', '.', ')']).len()..];
+                format!("{}{REDACTED}{punct}", &word[..at])
+            } else {
+                word.to_string()
+            };
+            kept + space
+        })
+        .collect()
+}
+
 /// Registers `Inflate`, `Deflate`, `NewFileSearch`, `ConPrintf` support and the path functions.
 pub fn register(lua: &Lua, pob_dir: &Path, user_dir: &Path) -> mlua::Result<()> {
     let g = lua.globals();
@@ -17,7 +46,7 @@ pub fn register(lua: &Lua, pob_dir: &Path, user_dir: &Path) -> mlua::Result<()> 
     g.set(
         "__log_info",
         lua.create_function(|_, msg: LuaString| {
-            log::info!("{}", msg.to_string_lossy());
+            log::info!("{}", redact(&msg.to_string_lossy()));
             Ok(())
         })?,
     )?;
@@ -189,6 +218,30 @@ fn new_file_search(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redact_hides_names_queries_and_urls() {
+        assert_eq!(
+            redact("Failed to download /character/GateOne: Response code: 500"),
+            "Failed to download /character/<redacted>: Response code: 500"
+        );
+        assert_eq!(
+            redact("Download /character/xbox/GateTwo"),
+            "Download /character/<redacted>"
+        );
+        assert_eq!(
+            redact("see /account/view-profile/Gate-1234 and get-items?accountName=A%231234 x"),
+            "see /account/<redacted> and get-items?<redacted> x"
+        );
+        assert_eq!(
+            redact("Downloading page at: https://pobb.in/gate\nnext line"),
+            "Downloading page at: <redacted>\nnext line"
+        );
+        assert_eq!(
+            redact("Loading passive tree data for version '3.29'..."),
+            "Loading passive tree data for version '3.29'..."
+        );
+    }
 
     struct TempDir(PathBuf);
     impl TempDir {

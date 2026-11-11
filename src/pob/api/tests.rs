@@ -3,12 +3,13 @@
 use std::{cell::RefCell, path::Path, rc::Rc};
 
 use mlua::{Lua, Value};
+use pob_runtime::subscript::SubscriptManager;
 
 use crate::{
     app::pob_font_definitions,
     color::Srgba,
     fonts::Fonts,
-    pob::{Context, api::register_globals, subscript::SubscriptManager},
+    pob::{Context, api::register_globals},
     renderer::textures::TextureManager,
 };
 

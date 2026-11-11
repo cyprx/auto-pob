@@ -76,7 +76,10 @@ pub(crate) fn ours_popup(s: &mut Session) -> PopupView {
 fn tie_key(label: &str) -> String {
     let mut key = String::new();
     let mut depth = 0;
-    for c in label.to_lowercase().chars() {
+    // a multi-line mod's label joins its lines with "/" (ItemsTab.lua:3059); only `mod[1]`,
+    // the first line, is compared
+    let first = label.split('/').next().unwrap_or_default();
+    for c in first.to_lowercase().chars() {
         match c {
             '(' => {
                 if depth == 0 {
@@ -163,6 +166,25 @@ mod canonical_tests {
         let swapped = ["+5 to Life", "+3 to Mana", "+10 to Life"];
         assert_ne!(canonical(popup(&base)), canonical(popup(&moved)));
         assert_ne!(canonical(popup(&base)), canonical(popup(&swapped)));
+    }
+
+    #[test]
+    fn multi_line_entries_tie_on_their_first_line_only() {
+        let base = [
+            "(4-6)% increased Strength/(4-6)% increased Dexterity",
+            "(4-6)% increased Strength/(4-6)% increased Intelligence",
+            "+3 to Mana",
+        ];
+        let swapped = [base[1], base[0], base[2]];
+        assert_eq!(canonical(popup(&base)), canonical(popup(&swapped)));
+        // a different first line in another order still differs
+        let other = [
+            "(4-6)% increased Dexterity/(4-6)% increased Strength",
+            base[0],
+            base[2],
+        ];
+        let other_swapped = [other[1], other[0], other[2]];
+        assert_ne!(canonical(popup(&other)), canonical(popup(&other_swapped)));
     }
 
     #[test]

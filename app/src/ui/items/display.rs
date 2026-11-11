@@ -60,14 +60,14 @@ impl TextBox {
 #[derive(Default)]
 pub struct DisplayState {
     pub(super) quality: TextBox,
-    catalyst_quality: TextBox,
+    pub(super) catalyst_quality: TextBox,
     /// The range line the slider is for
     pub range_line: usize,
     /// A slider value shown until the engine's view catches up
     slider: Option<(usize, f64)>,
     pub text_window: Option<TextWindow>,
     /// The window's text went to the engine; the next view closes it
-    pub(super) submitted: bool,
+    pub(super) submitted: Option<u64>,
     pub(super) rects: Rects,
 }
 
@@ -105,12 +105,13 @@ impl DisplayState {
         match text_window::show(ctx, window, &mut self.rects) {
             Outcome::Open => Vec::new(),
             Outcome::Save(command) => {
-                self.submitted = true;
+                // the app tells which seq it got (`ItemsUi::text_sent`)
+                self.submitted = Some(u64::MAX);
                 vec![command]
             }
             Outcome::Close => {
                 self.text_window = None;
-                self.submitted = false;
+                self.submitted = None;
                 Vec::new()
             }
         }
@@ -156,7 +157,7 @@ pub fn show_empty(ui: &mut egui::Ui, state: &mut DisplayState) {
         state.rects.note(&create, || "create".into());
         if create.clicked() {
             state.text_window = Some(TextWindow::create());
-            state.submitted = false;
+            state.submitted = None;
         }
     });
     ui.weak("Paste an item (Ctrl+V) or double-click one in the list.");
@@ -181,7 +182,7 @@ pub fn show(ui: &mut egui::Ui, view: &DisplayItemView, state: &mut DisplayState)
                 text: view.edit_text.clone(),
                 creating: false,
             });
-            state.submitted = false;
+            state.submitted = None;
         }
         let cancel = ui.button("Cancel");
         state.rects.note(&cancel, || "cancel".into());
@@ -200,6 +201,8 @@ pub fn show(ui: &mut egui::Ui, view: &DisplayItemView, state: &mut DisplayState)
                 }
             }
             for v in &view.variants {
+                // a combo may not wrap by itself, so each gets its own line
+                ui.end_row();
                 if let Some(index) = dropdown(
                     ui,
                     &mut state.rects,
@@ -282,6 +285,7 @@ pub fn show(ui: &mut egui::Ui, view: &DisplayItemView, state: &mut DisplayState)
                     out.push(Command::SetItemInfluence { which, index });
                 }
             }
+            ui.end_row();
             if let Some(quality) = &view.quality {
                 ui.label("Quality:");
                 if let Some(text) = state.quality.show(ui, "quality", quality, &mut state.rects) {
@@ -290,12 +294,14 @@ pub fn show(ui: &mut egui::Ui, view: &DisplayItemView, state: &mut DisplayState)
             } else {
                 state.quality.pending = false;
             }
+            ui.end_row();
             if let Some(catalyst) = &view.catalyst {
                 ui.label("Catalyst:");
                 if let Some(index) = dropdown(ui, &mut state.rects, "catalyst", catalyst) {
                     out.push(Command::SetItemCatalyst { index });
                 }
             }
+            ui.end_row();
             if let Some(quality) = &view.catalyst_quality {
                 ui.label("Catalyst quality:");
                 if let Some(text) =
@@ -348,7 +354,7 @@ pub fn show(ui: &mut egui::Ui, view: &DisplayItemView, state: &mut DisplayState)
                     Some((l, v)) if l == line => v,
                     _ => range,
                 };
-                let slider = ui.add(egui::Slider::new(&mut value, 0.0..=1.0));
+                let slider = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).show_value(false));
                 state.rects.note(&slider, || "range_slider".into());
                 if slider.dragged() || slider.changed() {
                     state.slider = Some((line, value));

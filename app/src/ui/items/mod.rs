@@ -95,7 +95,7 @@ impl ItemsUi {
         self.clipboard = None;
         self.sets.close();
         self.display.text_window = None;
-        self.display.submitted = false;
+        self.display.submitted = None;
     }
 
     /// What must go out before Save or a tab change, even while the tab isn't drawn: a quality
@@ -109,12 +109,27 @@ impl ItemsUi {
         commands
     }
 
-    /// The engine refused the raw text: the window stays open for another try.
-    pub fn text_refused(&mut self) {
-        self.display.submitted = false;
+    pub fn text_window_open(&self) -> bool {
+        self.display.text_window.is_some()
     }
 
+    /// The engine refused the raw text: the window stays open for another try.
+    pub fn text_refused(&mut self) {
+        self.display.submitted = None;
+    }
+
+    /// The raw text went to the engine as command `seq`; the first view from `seq` on closes
+    /// the window.
+    pub fn text_sent(&mut self, seq: u64) {
+        self.display.submitted = Some(seq);
+    }
+
+    /// A snapshot with no seq of its own (tests): it counts as the latest.
     pub fn on_snapshot(&mut self, snapshot: &Snapshot) {
+        self.on_snapshot_at(snapshot, u64::MAX);
+    }
+
+    pub fn on_snapshot_at(&mut self, snapshot: &Snapshot, seq: u64) {
         match snapshot {
             Snapshot::Items(view) => {
                 if self.view.as_deref() != Some(&**view) {
@@ -135,9 +150,11 @@ impl ItemsUi {
                 let old = self.display_view.as_ref().map(|d| (d.id, d.name.clone()));
                 let new = display.as_ref().map(|d| (d.id, d.name.clone()));
                 // a window opened on another item is stale; one just saved is done
-                if self.display.submitted || (old != new && self.display.text_window.is_some()) {
+                if self.display.submitted.is_some_and(|s| seq >= s)
+                    || (old != new && self.display.text_window.is_some())
+                {
                     self.display.text_window = None;
-                    self.display.submitted = false;
+                    self.display.submitted = None;
                 }
                 if display.is_none() || old != new {
                     self.display.on_gone();

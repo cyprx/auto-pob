@@ -5,6 +5,7 @@ use crate::engine::views::{
     DisplayItemView, DropList, EquippedIn, ItemEntry, ItemSetEntry, ItemText, ItemTooltip,
     ItemTooltipLine, ModLineList, ModLineRef, RangeLineView, SlotKind, SlotView,
 };
+use crate::engine::views::{SocketView, VariantView};
 use eframe::egui::{Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 
 fn item(id: u32, name: &str) -> ItemEntry {
@@ -1068,4 +1069,263 @@ fn focused_quality_box_survives_incoming_view() {
     view.quality = Some("15".into());
     h.show_display(view);
     assert_eq!(h.ui.display.quality.text, "15");
+}
+
+fn droplist(labels: &[&str], selected: usize, enabled: bool) -> DropList {
+    DropList {
+        labels: labels.iter().map(|l| (*l).into()).collect(),
+        selected,
+        enabled,
+    }
+}
+
+/// Every editor present; socket 1 is hidden, so the original index of the last two differs
+/// from their position among the shown ones.
+fn rich_view() -> DisplayItemView {
+    let socket = |colour: &str, shown, linked| SocketView {
+        colour: colour.into(),
+        shown,
+        linked,
+    };
+    DisplayItemView {
+        version: Some(droplist(&["Old", "New", "Newer"], 0, true)),
+        variants: vec![
+            VariantView {
+                control: 3,
+                list: droplist(&["A", "B", "C"], 0, true),
+            },
+            VariantView {
+                control: 4,
+                list: droplist(&["X", "Y"], 0, false),
+            },
+        ],
+        sockets: vec![
+            socket("R", true, Some(true)),
+            socket("G", false, Some(false)),
+            socket("G", true, Some(false)),
+            socket("B", true, None),
+        ],
+        can_add_socket: true,
+        influences: vec![
+            droplist(&["None", "Shaper", "Elder"], 0, true),
+            droplist(&["None", "Crusader", "Hunter"], 0, true),
+        ],
+        catalyst: Some(droplist(&["None", "Abrasive", "Fertile"], 0, true)),
+        catalyst_quality: Some("10".into()),
+        ..display_view()
+    }
+}
+
+fn rich() -> Harness {
+    let mut h = Harness::new(sample());
+    h.show_display(rich_view());
+    h
+}
+
+fn pick(h: &mut Harness, combo: &str, item: &str) -> Vec<String> {
+    h.click(combo);
+    debug(&h.click(item).commands)
+}
+
+#[test]
+fn hidden_editors_are_not_drawn_and_present_ones_are() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    for key in [
+        "version",
+        "variant_3",
+        "socket_0",
+        "link_0",
+        "add_socket",
+        "influence_0",
+        "catalyst",
+        "catalyst_quality",
+    ] {
+        assert!(!h.ui.display.rects.map.contains_key(key), "{key} drawn");
+    }
+    h.show_display(rich_view());
+    for key in [
+        "version",
+        "variant_3",
+        "variant_4",
+        "socket_0",
+        "socket_2",
+        "socket_3",
+        "link_0",
+        "link_2",
+        "add_socket",
+        "influence_0",
+        "influence_1",
+        "catalyst",
+        "catalyst_quality",
+    ] {
+        assert!(h.ui.display.rects.map.contains_key(key), "{key} missing");
+    }
+    assert!(!h.ui.display.rects.map.contains_key("socket_1"));
+    assert!(!h.ui.display.rects.map.contains_key("link_1"));
+}
+
+#[test]
+fn version_and_variant_dropdowns_send_their_indices() {
+    let mut h = rich();
+    assert_eq!(
+        pick(&mut h, "version", "version_2"),
+        ["SetItemVersion { index: 2 }"]
+    );
+    assert_eq!(
+        pick(&mut h, "variant_3", "variant_3_1"),
+        ["SetItemVariant { control: 3, index: 1 }"]
+    );
+}
+
+#[test]
+fn a_disabled_dropdown_sends_nothing_and_does_not_open() {
+    let mut h = rich();
+    h.click("variant_4");
+    assert!(!h.ui.display.rects.map.contains_key("variant_4_1"));
+    let o = h.click("variant_4");
+    assert!(o.commands.is_empty());
+}
+
+#[test]
+fn sockets_use_the_original_index_not_the_shown_position() {
+    let mut h = rich();
+    assert_eq!(
+        pick(&mut h, "socket_2", "socket_2_B"),
+        ["SetItemSocket { index: 2, colour: B }"]
+    );
+    assert_eq!(
+        pick(&mut h, "socket_3", "socket_3_W"),
+        ["SetItemSocket { index: 3, colour: W }"]
+    );
+    assert_eq!(
+        debug(&h.click("link_2").commands),
+        ["SetItemSocketLink { index: 2, linked: true }"]
+    );
+    assert_eq!(
+        debug(&h.click("link_0").commands),
+        ["SetItemSocketLink { index: 0, linked: false }"]
+    );
+    assert_eq!(debug(&h.click("add_socket").commands), ["AddItemSocket"]);
+}
+
+#[test]
+fn influence_and_catalyst_dropdowns_send_their_indices() {
+    let mut h = rich();
+    assert_eq!(
+        pick(&mut h, "influence_0", "influence_0_2"),
+        ["SetItemInfluence { which: 0, index: 2 }"]
+    );
+    assert_eq!(
+        pick(&mut h, "influence_1", "influence_1_1"),
+        ["SetItemInfluence { which: 1, index: 1 }"]
+    );
+    assert_eq!(
+        pick(&mut h, "catalyst", "catalyst_2"),
+        ["SetItemCatalyst { index: 2 }"]
+    );
+}
+
+#[test]
+fn the_catalyst_quality_box_sends_on_enter_reverts_on_escape_and_flushes() {
+    let mut h = rich();
+    h.type_into("catalyst_quality", "15");
+    let o = h.key(Key::Enter, Modifiers::NONE);
+    assert_eq!(
+        debug(&o.commands),
+        ["SetItemCatalystQuality { text: \"15\" }"]
+    );
+    h.type_into("catalyst_quality", "99");
+    let o = h.key(Key::Escape, Modifiers::NONE);
+    assert!(o.commands.is_empty());
+    assert!(h.ui.flush().is_empty());
+    assert_eq!(h.ui.display.catalyst_quality.text, "10");
+    h.type_into("catalyst_quality", "7");
+    assert_eq!(
+        debug(&h.ui.flush()),
+        ["SetItemCatalystQuality { text: \"7\" }"]
+    );
+    assert!(h.ui.flush().is_empty());
+}
+
+#[test]
+fn cancel_sends_cancel_display_item() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    assert_eq!(debug(&h.click("cancel").commands), ["CancelDisplayItem"]);
+}
+
+#[test]
+fn edit_prefills_the_views_rarity_and_text() {
+    let mut h = Harness::new(sample());
+    let mut view = display_view();
+    view.edit_rarity = 4;
+    view.edit_text = "Relic text".into();
+    h.show_display(view);
+    h.click("edit");
+    let w = h.ui.display.text_window.clone().expect("open");
+    assert_eq!(
+        (w.rarity, w.text.as_str(), w.creating),
+        (4, "Relic text", false)
+    );
+}
+
+fn saved_window() -> Harness {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    h.click("edit");
+    h.click("text_save");
+    h.ui.text_sent(10);
+    h
+}
+
+#[test]
+fn a_view_from_before_the_text_command_leaves_the_window_open() {
+    let mut h = saved_window();
+    h.ui.on_snapshot_at(&Snapshot::DisplayItem(Some(Arc::new(display_view()))), 9);
+    assert!(h.ui.display.text_window.is_some());
+    h.ui.on_snapshot_at(&Snapshot::DisplayItem(Some(Arc::new(display_view()))), 10);
+    assert!(h.ui.display.text_window.is_none(), "its own view closes it");
+}
+
+#[test]
+fn the_error_for_the_text_command_keeps_the_window_over_its_views() {
+    let mut h = saved_window();
+    h.ui.text_refused();
+    h.ui.on_snapshot_at(&Snapshot::DisplayItem(Some(Arc::new(display_view()))), 10);
+    h.ui.on_snapshot_at(&Snapshot::DisplayItem(Some(Arc::new(display_view()))), 11);
+    assert!(h.ui.display.text_window.is_some());
+}
+
+#[test]
+fn text_window_closes_on_a_name_change_and_when_the_display_goes() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    h.click("edit");
+    let mut renamed = display_view();
+    renamed.name = "Other name".into();
+    h.show_display(renamed);
+    assert!(h.ui.display.text_window.is_none());
+    h.click("edit");
+    assert!(h.ui.display.text_window.is_some());
+    h.ui.on_snapshot(&Snapshot::DisplayItem(None));
+    assert!(h.ui.display.text_window.is_none());
+}
+
+#[test]
+fn the_panel_stays_inside_the_window() {
+    let mut h = Harness::new(sample());
+    let mut view = rich_view();
+    view.sockets = (0..6)
+        .map(|_| SocketView {
+            colour: "R".into(),
+            shown: true,
+            linked: Some(false),
+        })
+        .collect();
+    h.show_display(view);
+    h.frame(vec![]);
+    for (key, r) in &h.ui.display.rects.map {
+        assert!(r.right() <= 1200.0, "{key} ends at {}", r.right());
+    }
 }

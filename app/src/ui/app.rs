@@ -237,7 +237,7 @@ impl AutoPobApp {
                     Snapshot::Items(_)
                     | Snapshot::DisplayItem(_)
                     | Snapshot::ItemTooltip(_)
-                    | Snapshot::ItemText(_) => self.items.on_snapshot(&snapshot),
+                    | Snapshot::ItemText(_) => self.items.on_snapshot_at(&snapshot, seq),
                     Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     // power results of the build being left
@@ -679,6 +679,7 @@ impl AutoPobApp {
             let seq = self.send(command);
             if is_text {
                 self.text_seq = Some(seq);
+                self.items.text_sent(seq);
             }
         }
         // questions never leave the app waiting
@@ -2106,6 +2107,139 @@ mod tests {
         frame(&mut app, &ctx, vec![]);
         frame(&mut app, &ctx, vec![]);
         (app, ctx)
+    }
+
+    fn click_item_key(app: &mut AutoPobApp, ctx: &egui::Context, key: &str) {
+        let pos = app.items.rect(key).center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![],
+        ] {
+            frame(app, ctx, events);
+        }
+    }
+
+    fn display_with_quality() -> crate::engine::DisplayItemView {
+        crate::engine::DisplayItemView {
+            id: Some(2),
+            name: "Kaom's Heart".into(),
+            save_label: "Save".into(),
+            quality: Some("20".into()),
+            ..Default::default()
+        }
+    }
+
+    /// The items tab with a quality typed ("205") but not sent.
+    fn items_app_typing() -> (AutoPobApp, egui::Context) {
+        let (mut app, ctx) = items_app();
+        app.on_event(Event::Snapshot {
+            seq: 91,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(display_with_quality()))),
+        });
+        frame(&mut app, &ctx, vec![]);
+        click_item_key(&mut app, &ctx, "quality");
+        frame(&mut app, &ctx, vec![egui::Event::Text("5".into())]);
+        frame(&mut app, &ctx, vec![]);
+        (app, ctx)
+    }
+
+    const QUALITY: &str = "SetItemQuality { text: \"205\" }";
+
+    #[test]
+    fn a_typed_quality_is_sent_when_leaving_the_items_tab() {
+        let (mut app, ctx) = items_app_typing();
+        let before = app.sent_full.len();
+        app.tab = BuildTab::Notes;
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(sent_since(&app, before), [QUALITY]);
+    }
+
+    #[test]
+    fn a_typed_quality_precedes_save_as_save_and_build_changes() {
+        let (mut app, _ctx) = items_app_typing();
+        let before = app.sent_full.len();
+        app.open_save_as(None);
+        app.send_save_as(false);
+        let sent = sent_since(&app, before);
+        assert_eq!(sent[0], QUALITY);
+        assert!(sent[1].starts_with("SaveAs"), "{sent:?}");
+
+        let (mut app, _ctx) = items_app_typing();
+        let before = app.sent_full.len();
+        app.save(None);
+        assert_eq!(sent_since(&app, before)[0], QUALITY);
+
+        let (mut app, ctx) = items_app_typing();
+        let before = app.sent_full.len();
+        app.run_action(&ctx, Pending::BackToList);
+        let sent = sent_since(&app, before);
+        assert_eq!(sent[0], QUALITY);
+        assert!(sent[1].starts_with("ListBuilds"), "{sent:?}");
+
+        let (mut app, ctx) = items_app_typing();
+        let before = app.sent_full.len();
+        app.run_action(&ctx, Pending::Open("/b/y.xml".into()));
+        let sent = sent_since(&app, before);
+        assert_eq!(sent[0], QUALITY);
+        assert!(sent[1].starts_with("OpenBuild"), "{sent:?}");
+
+        let (mut app, ctx) = items_app_typing();
+        let before = app.sent_full.len();
+        app.run_action(&ctx, Pending::Close);
+        assert_eq!(sent_since(&app, before)[0], QUALITY);
+    }
+
+    #[test]
+    fn the_raw_text_window_follows_the_text_commands_seq() {
+        let (mut app, ctx) = items_app();
+        app.on_event(Event::Snapshot {
+            seq: 91,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(display_with_quality()))),
+        });
+        frame(&mut app, &ctx, vec![]);
+        click_item_key(&mut app, &ctx, "edit");
+        let before = app.sent_full.len();
+        click_item_key(&mut app, &ctx, "text_save");
+        assert!(sent_since(&app, before)[0].starts_with("SetDisplayItemText"));
+        let seq = app.text_seq.expect("the text command's seq is remembered");
+        assert_eq!(seq, app.last_sent);
+        let open = |app: &AutoPobApp| app.items.text_window_open();
+
+        // a view from before it leaves the window open
+        app.on_event(Event::Snapshot {
+            seq: seq - 1,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(display_with_quality()))),
+        });
+        assert!(open(&app));
+        // its error keeps it open over its own views
+        app.on_event(Event::Error {
+            seq,
+            message: "bad item".into(),
+        });
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(display_with_quality()))),
+        });
+        assert!(open(&app));
+        // another command's error doesn't matter; a resend succeeding closes it
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        click_item_key(&mut app, &ctx, "text_save");
+        assert!(sent_since(&app, before)[0].starts_with("SetDisplayItemText"));
+        let seq = app.text_seq.unwrap();
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::DisplayItem(Some(Arc::new(display_with_quality()))),
+        });
+        assert!(!open(&app));
     }
 
     #[test]

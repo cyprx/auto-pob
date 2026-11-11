@@ -55,6 +55,8 @@ enum ConfirmThen {
     Send(Command),
     /// Cancel a request
     Cancel(u64),
+    /// Go on with an action that cancels a running OAuth import
+    Leave(Pending),
 }
 
 /// A `Save` or `SaveAs` whose outcome we are waiting for.
@@ -108,8 +110,6 @@ pub struct AutoPobApp {
     confirm: Option<AppConfirm>,
     /// The `ImportFromUrl` whose immediate answer replaces the build
     import_seq: Option<u64>,
-    /// The latest snapshot of each kind at the latest seq, to put back after a reset (R14)
-    step: Vec<(u64, Snapshot)>,
     config_ui: ConfigUi,
     list_ui: BuildListUi,
 
@@ -163,7 +163,6 @@ impl AutoPobApp {
             requests: RequestsView::default(),
             confirm: None,
             import_seq: None,
-            step: Vec::new(),
             config_ui: ConfigUi::default(),
             list_ui: BuildListUi::default(),
             notices: Vec::new(),
@@ -285,14 +284,6 @@ impl AutoPobApp {
                     self.import_seq = None;
                     self.reset_for_new_build();
                 }
-                if self.step.first().is_some_and(|(s, _)| *s != seq) {
-                    self.step.clear();
-                }
-                if !matches!(snapshot, Snapshot::Requests(_)) {
-                    let kind = std::mem::discriminant(&snapshot);
-                    self.step.retain(|(_, s)| std::mem::discriminant(s) != kind);
-                    self.step.push((seq, snapshot.clone()));
-                }
                 self.import_ui.on_snapshot(&snapshot, seq);
                 match snapshot {
                     Snapshot::Build(view) => {
@@ -327,7 +318,7 @@ impl AutoPobApp {
                         self.items.on_snapshot_at(&snapshot, seq);
                     }
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
-                    Snapshot::Requests(view) => self.on_requests(&view, seq),
+                    Snapshot::Requests(view) => self.on_requests(&view),
                     // the Import tab keeps its own
                     Snapshot::Share(_) | Snapshot::ShareCode(_) | Snapshot::Account(_) => {}
                     // power results of the build being left
@@ -394,7 +385,7 @@ impl AutoPobApp {
         self.reset_build_state();
     }
 
-    fn on_requests(&mut self, view: &RequestsView, seq: u64) {
+    fn on_requests(&mut self, view: &RequestsView) {
         self.requests = RequestsView {
             pending: view.pending.clone(),
             finished: Vec::new(),
@@ -406,17 +397,8 @@ impl AutoPobApp {
             }
         }
         if view.finished.iter().any(|f| f.new_build) {
+            // the step's other views follow this one (the engine sends the requests first)
             self.reset_for_new_build();
-            // the step's views came before this one; the reset dropped them
-            let step: Vec<_> = std::mem::take(&mut self.step)
-                .into_iter()
-                .filter(|(s, _)| *s == seq)
-                .collect();
-            for (seq, snapshot) in step {
-                self.on_event(Event::Snapshot { seq, snapshot });
-            }
-            self.import_ui
-                .on_snapshot(&Snapshot::Requests(Arc::new(self.requests.clone())), seq);
         }
     }
 
@@ -470,6 +452,22 @@ impl AutoPobApp {
 
     /// Asks first if there are unsaved changes.
     fn request(&mut self, action: Pending) {
+        // leaving or replacing the build cancels its requests (R13); cancelling a running
+        // OAuth fetch or import may sign the user out in both apps
+        if !matches!(action, Pending::Close) && self.import_ui.pending_signs_out() {
+            self.confirm = Some(AppConfirm {
+                message: "Leaving now cancels your Path of Exile import, which may sign you out of Path of Exile in both apps."
+                    .into(),
+                yes: "Leave",
+                no: "Stay",
+                then: ConfirmThen::Leave(action),
+            });
+            return;
+        }
+        self.request_checked(action);
+    }
+
+    fn request_checked(&mut self, action: Pending) {
         if needs_prompt(self.current_unsaved(), &action) {
             self.prompt = Some(action);
         } else {
@@ -654,6 +652,9 @@ impl AutoPobApp {
         }
         for command in self.import_ui.take_ready() {
             self.send(command);
+        }
+        if let Some(url) = self.import_ui.take_open_url() {
+            ctx.open_url(egui::OpenUrl::new_tab(url));
         }
         self.notices_panel(ui);
         self.pending_panel(ui);
@@ -999,8 +1000,12 @@ impl AutoPobApp {
                     Some(command) => ConfirmThen::Send(command),
                     None => ConfirmThen::Plan(plan),
                 };
+                let mut message = String::from(message);
+                if self.import_ui.pending_signs_out() {
+                    message.push_str(" It also cancels your running Path of Exile import, which may sign you out in both apps.");
+                }
                 self.confirm = Some(AppConfirm {
-                    message: message.into(),
+                    message,
                     yes: "Import",
                     no: "Cancel",
                     then,
@@ -1051,11 +1056,14 @@ impl AutoPobApp {
             return;
         }
         match confirm.then {
+            ConfirmThen::Leave(action) => self.request_checked(action),
             ConfirmThen::Plan(plan) => {
+                self.flush_edits();
                 let command = self.import_ui.begin(plan);
                 self.send(command);
             }
             ConfirmThen::Send(command) => {
+                self.flush_edits();
                 self.send(command);
             }
             ConfirmThen::Cancel(id) => {
@@ -4410,9 +4418,9 @@ mod tests {
             ..Default::default()
         };
         for snapshot in [
+            requests_snapshot(&[], vec![finished(1, None, false, true)]),
             Snapshot::Build(Arc::new(build)),
             Snapshot::Items(Arc::new(items)),
-            requests_snapshot(&[], vec![finished(1, None, false, true)]),
         ] {
             app.on_event(Event::Snapshot { seq, snapshot });
         }
@@ -4447,8 +4455,8 @@ mod tests {
         assert_eq!(app.items.history(), (true, false));
         let seq = app.last_sent.max(app.last_snapshot) + 1;
         for snapshot in [
-            Snapshot::Build(Arc::new((**app.build.as_ref().unwrap()).clone())),
             requests_snapshot(&[], vec![finished(1, None, false, true)]),
+            Snapshot::Build(Arc::new((**app.build.as_ref().unwrap()).clone())),
         ] {
             app.on_event(Event::Snapshot { seq, snapshot });
         }
@@ -4573,7 +4581,7 @@ mod tests {
             ..AccountView::default()
         };
         deliver(&mut app, Snapshot::Account(Arc::new(account)));
-        app.import_ui.tree_used_for_test();
+        deliver(&mut app, crate::ui::import::tests::tree_snapshot(3, 0));
         frame(&mut app, &ctx, vec![]);
         click_mark(&mut app, &ctx, "char:Alice");
         let before = app.sent_full.len();
@@ -4586,5 +4594,105 @@ mod tests {
         let sent = sent_since(&app, before);
         assert_eq!(sent.len(), 1, "{sent:?}");
         assert!(sent[0].contains("Tree { delete_jewels: true }"), "{sent:?}");
+    }
+
+    #[test]
+    fn a_new_build_does_not_bring_back_the_old_builds_power_views() {
+        // a heat map calculation of the old build sent at the same seq as the import's step
+        let (mut app, _ctx) = import_app();
+        let seq = app.last_sent.max(app.last_snapshot) + 1;
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::NodePower(Arc::new(crate::engine::NodePower {
+                stat: Some("Life".into()),
+                nodes: vec![],
+                max_single: 1.0,
+                max_offence: 1.0,
+                max_defence: 1.0,
+                finished: true,
+            })),
+        });
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: requests_snapshot(&[], vec![finished(1, None, false, true)]),
+        });
+        assert!(!app.tree.heatmap_on(), "the old build's heat map is gone");
+    }
+
+    #[test]
+    fn leaving_asks_while_an_oauth_import_runs() {
+        let (mut app, ctx) = import_app();
+        deliver(
+            &mut app,
+            Snapshot::Account(Arc::new(AccountView {
+                oauth: OAuthView {
+                    signed_in: true,
+                    busy: true,
+                    ..OAuthView::default()
+                },
+                ..AccountView::default()
+            })),
+        );
+        deliver(
+            &mut app,
+            requests_snapshot(&[(5, "Fetching characters")], vec![]),
+        );
+        let before = app.sent_full.len();
+        app.request(Pending::BackToList);
+        frame(&mut app, &ctx, vec![]);
+        assert!(
+            app.confirm
+                .as_ref()
+                .is_some_and(|c| c.message.contains("sign you out"))
+        );
+        assert_eq!(app.screen, Screen::Build, "nothing happened yet");
+        click_mark(&mut app, &ctx, "confirm_no");
+        assert_eq!(app.screen, Screen::Build);
+        assert!(sent_since(&app, before).is_empty());
+        app.request(Pending::BackToList);
+        frame(&mut app, &ctx, vec![]);
+        click_mark(&mut app, &ctx, "confirm_yes");
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.screen, Screen::List);
+        // without such a request it goes straight away
+        let (mut app, ctx) = import_app();
+        app.request(Pending::BackToList);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.screen, Screen::List);
+    }
+
+    #[test]
+    fn blurring_the_account_name_box_in_the_app_sends_no_request() {
+        let (mut app, ctx) = import_app();
+        click_mark(&mut app, &ctx, "mode:name");
+        click_mark(&mut app, &ctx, "account_name");
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text("Someone#1234".into())],
+        );
+        let before = app.sent_full.len();
+        click_mark(&mut app, &ctx, "mode:oauth");
+        assert!(
+            sent_since(&app, before)
+                .iter()
+                .all(|c| !c.contains("ListPublic")),
+            "{:?}",
+            sent_since(&app, before)
+        );
+    }
+
+    #[test]
+    fn the_sign_in_link_opens_even_when_the_tab_was_left() {
+        let (mut app, ctx) = import_app();
+        click_mark(&mut app, &ctx, "sign_in");
+        app.tab = BuildTab::Notes;
+        let seq = app.last_sent;
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::Account(Arc::new(waiting_account(AUTH))),
+        });
+        let (opened, _, _) = outputs_within(&mut app, &ctx, 3);
+        assert_eq!(opened, [AUTH]);
     }
 }

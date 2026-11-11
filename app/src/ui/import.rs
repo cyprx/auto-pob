@@ -238,7 +238,16 @@ impl ImportUi {
                     self.copy_ready = Some(code.to_string());
                 }
             }
-            Snapshot::Requests(view) => self.pending.clone_from(&view.pending),
+            Snapshot::Requests(view) => {
+                self.pending.clone_from(&view.pending);
+                // a tree part that was cancelled or failed ends the import: the items part
+                // must not go after the user said stop
+                if view.finished.iter().any(|f| {
+                    f.label == "Importing passive tree" && (f.cancelled || f.error.is_some())
+                }) {
+                    self.chain = None;
+                }
+            }
             Snapshot::Tree(state) => self.tree_used = state.points.used > 0,
             _ => {}
         }
@@ -310,6 +319,12 @@ impl ImportUi {
         }
     }
 
+    /// The sign-in link to open, once. The app asks every frame, so a tab switch after Sign in
+    /// does not lose it.
+    pub fn take_open_url(&mut self) -> Option<String> {
+        self.open_ready.take()
+    }
+
     /// The sign-in completed: the window should come back from behind the browser. Once.
     pub fn take_focus(&mut self) -> bool {
         std::mem::take(&mut self.focus)
@@ -323,17 +338,18 @@ impl ImportUi {
 
     /// Whether cancelling this request may sign the user out: PoB signs out when the token
     /// refresh inside an OAuth fetch or import is cancelled, and that is in both apps.
+    /// Account-name requests carry the same labels, so a signed-in user is asked for those too
+    /// (an unneeded question is harmless, a missing one is not).
     pub fn cancel_signs_out(&self, label: &str) -> bool {
         matches!(
             label,
             "Fetching characters" | "Importing passive tree" | "Importing items and skills"
-        ) && self.account.as_ref().is_some_and(|a| {
-            a.oauth.signed_in
-                && matches!(
-                    a.public.stage,
-                    PublicStage::EnterAccount | PublicStage::SelectCharacter
-                )
-        })
+        ) && self.account.as_ref().is_some_and(|a| a.oauth.signed_in)
+    }
+
+    /// Some pending request, if cancelled, may sign the user out.
+    pub fn pending_signs_out(&self) -> bool {
+        self.pending.iter().any(|p| self.cancel_signs_out(&p.label))
     }
 
     /// Starts a plan: its first command goes now, the second after the first request ends.
@@ -354,13 +370,7 @@ impl ImportUi {
     pub fn leave(&mut self) -> Option<Command> {
         self.await_code = false;
         self.copy_ready = None;
-        self.open_ready = None;
         self.flush()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn tree_used_for_test(&mut self) {
-        self.tree_used = true;
     }
 
     #[cfg(test)]
@@ -563,8 +573,11 @@ impl ImportUi {
                     let name = self.account_box.text.trim().to_owned();
                     let start = ui.add_enabled(!name.is_empty(), theme::primary_button("Start"));
                     mark(ui, "start", &start);
-                    // Enter in the box starts too
-                    if start.clicked() || (entered.is_some() && !name.is_empty()) {
+                    // Only Start, or Enter in the box, asks for the list. Leaving the box with
+                    // the text (`entered`) is no request: nothing goes out the user didn't ask for.
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let _ = entered;
+                    if start.clicked() || (enter && !name.is_empty()) {
                         out.commands.push(Command::ListPublicCharacters {
                             account: name,
                             realm: self.realm,
@@ -866,7 +879,7 @@ impl ImportUi {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::engine::views::{ImportCodeView, OAuthView, PublicView, RequestsView};
     use std::sync::Arc;
@@ -1148,6 +1161,22 @@ mod tests {
         assert!(!h.ui.take_focus());
     }
 
+    pub(crate) fn tree_snapshot(used: u32, ascendancy_used: u32) -> Snapshot {
+        let state: crate::engine::views::TreeState = serde_json::from_value(serde_json::json!({
+            "version": "3_28", "version_label": "3.28", "class_id": 0, "ascendancy_id": 0,
+            "points": {"used": used, "available": 100,
+                       "ascendancy_used": ascendancy_used, "ascendancy_available": 8},
+            "active_spec": 0, "can_undo": false, "can_redo": false
+        }))
+        .expect("a tree state");
+        Snapshot::Tree(Arc::new(state))
+    }
+
+    fn deliver_tree(h: &mut Harness, used: u32, ascendancy_used: u32) {
+        h.seq += 1;
+        h.ui.on_snapshot(&tree_snapshot(used, ascendancy_used), h.seq);
+    }
+
     fn pick_character(h: &mut Harness, name: &str) {
         h.frame(vec![]);
         h.click(&format!("char:{name}"));
@@ -1167,7 +1196,7 @@ mod tests {
         // uncheck "Ignore weapon swap"'s opposite so every option is non-default somewhere
         h.ui.ignore_weapon_swap = true;
         h.ui.clear_items = false;
-        h.ui.tree_used = true;
+        deliver_tree(&mut h, 3, 0);
         h.click("import_character");
         // the tree has nodes: nothing goes before the question
         assert!(h.log.is_empty(), "{:?}", h.log);
@@ -1237,11 +1266,83 @@ mod tests {
     }
 
     #[test]
+    fn only_allocated_points_make_the_tree_worth_asking_about() {
+        // class start and ascendancy nodes do not count, as PoB's CountAllocNodes
+        for (used, ascendancy) in [(0, 0), (0, 4)] {
+            let mut h = Harness::new();
+            deliver_tree(&mut h, used, ascendancy);
+            pick_character(&mut h, "Alice");
+            h.click("import_character");
+            assert!(h.confirms.is_empty(), "{used} {ascendancy}");
+            assert_eq!(h.log.len(), 1);
+        }
+        let mut h = Harness::new();
+        deliver_tree(&mut h, 1, 0);
+        pick_character(&mut h, "Alice");
+        h.click("import_character");
+        assert_eq!(h.confirms.len(), 1);
+        assert!(h.log.is_empty());
+    }
+
+    fn finished_tree(cancelled: bool, error: Option<&str>) -> Snapshot {
+        Snapshot::Requests(Arc::new(RequestsView {
+            pending: vec![],
+            finished: vec![crate::engine::views::FinishedRequest {
+                id: 1,
+                label: "Importing passive tree".into(),
+                error: error.map(str::to_owned),
+                cancelled,
+                new_build: false,
+            }],
+        }))
+    }
+
+    #[test]
+    fn a_cancelled_or_failed_tree_part_never_sends_the_items() {
+        for (cancelled, error) in [
+            (true, Some("Cancelled")),
+            (false, Some("Failed to retrieve character data")),
+        ] {
+            let mut h = Harness::new();
+            pick_character(&mut h, "Alice");
+            h.click("import_character");
+            assert_eq!(h.log.len(), 1);
+            let head = h.seq;
+            h.ui.on_snapshot(&Snapshot::Account(Arc::new(account_with(true, None))), head);
+            // the engine sends the finished request first, then the settled account
+            h.ui.on_snapshot(&finished_tree(cancelled, error), head + 1);
+            h.ui.on_snapshot(
+                &Snapshot::Account(Arc::new(account_with(false, None))),
+                head + 1,
+            );
+            h.frame(vec![]);
+            assert_eq!(
+                h.log.len(),
+                1,
+                "items went after a stopped tree: {:?}",
+                h.log
+            );
+        }
+        // a tree that finished well lets them go
+        let mut h = Harness::new();
+        pick_character(&mut h, "Alice");
+        h.click("import_character");
+        let head = h.seq;
+        h.ui.on_snapshot(&finished_tree(false, None), head + 1);
+        h.ui.on_snapshot(
+            &Snapshot::Account(Arc::new(account_with(false, None))),
+            head + 1,
+        );
+        h.frame(vec![]);
+        assert_eq!(h.log.len(), 2);
+    }
+
+    #[test]
     fn items_only_needs_no_tree_question() {
         let mut h = Harness::new();
         pick_character(&mut h, "Alice");
         h.ui.part_tree = false;
-        h.ui.tree_used = true;
+        deliver_tree(&mut h, 3, 0);
         h.click("import_character");
         assert!(h.confirms.is_empty());
         assert_eq!(h.log.len(), 1);
@@ -1631,6 +1732,53 @@ mod tests {
     }
 
     #[test]
+    fn leaving_the_account_name_box_starts_no_request() {
+        // typing a name, then blurring by every route, sends nothing; Enter and Start do
+        for away in ["realm_combo", "mode:oauth", "code_box"] {
+            let mut h = Harness::new();
+            h.frame(vec![]);
+            h.click("mode:name");
+            h.click("account_name");
+            h.frame(vec![egui::Event::Text("Someone#1234".into())]);
+            h.click(away);
+            h.frame(vec![]);
+            assert!(h.log.is_empty(), "blurring via {away} sent {:?}", h.log);
+        }
+        let mut h = Harness::new();
+        h.frame(vec![]);
+        h.click("mode:name");
+        h.click("account_name");
+        h.frame(vec![egui::Event::Text("Someone#1234".into())]);
+        h.frame(vec![egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: Some(egui::Key::Enter),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        assert_eq!(
+            h.log,
+            ["ListPublicCharacters { account: \"Someone#1234\", realm: Pc }"]
+        );
+    }
+
+    #[test]
+    fn leaving_the_code_box_imports_nothing() {
+        // the box only validates; it never fetches or imports by itself
+        let mut h = Harness::new();
+        h.frame(vec![]);
+        h.click("code_box");
+        h.frame(vec![egui::Event::Text("https://pobb.in/abc".into())]);
+        h.click("realm_combo");
+        h.idle_for(1.0);
+        assert!(
+            h.log.iter().all(|c| c.starts_with("SetImportCode")),
+            "{:?}",
+            h.log
+        );
+    }
+
+    #[test]
     fn sign_out_and_cancel_by_request_id() {
         let mut h = Harness::new();
         h.frame(vec![]);
@@ -1680,12 +1828,13 @@ mod tests {
         ] {
             assert!(!h.ui.cancel_signs_out(label), "{label}");
         }
-        // signed out, or an account name import: no token is at stake
+        // signed out: no token is at stake
         h.account(signed_out());
         assert!(!h.ui.cancel_signs_out("Fetching characters"));
+        // signed in, with an account-name request running too: the OAuth one still asks
         let mut view = signed_in();
         view.public.stage = PublicStage::Importing;
         h.account(view);
-        assert!(!h.ui.cancel_signs_out("Importing passive tree"));
+        assert!(h.ui.cancel_signs_out("Importing passive tree"));
     }
 }

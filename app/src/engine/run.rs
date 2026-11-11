@@ -377,6 +377,11 @@ pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send
             }
         }
     };
+    // The requests go first: one that finished with a new build tells the UI to start over
+    // (`new_build`), and the new build's views must come after that, not before.
+    if flags.requests {
+        emit(seq, send, backend.requests_view(), Snapshot::Requests);
+    }
     if flags.build {
         emit(seq, send, backend.build_view(), Snapshot::Build);
     }
@@ -579,9 +584,6 @@ pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send
                 message: format!("{e:#}"),
             }),
         }
-    }
-    if flags.requests {
-        emit(seq, send, backend.requests_view(), Snapshot::Requests);
     }
     if flags.share {
         emit(seq, send, backend.share_view(), Snapshot::Share);
@@ -999,6 +1001,7 @@ mod tests {
         assert_eq!(
             kinds,
             [
+                "requests",
                 "build",
                 "list",
                 "stats",
@@ -1010,7 +1013,6 @@ mod tests {
                 "display_item",
                 "popup",
                 "notes",
-                "requests",
                 "share",
                 "account"
             ]
@@ -1123,7 +1125,7 @@ mod tests {
         // the requests need no build either (R10)
         assert_eq!(
             kinds,
-            ["list", "requests"],
+            ["requests", "list"],
             "only the list-safe views go out"
         );
     }
@@ -2038,8 +2040,25 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        assert_eq!(kinds(true), ["stats", "requests"]);
+        assert_eq!(kinds(true), ["requests", "stats"]);
         assert_eq!(kinds(false), ["requests"]);
+    }
+
+    #[test]
+    fn requests_come_before_the_views_of_a_new_build() {
+        // a request that finished with a new build tells the UI to start over, so the build's
+        // views follow it
+        let (mut fake, _log) = Fake::new();
+        let events = RefCell::new(Vec::new());
+        send_snapshots(&mut fake, 1, Affected::ALL_VIEWS, &|e| {
+            events.borrow_mut().push(e)
+        });
+        let kinds: Vec<_> = snapshots(&events.into_inner())
+            .iter()
+            .map(|(_, s)| matches!(s, Snapshot::Requests(_)))
+            .collect();
+        assert!(kinds[0], "Requests is the step's first snapshot");
+        assert_eq!(kinds.iter().filter(|k| **k).count(), 1);
     }
 
     fn count_of(events: &[Event], wanted: fn(&Snapshot) -> bool) -> usize {

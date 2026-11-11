@@ -2045,6 +2045,8 @@ mod tests {
             count_of(&events, |s| matches!(s, Snapshot::ShareCode(_))),
             1
         );
+        // the box is emptied, so the link showing is gone: the share view follows
+        assert_eq!(count_of(&events, |s| matches!(s, Snapshot::Share(_))), 1);
         assert_eq!(log.lock().unwrap().share_codes, 1);
         // a later batch asks again
         let events = run_queued(&mut fake, vec![Command::ExportShareCode]);

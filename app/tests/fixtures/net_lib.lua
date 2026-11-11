@@ -122,3 +122,16 @@ function siteList()
 	end
 	return list
 end
+
+-- A protocol link as Main:Init handles `arg[1]` (Main.lua:68-77): fetched with no ImportTab,
+-- then opened as a new build with the callback's link
+function act.arg_import(uri)
+	buildSites.DownloadBuild(uri, nil, function(isSuccess, data, importLink)
+		if not isSuccess then
+			main:SetMode("BUILD", false, data)
+		else
+			local xmlText = Inflate(common.base64.decode(data:gsub("-","+"):gsub("_","/")))
+			main:SetMode("BUILD", false, "Imported Build", xmlText, false, importLink)
+		end
+	end)
+end

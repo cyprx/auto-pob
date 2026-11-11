@@ -62,6 +62,14 @@ end
 -- The first error a request meets in its popups, `promptMsg` or our own machinery sticks.
 local function record_error(req, message)
 	message = first_line(StripEscapes(tostring(message))):gsub("^%s+", ""):gsub("%s+$", "")
+	-- a site's error page can be long: keep the start, on a character boundary
+	if #message > 200 then
+		local cut = 200
+		while cut > 0 and message:byte(cut + 1) and message:byte(cut + 1) >= 0x80 and message:byte(cut + 1) < 0xC0 do
+			cut = cut - 1
+		end
+		message = message:sub(1, cut) .. "..."
+	end
 	if not req.error and message ~= "" then
 		req.error = message
 	end

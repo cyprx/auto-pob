@@ -986,6 +986,27 @@ fn build_sites_match_pob() {
         assert_eq!(ours.site, None);
     }
 
+    // a redirect link is unwrapped by the box (ImportTab.lua:590-594), on either route
+    for wrapped in [
+        "https://www.google.com/url?sa=t&q=https%3A%2F%2Fpobb.in%2Fgate&usg=x",
+        "https://www.youtube.com/redirect?event=c&q=https%3A%2F%2Fpobb.in%2Fgate&v=x",
+    ] {
+        up.eval::<()>(&format!("act.code_set('{wrapped}')"));
+        s.backend
+            .apply(
+                Command::SetImportCode {
+                    text: wrapped.into(),
+                },
+                &|_| {},
+            )
+            .unwrap();
+        let (ours, theirs) = (our_view(&mut s).import, up_dump(&up));
+        assert_eq!(ours.detail, "URL is valid (pobb.in)");
+        assert_eq!(ours.detail, theirs.detail);
+        assert_eq!(ours.text, "https://pobb.in/gate");
+        assert_eq!(ours.text, theirs.text);
+    }
+
     // ---- Every site imports into a new build, equal to the fixture ----
     for site in &sites {
         up.eval::<()>(&format!("act.code_import('{}', 'new')", site.link()));
@@ -1013,6 +1034,13 @@ fn build_sites_match_pob() {
             site.id
         );
     }
+    let wrapped = "https://www.google.com/url?q=https%3A%2F%2Fpobb.in%2Fgate&sa=D";
+    up.eval::<()>(&format!("act.code_import('{wrapped}', 'new')"));
+    up.pump(Duration::from_secs(15));
+    let entry = import_link(&mut s, wrapped, ImportMode::NewBuild);
+    assert_eq!(entry.error, None);
+    assert_eq!(entry.label, "Fetching build from pobb.in");
+    assert_golden(&mut s, "attack", "redirect link");
     // the upstream build is the same one
     let theirs = golden_of(&up.lua, Game::Poe1.pob_version()).expect("upstream stats");
     assert_sidebar(
@@ -1070,9 +1098,32 @@ fn build_sites_match_pob() {
         let pending = s.requests().pending;
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].label, format!("Sharing on {}", site.label));
-        let entry = finish_request(&mut s);
-        assert_eq!(entry.error, None, "{}", site.id);
-        assert!(!entry.new_build);
+        // PoB disables the button while an upload runs: a second press starts nothing
+        if site.id == "Maxroll" {
+            let posts = |web: &pob_runtime::net::CannedWeb| {
+                web.requests().iter().filter(|r| r.method == "POST").count()
+            };
+            let asked = posts(&web);
+            let err = s
+                .backend
+                .apply(
+                    Command::ShareBuild {
+                        site: site.id.clone(),
+                    },
+                    &|_| {},
+                )
+                .unwrap_err();
+            assert_eq!(format!("{err:#}"), "already sharing");
+            assert_eq!(s.requests().pending.len(), 1);
+            assert!(our_view(&mut s).sharing);
+            let entry = finish_request(&mut s);
+            assert_eq!(entry.error, None);
+            assert_eq!(posts(&web), asked + 1, "a second upload started");
+        } else {
+            let entry = finish_request(&mut s);
+            assert_eq!(entry.error, None, "{}", site.id);
+            assert!(!entry.new_build);
+        }
         let want = format!("{}gate-{}", site.code_out.clone().unwrap(), site.id);
         let ours = our_view(&mut s);
         assert_eq!(ours.link.as_deref(), Some(want.as_str()), "{}", site.id);
@@ -1108,8 +1159,26 @@ fn build_sites_match_pob() {
         // upstream's code is a different serialisation of the same build (PoB writes its
         // stats in `pairs` order), but the field prefix is PoB's own
         assert!(
-            their_post.body.starts_with(fields.as_bytes()) && their_post.body.len() > fields.len(),
+            their_post.body.starts_with(fields.as_bytes()),
             "{}",
+            site.id
+        );
+        let decode_body = |body: &[u8]| -> Vec<String> {
+            let code = String::from_utf8(body[fields.len()..].to_vec()).unwrap();
+            let xml: String = s
+                .backend
+                .lua
+                .load("local c = ... return Inflate(common.base64.decode((c:gsub('-','+'):gsub('_','/'))))")
+                .call(code)
+                .expect("an upload that is a build code");
+            let mut lines: Vec<String> = canonical_xml(&xml).lines().map(str::to_owned).collect();
+            lines.sort();
+            lines
+        };
+        assert_eq!(
+            decode_body(&our_post.body),
+            decode_body(&their_post.body),
+            "{}: the uploaded builds differ",
             site.id
         );
         s.assert_clean(&site.id);
@@ -1232,7 +1301,11 @@ fn build_sites_match_pob() {
     assert!(entry.new_build);
 
     // Share failing: PoB's message popup, captured as the error
-    web.route("POST", &post, Canned::status(500, "boom"));
+    web.route(
+        "POST",
+        &post,
+        Canned::status(500, format!("boom {}", "é".repeat(400))),
+    );
     up.eval::<()>("act.share('POBBin')");
     up.pump(Duration::from_secs(15));
     let message: String = up.eval("return popupMessage()");
@@ -1251,6 +1324,11 @@ fn build_sites_match_pob() {
     let error = entry.error.expect("the share fails");
     assert!(error.starts_with(&message), "{error}");
     assert!(error.contains("boom"), "{error}");
+    // a site's error page is cut to its start, on a character boundary
+    assert!(
+        error.chars().count() <= 204 && error.ends_with("..."),
+        "{error}"
+    );
     assert_eq!(our_view(&mut s).link, None);
     assert_eq!(flags(&s).1, "Share");
     s.assert_clean("share 500");
@@ -1398,6 +1476,13 @@ fn build_sites_match_pob() {
     ] {
         web.route("GET", &get, reply);
         let entry = import_link(&mut list, pob_link, ImportMode::NewBuild);
+        // a redirect link is unwrapped as the box does: the unwrapped site is fetched
+        let wrapped = "https://www.google.com/url?q=https%3A%2F%2Fpobb.in%2Fgate&sa=D";
+        let before = web.requests().len();
+        let again = import_link(&mut list, wrapped, ImportMode::NewBuild);
+        assert_eq!(again.error, entry.error, "{what}: redirect link");
+        assert_eq!(web.requests()[before..].len(), 1);
+        assert_eq!(web.requests()[before].url, get);
         assert_eq!(entry.error.as_deref(), Some(want), "{what}");
         assert_eq!(entry.label, "Fetching build from pobb.in");
         assert!(!entry.new_build);
@@ -1425,6 +1510,17 @@ fn build_sites_match_pob() {
             &|_| {},
         )
         .unwrap();
+    // text PoB's box rejects changes nothing, so it cancels nothing
+    let err = list
+        .backend
+        .apply(import_command("nonsense", ImportMode::NewBuild), &|_| {})
+        .unwrap_err();
+    assert_eq!(format!("{err:#}"), "that isn't a link PoB can import");
+    assert_eq!(
+        list.requests().pending,
+        pending,
+        "a rejected import cancelled it"
+    );
     assert_eq!(
         list.requests().pending,
         pending,
@@ -1451,8 +1547,13 @@ fn build_sites_match_pob() {
         ("Imported build", None)
     );
     assert_golden(&mut list, "attack", "from the list");
-    // the link is stored: the protocol link's https form (Main.lua:68-77)
-    assert_eq!(saved_import_link(&our_saved_xml(&list)), want_link);
+    // the link is stored as Main.lua does: what the download fetched (Main.lua:70-77)
+    up.eval::<()>("act.arg_import('pob://pobbin/gate')");
+    up.pump(Duration::from_secs(15));
+    up.eval::<()>("runCallback('OnFrame')");
+    let theirs = saved_import_link(&up.eval::<String>("return build:SaveDB('code')"));
+    assert_eq!(theirs.as_deref(), Some(get.as_str()));
+    assert_eq!(saved_import_link(&our_saved_xml(&list)), theirs);
     list.assert_clean("from the list");
 
     assert!(web.unrouted().is_empty(), "unrouted: {:?}", web.unrouted());

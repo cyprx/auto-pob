@@ -232,6 +232,7 @@ impl Fake {
                 ..Affected::default()
             }),
             Command::ExportShareCode => Ok(Affected {
+                share: true,
                 share_code: true,
                 ..Affected::default()
             }),

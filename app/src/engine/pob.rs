@@ -671,7 +671,9 @@ impl PobBackend {
                 affected.share = true;
                 Ok(affected)
             }
+            // the box is emptied, as PoB's Copy button does, so a link showing is gone
             Command::ExportShareCode => Ok(Affected {
+                share: true,
                 share_code: true,
                 ..Affected::default()
             }),
@@ -1378,6 +1380,14 @@ impl Backend for PobBackend {
         let leaves = leaves_build(&command);
         // a late result must never land on another build (R13); the cancelled entries go out
         // with the command's views
+        // text PoB's box rejects changes nothing, so it cancels nothing either (R13)
+        if let Command::ImportFromUrl { url, mode } = &command {
+            let mode = match mode {
+                ImportMode::ThisBuild => "this",
+                ImportMode::NewBuild => "new",
+            };
+            self.call::<_, ()>("import_check", (url.clone(), mode))?;
+        }
         let cancelled = match cancels_requests(&command) {
             Some(scope) => {
                 self.cancel_all_requests(scope)?;

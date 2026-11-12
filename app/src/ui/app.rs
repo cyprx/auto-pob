@@ -716,6 +716,7 @@ impl AutoPobApp {
         self.sidebar = sidebar::SidebarState::default();
         self.top_bar = build::TopBarState::default();
         self.notes.reset();
+        self.config_ui.reset();
         self.import_ui.reset();
         self.compare.reset();
         // the engine dropped the overlay with the comparisons
@@ -3435,6 +3436,26 @@ mod tests {
         assert!(app.config_ui.rects.contains_key("set_delete"));
         assert!(!app.config_ui.rects.contains_key("set_delete_yes"));
         assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn another_build_starts_with_no_config_set_question() {
+        // PoB makes a new ConfigTab for each build: an unanswered Delete question doesn't
+        // carry over to a set of the next build with the same id
+        let (mut app, ctx) = config_app(sample_config());
+        click(&mut app, &ctx, "set_delete");
+        assert!(app.config_ui.rects.contains_key("set_delete_yes"));
+        app.request(Pending::New);
+        pump_until(&mut app, &ctx, "another build", |a| {
+            a.screen == Screen::Build && a.entering.is_none()
+        });
+        app.config = Some(Arc::new(sample_config()));
+        app.tab = BuildTab::Config;
+        app.config_ui.rects.clear();
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.config_ui.rects.contains_key("set_delete"));
+        assert!(!app.config_ui.rects.contains_key("set_delete_yes"));
     }
 
     #[test]

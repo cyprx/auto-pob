@@ -1012,4 +1012,60 @@ mod tests {
         let out = h.click_at(h.screen_of(6));
         assert!(out.commands.is_empty(), "{:?}", out.commands);
     }
+
+    // ---- Task 13: tree Copy and reorder (NF-3) ----
+
+    fn two_specs() -> Harness {
+        let (l, s) = sample();
+        let mut state = (*s).clone();
+        state.specs = serde_json::from_value(serde_json::json!([
+            { "title": "Main", "version": "3_28", "points": 1 },
+            { "title": "Bare", "version": "3_28", "points": 0 },
+        ]))
+        .unwrap();
+        Harness::new(l, Arc::new(state))
+    }
+
+    #[test]
+    fn spec_copy_asks_for_a_name_and_sends_copy_spec() {
+        let mut h = two_specs();
+        let pos = h.tab.rects.map["spec_copy"].center();
+        assert!(h.click_at(pos).commands.is_empty());
+        h.frame(vec![]);
+        let pos = h.tab.rects.map["spec_copy_ok"].center();
+        assert_eq!(
+            debug(&h.click_at(pos).commands),
+            ["CopySpec { index: 0, title: \"Main\" }"]
+        );
+    }
+
+    #[test]
+    fn dragging_a_tree_sends_move_spec() {
+        let mut h = two_specs();
+        let pos = h.tab.rects.map["spec_order"].center();
+        h.click_at(pos);
+        h.frame(vec![]);
+        let from = h.tab.rects.map["spec_order_row:0"].center();
+        let r = h.tab.rects.map["spec_order_row:1"];
+        let to = Pos2::new(r.center().x, r.bottom() - 2.0);
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut all = vec![];
+        for events in [
+            vec![Event::PointerMoved(from)],
+            vec![button(from, true)],
+            vec![Event::PointerMoved(Pos2::new(from.x + 30.0, from.y + 6.0))],
+            vec![Event::PointerMoved(to)],
+            vec![Event::PointerMoved(to)],
+            vec![button(to, false)],
+            vec![],
+        ] {
+            all.extend(h.frame(events).commands);
+        }
+        assert_eq!(debug(&all), ["MoveSpec { from: 0, to: 1 }"]);
+    }
 }

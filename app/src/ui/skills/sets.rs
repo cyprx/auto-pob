@@ -3,7 +3,11 @@
 use super::{SkillsOutput, SkillsUi};
 use crate::engine::Command;
 use crate::engine::views::{SkillSetEntry, SkillsView};
-use eframe::egui;
+use crate::ui::items::list::reorder_rows;
+use eframe::egui::{self, Color32};
+
+/// What a dragged set row carries: its position
+struct SetDrag(usize);
 
 /// What the name box of the manager is asking for.
 #[derive(Debug, Clone, PartialEq)]
@@ -122,20 +126,49 @@ impl SkillsUi {
                     }
                 }
                 ui.add_enabled_ui(!blocked, |ui| {
-                    for (i, set) in view.sets.iter().enumerate() {
-                        let label = if set.id == view.active_set {
-                            format!("{} (active)", title(set))
-                        } else {
-                            title(set).to_owned()
-                        };
-                        let row = ui.selectable_label(self.sets.selected == Some(set.id), label);
-                        self.rects.note(&row, || format!("sets_row_{i}"));
+                    // PoB's list rows drag to a new place (R31)
+                    let selected = self.sets.selected;
+                    let rows = reorder_rows(
+                        ui,
+                        "skills_sets",
+                        view.sets.len(),
+                        true,
+                        false,
+                        SetDrag,
+                        |p: &SetDrag| p.0,
+                        |ui, i| {
+                            let set = &view.sets[i];
+                            let label = if set.id == view.active_set {
+                                format!("{} (active)", title(set))
+                            } else {
+                                title(set).to_owned()
+                            };
+                            let fill = if selected == Some(set.id) {
+                                ui.visuals().selection.bg_fill
+                            } else {
+                                Color32::TRANSPARENT
+                            };
+                            egui::Frame::NONE
+                                .fill(fill)
+                                .inner_margin(2.0)
+                                .show(ui, |ui| {
+                                    ui.set_min_width(240.0);
+                                    ui.add(egui::Label::new(label).selectable(false));
+                                });
+                        },
+                    );
+                    for (i, row) in rows.rows.iter().enumerate() {
+                        let set = &view.sets[i];
+                        self.rects.note(row, || format!("sets_row_{i}"));
                         if row.clicked() {
                             self.sets.selected = Some(set.id);
                         }
                         if row.double_clicked() && set.id != view.active_set {
                             out.commands.push(Command::SelectSkillSet { id: set.id });
                         }
+                    }
+                    if let Some((from, to)) = rows.moved {
+                        out.commands.push(Command::MoveSkillSet { from, to });
                     }
                     ui.separator();
                     let sel = self

@@ -35,7 +35,7 @@ pub fn delete_prompt(entry: &ItemEntry) -> Option<String> {
 }
 
 /// What a reorderable column of rows reports.
-pub(super) struct Reordered {
+pub(crate) struct Reordered {
     /// One click response per row
     pub rows: Vec<egui::Response>,
     /// `from`, and where it ends up (as `drop_index`)
@@ -45,7 +45,7 @@ pub(super) struct Reordered {
 /// Draws `n` rows that can be dragged (carrying `payload(i)`) and, when `reorder` is on,
 /// dropped on each other. `draw` fills a row.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn reorder_rows<P: Send + Sync + 'static>(
+pub(crate) fn reorder_rows<P: Send + Sync + 'static>(
     ui: &mut egui::Ui,
     salt: &str,
     n: usize,

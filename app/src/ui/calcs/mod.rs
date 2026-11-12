@@ -614,6 +614,7 @@ mod tests {
                         }],
                     }],
                 }],
+                col_widths: vec![95.0],
             }],
             selector: CalcsSelector {
                 group: list(&["Group"]),

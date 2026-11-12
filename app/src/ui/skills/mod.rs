@@ -67,9 +67,16 @@ pub struct SkillsUi {
     pub(crate) rects: Rects,
     /// The group row Up, Down, Home or End moved to: it takes the focus when drawn
     focus_group: Option<usize>,
+    /// The gem quality, enable and count boxes' "what if" tooltips (R22)
+    pub(crate) hover_tip: crate::ui::hover::HoverTip,
 }
 
 impl SkillsUi {
+    /// A recalculation changed what the hover answers compare against.
+    pub fn forget_hover(&mut self) {
+        self.hover_tip.forget();
+    }
+
     /// Forgets the build's state, as for another build.
     pub fn reset(&mut self) {
         *self = Self::default();
@@ -141,6 +148,7 @@ impl SkillsUi {
                     self.tooltip_asked = None;
                     self.gem_tooltip = None;
                     self.gem_tooltip_asked = None;
+                    self.hover_tip.forget();
                 }
                 let old = self.view.as_ref().map_or(0, |v| v.groups.len());
                 let n = view.groups.len();
@@ -167,6 +175,7 @@ impl SkillsUi {
                 }
             }
             Snapshot::GroupTooltip(t) => self.tooltip = Some(t.clone()),
+            Snapshot::HoverTooltip(t) => self.hover_tip.on_view(t),
             Snapshot::GemSearch(v) => {
                 if let Some(p) = &mut self.picker {
                     p.on_search(v.clone());

@@ -8,14 +8,16 @@ use std::time::Duration;
 
 use crate::pob_files::DownloadProgress;
 
-use super::commands::{Command, ControlTooltipQuery, GemTooltipQuery, ItemTooltipQuery};
+use super::commands::{
+    Command, ControlTooltipQuery, GemTooltipQuery, HoverTarget, ItemTooltipQuery,
+};
 use super::views::HelpView;
 use super::views::{
     AccountView, BreakdownView, BuildBrowseView, BuildListView, BuildView, CalcsView, CellRef,
     CompareView, ConfigView, ControlTooltipView, DisplayItemView, ExternalUrl, GemSearchView,
-    GemTooltipView, GroupTooltipView, ItemDbView, ItemText, ItemTooltipView, ItemsView, NodePower,
-    NodeTooltip, NotesView, PopupView, PowerReport, RequestsView, SettingsView, ShareView,
-    SkillsView, SocketGroupText, StatsView, TreeLayout, TreeState,
+    GemTooltipView, GroupTooltipView, HoverTooltipView, ItemDbView, ItemText, ItemTooltipView,
+    ItemsView, NodePower, NodeTooltip, NotesView, PopupView, PowerReport, RequestsView,
+    SettingsView, ShareView, SkillsView, SocketGroupText, StatsView, TreeLayout, TreeState,
 };
 use pob_runtime::net::Waker;
 
@@ -68,6 +70,8 @@ pub enum Snapshot {
     ExternalUrl(Arc<ExternalUrl>),
     /// PoB's help, answering `Help`; sent with or without a build
     Help(Arc<HelpView>),
+    /// What hovering a control shows (R22), answering `HoverTooltip`
+    HoverTooltip(Arc<HoverTooltipView>),
 }
 
 /// Long-running work the engine does between commands.
@@ -186,6 +190,8 @@ pub struct Affected {
     pub external_url: Option<ExternalUrl>,
     /// PoB's help was asked for (`Help`); list-safe
     pub help: bool,
+    /// This control's hover tooltip was requested; the latest request wins (R22)
+    pub hover: Option<HoverTarget>,
 }
 
 impl Affected {
@@ -226,6 +232,7 @@ impl Affected {
         browse: None,
         external_url: None,
         help: false,
+        hover: None,
     };
 
     /// Only views that need no build are asked for: the build list, the requests, the settings
@@ -296,6 +303,9 @@ impl Affected {
             self.external_url = other.external_url;
         }
         self.help |= other.help;
+        if other.hover.is_some() {
+            self.hover = other.hover;
+        }
     }
 }
 
@@ -392,6 +402,11 @@ pub trait Backend {
     fn set_waker(&mut self, _wake: Waker) {}
     /// PoB's help as its About window lists it; needs no build, changes nothing
     fn help_view(&mut self) -> anyhow::Result<HelpView>;
+    /// What hovering the control shows (R22); `None` when the gem, option or group is gone
+    fn hover_tooltip_view(
+        &mut self,
+        target: &HoverTarget,
+    ) -> anyhow::Result<Option<HoverTooltipView>>;
 }
 
 /// Sends the snapshots `flags` asks for, as the loop does after a command or a background
@@ -669,6 +684,20 @@ pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send
             seq,
             snapshot: Snapshot::ExternalUrl(Arc::new(url.clone())),
         });
+    }
+    if let Some(target) = &flags.hover {
+        match backend.hover_tooltip_view(target) {
+            Ok(Some(view)) => send(Event::Snapshot {
+                seq,
+                snapshot: Snapshot::HoverTooltip(Arc::new(view)),
+            }),
+            // a vanished control sends nothing
+            Ok(None) => {}
+            Err(e) => send(Event::Error {
+                seq,
+                message: format!("{e:#}"),
+            }),
+        }
     }
     // "no comparison" is an answer too: a build change drops them
     if flags.compare {
@@ -1518,6 +1547,32 @@ mod tests {
             .collect();
         assert_eq!(tooltips, [3]);
         assert_eq!(log.lock().unwrap().tooltips, [3]);
+    }
+
+    #[test]
+    fn only_latest_hover_tooltip_runs() {
+        use crate::engine::HoverTarget;
+        let (mut fake, log) = Fake::new();
+        let targets = [
+            HoverTarget::GemQuality { group: 0, slot: 1 },
+            HoverTarget::ConfigOption {
+                var: "buffOnslaught".into(),
+            },
+            HoverTarget::GemCount { group: 2, slot: 0 },
+        ];
+        let events = run_queued(
+            &mut fake,
+            targets.iter().cloned().map(Command::HoverTooltip).collect(),
+        );
+        let hovers: Vec<_> = snapshots(&events)
+            .into_iter()
+            .filter_map(|(_, s)| match s {
+                Snapshot::HoverTooltip(t) => Some(t.target.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hovers, [targets[2].clone()]);
+        assert_eq!(log.lock().unwrap().hovers, [targets[2].clone()]);
     }
 
     fn item_query(id: u32) -> crate::engine::ItemTooltipQuery {

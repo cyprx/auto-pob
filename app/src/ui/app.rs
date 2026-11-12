@@ -609,15 +609,28 @@ impl AutoPobApp {
                     }
                     Snapshot::BuildList(view) => self.list = Some(view),
                     Snapshot::Stats(view) => {
+                        // a new calculation: the "what if" answers compared against the old one
+                        self.skills.forget_hover();
+                        self.config_ui.forget_hover();
                         self.stats = Some(view);
                     }
-                    Snapshot::Config(view) => self.config = Some(view),
+                    Snapshot::Config(view) => {
+                        // the answers to hovers were about the options before
+                        self.config_ui.forget_hover();
+                        self.config = Some(view);
+                    }
                     Snapshot::Calcs(_) => self.calcs.on_snapshot(&snapshot),
                     Snapshot::Skills(_)
                     | Snapshot::SocketGroupText(_)
                     | Snapshot::GroupTooltip(_)
                     | Snapshot::GemSearch(_)
                     | Snapshot::GemTooltip(_) => self.skills.on_snapshot(&snapshot),
+                    // the Skills and Config tabs each keep the answers to their own hovers
+                    Snapshot::HoverTooltip(view) => {
+                        self.skills
+                            .on_snapshot(&Snapshot::HoverTooltip(view.clone()));
+                        self.config_ui.on_hover(&view);
+                    }
                     Snapshot::Items(_)
                     | Snapshot::DisplayItem(_)
                     | Snapshot::ItemTooltip(_)
@@ -1563,7 +1576,12 @@ impl AutoPobApp {
             }
         });
         for command in config_commands {
-            self.send(command);
+            // a hover is a question: it never leaves the app waiting
+            if matches!(command, Command::HoverTooltip(_)) {
+                self.engine.send(command);
+            } else {
+                self.send(command);
+            }
         }
         if let Some(command) = notes_command {
             self.send(command);
@@ -2473,6 +2491,12 @@ mod tests {
         }
         fn requests_view(&mut self) -> anyhow::Result<crate::engine::RequestsView> {
             Ok(crate::engine::RequestsView::default())
+        }
+        fn hover_tooltip_view(
+            &mut self,
+            _target: &crate::engine::HoverTarget,
+        ) -> anyhow::Result<Option<crate::engine::HoverTooltipView>> {
+            Ok(None)
         }
         fn help_view(&mut self) -> anyhow::Result<crate::engine::HelpView> {
             Ok(fake_help())

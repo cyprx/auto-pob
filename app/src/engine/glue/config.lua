@@ -330,3 +330,81 @@ function glue.redo(tab)
 	configTab:BuildModList()
 	configTab.build.buildFlag = true
 end
+
+-- ---- "What if" tooltips, set copy and reorder (R22, NF-4) ----
+
+-- What hovering an option's control shows: its `tooltipFunc` as PoB wraps it (ConfigTab.lua:
+-- 700-764, the "Toggling/Selecting this option will give you:" comparison), called with what
+-- the control's own draw passes: a check box its state (CheckBoxControl.lua:80), a dropdown's
+-- box "BODY" and its selection (DropDownControl.lua:295-298), an edit box nothing. An option
+-- whose control has no `tooltipFunc` shows its `tooltipText`, as TooltipHost does. Nil when the
+-- option has no control, or PoB doesn't show it.
+function glue.config_hover(var)
+	local tab = config_tab()
+	local control = tab.varControls[var]
+	if not (control and control:IsShown()) then
+		return nil
+	end
+	local tooltip = new("Tooltip")
+	if control.tooltipFunc then
+		if control._className == "CheckBoxControl" then
+			control.tooltipFunc(tooltip, control.state)
+		elseif control._className == "DropDownControl" then
+			control.tooltipFunc(tooltip, "BODY", control.selIndex, control.list[control.selIndex])
+		else
+			control.tooltipFunc(tooltip)
+		end
+	else
+		local text = control:GetProperty("tooltipText")
+		if text and text ~= "" then
+			tooltip:AddLine(14, text)
+		end
+	end
+	return glue.tooltip_lines(tooltip)
+end
+
+-- What hovering a custom modifier group's enable box shows (ConfigTab.lua:53-67)
+function glue.custom_mod_hover(group)
+	local blocks = config_tab().customModsBlockControls
+	local block = blocks and blocks[group]
+	if not block then
+		return nil
+	end
+	local tooltip = new("Tooltip")
+	block.controls.enableCheck.tooltipFunc(tooltip)
+	return glue.tooltip_lines(tooltip)
+end
+
+local function with_config_set_list(fn)
+	glue.with_set_list("config set", function()
+		config_tab():OpenConfigSetManagePopup()
+	end, fn)
+end
+
+-- The manager's Copy button and its name popup (ConfigSetListControl.lua:13-25, 44-69): the copy
+-- is added at the end of the list, not switched to
+function glue.copy_config_set(id, title)
+	local tab = config_tab()
+	local index = config_set_index(tab, id)
+	glue.check_title("config set", title)
+	with_config_set_list(function(list)
+		list.selIndex, list.selValue = index, id
+		list.controls.copy.onClick()
+		glue.save_name("config set", title)
+	end)
+end
+
+-- Dragging a row of the manager's list (ConfigSetListControl.lua:79-81 only sets modFlag)
+function glue.move_config_set(from, to)
+	local order = config_tab().configSetOrderList
+	if not (order[from] and order[to]) then
+		error("no such config set", 0)
+	end
+	if from == to then
+		return
+	end
+	with_config_set_list(function(list)
+		glue.drop_list_row(list, from, to)
+	end)
+	glue.frame()
+end

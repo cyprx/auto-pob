@@ -3,18 +3,18 @@
 use super::buildpaths;
 use super::commands::{
     CharacterPart, Command, CompareSource, ConfigValue, ControlTooltipQuery, DeleteKind,
-    GemSearchQuery, GemTarget, GemToggle, GemTooltipQuery, ImportMode, ItemDb, ItemDbQuery,
-    ItemTooltipQuery, PopupInput, PopupKind, SkillOption, SocketColour, Tab,
+    GemSearchQuery, GemTarget, GemToggle, GemTooltipQuery, HoverTarget, ImportMode, ItemDb,
+    ItemDbQuery, ItemTooltipQuery, PopupInput, PopupKind, SkillOption, SocketColour, Tab,
 };
 use super::net::{Dispatch, NetHandle};
 use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Engine, Event};
 use super::views::{
     AccountView, BreakdownView, BuildBrowseView, BuildListView, BuildView, CalcsView, CellRef,
     CompareView, ConfigView, ControlTooltipView, DisplayItemView, ExternalUrl, GemRow,
-    GemSearchView, GemTooltipView, GroupTooltipView, ItemDbView, ItemText, ItemTooltip,
-    ItemTooltipView, ItemsView, ModLineList, NodePower, NodeTooltip, NotesView, PopupView,
-    PowerReport, RequestsView, SettingsView, ShareView, SkillsView, SocketGroupText, StatsView,
-    TooltipLine, TreeLayout, TreeState,
+    GemSearchView, GemTooltipView, GroupTooltipView, HoverTooltipView, ItemDbView, ItemText,
+    ItemTooltip, ItemTooltipView, ItemsView, ModLineList, NodePower, NodeTooltip, NotesView,
+    PopupView, PowerReport, RequestsView, SettingsView, ShareView, SkillsView, SocketGroupText,
+    StatsView, TooltipLine, TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -633,6 +633,7 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::Breakdown(_)
             | Command::GemTooltip(_)
             | Command::GroupTooltip { .. }
+            | Command::HoverTooltip(_)
             | Command::CopySocketGroup { .. }
             | Command::PreviewNode { .. }
             | Command::PreviewTrace { .. }
@@ -1025,6 +1026,67 @@ impl PobBackend {
                     tree: true,
                     ..Affected::default()
                 })
+            }
+            Command::MoveSkillSet { from, to } => {
+                let (Some(lua_from), Some(lua_to)) = (from.checked_add(1), to.checked_add(1))
+                else {
+                    return Err(anyhow!("no such skill set"));
+                };
+                self.call::<_, ()>("skills_move_set", (lua_from, lua_to))?;
+                // PoB's drop onto the same place changes nothing
+                if from == to {
+                    return Ok(Affected::default());
+                }
+                // the order feeds no calculation; the glue ran a frame for `unsaved`
+                Ok(Affected {
+                    build: true,
+                    skills: true,
+                    ..Affected::default()
+                })
+            }
+            Command::HoverTooltip(target) => Ok(Affected {
+                hover: Some(target),
+                ..Affected::default()
+            }),
+            Command::CopyConfigSet { id, title } => {
+                self.call::<_, ()>("copy_config_set", (id, title))?;
+                // the name popup's Save syncs the loadouts, which flags a rebuild
+                Ok(config_changed())
+            }
+            Command::MoveConfigSet { from, to } => {
+                let (Some(lua_from), Some(lua_to)) = (from.checked_add(1), to.checked_add(1))
+                else {
+                    return Err(anyhow!("no such config set"));
+                };
+                self.call::<_, ()>("move_config_set", (lua_from, lua_to))?;
+                if from == to {
+                    return Ok(Affected::default());
+                }
+                Ok(Affected {
+                    build: true,
+                    config: true,
+                    ..Affected::default()
+                })
+            }
+            Command::CopySpec { index, title } => {
+                let Some(lua_index) = index.checked_add(1) else {
+                    return Err(anyhow!("unknown tree {index}"));
+                };
+                self.call::<_, ()>("copy_spec", (lua_index, title))?;
+                self.spec_edited(false)
+                    .map(|a| Affected { build: true, ..a })
+            }
+            Command::MoveSpec { from, to } => {
+                let (Some(lua_from), Some(lua_to)) = (from.checked_add(1), to.checked_add(1))
+                else {
+                    return Err(anyhow!("unknown tree"));
+                };
+                self.call::<_, ()>("move_spec", (lua_from, lua_to))?;
+                if from == to {
+                    return Ok(Affected::default());
+                }
+                self.spec_edited(false)
+                    .map(|a| Affected { build: true, ..a })
             }
             Command::CancelRequest { id } => {
                 self.cancel_request(id)?;
@@ -2414,6 +2476,26 @@ impl Backend for PobBackend {
     fn help_view(&mut self) -> Result<crate::engine::views::HelpView> {
         self.view("help_view", ())
     }
+
+    fn hover_tooltip_view(&mut self, target: &HoverTarget) -> Result<Option<HoverTooltipView>> {
+        let lines: Option<Vec<TooltipLine>> = match target {
+            HoverTarget::GemQuality { group, slot } => {
+                self.view("skills_hover", (group + 1, slot + 1, "quality"))?
+            }
+            HoverTarget::GemEnabled { group, slot } => {
+                self.view("skills_hover", (group + 1, slot + 1, "enabled"))?
+            }
+            HoverTarget::GemCount { group, slot } => {
+                self.view("skills_hover", (group + 1, slot + 1, "count"))?
+            }
+            HoverTarget::ConfigOption { var } => self.view("config_hover", var.clone())?,
+            HoverTarget::CustomModEnabled { group } => self.view("custom_mod_hover", group + 1)?,
+        };
+        Ok(lines.map(|lines| HoverTooltipView {
+            target: target.clone(),
+            lines,
+        }))
+    }
 }
 
 impl Engine {
@@ -2471,6 +2553,7 @@ mod tests {
                 target: GemTarget::Slot(0),
                 gem_id: None,
             }),
+            Command::HoverTooltip(crate::engine::HoverTarget::GemEnabled { group: 0, slot: 0 }),
             Command::OpenPopup(PopupKind::Craft),
             Command::OpenPopup(PopupKind::Options),
             Command::SetOverrides {

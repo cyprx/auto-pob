@@ -987,3 +987,30 @@ function glue.alloc_trace(id, trace)
 	spec:AllocNode(node, path)
 	finish_edit(false)
 end
+
+-- ---- Tree copy and reorder (NF-3) ----
+
+-- The tree manager's Copy button and its "Copy Tree" name popup (PassiveSpecListControl.lua:
+-- 13-21, 37-58): the copy is added at the end, not selected
+function glue.copy_spec(index, title)
+	local spec = spec_at(index)
+	with_spec_list(function(list)
+		list.selIndex, list.selValue = index, spec
+		list.controls.copy.onClick()
+		save_name(title)
+	end)
+end
+
+-- Dragging a row of the tree manager's list; its OnOrderChange (PassiveSpecListControl.lua:
+-- 75-80) finds the active tree again, refreshes the Items tab's tree list and syncs loadouts
+function glue.move_spec(from, to)
+	spec_at(from)
+	spec_at(to)
+	if from == to then
+		return
+	end
+	with_spec_list(function(list)
+		glue.drop_list_row(list, from, to)
+	end)
+	glue.frame()
+end

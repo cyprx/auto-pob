@@ -4,6 +4,7 @@
 use super::{Rects, TreeOutput};
 use crate::engine::{Command, PopupKind, TreeState};
 use crate::theme;
+use crate::ui::items::list::reorder_rows;
 use crate::widgets::pob_text;
 use eframe::egui;
 
@@ -35,7 +36,17 @@ enum Dialog {
         title: String,
         url: String,
     },
+    /// The tree manager's Copy and its "Copy Tree" name popup (NF-3)
+    CopySpec {
+        index: usize,
+        title: String,
+    },
+    /// The tree manager's list, whose rows drag to a new place (NF-3)
+    OrderSpecs,
 }
+
+/// What a dragged tree row carries: its position
+struct SpecDrag(usize);
 
 #[derive(Default)]
 pub(super) struct Toolbar {
@@ -190,6 +201,21 @@ impl Toolbar {
         rects.note(&delete, || "spec_delete".into());
         if delete.clicked() {
             self.dialog = Some(Dialog::DeleteSpec(state.active_spec));
+        }
+        let copy = ui.add_enabled(active.is_some(), egui::Button::new("Copy"));
+        rects.note(&copy, || "spec_copy".into());
+        if copy.clicked()
+            && let Some(spec) = active
+        {
+            self.dialog = Some(Dialog::CopySpec {
+                index: state.active_spec,
+                title: spec.title.clone(),
+            });
+        }
+        let order = ui.add_enabled(state.specs.len() > 1, egui::Button::new("Order\u{2026}"));
+        rects.note(&order, || "spec_order".into());
+        if order.clicked() {
+            self.dialog = Some(Dialog::OrderSpecs);
         }
         ui.label("Compare");
         let compare = egui::ComboBox::from_id_salt("tree_compare")
@@ -611,6 +637,8 @@ impl Toolbar {
             Dialog::Reset => "Reset tree",
             Dialog::RemoveTattoos => "Remove all tattoos",
             Dialog::Import { .. } => "Import tree link",
+            Dialog::CopySpec { .. } => "Copy Tree",
+            Dialog::OrderSpecs => "Tree order",
         };
         egui::Window::new(title)
             .collapsible(false)
@@ -704,6 +732,55 @@ impl Toolbar {
                         }
                         close |= ui.button("Cancel").clicked();
                     });
+                }
+                Dialog::CopySpec { index, title } => {
+                    ui.label("Enter name for this passive tree:");
+                    let field = ui.add(egui::TextEdit::singleline(title));
+                    let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    ui.horizontal(|ui| {
+                        let valid = !title.trim().is_empty();
+                        if (button(ui, rects, "spec_copy_ok", "Save", valid) || (enter && valid))
+                            && valid
+                        {
+                            commands.push(Command::CopySpec {
+                                index: *index,
+                                title: title.trim().to_owned(),
+                            });
+                            close = true;
+                        }
+                        close |= ui.button("Cancel").clicked();
+                    });
+                }
+                Dialog::OrderSpecs => {
+                    ui.label("Drag a tree to a new place.");
+                    let rows = reorder_rows(
+                        ui,
+                        "tree_specs",
+                        state.specs.len(),
+                        true,
+                        false,
+                        SpecDrag,
+                        |p: &SpecDrag| p.0,
+                        |ui, i| {
+                            let spec = &state.specs[i];
+                            let label = if i == state.active_spec {
+                                format!("{} (current)", spec.title)
+                            } else {
+                                spec.title.clone()
+                            };
+                            egui::Frame::NONE.inner_margin(2.0).show(ui, |ui| {
+                                ui.set_min_width(240.0);
+                                ui.add(egui::Label::new(label).selectable(false));
+                            });
+                        },
+                    );
+                    for (i, row) in rows.rows.iter().enumerate() {
+                        rects.note(row, || format!("spec_order_row:{i}"));
+                    }
+                    if let Some((from, to)) = rows.moved {
+                        commands.push(Command::MoveSpec { from, to });
+                    }
+                    close |= ui.button("Done").clicked();
                 }
             });
         if close {

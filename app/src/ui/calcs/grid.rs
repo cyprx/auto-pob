@@ -234,6 +234,7 @@ mod tests {
             colour: "^xFFFFFF".into(),
             enabled,
             subs,
+            col_widths: vec![],
         }
     }
 

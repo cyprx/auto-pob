@@ -346,6 +346,13 @@ pub struct GroupTooltipView {
     pub lines: Vec<TooltipLine>,
 }
 
+/// What hovering a control shows (R22): PoB's `tooltipFunc`, colour codes kept.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct HoverTooltipView {
+    pub target: crate::engine::HoverTarget,
+    pub lines: Vec<TooltipLine>,
+}
+
 /// The passive tree's geometry for the active spec, in PoB's tree coordinates. It changes only
 /// with the tree version or cluster jewel subgraphs, so it is sent apart from [`TreeState`].
 #[derive(Debug, Clone)]
@@ -948,6 +955,10 @@ pub struct CalcsSection {
     pub enabled: bool,
     #[serde(default)]
     pub subs: Vec<CalcsSub>,
+    /// The width PoB gives each cell column of a sub-section, by sub-section (R24):
+    /// `colWidth` or the section's width less the label column (CalcSectionControl.lua:126)
+    #[serde(default)]
+    pub col_widths: Vec<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

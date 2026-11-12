@@ -7,6 +7,7 @@ pub mod config;
 pub mod first_run;
 pub mod folder_picker;
 pub mod help;
+pub(crate) mod hover;
 pub mod import;
 pub mod items;
 pub mod notes;

@@ -49,6 +49,8 @@ pub struct Log {
     /// Compare views asked for
     pub compare_views: usize,
     pub applies: usize,
+    /// Hover tooltips answered (R22)
+    pub hovers: Vec<crate::engine::HoverTarget>,
 }
 
 /// The link a fake trade window's `search` press answers
@@ -169,6 +171,10 @@ impl Fake {
             }),
             Command::GroupTooltip { group } => Ok(Affected {
                 group_tooltip: Some(group),
+                ..Affected::default()
+            }),
+            Command::HoverTooltip(target) => Ok(Affected {
+                hover: Some(target),
                 ..Affected::default()
             }),
             Command::CopySocketGroup { group } => Ok(Affected {
@@ -736,6 +742,17 @@ impl Backend for Fake {
 
     fn set_waker(&mut self, wake: Waker) {
         self.waker = Some(wake);
+    }
+
+    fn hover_tooltip_view(
+        &mut self,
+        target: &crate::engine::HoverTarget,
+    ) -> anyhow::Result<Option<crate::engine::HoverTooltipView>> {
+        self.log.lock().unwrap().hovers.push(target.clone());
+        Ok(Some(crate::engine::HoverTooltipView {
+            target: target.clone(),
+            lines: vec![],
+        }))
     }
 
     fn release_memory(&mut self) {

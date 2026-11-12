@@ -657,6 +657,33 @@ fn ctrl_click(h: &mut Harness, key: &str, button: PointerButton) -> SkillsOutput
     all
 }
 
+// ---- Task 13: set reorder (R31) and "what if" tooltips (R22) ----
+
+use crate::engine::HoverTarget;
+
+fn drag(h: &mut Harness, from: Pos2, to: Pos2) -> Vec<Command> {
+    let button = |pos, pressed| Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    let mid = Pos2::new(from.x + 30.0, from.y + 6.0);
+    let mut all = Vec::new();
+    for events in [
+        vec![Event::PointerMoved(from)],
+        vec![button(from, true)],
+        vec![Event::PointerMoved(mid)],
+        vec![Event::PointerMoved(to)],
+        vec![Event::PointerMoved(to)],
+        vec![button(to, false)],
+        vec![],
+    ] {
+        all.extend(h.frame(events).commands);
+    }
+    all
+}
+
 #[test]
 fn ctrl_clicks_on_a_group_toggle_it_and_its_full_dps() {
     let mut h = Harness::new(sample());
@@ -730,4 +757,84 @@ fn group_list_keys_move_the_selection_and_backspace_deletes() {
     // the second group has no gems: it goes at once
     let o = h.press(Key::Backspace);
     assert_eq!(debug(&o.commands), ["DeleteSocketGroup { group: 1 }"]);
+}
+
+#[test]
+fn set_drag_sends_move_skill_set() {
+    let mut h = Harness::new(sample());
+    h.click("manage");
+    h.frame(vec![]);
+    let from = h.ui.rect("sets_row_0").center();
+    let r = h.ui.rect("sets_row_1");
+    let below = Pos2::new(r.center().x, r.bottom() - 2.0);
+    assert_eq!(
+        debug(&drag(&mut h, from, below)),
+        ["MoveSkillSet { from: 0, to: 1 }"]
+    );
+    // a click on a row still only selects it
+    let o = h.click("sets_row_1");
+    assert!(o.commands.is_empty(), "{:?}", o.commands);
+}
+
+#[test]
+fn gem_quality_hover_queries_once() {
+    let mut h = Harness::new(sample());
+    let pos = h.ui.rect("g0_s1_quality").center();
+    let o = h.frame(vec![Event::PointerMoved(pos)]);
+    assert!(o.queries.is_empty(), "too early: {:?}", o.queries);
+    let o = h.frame(vec![]);
+    let target = HoverTarget::GemQuality { group: 0, slot: 1 };
+    assert_eq!(
+        debug(&o.queries),
+        debug(&[Command::HoverTooltip(target.clone())])
+    );
+    for _ in 0..3 {
+        assert!(h.frame(vec![]).queries.is_empty(), "asked once");
+    }
+    // the answer is kept for the open question only
+    let answer = |target: HoverTarget| {
+        Snapshot::HoverTooltip(Arc::new(crate::engine::views::HoverTooltipView {
+            target,
+            lines: vec![TooltipLine::Line {
+                size: 16,
+                text: "^7Setting to 20 quality will give you:".into(),
+            }],
+        }))
+    };
+    h.ui.on_snapshot(&answer(HoverTarget::GemQuality { group: 0, slot: 0 }));
+    assert!(h.frame(vec![]).queries.is_empty());
+    h.ui.on_snapshot(&answer(target.clone()));
+    assert!(h.frame(vec![]).queries.is_empty());
+    // a new skills view asks again while still hovered
+    let mut changed = sample();
+    changed.groups[0].gems[1].quality = 20;
+    h.ui.on_snapshot(&Snapshot::Skills(Arc::new(changed)));
+    let o = h.frame(vec![Event::PointerMoved(pos)]);
+    assert_eq!(debug(&o.queries), debug(&[Command::HoverTooltip(target)]));
+    // leaving forgets it
+    h.frame(vec![Event::PointerMoved(Pos2::new(1100.0, 650.0))]);
+    assert!(h.ui.hover_tip.asked().is_none());
+}
+
+#[test]
+fn gem_enabled_and_count_hovers_name_their_box() {
+    let mut view = sample();
+    view.groups[0].gems[0].count = Some(1);
+    let mut h = Harness::new(view);
+    for (key, target) in [
+        (
+            "gem_0_enabled",
+            HoverTarget::GemEnabled { group: 0, slot: 0 },
+        ),
+        ("g0_s0_count", HoverTarget::GemCount { group: 0, slot: 0 }),
+    ] {
+        let pos = h.ui.rect(key).center();
+        h.frame(vec![Event::PointerMoved(pos)]);
+        let o = h.frame(vec![Event::PointerMoved(pos)]);
+        assert_eq!(
+            debug(&o.queries),
+            debug(&[Command::HoverTooltip(target)]),
+            "{key}"
+        );
+    }
 }

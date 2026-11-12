@@ -925,8 +925,7 @@ ported = "app/src/ui/compare/mod.rs views in egui ScrollAreas"
 note = "Compare sub-tabs"
 
 [controls."config.#CheckBoxControl"]
-gap = "Task 13"
-note = "options ported with PoB's tooltips (config.rs); the what-if stat comparison of the control's tooltipFunc is R22"
+ported = "app/src/ui/config.rs check boxes with PoB's tooltips and its what-if hover comparison (HoverTooltip ConfigOption, R22)"
 
 [controls."config.#Control"]
 ported = "app/src/ui/config.rs option rows"
@@ -943,8 +942,7 @@ note = "Mod Browser (R28)"
 ported = "app/src/ui/config.rs remove custom mod group"
 
 [controls."config.#CustomModBlockControl.enableCheck"]
-gap = "Task 13"
-note = "box ported (config.rs); NF-10 (new finding, in scope by controller ruling): its Enabling this group will give you what-if tooltip is not"
+ported = "app/src/ui/config.rs custom group enable box with PoB's what-if hover (HoverTooltip CustomModEnabled, NF-10)"
 
 [controls."config.#CustomModBlockControl.textEdit"]
 ported = "app/src/ui/config.rs custom mod group text"
@@ -953,31 +951,31 @@ ported = "app/src/ui/config.rs custom mod group text"
 ported = "app/src/ui/config.rs custom mod group title"
 
 [controls."config.#DropDownControl"]
-gap = "Task 13"
-note = "options ported with PoB's tooltips (config.rs); the what-if stat comparison of the control's tooltipFunc is R22"
+ported = "app/src/ui/config.rs dropdowns with PoB's tooltipFunc on hover (HoverTooltip ConfigOption, R22)"
+note = "per-entry tooltips inside the open list are out (R34)"
 
 [controls."config.#DropDownControl.scrollBar"]
-gap = "Task 13"
+ported = "app/src/ui/config.rs dropdowns"
 note = "part of config.#DropDownControl"
 
 [controls."config.#EditControl"]
-gap = "Task 13"
-note = "options ported with PoB's tooltips (config.rs); the what-if stat comparison of the control's tooltipFunc is R22"
+ported = "app/src/ui/config.rs edit boxes with PoB's tooltipFunc on hover (HoverTooltip ConfigOption, R22)"
+note = "PoB adds no what-if comparison to number inputs (ConfigTab.lua:719-721)"
 
 [controls."config.#EditControl.buttonDown"]
-gap = "Task 13"
+ported = "app/src/ui/config.rs edit boxes"
 note = "part of config.#EditControl"
 
 [controls."config.#EditControl.buttonUp"]
-gap = "Task 13"
+ported = "app/src/ui/config.rs edit boxes"
 note = "part of config.#EditControl"
 
 [controls."config.#EditControl.scrollBarH"]
-gap = "Task 13"
+ported = "app/src/ui/config.rs edit boxes"
 note = "part of config.#EditControl"
 
 [controls."config.#EditControl.scrollBarV"]
-gap = "Task 13"
+ported = "app/src/ui/config.rs edit boxes"
 note = "part of config.#EditControl"
 
 [controls."config.#LabelControl"]
@@ -1016,8 +1014,7 @@ note = "layout anchor"
 ported = "app/src/ui/config.rs set combo"
 
 [controls."config.setManage"]
-gap = "Task 13"
-note = "New, Rename and Delete ported (config.rs); NF-4 (new finding, in scope by controller ruling): no Copy and no reorder of config sets"
+ported = "app/src/ui/config.rs set buttons: New, Rename, Delete, Copy (CopyConfigSet) and Order window (MoveConfigSet, NF-4)"
 
 [controls."config.setSelect"]
 ported = "app/src/ui/config.rs set combo"
@@ -2504,31 +2501,29 @@ ported = "app/src/ui/skills/group.rs gem table"
 ported = "app/src/ui/skills/group.rs gem table"
 
 [controls."skills.gemSlot#Count"]
-gap = "Task 13"
-note = "box ported (skills/group.rs); the what-if tooltip is R22"
+ported = "app/src/ui/skills/group.rs Count box with PoB's what-if hover tooltip (HoverTooltip, R22)"
 
 [controls."skills.gemSlot#Count.buttonDown"]
-gap = "Task 13"
+ported = "app/src/ui/skills/group.rs Count box"
 note = "part of skills.gemSlot#Count"
 
 [controls."skills.gemSlot#Count.buttonUp"]
-gap = "Task 13"
+ported = "app/src/ui/skills/group.rs Count box"
 note = "part of skills.gemSlot#Count"
 
 [controls."skills.gemSlot#Count.scrollBarH"]
-gap = "Task 13"
+ported = "app/src/ui/skills/group.rs Count box"
 note = "part of skills.gemSlot#Count"
 
 [controls."skills.gemSlot#Count.scrollBarV"]
-gap = "Task 13"
+ported = "app/src/ui/skills/group.rs Count box"
 note = "part of skills.gemSlot#Count"
 
 [controls."skills.gemSlot#Delete"]
 ported = "app/src/ui/skills/group.rs gem table"
 
 [controls."skills.gemSlot#Enable"]
-gap = "Task 13"
-note = "box ported (skills/group.rs); the what-if tooltip is R22"
+ported = "app/src/ui/skills/group.rs enable box with PoB's what-if hover tooltip (HoverTooltip, R22)"
 
 [controls."skills.gemSlot#EnableGlobal1"]
 ported = "app/src/ui/skills/group.rs Vaal toggles"
@@ -2574,23 +2569,22 @@ ported = "app/src/ui/skills/picker.rs gem picker"
 note = "part of skills.gemSlot#Name"
 
 [controls."skills.gemSlot#Quality"]
-gap = "Task 13"
-note = "box ported (skills/group.rs); the what-if tooltip is R22"
+ported = "app/src/ui/skills/group.rs Quality box with PoB's what-if hover tooltip (HoverTooltip, R22)"
 
 [controls."skills.gemSlot#Quality.buttonDown"]
-gap = "Task 13"
+ported = "app/src/ui/skills/group.rs Quality box"
 note = "part of skills.gemSlot#Quality"
 
 [controls."skills.gemSlot#Quality.buttonUp"]
-gap = "Task 13"
+ported = "app/src/ui/skills/group.rs Quality box"
 note = "part of skills.gemSlot#Quality"
 
 [controls."skills.gemSlot#Quality.scrollBarH"]
-gap = "Task 13"
+ported = "app/src/ui/skills/group.rs Quality box"
 note = "part of skills.gemSlot#Quality"
 
 [controls."skills.gemSlot#Quality.scrollBarV"]
-gap = "Task 13"
+ported = "app/src/ui/skills/group.rs Quality box"
 note = "part of skills.gemSlot#Quality"
 
 [controls."skills.groupCount"]
@@ -3076,20 +3070,17 @@ ruled_out = "R3"
 note = "Change Settings Path is out (R15)"
 
 [popups."Manage Config Sets"]
-gap = "Task 13"
-note = "NF-4: Copy and reorder missing"
+ported = "app/src/ui/config.rs set buttons and Order window (NF-4)"
 
 [popups."Manage Item Sets"]
 gap = "Task 13"
 note = "item sets ported (items/sets.rs); the popup's shared item set list is NF-2"
 
 [popups."Manage Passive Trees"]
-gap = "Task 13"
-note = "New, Rename and Delete ported (tree/toolbar.rs); NF-3 (new finding, in scope by controller ruling): no Copy and no reorder of trees"
+ported = "app/src/ui/tree/toolbar.rs tree buttons: New, Rename, Delete, Copy (CopySpec) and Order window (MoveSpec, NF-3)"
 
 [popups."Manage Skill Sets"]
-gap = "Task 13"
-note = "skill set reorder (R31); the rest ported (skills/sets.rs)"
+ported = "app/src/ui/skills/sets.rs set manager window: New, Rename, Copy, Delete and drag-reorder (MoveSkillSet, R31)"
 
 [popups."Mod Browser"]
 gap = "Task 13"
@@ -3103,8 +3094,7 @@ note = "R16"
 ported = "app/src/ui/options.rs OptionsUi draws PoB's Options popup through PopupWindow, with auto-pob-only boxes"
 
 [popups."PassiveSpecListControl:69"]
-gap = "Task 13"
-note = "New and Rename name entry ported (tree/toolbar.rs); the Copy name entry is NF-3"
+ported = "app/src/ui/tree/toolbar.rs New, Rename and Copy Tree name dialogs (NF-3)"
 
 [popups."Please Wait"]
 ruled_out = "D-005"

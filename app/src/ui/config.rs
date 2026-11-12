@@ -5,8 +5,10 @@
 //! picked, and goes back to showing the snapshot once the engine has caught up.
 
 use crate::engine::views::{ConfigKind, ConfigOption, ConfigSection, ConfigView, CustomModGroup};
-use crate::engine::{Command, ConfigValue};
+use crate::engine::{Command, ConfigValue, HoverTarget};
 use crate::theme;
+use crate::ui::hover::HoverTip;
+use crate::ui::items::list::reorder_rows;
 use crate::widgets::{pob_text, tooltip_ui};
 use eframe::egui;
 use std::collections::HashMap;
@@ -90,8 +92,19 @@ fn value_text(value: Option<&serde_json::Value>) -> String {
 /// An in-progress edit of a config set's title.
 enum SetEdit {
     New(String),
-    Rename { id: u32, title: String },
+    Rename {
+        id: u32,
+        title: String,
+    },
+    /// PoB's manager Copy: the copy's name (NF-4)
+    Copy {
+        id: u32,
+        title: String,
+    },
 }
+
+/// What a dragged config set row carries: its position
+struct ConfigSetDrag(usize);
 
 /// How a text field sends its edits.
 #[derive(Clone, Copy, PartialEq)]
@@ -132,6 +145,12 @@ pub struct ConfigUi {
     /// Where widgets were drawn last frame, so tests can click them
     #[cfg(test)]
     pub(crate) rects: HashMap<String, egui::Rect>,
+    /// The options' and custom groups' "what if" tooltips (R22)
+    pub(crate) hover_tip: HoverTip,
+    /// The set order window is open (NF-4)
+    ordering: bool,
+    /// Hover questions made this frame; `show` hands them out with the commands
+    hover_queries: Vec<Command>,
 }
 
 impl ConfigUi {
@@ -153,7 +172,17 @@ impl ConfigUi {
     #[cfg(not(test))]
     fn note(&mut self, _key: String, _response: &egui::Response) {}
 
-    /// Draws the tab; returns the commands to send.
+    /// The engine answered a hover; only the open question's answer is kept.
+    pub fn on_hover(&mut self, view: &std::sync::Arc<crate::engine::views::HoverTooltipView>) {
+        self.hover_tip.on_view(view);
+    }
+
+    /// The options changed under the hover's answer.
+    pub fn forget_hover(&mut self) {
+        self.hover_tip.forget();
+    }
+
+    /// Draws the tab; returns the commands to send, `HoverTooltip` questions among them.
     pub fn show(&mut self, ui: &mut egui::Ui, view: &ConfigView, behind: bool) -> Vec<Command> {
         let mut commands = Vec::new();
         if !behind {
@@ -161,6 +190,7 @@ impl ConfigUi {
             self.picks.clear();
         }
         self.top_row(ui, view, &mut commands);
+        self.order_window(&ui.ctx().clone(), view, &mut commands);
         ui.separator();
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -185,6 +215,7 @@ impl ConfigUi {
             self.bools.clear();
             self.picks.clear();
         }
+        commands.append(&mut self.hover_queries);
         commands
     }
 
@@ -264,7 +295,9 @@ impl ConfigUi {
         }
         if let Some(edit) = &mut self.set_edit {
             let title = match edit {
-                SetEdit::New(t) | SetEdit::Rename { title: t, .. } => t,
+                SetEdit::New(t)
+                | SetEdit::Rename { title: t, .. }
+                | SetEdit::Copy { title: t, .. } => t,
             };
             let field = ui.add(
                 egui::TextEdit::singleline(title)
@@ -281,11 +314,13 @@ impl ConfigUi {
                 commands.push(match edit {
                     SetEdit::New(_) => Command::NewConfigSet { title },
                     SetEdit::Rename { id, .. } => Command::RenameConfigSet { id: *id, title },
+                    SetEdit::Copy { id, .. } => Command::CopyConfigSet { id: *id, title },
                 });
                 self.set_edit = None;
             } else if cancel.clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.set_edit = None;
             }
+            self.note("set_ok".into(), &ok);
             return;
         }
         let new = ui.button("New");
@@ -305,6 +340,70 @@ impl ConfigUi {
         self.note("set_delete".into(), &delete);
         if delete.clicked() {
             self.confirm_delete = true;
+        }
+        // PoB's manager also copies a set and reorders the list (NF-4)
+        let copy = ui.button("Copy");
+        self.note("set_copy".into(), &copy);
+        if copy.clicked() {
+            self.set_edit = Some(SetEdit::Copy {
+                id: view.active_set,
+                title: active_title.unwrap_or_default().to_owned(),
+            });
+        }
+        let order = ui.add_enabled(view.sets.len() > 1, egui::Button::new("Order\u{2026}"));
+        self.note("set_order".into(), &order);
+        if order.clicked() {
+            self.ordering = !self.ordering;
+        }
+    }
+
+    /// The set order window: PoB's manager list, whose rows drag to a new place (NF-4).
+    fn order_window(
+        &mut self,
+        ctx: &egui::Context,
+        view: &ConfigView,
+        commands: &mut Vec<Command>,
+    ) {
+        if !self.ordering {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("Config set order")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("Drag a set to a new place.");
+                let rows = reorder_rows(
+                    ui,
+                    "config_sets",
+                    view.sets.len(),
+                    true,
+                    false,
+                    ConfigSetDrag,
+                    |p: &ConfigSetDrag| p.0,
+                    |ui, i| {
+                        let set = &view.sets[i];
+                        let label = if set.id == view.active_set {
+                            format!("{} (current)", set.title)
+                        } else {
+                            set.title.clone()
+                        };
+                        egui::Frame::NONE.inner_margin(2.0).show(ui, |ui| {
+                            ui.set_min_width(220.0);
+                            ui.add(egui::Label::new(label).selectable(false));
+                        });
+                    },
+                );
+                for (i, row) in rows.rows.iter().enumerate() {
+                    self.note(format!("order_row:{i}"), row);
+                }
+                if let Some((from, to)) = rows.moved {
+                    commands.push(Command::MoveConfigSet { from, to });
+                }
+            });
+        if !open {
+            self.ordering = false;
         }
     }
 
@@ -380,7 +479,15 @@ impl ConfigUi {
         let widget = scoped(ui, dim, |ui| {
             self.option_widget(ui, option, behind, commands)
         });
-        if !option.tooltip.is_empty() {
+        // PoB's own tooltip, with its comparison, replaces the static one once it is here
+        let now = ui.input(|i| i.time);
+        let target = HoverTarget::ConfigOption {
+            var: option.var.clone(),
+        };
+        let shown = self
+            .hover_tip
+            .track(&widget, target, now, &mut self.hover_queries);
+        if !shown && !option.tooltip.is_empty() {
             widget.on_hover_ui(|ui| tooltip_ui(ui, &option.tooltip));
         }
     }
@@ -614,6 +721,10 @@ impl ConfigUi {
                 .unwrap_or(group.enabled);
             let toggle = ui.add(egui::Checkbox::without_text(&mut enabled));
             self.note(enabled_key.clone(), &toggle);
+            let now = ui.input(|i| i.time);
+            let target = HoverTarget::CustomModEnabled { group: i };
+            self.hover_tip
+                .track(&toggle, target, now, &mut self.hover_queries);
             if toggle.changed() {
                 self.bools.insert(enabled_key, enabled);
                 commands.push(Command::SetCustomModEnabled { group: i, enabled });
@@ -750,5 +861,204 @@ mod tests {
     fn empty_search_matches_everything() {
         assert!(matches_search(&option("anything"), ""));
         assert!(matches_search(&option("anything"), "   "));
+    }
+
+    // ---- Task 13: hover tooltips (R22), set Copy and order (NF-4) ----
+
+    use crate::engine::HoverTarget;
+    use crate::engine::views::{ConfigSet, CustomModGroup, HoverTooltipView, TooltipLine};
+    use egui::{Event, Modifiers, PointerButton, Pos2, RawInput};
+    use std::sync::Arc;
+
+    struct Harness {
+        ui: ConfigUi,
+        view: ConfigView,
+        ctx: egui::Context,
+        time: f64,
+    }
+
+    impl Harness {
+        fn new() -> Harness {
+            let mut check = option("Do you have Onslaught?");
+            check.var = "buffOnslaught".into();
+            let view = ConfigView {
+                sets: vec![
+                    ConfigSet {
+                        id: 1,
+                        title: "First".into(),
+                    },
+                    ConfigSet {
+                        id: 2,
+                        title: "Second".into(),
+                    },
+                ],
+                active_set: 1,
+                custom_mods: vec![CustomModGroup {
+                    title: "Default".into(),
+                    enabled: true,
+                    text: "+5 to Strength".into(),
+                }],
+                sections: vec![ConfigSection {
+                    name: "General".into(),
+                    column: 1,
+                    options: vec![check],
+                }],
+            };
+            let mut h = Harness {
+                ui: ConfigUi::default(),
+                view,
+                ctx: egui::Context::default(),
+                time: 1.0,
+            };
+            h.frame(vec![]);
+            h.frame(vec![]);
+            h
+        }
+
+        fn frame(&mut self, events: Vec<Event>) -> Vec<Command> {
+            self.time += 0.06;
+            let input = RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    Pos2::ZERO,
+                    egui::vec2(1200.0, 800.0),
+                )),
+                time: Some(self.time),
+                events,
+                ..RawInput::default()
+            };
+            let mut out = vec![];
+            let view = self.view.clone();
+            let output = self.ctx.run_ui(input, |ui| {
+                // egui may run a frame twice; each pass's output counts
+                out.extend(self.ui.show(ui, &view, false));
+            });
+            output.drop_without_applying_deltas();
+            out
+        }
+
+        fn pos(&self, key: &str) -> Pos2 {
+            self.ui
+                .rects
+                .get(key)
+                .unwrap_or_else(|| panic!("no widget {key}"))
+                .center()
+        }
+
+        fn click(&mut self, key: &str) -> Vec<Command> {
+            let pos = self.pos(key);
+            let button = |pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            let mut all = vec![];
+            for events in [
+                vec![Event::PointerMoved(pos)],
+                vec![button(true)],
+                vec![button(false)],
+                vec![],
+            ] {
+                all.extend(self.frame(events));
+            }
+            all
+        }
+
+        /// Frames with the pointer over `key` until a hover question comes out
+        fn hover(&mut self, key: &str) -> Vec<Command> {
+            let pos = self.pos(key);
+            let mut all = vec![];
+            for _ in 0..4 {
+                all.extend(self.frame(vec![Event::PointerMoved(pos)]));
+            }
+            all
+        }
+    }
+
+    fn debug(commands: &[Command]) -> Vec<String> {
+        commands.iter().map(|c| format!("{c:?}")).collect()
+    }
+
+    #[test]
+    fn config_hover_asks_once_and_shows_the_answer() {
+        let mut h = Harness::new();
+        let pos = h.pos("check:buffOnslaught");
+        // under PoB's delay nothing is asked
+        assert!(h.frame(vec![Event::PointerMoved(pos)]).is_empty());
+        let target = HoverTarget::ConfigOption {
+            var: "buffOnslaught".into(),
+        };
+        let sent = h.hover("check:buffOnslaught");
+        assert_eq!(
+            debug(&sent),
+            debug(&[Command::HoverTooltip(target.clone())])
+        );
+        assert_eq!(h.ui.hover_tip.asked(), Some(&target));
+        h.ui.on_hover(&Arc::new(HoverTooltipView {
+            target: target.clone(),
+            lines: vec![TooltipLine::Line {
+                size: 14,
+                text: "^7Toggling this option will give you:".into(),
+            }],
+        }));
+        assert!(h.hover("check:buffOnslaught").is_empty(), "asked once");
+        // a new view of the options asks again
+        h.ui.forget_hover();
+        assert_eq!(
+            debug(&h.hover("check:buffOnslaught")),
+            debug(&[Command::HoverTooltip(target)])
+        );
+    }
+
+    #[test]
+    fn custom_group_enable_hover_names_the_group() {
+        let mut h = Harness::new();
+        assert_eq!(
+            debug(&h.hover("mod_enabled:0")),
+            debug(&[Command::HoverTooltip(HoverTarget::CustomModEnabled {
+                group: 0
+            })])
+        );
+    }
+
+    #[test]
+    fn copy_asks_for_a_name_and_sends_copy_config_set() {
+        let mut h = Harness::new();
+        assert!(h.click("set_copy").is_empty());
+        let sent = h.click("set_ok");
+        assert_eq!(debug(&sent), ["CopyConfigSet { id: 1, title: \"First\" }"]);
+    }
+
+    #[test]
+    fn dragging_a_config_set_sends_move_config_set() {
+        let mut h = Harness::new();
+        h.click("set_order");
+        h.frame(vec![]);
+        let from = h.pos("order_row:0");
+        let r = h.ui.rects["order_row:1"];
+        let to = Pos2::new(r.center().x, r.bottom() - 2.0);
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let mut all = vec![];
+        for events in [
+            vec![Event::PointerMoved(from)],
+            vec![button(from, true)],
+            vec![Event::PointerMoved(Pos2::new(from.x + 30.0, from.y + 6.0))],
+            vec![Event::PointerMoved(to)],
+            vec![Event::PointerMoved(to)],
+            vec![button(to, false)],
+            vec![],
+        ] {
+            all.extend(h.frame(events));
+        }
+        let moves: Vec<_> = debug(&all)
+            .into_iter()
+            .filter(|c| c.starts_with("Move"))
+            .collect();
+        assert_eq!(moves, ["MoveConfigSet { from: 0, to: 1 }"]);
     }
 }

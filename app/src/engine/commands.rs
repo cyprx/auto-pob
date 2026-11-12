@@ -845,6 +845,53 @@ pub enum Command {
         id: u32,
         path: Vec<u32>,
     },
+
+    /// Drags a skill set's row in the manager to a new place (R31). Positions are 0-based in
+    /// `SkillsView.sets`; `to` is the set's final position. PoB only marks the tab changed.
+    MoveSkillSet {
+        from: usize,
+        to: usize,
+    },
+    /// A query: what hovering this control shows, PoB's `tooltipFunc` with its "what if" stat
+    /// comparison (R22). The latest one in a batch is answered, as a `HoverTooltip`.
+    HoverTooltip(HoverTarget),
+    /// The config set manager's Copy button and its name popup (NF-4).
+    CopyConfigSet {
+        id: u32,
+        title: String,
+    },
+    /// Drags a config set's row in the manager (NF-4); 0-based positions in `ConfigView.sets`,
+    /// `to` the final one.
+    MoveConfigSet {
+        from: usize,
+        to: usize,
+    },
+    /// The tree manager's Copy button and its "Copy Tree" name popup (NF-3); 0-based.
+    CopySpec {
+        index: usize,
+        title: String,
+    },
+    /// Drags a tree's row in the tree manager (NF-3); 0-based positions in `TreeState.specs`,
+    /// `to` the final one.
+    MoveSpec {
+        from: usize,
+        to: usize,
+    },
+}
+
+/// A control whose hover tooltip PoB computes (R22). Gem positions are 0-based.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HoverTarget {
+    /// A gem's Quality box: its quality lines and "Setting to 20 quality will give you:"
+    GemQuality { group: usize, slot: usize },
+    /// A gem's enable box: "Disabling/Enabling this gem will give you:"
+    GemEnabled { group: usize, slot: usize },
+    /// A gem's Count box: PoB's note on what the count does
+    GemCount { group: usize, slot: usize },
+    /// A Config option's control, as hovering its box shows it
+    ConfigOption { var: String },
+    /// A custom modifier group's enable box (0-based): "Disabling/Enabling this group..."
+    CustomModEnabled { group: usize },
 }
 
 #[derive(Debug, Clone, PartialEq)]

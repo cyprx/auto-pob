@@ -41,6 +41,8 @@ mod network;
 mod parity;
 #[path = "gate/parity_gaps.rs"]
 mod parity_gaps;
+#[path = "gate/parity_gaps_tabs.rs"]
+mod parity_gaps_tabs;
 #[path = "gate/settings.rs"]
 mod settings;
 #[path = "gate/skills.rs"]

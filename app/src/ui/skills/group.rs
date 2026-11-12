@@ -2,7 +2,7 @@
 
 use super::{SkillsOutput, SkillsUi};
 use crate::engine::views::{GemView, SkillsView, SocketGroupView};
-use crate::engine::{Command, GemTarget, GemToggle, GemTooltipQuery};
+use crate::engine::{Command, GemTarget, GemToggle, GemTooltipQuery, HoverTarget};
 use crate::widgets::{pob_colour, pob_text, tooltip_ui};
 use eframe::egui::{self, Color32, Stroke};
 
@@ -270,6 +270,15 @@ impl SkillsUi {
         let mut on = gem.enabled;
         let check = ui.checkbox(&mut on, "");
         self.rects.note(&check, || format!("gem_{si}_enabled"));
+        self.hover_tip.track(
+            &check,
+            HoverTarget::GemEnabled {
+                group: gi,
+                slot: si,
+            },
+            self.now,
+            &mut out.queries,
+        );
         if check.changed() {
             out.commands.push(Command::SetGemEnabled {
                 group: gi,
@@ -316,7 +325,7 @@ impl SkillsUi {
             },
             &mut out.commands,
         );
-        self.field(
+        let quality = self.field(
             ui,
             &format!("g{gi}_s{si}_quality"),
             &gem.quality.to_string(),
@@ -329,10 +338,19 @@ impl SkillsUi {
             },
             &mut out.commands,
         );
+        self.hover_tip.track(
+            &quality,
+            HoverTarget::GemQuality {
+                group: gi,
+                slot: si,
+            },
+            self.now,
+            &mut out.queries,
+        );
         if has_count {
             match gem.count {
                 Some(count) => {
-                    self.field(
+                    let response = self.field(
                         ui,
                         &format!("g{gi}_s{si}_count"),
                         &count.to_string(),
@@ -344,6 +362,15 @@ impl SkillsUi {
                             text,
                         },
                         &mut out.commands,
+                    );
+                    self.hover_tip.track(
+                        &response,
+                        HoverTarget::GemCount {
+                            group: gi,
+                            slot: si,
+                        },
+                        self.now,
+                        &mut out.queries,
                     );
                 }
                 None => {

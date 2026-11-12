@@ -5,8 +5,9 @@
 #
 # Builds the gate once, then runs every ignored gate test in its own process of the built
 # binary. Tests listed in app/tests/gate-serial.txt (they share machine-wide resources) run
-# one at a time after the parallel ones. Writes target/gate-times.tsv as
-# `name<TAB>seconds<TAB>ok|FAIL`, slowest first. Exits 0 only if every selected test passed
+# one at a time after the parallel ones. Keeps target/gate-times.tsv as
+# `name<TAB>seconds<TAB>ok|FAIL`, slowest first: a run replaces the rows of the tests it ran
+# and keeps the others. Exits 0 only if every selected test passed
 # and at least one was selected. A test still running after SECS seconds (default 300) is
 # killed and counts as FAIL. Each process can peak near 1.7 GB, so keep N at 4 or below on a
 # 16 GB machine.
@@ -127,12 +128,20 @@ run_batch "$is_serial" 1
 
 wall=$(( $(date +%s) - began ))
 mkdir -p "$root/target"
-sort -t$'\t' -k2,2nr "$results" >"$times"
+# a filtered run updates its own tests' times and keeps every other test's, so the next full
+# run still orders by the whole suite; a full run starts the file over
+merged=$logdir/times.tsv
+if [[ -n $filter && -f $times ]]; then
+    awk -F'\t' 'NR==FNR { seen[$1] = 1; print; next } !($1 in seen)' "$results" "$times" >"$merged"
+else
+    cp "$results" "$merged"
+fi
+sort -t$'\t' -k2,2nr "$merged" >"$times"
 passed=$(grep -c $'\tok$' "$results" || true)
 failed=$(grep -c $'\tFAIL$' "$results" || true)
 sum=$(awk -F'\t' '{ t += $2 } END { printf "%.0f", t }' "$results")
 echo "slowest:"
-head -5 "$times" | sed 's/^/  /'
+sort -t$'\t' -k2,2nr "$results" | head -5 | sed 's/^/  /'
 if [[ $failed -ne 0 || $passed -ne $total ]]; then
     echo "FAILED:"
     for name in $(awk -F'\t' '$3 == "FAIL" { print $1 }' "$results"); do

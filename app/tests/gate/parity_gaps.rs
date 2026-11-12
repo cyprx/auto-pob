@@ -1069,16 +1069,41 @@ fn trace_path_matches_pob() {
     assert!(ours.build().unsaved, "the allocation isn't marked unsaved");
     let stats = same_stats(&mut ours, &up, "after the trace");
     assert!(!stats.stats.is_empty());
-    // a path not ending at the node is refused
+    // a trace may pass through an allocated node (PassiveSpec.lua:898): it is allocated
+    // already and the path goes on from it
+    let through: Vec<u32> = ours.eval(
+        "local spec = pob.build.spec local ids = {} for id in pairs(spec.nodes) do ids[#ids + 1] = id end \
+         table.sort(ids) for _, id in ipairs(ids) do local a = spec.nodes[id] \
+         if a.alloc and a.type == 'Normal' then for _, d in ipairs(a.linked) do \
+         if not d.alloc and d.path and d.type == 'Normal' and not d.ascendancyName then \
+         return { a.id, d.id } end end end end",
+    );
+    let (a, d) = (through[0], through[1]);
+    ours.run(Command::AllocTracePath {
+        id: d,
+        path: vec![a, d],
+    })
+    .unwrap();
+    up.lua.globals().set("TRACE", vec![a, d]).unwrap();
+    let up_alloc: Vec<u32> = up.lua.load(UP_TRACE_ALLOC).eval().unwrap();
+    let mut alloc = ours.s.backend.tree_state_view().unwrap().allocated;
+    alloc.sort();
+    assert_eq!(alloc, up_alloc, "through an allocated node");
+    assert!(alloc.contains(&d));
+    // a target that isn't connected to the tree is refused, and nothing changes
+    let far: u32 = ours.eval(
+        "local spec = pob.build.spec local ids = {} for id in pairs(spec.nodes) do ids[#ids + 1] = id end \
+         table.sort(ids) for _, id in ipairs(ids) do local n = spec.nodes[id] \
+         if not n.alloc and not n.path and n.type == 'Normal' then return id end end",
+    );
     let err = ours
         .run(Command::AllocTracePath {
-            id: c,
-            path: vec![c, b],
+            id: far,
+            path: vec![far],
         })
         .unwrap_err();
-    assert!(
-        err.to_string().contains("doesn't end at the node")
-            || err.to_string().contains("isn't connected"),
-        "{err}"
-    );
+    assert_eq!(err.to_string(), "that passive isn't connected to your tree");
+    let mut after = ours.s.backend.tree_state_view().unwrap().allocated;
+    after.sort();
+    assert_eq!(after, alloc);
 }

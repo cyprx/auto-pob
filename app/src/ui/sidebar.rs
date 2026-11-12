@@ -177,13 +177,16 @@ fn dropdown(
     let default = ui.visuals().text_color();
     let current = list.labels.get(list.selected).map_or("", String::as_str);
     let rect = ui.add_enabled_ui(list.enabled, |ui| {
-        let combo = egui::ComboBox::from_id_salt(("sidebar_select", key))
+        let combo = crate::widgets::dropdown::Dropdown::from_id_salt(("sidebar_select", key))
             .width(150.0)
             .selected_text(pob_text(current, 14.0, default))
             .show_ui(ui, |ui| {
                 for (i, text) in list.labels.iter().enumerate() {
-                    let item =
-                        ui.selectable_label(i == list.selected, pob_text(text, 14.0, default));
+                    let item = crate::widgets::dropdown::item(
+                        ui,
+                        i == list.selected,
+                        pob_text(text, 14.0, default),
+                    );
                     note(ui, &format!("{key}_item_{i}"), item.rect);
                     if item.clicked() && i != list.selected {
                         out.push(Command::SetMainSkillSelect { control, index: i });

@@ -73,7 +73,13 @@ impl TreeTab {
         }
         let id = hovered?;
         // a node with no path can't be traced to
-        let path = self.derived.paths.get(&id)?;
+        // an allocated node's path is empty, never missing: it stays hovered, and a trace can
+        // pass through it (PassiveSpec.lua:898, PassiveTreeView.lua:330)
+        let path = if self.derived.allocated.contains(&id) {
+            Vec::new()
+        } else {
+            self.derived.paths.get(&id)?.clone()
+        };
         let old = self.trace.clone();
         let mut keep = Some(id);
         match self.trace.last().copied() {

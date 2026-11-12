@@ -67,11 +67,15 @@ pub(super) fn show(
                 .map_or("", |s| s.title.as_str());
             let rects = &mut tab.rects;
             ui.add_enabled_ui(config.sets.len() > 1, |ui| {
-                let combo = egui::ComboBox::from_id_salt("compare_config_set")
+                let combo = crate::widgets::dropdown::Dropdown::from_id_salt("compare_config_set")
                     .selected_text(active)
                     .show_ui(ui, |ui| {
                         for set in &config.sets {
-                            let item = ui.selectable_label(set.id == config.active_set, &set.title);
+                            let item = crate::widgets::dropdown::item(
+                                ui,
+                                set.id == config.active_set,
+                                &set.title,
+                            );
                             rects.note(&item, || format!("config_set:{}", set.id));
                             if item.clicked() && set.id != config.active_set {
                                 out.commands.push(Command::SelectConfigSet { id: set.id });

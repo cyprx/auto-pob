@@ -119,11 +119,12 @@ impl FolderPicker {
             {
                 out = self.ask_delete(&path, view);
             }
-            let combo = egui::ComboBox::from_id_salt("picker_sort")
+            let combo = crate::widgets::dropdown::Dropdown::from_id_salt("picker_sort")
                 .selected_text(self.sort.label())
                 .show_ui(ui, |ui| {
                     for sort in [FolderSort::Name, FolderSort::Edited] {
-                        let item = ui.selectable_value(&mut self.sort, sort, sort.label());
+                        let item =
+                            crate::widgets::dropdown::value(ui, &mut self.sort, sort, sort.label());
                         mark(ui, &format!("picker_sort:{sort:?}"), &item);
                     }
                 });

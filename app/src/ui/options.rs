@@ -314,11 +314,15 @@ impl Extras<'_> {
                 ui.end_row();
 
                 ui.label("Trade realm");
-                let combo = egui::ComboBox::from_id_salt("options_realm")
+                let combo = crate::widgets::dropdown::Dropdown::from_id_salt("options_realm")
                     .selected_text(self.draft.trade_realm.as_str())
                     .show_ui(ui, |ui| {
                         for realm in REALMS {
-                            let item = ui.selectable_label(self.draft.trade_realm == realm, realm);
+                            let item = crate::widgets::dropdown::item(
+                                ui,
+                                self.draft.trade_realm == realm,
+                                realm,
+                            );
                             super::import::mark(ui, &format!("options_realm_{realm}"), &item);
                             if item.clicked() {
                                 self.draft.trade_realm = realm.to_owned();

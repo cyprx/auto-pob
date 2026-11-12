@@ -56,11 +56,12 @@ pub fn show(ctx: &egui::Context, window: &mut TextWindow, rects: &mut Rects) -> 
         });
         ui.horizontal(|ui| {
             ui.label("Rarity:");
-            let combo = egui::ComboBox::from_id_salt("items_text_rarity")
+            let combo = crate::widgets::dropdown::Dropdown::from_id_salt("items_text_rarity")
                 .selected_text(RARITIES[window.rarity.min(4)])
                 .show_ui(ui, |ui| {
                     for (i, name) in RARITIES.iter().enumerate() {
-                        let item = ui.selectable_value(&mut window.rarity, i, *name);
+                        let item =
+                            crate::widgets::dropdown::value(ui, &mut window.rarity, i, *name);
                         rects.note(&item, || format!("text_rarity_{i}"));
                     }
                 });

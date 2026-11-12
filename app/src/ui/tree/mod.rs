@@ -1061,6 +1061,35 @@ mod tests {
     }
 
     #[test]
+    fn under_shift_an_allocated_node_stays_hovered_and_a_click_deallocates_it() {
+        let (l, s) = trace_sample();
+        let mut h = Harness::new(l, s);
+        h.frame(vec![Event::ModifiersChanged(egui::Modifiers::SHIFT)]);
+        h.frame(vec![Event::PointerMoved(h.screen_of(1))]);
+        // its path is empty, not missing (PassiveSpec.lua:898): the trace stays empty
+        assert_eq!(h.tab.hover, Some(1));
+        assert!(h.tab.trace_for_test().is_empty());
+        let out = h.click_at(h.screen_of(1));
+        assert_eq!(debug(&out.commands), ["DeallocNode { id: 1 }"]);
+    }
+
+    #[test]
+    fn a_trace_passes_through_an_allocated_node() {
+        let (l, s) = trace_sample();
+        let mut h = Harness::new(l, s);
+        h.frame(vec![Event::ModifiersChanged(egui::Modifiers::SHIFT)]);
+        for id in [2, 1, 6] {
+            h.frame(vec![Event::PointerMoved(h.screen_of(id))]);
+        }
+        assert_eq!(h.tab.trace_for_test(), [2, 1, 6]);
+        let out = h.click_at(h.screen_of(6));
+        assert_eq!(
+            debug(&out.commands),
+            ["AllocTracePath { id: 6, path: [2, 1, 6] }"]
+        );
+    }
+
+    #[test]
     fn a_node_the_trace_cant_take_isnt_hovered() {
         let (l, s) = trace_sample();
         let mut h = Harness::new(l, s);

@@ -63,11 +63,15 @@ impl SkillsUi {
                     .map(|c| c.label.clone())
                     .or_else(|| g.slot.clone())
                     .unwrap_or_else(|| "None".into());
-                let combo = egui::ComboBox::from_id_salt(("skills_slot", gi))
+                let combo = crate::widgets::dropdown::Dropdown::from_id_salt(("skills_slot", gi))
                     .selected_text(current)
                     .show_ui(ui, |ui| {
                         for (i, choice) in view.slot_choices.iter().enumerate() {
-                            let item = ui.selectable_label(choice.slot == g.slot, &choice.label);
+                            let item = crate::widgets::dropdown::item(
+                                ui,
+                                choice.slot == g.slot,
+                                &choice.label,
+                            );
                             self.rects.note(&item, || format!("slot_item_{i}"));
                             if item.clicked() && choice.slot != g.slot {
                                 out.commands.push(Command::SetGroupSlot {

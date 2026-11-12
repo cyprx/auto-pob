@@ -642,3 +642,41 @@ fn the_wheel_steps_a_pointed_at_dropdown() {
     frame(&mut app, &ctx, vec![wheel(-1.0)]);
     assert_eq!(sent_since(&app, before), ["SelectSpec { index: 1 }"]);
 }
+
+fn wheel_event(y: f32) -> Event {
+    Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::Vec2::new(0.0, y),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+        modifiers: Modifiers::NONE,
+    }
+}
+
+#[test]
+fn a_focused_box_holds_its_hosts_dropdowns_but_not_builds() {
+    let (mut app, ctx) = tree_app();
+    click(&mut app, &ctx, "search");
+    assert!(ctx.text_edit_focused());
+    // the tab's own dropdown gets nothing while the tab's box has the keyboard
+    // (ControlHost.lua:56-71)
+    let spec = rect_of(&app, "spec_combo").center();
+    frame(&mut app, &ctx, vec![Event::PointerMoved(spec)]);
+    let before = app.sent_full.len();
+    frame(&mut app, &ctx, vec![wheel_event(-1.0)]);
+    frame(&mut app, &ctx, plain(Key::PageDown));
+    assert!(
+        !sent_since(&app, before)
+            .iter()
+            .any(|c| c.starts_with("SelectSpec")),
+        "{:?}",
+        sent_since(&app, before)
+    );
+    assert!(ctx.text_edit_focused(), "the box lost the keyboard");
+    // Build's class dropdown is another host, processed first: it still steps (Build.lua:1230)
+    let class = rect_of(&app, "class_combo").center();
+    frame(&mut app, &ctx, vec![Event::PointerMoved(class)]);
+    frame(&mut app, &ctx, vec![wheel_event(-1.0)]);
+    // Marauder asks first (needs_confirm)
+    assert!(app.tree.has_dialog(), "the class dropdown didn't step");
+}

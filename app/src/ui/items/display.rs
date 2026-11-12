@@ -95,12 +95,15 @@ fn dropdown(ui: &mut egui::Ui, rects: &mut Rects, key: &str, list: &DropList) ->
     let current = list.labels.get(list.selected).map_or("", String::as_str);
     let mut picked = None;
     let combo = ui.add_enabled_ui(list.enabled, |ui| {
-        egui::ComboBox::from_id_salt(("items_display", key))
+        crate::widgets::dropdown::Dropdown::from_id_salt(("items_display", key))
             .selected_text(pob_text(current, 14.0, default))
             .show_ui(ui, |ui| {
                 for (i, label) in list.labels.iter().enumerate() {
-                    let item =
-                        ui.selectable_label(i == list.selected, pob_text(label, 14.0, default));
+                    let item = crate::widgets::dropdown::item(
+                        ui,
+                        i == list.selected,
+                        pob_text(label, 14.0, default),
+                    );
                     rects.note(&item, || format!("{key}_{i}"));
                     if item.clicked() && i != list.selected {
                         picked = Some(i);
@@ -255,7 +258,7 @@ fn panel(
             for &i in &shown {
                 let socket = &view.sockets[i];
                 let current = colour(&socket.colour);
-                let combo = egui::ComboBox::from_id_salt(("items_socket", i))
+                let combo = crate::widgets::dropdown::Dropdown::from_id_salt(("items_socket", i))
                     .width(40.0)
                     .selected_text(&socket.colour)
                     .show_ui(ui, |ui| {
@@ -265,7 +268,7 @@ fn panel(
                             ("B", SocketColour::B),
                             ("W", SocketColour::W),
                         ] {
-                            let item = ui.selectable_label(current == Some(c), name);
+                            let item = crate::widgets::dropdown::item(ui, current == Some(c), name);
                             state.rects.note(&item, || format!("socket_{i}_{name}"));
                             if item.clicked() && current != Some(c) {
                                 out.push(Command::SetItemSocket {
@@ -385,13 +388,16 @@ fn panel(
         ui.horizontal_wrapped(|ui| {
             ui.label("Range:");
             let current = &view.range_lines[line];
-            let combo = egui::ComboBox::from_id_salt("items_range_line")
+            let combo = crate::widgets::dropdown::Dropdown::from_id_salt("items_range_line")
                 .width(260.0)
                 .selected_text(pob_text(&current.label, 14.0, default))
                 .show_ui(ui, |ui| {
                     for (i, l) in view.range_lines.iter().enumerate() {
-                        let item =
-                            ui.selectable_label(i == line, pob_text(&l.label, 14.0, default));
+                        let item = crate::widgets::dropdown::item(
+                            ui,
+                            i == line,
+                            pob_text(&l.label, 14.0, default),
+                        );
                         state.rects.note(&item, || format!("range_line_{i}"));
                         if item.clicked() {
                             state.range_line = i;

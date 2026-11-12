@@ -133,12 +133,13 @@ impl ItemsUi {
             ui.label("Passive tree:");
             let current = specs.labels.get(specs.selected).map_or("", String::as_str);
             let combo = ui.add_enabled_ui(specs.enabled, |ui| {
-                egui::ComboBox::from_id_salt("items_spec")
+                crate::widgets::dropdown::Dropdown::from_id_salt("items_spec")
                     .width(200.0)
                     .selected_text(pob_text(current, 14.0, default))
                     .show_ui(ui, |ui| {
                         for (i, label) in specs.labels.iter().enumerate() {
-                            let entry = ui.selectable_label(
+                            let entry = crate::widgets::dropdown::item(
+                                ui,
                                 i == specs.selected,
                                 pob_text(label, 14.0, default),
                             );
@@ -215,11 +216,12 @@ impl ItemsUi {
                     item_label(view, slot.selected, 14.0, default)
                 };
                 let combo = ui.add_enabled_ui(slot.enabled, |ui| {
-                    egui::ComboBox::from_id_salt(("items_slot", &slot.name))
+                    crate::widgets::dropdown::Dropdown::from_id_salt(("items_slot", &slot.name))
                         .width(200.0)
                         .selected_text(current)
                         .show_ui(ui, |ui| {
-                            let none = ui.selectable_label(slot.selected == 0, "None");
+                            let none =
+                                crate::widgets::dropdown::item(ui, slot.selected == 0, "None");
                             self.rects
                                 .note(&none, || format!("slot_{}_none", slot.name));
                             if none.clicked() && slot.selected != 0 {
@@ -229,7 +231,8 @@ impl ItemsUi {
                                 });
                             }
                             for &id in &slot.choices {
-                                let entry = ui.selectable_label(
+                                let entry = crate::widgets::dropdown::item(
+                                    ui,
                                     slot.selected == id,
                                     item_label(view, id, 14.0, default),
                                 );

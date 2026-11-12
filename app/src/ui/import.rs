@@ -431,11 +431,16 @@ impl ImportUi {
         };
         ui.horizontal(|ui| {
             let before = self.realm;
-            let combo = egui::ComboBox::from_id_salt("import_realm")
+            let combo = crate::widgets::dropdown::Dropdown::from_id_salt("import_realm")
                 .selected_text(realm_label(self.realm))
                 .show_ui(ui, |ui| {
                     for realm in [Realm::Pc, Realm::Xbox, Realm::Sony] {
-                        let r = ui.selectable_value(&mut self.realm, realm, realm_label(realm));
+                        let r = crate::widgets::dropdown::value(
+                            ui,
+                            &mut self.realm,
+                            realm,
+                            realm_label(realm),
+                        );
                         mark(ui, &format!("realm:{}", realm.pob_id()), &r);
                     }
                 });
@@ -614,24 +619,26 @@ impl ImportUi {
                             .clone()
                             .or_else(|| public.history_selected.clone())
                             .filter(|a| public.history.contains(a));
-                        let combo = egui::ComboBox::from_id_salt("import_history")
-                            .selected_text(current.as_deref().unwrap_or("Recent"))
-                            .show_ui(ui, |ui| {
-                                for account in &public.history {
-                                    let item = ui.selectable_label(
-                                        current.as_ref() == Some(account),
-                                        account,
-                                    );
-                                    mark(ui, &format!("history:{account}"), &item);
-                                    if item.clicked() {
-                                        // PoB's pick puts the name in the box; it stays there
-                                        // while the box has focus, until Start or Enter
-                                        self.history_pick = Some(account.clone());
-                                        self.account_box.text = account.clone();
-                                        ui.memory_mut(|m| m.request_focus(self.account_id));
+                        let combo =
+                            crate::widgets::dropdown::Dropdown::from_id_salt("import_history")
+                                .selected_text(current.as_deref().unwrap_or("Recent"))
+                                .show_ui(ui, |ui| {
+                                    for account in &public.history {
+                                        let item = crate::widgets::dropdown::item(
+                                            ui,
+                                            current.as_ref() == Some(account),
+                                            account,
+                                        );
+                                        mark(ui, &format!("history:{account}"), &item);
+                                        if item.clicked() {
+                                            // PoB's pick puts the name in the box; it stays there
+                                            // while the box has focus, until Start or Enter
+                                            self.history_pick = Some(account.clone());
+                                            self.account_box.text = account.clone();
+                                            ui.memory_mut(|m| m.request_focus(self.account_id));
+                                        }
                                     }
-                                }
-                            });
+                                });
                         mark(ui, "history", &combo.response);
                         // the wheel and the arrows step it as a pick (DropDownControl.lua)
                         let at = current
@@ -717,12 +724,17 @@ impl ImportUi {
     ) {
         ui.horizontal(|ui| {
             ui.label("League:");
-            let combo = egui::ComboBox::from_id_salt("import_league")
+            let combo = crate::widgets::dropdown::Dropdown::from_id_salt("import_league")
                 .selected_text(self.league.as_deref().unwrap_or("Any"))
                 .show_ui(ui, |ui| {
                     for index in 0..leagues.len() {
                         let value = league_value(leagues, index);
-                        let r = ui.selectable_value(&mut self.league, value, &leagues[index]);
+                        let r = crate::widgets::dropdown::value(
+                            ui,
+                            &mut self.league,
+                            value,
+                            &leagues[index],
+                        );
                         mark(ui, &format!("league:{}", leagues[index]), &r);
                     }
                 });
@@ -938,12 +950,17 @@ impl ImportUi {
                     .map_or("", |s: &SiteRef| s.label.as_str())
                     .to_owned()
             };
-            let combo = egui::ComboBox::from_id_salt("import_site")
+            let combo = crate::widgets::dropdown::Dropdown::from_id_salt("import_site")
                 .selected_text(label(&chosen))
                 .show_ui(ui, |ui| {
                     for site in &view.sites {
                         let mut value = chosen.clone();
-                        let r = ui.selectable_value(&mut value, Some(site.id.clone()), &site.label);
+                        let r = crate::widgets::dropdown::value(
+                            ui,
+                            &mut value,
+                            Some(site.id.clone()),
+                            &site.label,
+                        );
                         mark(ui, &format!("site:{}", site.id), &r);
                         if r.clicked() {
                             self.site = Some(site.id.clone());

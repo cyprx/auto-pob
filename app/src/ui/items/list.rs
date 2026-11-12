@@ -118,12 +118,15 @@ impl ItemsUi {
             let f = &view.list_filter;
             let current = f.labels.get(f.selected).map_or("", String::as_str);
             let combo = ui.add_enabled_ui(f.enabled, |ui| {
-                egui::ComboBox::from_id_salt("items_filter")
+                crate::widgets::dropdown::Dropdown::from_id_salt("items_filter")
                     .selected_text(pob_text(current, 14.0, default))
                     .show_ui(ui, |ui| {
                         for (i, text) in f.labels.iter().enumerate() {
-                            let item =
-                                ui.selectable_label(i == f.selected, pob_text(text, 14.0, default));
+                            let item = crate::widgets::dropdown::item(
+                                ui,
+                                i == f.selected,
+                                pob_text(text, 14.0, default),
+                            );
                             self.rects.note(&item, || format!("filter_item_{i}"));
                             if item.clicked() && i != f.selected {
                                 out.commands.push(Command::SetItemListFilter { index: i });

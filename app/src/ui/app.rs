@@ -1170,7 +1170,12 @@ impl AutoPobApp {
             ctx.interaction_snapshot(|s| s.hovered.iter().copied().collect());
         let target = hovered
             .into_iter()
-            .find(|id| egui::TextEdit::load_state(ctx, *id).is_some());
+            .find(|id| egui::TextEdit::load_state(ctx, *id).is_some())
+            // a read-only or disabled box takes no paste (EditControl.lua:438)
+            .filter(|id| {
+                ctx.read_response(*id)
+                    .is_some_and(|r| r.enabled() && r.sense.senses_click())
+            });
         if let Some(id) = target
             && let Some(text) = read().filter(|t| !t.is_empty())
         {
@@ -1330,6 +1335,13 @@ impl AutoPobApp {
             || self.popup.is_blocking()
             || self.options.window.is_blocking()
             || self.help.is_open();
+        crate::widgets::scroll_step::set_scope(
+            ui.ctx(),
+            crate::widgets::scroll_step::FocusScope {
+                typing: ui.ctx().text_edit_focused(),
+                ..Default::default()
+            },
+        );
         // F1: the Help window ("Build List tab" matches no section: the first, Main.lua:441)
         let state = ShortcutState {
             typing: ui.ctx().text_edit_focused(),
@@ -1450,6 +1462,15 @@ impl AutoPobApp {
                 .memory(|m| m.focused())
                 .and_then(|id| ctx.read_response(id))
                 .is_some_and(|r| self.bar_rects.iter().any(|b| b.contains(r.rect.center())));
+        // the dropdowns and sliders hold their keys while their host has a box focused
+        crate::widgets::scroll_step::set_scope(
+            &ctx,
+            crate::widgets::scroll_step::FocusScope {
+                typing,
+                build_box,
+                build_host: false,
+            },
+        );
         // under a window only the gem list's own rows open a page
         let wiki = if modal {
             (self.tab == BuildTab::Skills && self.skills.picker_open())
@@ -1484,6 +1505,8 @@ impl AutoPobApp {
 
         let behind = self.behind();
         let mut top_commands = Vec::new();
+        // the top bar and the sidebar are Build's own controls (Build.lua:1230)
+        crate::widgets::scroll_step::set_build_host(ui.ctx(), true);
         let top = egui::Panel::top("top_bar").show(ui, |ui| {
             let history = match self.undo_tab() {
                 Some(Tab::Tree) => self.tree.history(),
@@ -1520,6 +1543,7 @@ impl AutoPobApp {
                     sidebar::show(ui, self.stats.as_deref(), behind, &mut self.sidebar);
             });
         self.bar_rects = vec![top.response.rect, side.response.rect];
+        crate::widgets::scroll_step::set_build_host(ui.ctx(), false);
         for command in sidebar_commands {
             self.send(command);
         }

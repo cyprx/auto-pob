@@ -152,12 +152,12 @@ impl Toolbar {
             // PoB's Version dropdown: any listed version converts the tree (NF-7)
             if !state.versions.is_empty() {
                 ui.label("Version:");
-                let combo = egui::ComboBox::from_id_salt("tree_version")
+                let combo = crate::widgets::dropdown::Dropdown::from_id_salt("tree_version")
                     .selected_text(&state.version_label)
                     .show_ui(ui, |ui| {
                         for choice in &state.versions {
                             let current = choice.value == state.version;
-                            let item = ui.selectable_label(current, &choice.label);
+                            let item = crate::widgets::dropdown::item(ui, current, &choice.label);
                             rects.note(&item, || format!("version:{}", choice.value));
                             if item.clicked() && !current {
                                 self.dialog = Some(Dialog::ConvertVersion {
@@ -221,11 +221,12 @@ impl Toolbar {
         commands: &mut Vec<Command>,
     ) {
         let active = state.specs.get(state.active_spec);
-        let combo = egui::ComboBox::from_id_salt("tree_spec")
+        let combo = crate::widgets::dropdown::Dropdown::from_id_salt("tree_spec")
             .selected_text(active.map_or("", |s| s.title.as_str()))
             .show_ui(ui, |ui| {
                 for (i, spec) in state.specs.iter().enumerate() {
-                    let item = ui.selectable_label(
+                    let item = crate::widgets::dropdown::item(
+                        ui,
                         i == state.active_spec,
                         format!("{} ({} points)", spec.title, spec.points),
                     );
@@ -300,7 +301,7 @@ impl Toolbar {
             self.open_manager(state);
         }
         ui.label("Compare");
-        let compare = egui::ComboBox::from_id_salt("tree_compare")
+        let compare = crate::widgets::dropdown::Dropdown::from_id_salt("tree_compare")
             .selected_text(
                 state
                     .compare_spec
@@ -308,7 +309,7 @@ impl Toolbar {
                     .map_or("None", |s| s.title.as_str()),
             )
             .show_ui(ui, |ui| {
-                let none = ui.selectable_label(state.compare_spec.is_none(), "None");
+                let none = crate::widgets::dropdown::item(ui, state.compare_spec.is_none(), "None");
                 rects.note(&none, || "compare:none".into());
                 if none.clicked() && state.compare_spec.is_some() {
                     commands.push(Command::SetCompareSpec { index: None });
@@ -317,7 +318,11 @@ impl Toolbar {
                     if i == state.active_spec {
                         continue;
                     }
-                    let item = ui.selectable_label(state.compare_spec == Some(i), &spec.title);
+                    let item = crate::widgets::dropdown::item(
+                        ui,
+                        state.compare_spec == Some(i),
+                        &spec.title,
+                    );
                     rects.note(&item, || format!("compare:{i}"));
                     if item.clicked() && state.compare_spec != Some(i) {
                         commands.push(Command::SetCompareSpec { index: Some(i) });
@@ -384,11 +389,11 @@ impl Toolbar {
         commands: &mut Vec<Command>,
     ) {
         let class = state.classes.iter().find(|c| c.id == state.class_id);
-        let combo = egui::ComboBox::from_id_salt("tree_class")
+        let combo = crate::widgets::dropdown::Dropdown::from_id_salt("tree_class")
             .selected_text(class.map_or("Class", |c| c.name.as_str()))
             .show_ui(ui, |ui| {
                 for c in &state.classes {
-                    let item = ui.selectable_label(c.id == state.class_id, &c.name);
+                    let item = crate::widgets::dropdown::item(ui, c.id == state.class_id, &c.name);
                     rects.note(&item, || format!("class:{}", c.id));
                     if item.clicked() && c.id != state.class_id {
                         if c.needs_confirm {
@@ -423,11 +428,12 @@ impl Toolbar {
         }
         let ascendancies = class.map_or(&[][..], |c| c.ascendancies.as_slice());
         let current = ascendancies.iter().find(|a| a.id == state.ascendancy_id);
-        let combo = egui::ComboBox::from_id_salt("tree_ascendancy")
+        let combo = crate::widgets::dropdown::Dropdown::from_id_salt("tree_ascendancy")
             .selected_text(current.map_or("Ascendancy", |a| a.name.as_str()))
             .show_ui(ui, |ui| {
                 for a in ascendancies {
-                    let item = ui.selectable_label(a.id == state.ascendancy_id, &a.name);
+                    let item =
+                        crate::widgets::dropdown::item(ui, a.id == state.ascendancy_id, &a.name);
                     rects.note(&item, || format!("ascendancy:{}", a.id));
                     if item.clicked() && a.id != state.ascendancy_id {
                         commands.push(Command::SelectAscendancy { id: a.id });
@@ -508,7 +514,7 @@ impl Toolbar {
         let set =
             |stat: Option<String>, max_depth: Option<u32>| Command::SetHeatmap { stat, max_depth };
         ui.label("Heat map");
-        let combo = egui::ComboBox::from_id_salt("tree_heat_stat")
+        let combo = crate::widgets::dropdown::Dropdown::from_id_salt("tree_heat_stat")
             .selected_text(state.heatmap.as_deref().unwrap_or(if state.heatmap_shown {
                 "Damage / defence"
             } else {
@@ -516,14 +522,14 @@ impl Toolbar {
             }))
             .show_ui(ui, |ui| {
                 let shown = state.heatmap.is_some() || state.heatmap_shown;
-                let off = ui.selectable_label(!shown, "Off");
+                let off = crate::widgets::dropdown::item(ui, !shown, "Off");
                 rects.note(&off, || "heat:off".into());
                 if off.clicked() && shown {
                     commands.push(set(None, state.max_depth));
                 }
                 for stat in &state.power_stats {
                     let selected = state.heatmap.as_ref() == Some(stat);
-                    let item = ui.selectable_label(selected, stat);
+                    let item = crate::widgets::dropdown::item(ui, selected, stat);
                     rects.note(&item, || format!("heat:{stat}"));
                     if item.clicked() && !selected {
                         commands.push(set(Some(stat.clone()), state.max_depth));
@@ -560,11 +566,15 @@ impl Toolbar {
                 (None, Some(d)) => format!("Within {d}"),
                 (None, None) => "All".to_owned(),
             };
-            let combo = egui::ComboBox::from_id_salt("tree_heat_depth")
+            let combo = crate::widgets::dropdown::Dropdown::from_id_salt("tree_heat_depth")
                 .selected_text(shown)
                 .show_ui(ui, |ui| {
                     let custom = self.custom_depth.is_some();
-                    let all = ui.selectable_label(!custom && state.max_depth.is_none(), "All");
+                    let all = crate::widgets::dropdown::item(
+                        ui,
+                        !custom && state.max_depth.is_none(),
+                        "All",
+                    );
                     rects.note(&all, || "depth:all".into());
                     if all.clicked() {
                         self.custom_depth = None;
@@ -573,7 +583,8 @@ impl Toolbar {
                         }
                     }
                     for depth in DEPTHS {
-                        let item = ui.selectable_label(
+                        let item = crate::widgets::dropdown::item(
+                            ui,
                             !custom && state.max_depth == Some(depth),
                             depth.to_string(),
                         );
@@ -586,7 +597,7 @@ impl Toolbar {
                         }
                     }
                     // PoB's "Custom" entry shows a box for any depth (NF-6)
-                    let item = ui.selectable_label(custom, "Custom");
+                    let item = crate::widgets::dropdown::item(ui, custom, "Custom");
                     rects.note(&item, || "depth:custom".into());
                     if item.clicked() && !custom {
                         self.custom_depth =

@@ -309,12 +309,15 @@ impl CalcsUi {
         let current = list.labels.get(list.selected).map_or("", String::as_str);
         let mut response = None;
         ui.add_enabled_ui(list.enabled, |ui| {
-            let combo = egui::ComboBox::from_id_salt(("calcs_select", key))
+            let combo = crate::widgets::dropdown::Dropdown::from_id_salt(("calcs_select", key))
                 .selected_text(pob_text(current, 14.0, default))
                 .show_ui(ui, |ui| {
                     for (i, text) in list.labels.iter().enumerate() {
-                        let item =
-                            ui.selectable_label(i == list.selected, pob_text(text, 14.0, default));
+                        let item = crate::widgets::dropdown::item(
+                            ui,
+                            i == list.selected,
+                            pob_text(text, 14.0, default),
+                        );
                         self.rects.note(&item, || format!("{key}_item_{i}"));
                         if item.clicked() && i != list.selected {
                             out.push(Command::SetCalcsSelect { control, index: i });

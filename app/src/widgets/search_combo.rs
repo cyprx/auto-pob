@@ -282,7 +282,10 @@ mod tests {
         h.frame(vec![key(Key::Escape)]);
         h.frame(vec![]);
         h.frame(vec![]);
-        assert!(h.entries.is_empty() || h.picks.is_empty());
+        assert!(
+            h.entries.is_empty(),
+            "Esc with no search didn't close the list"
+        );
     }
 
     #[test]

@@ -88,8 +88,9 @@ pub fn show(
 
     // the nodes a click on the hovered one would add or drop
     let (highlight, highlight_colour) = match hovered_id {
-        // the trace is the path (PassiveTreeView.lua:359-363)
-        _ if !tab.trace.is_empty() => (Some(&tab.trace), PATH),
+        // with Shift held the trace is the path, and nothing is a dependent
+        // (PassiveTreeView.lua:328-363)
+        _ if shift => (Some(&tab.trace), PATH),
         Some(id) if tab.derived.allocated.contains(&id) => (tab.derived.depends.get(&id), DROP),
         Some(id) => (tab.derived.paths.get(&id), PATH),
         None => (None, PATH),

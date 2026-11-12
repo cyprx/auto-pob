@@ -78,11 +78,15 @@ impl ItemsUi {
                 .find(|s| s.id == view.active_set)
                 .map_or("", title);
             let combo = ui.add_enabled_ui(view.sets.len() > 1, |ui| {
-                egui::ComboBox::from_id_salt("items_set")
+                crate::widgets::dropdown::Dropdown::from_id_salt("items_set")
                     .selected_text(current)
                     .show_ui(ui, |ui| {
                         for (i, set) in view.sets.iter().enumerate() {
-                            let item = ui.selectable_label(set.id == view.active_set, title(set));
+                            let item = crate::widgets::dropdown::item(
+                                ui,
+                                set.id == view.active_set,
+                                title(set),
+                            );
                             self.rects.note(&item, || format!("set_item_{i}"));
                             if item.clicked() && set.id != view.active_set {
                                 out.commands.push(Command::SelectItemSet { id: set.id });

@@ -152,6 +152,8 @@ pub struct ConfigUi {
     ordering: bool,
     /// The manager's selected set, which Copy copies
     order_selected: Option<u32>,
+    /// A row of the manager's list had the keyboard last frame: its keys are the list's
+    order_focused: bool,
     /// Hover questions made this frame; `show` hands them out with the commands
     hover_queries: Vec<Command>,
 }
@@ -227,12 +229,12 @@ impl ConfigUi {
     fn top_row(&mut self, ui: &mut egui::Ui, view: &ConfigView, commands: &mut Vec<Command>) {
         let active = view.sets.iter().find(|s| s.id == view.active_set);
         ui.horizontal_wrapped(|ui| {
-            let combo = egui::ComboBox::from_id_salt("config_set")
+            let combo = crate::widgets::dropdown::Dropdown::from_id_salt("config_set")
                 .selected_text(active.map_or("", |s| s.title.as_str()))
                 .show_ui(ui, |ui| {
                     for set in &view.sets {
                         let selected = set.id == view.active_set;
-                        let item = ui.selectable_label(selected, &set.title);
+                        let item = crate::widgets::dropdown::item(ui, selected, &set.title);
                         self.note(format!("set:{}", set.id), &item);
                         if item.clicked() && !selected {
                             commands.push(Command::SelectConfigSet { id: set.id });
@@ -401,8 +403,13 @@ impl ConfigUi {
         }
         // its list's keys (ListControl.lua:375-392): the arrows, Home and End pick a row, F2
         // renames it (ConfigSetListControl.lua's OnSelKeyDown) and Delete or Backspace asks to
-        // delete it. They wait for a question, a name being typed and any text field.
-        if self.set_edit.is_none() && self.confirm_delete.is_none() && !ctx.text_edit_focused() {
+        // delete it. They are the list's own: only while it is the selected control (one of
+        // its rows has the keyboard), and they wait for a question and a name being typed.
+        if self.order_focused
+            && self.set_edit.is_none()
+            && self.confirm_delete.is_none()
+            && !ctx.text_edit_focused()
+        {
             let at = view
                 .sets
                 .iter()
@@ -465,11 +472,28 @@ impl ConfigUi {
                             });
                     },
                 );
+                // a click on a row selects the list; a click anywhere else, but in the questions
+                // it opens, selects another control (ControlHost.lua:47-52)
+                let press = ui.input(|i| {
+                    i.pointer
+                        .button_pressed(egui::PointerButton::Primary)
+                        .then(|| i.pointer.interact_pos())
+                        .flatten()
+                });
                 for (i, row) in rows.rows.iter().enumerate() {
                     self.note(format!("order_row:{i}"), row);
                     if row.clicked() {
                         self.order_selected = Some(view.sets[i].id);
                     }
+                    if self.order_focused {
+                        crate::ui::shortcuts::keep_arrows(ui.ctx(), row.id);
+                    }
+                }
+                if let Some(pos) = press
+                    && self.set_edit.is_none()
+                    && self.confirm_delete.is_none()
+                {
+                    self.order_focused = rows.rows.iter().any(|r| r.rect.contains(pos));
                 }
                 if let Some((from, to)) = rows.moved {
                     commands.push(Command::MoveConfigSet { from, to });
@@ -605,7 +629,7 @@ impl ConfigUi {
                     .find(|c| c.value == current)
                     .map_or(current.as_str(), |c| c.label.as_str());
                 let default = ui.visuals().text_color();
-                let combo = egui::ComboBox::from_id_salt(("config_list", var))
+                let combo = crate::widgets::dropdown::Dropdown::from_id_salt(("config_list", var))
                     .selected_text(pob_text(shown, 14.0, default))
                     .width(150.0)
                     .show_ui(ui, |ui| {
@@ -683,13 +707,13 @@ impl ConfigUi {
         }
     }
 
-    /// A text field that shows what the user typed until the engine has caught up. Returns
-    /// the text to send, if the field's edit is due to be sent.
     /// A resizable box's height: PoB's 80 until its grip moves it (ConfigTab.lua:70)
     fn box_height(&self, key: &str) -> f32 {
         self.heights.get(key).copied().unwrap_or(80.0)
     }
 
+    /// A text field that shows what the user typed until the engine has caught up. Returns
+    /// the text to send, if the field's edit is due to be sent.
     #[allow(clippy::too_many_arguments)]
     fn draft_field(
         &mut self,
@@ -1174,6 +1198,14 @@ mod tests {
         let mut h = Harness::new();
         h.click("set_order");
         h.frame(vec![]);
+        // the list's keys wait until it is selected
+        key(&mut h, egui::Key::Delete);
+        h.frame(vec![]);
+        assert!(
+            h.ui.confirm_delete.is_none(),
+            "Delete asked before the list was selected"
+        );
+        h.click("order_row:0");
         key(&mut h, egui::Key::ArrowDown);
         key(&mut h, egui::Key::Delete);
         h.frame(vec![]);
@@ -1181,6 +1213,12 @@ mod tests {
             debug(&h.click("set_delete_yes")),
             ["DeleteConfigSet { id: 2 }"]
         );
+        // a click elsewhere on the tab selects another control: Delete there asks nothing
+        h.click("order_row:0");
+        h.click("show_all");
+        key(&mut h, egui::Key::Delete);
+        h.frame(vec![]);
+        assert!(h.ui.confirm_delete.is_none(), "Delete off the list asked");
     }
 
     #[test]

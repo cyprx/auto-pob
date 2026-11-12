@@ -212,13 +212,17 @@ fn drop_list(
     let current = list.labels.get(selected).map_or("", String::as_str);
     let mut picked = None;
     let combo = ui.add_enabled_ui(list.enabled, |ui| {
-        egui::ComboBox::from_id_salt(("items_db", key))
+        crate::widgets::dropdown::Dropdown::from_id_salt(("items_db", key))
             .width(100.0)
             .truncate()
             .selected_text(pob_text(current, 14.0, default))
             .show_ui(ui, |ui| {
                 for (i, label) in list.labels.iter().enumerate() {
-                    let item = ui.selectable_label(i == selected, pob_text(label, 14.0, default));
+                    let item = crate::widgets::dropdown::item(
+                        ui,
+                        i == selected,
+                        pob_text(label, 14.0, default),
+                    );
                     rects.note(&item, || format!("db_{key}_{i}"));
                     if item.clicked() && i != selected {
                         picked = Some(i);

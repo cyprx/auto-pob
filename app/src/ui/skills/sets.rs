@@ -55,11 +55,15 @@ impl SkillsUi {
                 .iter()
                 .find(|s| s.id == view.active_set)
                 .map_or("", title);
-            let combo = egui::ComboBox::from_id_salt("skills_set")
+            let combo = crate::widgets::dropdown::Dropdown::from_id_salt("skills_set")
                 .selected_text(current)
                 .show_ui(ui, |ui| {
                     for (i, set) in view.sets.iter().enumerate() {
-                        let item = ui.selectable_label(set.id == view.active_set, title(set));
+                        let item = crate::widgets::dropdown::item(
+                            ui,
+                            set.id == view.active_set,
+                            title(set),
+                        );
                         self.rects.note(&item, || format!("set_item_{i}"));
                         if item.clicked() && set.id != view.active_set {
                             out.commands.push(Command::SelectSkillSet { id: set.id });

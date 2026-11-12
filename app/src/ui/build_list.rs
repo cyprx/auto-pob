@@ -424,11 +424,11 @@ impl BuildListUi {
                 if about.clicked() {
                     action = Some(ListScreenAction::About);
                 }
-                let combo = egui::ComboBox::from_id_salt("build_sort")
+                let combo = crate::widgets::dropdown::Dropdown::from_id_salt("build_sort")
                     .selected_text(sort_label(view.sort))
                     .show_ui(ui, |ui| {
                         for (sort, label) in SORTS {
-                            let item = ui.selectable_label(view.sort == sort, label);
+                            let item = crate::widgets::dropdown::item(ui, view.sort == sort, label);
                             mark(ui, &format!("sort:{}", sort.id()), &item);
                             if item.clicked() && sort != view.sort {
                                 action = Some(ListScreenAction::SetSort(sort));

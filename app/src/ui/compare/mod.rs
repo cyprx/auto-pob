@@ -332,12 +332,13 @@ impl CompareUi {
                 let active = view.entries.get(view.active).map_or("", String::as_str);
                 let rects = &mut self.rects;
                 let busy = self.busy;
-                let combo = egui::ComboBox::from_id_salt("compare_entries")
+                let combo = crate::widgets::dropdown::Dropdown::from_id_salt("compare_entries")
                     .selected_text(plain(active))
                     .width(250.0)
                     .show_ui(ui, |ui| {
                         for (i, entry) in view.entries.iter().enumerate() {
-                            let item = ui.selectable_label(i == view.active, plain(entry));
+                            let item =
+                                crate::widgets::dropdown::item(ui, i == view.active, plain(entry));
                             rects.note(&item, || format!("entry:{i}"));
                             if item.clicked() && i != view.active && !busy {
                                 out.commands.push(Command::SelectCompare { index: i });

@@ -15,6 +15,42 @@ pub struct ScrollOptions {
     pub invert_slider: bool,
 }
 
+/// Where a text field has the keyboard, as PoB's ControlHosts see it (ControlHost.lua:56-71)
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct FocusScope {
+    /// A text field has the keyboard
+    pub typing: bool,
+    /// ... and it is Build's own: the top bar's or the sidebar's
+    pub build_box: bool,
+    /// The controls being drawn are Build's own (the top bar and the sidebar)
+    pub build_host: bool,
+}
+
+fn scope_id() -> egui::Id {
+    egui::Id::NULL.with("pob_focus_scope")
+}
+
+/// The app says where the keyboard is, once a frame before drawing
+pub fn set_scope(ctx: &egui::Context, scope: FocusScope) {
+    ctx.data_mut(|d| d.insert_temp(scope_id(), scope));
+}
+
+/// The app says whose controls it draws next: Build's (true) or a tab's or window's
+pub fn set_build_host(ctx: &egui::Context, build: bool) {
+    let mut scope: FocusScope = ctx.data(|d| d.get_temp(scope_id())).unwrap_or_default();
+    scope.build_host = build;
+    set_scope(ctx, scope);
+}
+
+/// A text field of this control's host has the keyboard: PoB gives that host's keys to it,
+/// so a hovered dropdown or slider of the host gets none (ControlHost.lua:56-71). Build's
+/// host is processed before the tab's (Build.lua:1230), so a tab's box holds only the tab's
+/// controls, and a Build box holds every control.
+fn held(ctx: &egui::Context) -> bool {
+    let scope: FocusScope = ctx.data(|d| d.get_temp(scope_id())).unwrap_or_default();
+    scope.typing && (scope.build_box || !scope.build_host)
+}
+
 fn options_id() -> egui::Id {
     egui::Id::NULL.with("pob_scroll_options")
 }
@@ -82,7 +118,7 @@ const DROPDOWN_KEYS: [(Key, i32); 4] = [
 
 /// A dropdown of `len` entries, `selected`, drawn as `response`: the entry the wheel or keys
 /// step it to while it is pointed at, if another. `open`: its list is dropped, where the wheel
-/// scrolls the list instead and only the arrows step.
+/// scrolls a list too long to show whole instead, and only the arrows step it.
 pub fn dropdown_step(
     ui: &egui::Ui,
     response: &egui::Response,
@@ -93,19 +129,29 @@ pub fn dropdown_step(
     if len == 0 || !response.enabled() || !(response.hovered() || open) {
         return None;
     }
-    let arrows: &[(Key, i32)] = if open {
+    // a dropped list is the selected control itself: its own search box has the keyboard
+    if !open && held(ui.ctx()) {
+        return None;
+    }
+    // a dropped list scrolls on the wheel and PageUp/PageDown only when it is too long to
+    // show whole; a short one steps (DropDownControl.lua:488-511)
+    let spacing = ui.spacing();
+    let rows = spacing.combo_height / (spacing.interact_size.y + spacing.item_spacing.y);
+    // the search box takes a row
+    let scrolls = open && len as f32 > rows - 1.0;
+    let arrows: &[(Key, i32)] = if scrolls {
         &DROPDOWN_KEYS[2..]
     } else {
         &DROPDOWN_KEYS
     };
     let (mut step, wheel, _, _) = ui.input(|i| steps(i, arrows));
-    if open || options(ui.ctx()).disable {
+    if scrolls || options(ui.ctx()).disable {
         step -= wheel;
     }
     if step == 0 {
         return None;
     }
-    take(ui, if open { arrows } else { &DROPDOWN_KEYS });
+    take(ui, if scrolls { arrows } else { &DROPDOWN_KEYS });
     // SetSel clamps to the list
     let to = (selected as i64 + i64::from(step)).clamp(0, len as i64 - 1) as usize;
     (to != selected).then_some(to)
@@ -122,10 +168,13 @@ const SLIDER_KEYS: [(Key, i32); 4] = [
 /// while it is pointed at: 0.05 a step, 0.25 with Shift, 0.01 with Ctrl, the wheel reversed
 /// by PoB's option.
 pub fn slider_step(ui: &egui::Ui, response: &egui::Response, value: f64) -> Option<f64> {
-    if !response.enabled() || !response.hovered() {
+    if !response.enabled() || !response.hovered() || held(ui.ctx()) {
         return None;
     }
-    let (total, wheel, shift, ctrl) = ui.input(|i| steps(i, &SLIDER_KEYS));
+    // a focused slider takes the arrows itself (egui's own step)
+    let focused = response.has_focus();
+    let arrows: &[(Key, i32)] = if focused { &[] } else { &SLIDER_KEYS };
+    let (total, wheel, shift, ctrl) = ui.input(|i| steps(i, arrows));
     let keys = total - wheel;
     // the wheel down lowers the value (SliderControl.lua:164)
     let wheel = if options(ui.ctx()).invert_slider {
@@ -137,7 +186,7 @@ pub fn slider_step(ui: &egui::Ui, response: &egui::Response, value: f64) -> Opti
     if step == 0 {
         return None;
     }
-    take(ui, &SLIDER_KEYS);
+    take(ui, arrows);
     let size = if shift {
         0.25
     } else if ctrl {

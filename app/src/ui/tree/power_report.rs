@@ -66,11 +66,11 @@ impl ReportPanel {
                     masteries,
                 });
             }
-            let combo = egui::ComboBox::from_id_salt("report_filter")
+            let combo = crate::widgets::dropdown::Dropdown::from_id_salt("report_filter")
                 .selected_text(FILTERS.get(report.filter).copied().unwrap_or(""))
                 .show_ui(ui, |ui| {
                     for (i, label) in FILTERS.iter().enumerate() {
-                        let item = ui.selectable_label(i == report.filter, *label);
+                        let item = crate::widgets::dropdown::item(ui, i == report.filter, *label);
                         rects.note(&item, || format!("report_filter:{i}"));
                         if item.clicked() && i != report.filter {
                             commands.push(Command::SetPowerReportFilter {

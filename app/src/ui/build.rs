@@ -260,11 +260,12 @@ fn bloodline(ui: &mut egui::Ui, view: &BuildView, commands: &mut Vec<Command>) {
         .find(|(id, _)| *id == view.secondary_selected)
         .map_or("None", |(_, label)| label.as_str());
     ui.add_enabled_ui(view.secondary.len() > 1, |ui| {
-        let combo = egui::ComboBox::from_id_salt("top_bar_bloodline")
+        let combo = crate::widgets::dropdown::Dropdown::from_id_salt("top_bar_bloodline")
             .selected_text(current)
             .show_ui(ui, |ui| {
                 for (i, (id, label)) in view.secondary.iter().enumerate() {
-                    let item = ui.selectable_label(*id == view.secondary_selected, label);
+                    let item =
+                        crate::widgets::dropdown::item(ui, *id == view.secondary_selected, label);
                     note(ui, &format!("bloodline_{i}"), item.rect);
                     if item.clicked() && *id != view.secondary_selected {
                         commands.push(Command::SelectSecondaryAscendancy { id: *id });
@@ -304,14 +305,15 @@ fn loadouts(
         .loadout_selected
         .and_then(|i| view.loadouts.get(i))
         .map_or("Loadouts", String::as_str);
-    let combo = egui::ComboBox::from_id_salt("top_bar_loadouts")
+    let combo = crate::widgets::dropdown::Dropdown::from_id_salt("top_bar_loadouts")
         .selected_text(pob_text(current, 14.0, default))
         .width(160.0)
         .show_ui(ui, |ui| {
             for (i, entry) in view.loadouts.iter().enumerate() {
                 let key = format!("loadout_{i}");
                 if !is_loadout_marker(entry) {
-                    let item = ui.selectable_label(
+                    let item = crate::widgets::dropdown::item(
+                        ui,
                         view.loadout_selected == Some(i),
                         pob_text(entry, 14.0, default),
                     );
@@ -325,7 +327,7 @@ fn loadouts(
                 }
                 let response = match &entry[4..] {
                     "New Loadout" => {
-                        let r = ui.button("New Loadout…");
+                        let r = crate::widgets::dropdown::button(ui, "New Loadout…");
                         if r.clicked() {
                             // PoB's box opens on "New Loadout" (Build.lua:318)
                             state.new_loadout = Some("New Loadout".to_owned());
@@ -333,8 +335,7 @@ fn loadouts(
                         r
                     }
                     "Sync" => {
-                        let r = ui
-                            .button("Sync")
+                        let r = crate::widgets::dropdown::button(ui, "Sync")
                             .on_hover_text("Rebuild the list from the sets' names");
                         if r.clicked() {
                             commands.push(Command::SyncLoadouts);
@@ -342,7 +343,7 @@ fn loadouts(
                         r
                     }
                     "Help >>" => {
-                        let r = ui.button("Help >>");
+                        let r = crate::widgets::dropdown::button(ui, "Help >>");
                         if r.clicked() {
                             state.help = true;
                         }
@@ -353,7 +354,10 @@ fn loadouts(
                         continue;
                     }
                     // "Loadouts:" and any other header: a label, never a choice
-                    _ => ui.label(pob_text(entry, 14.0, ui.visuals().weak_text_color())),
+                    _ => {
+                        let weak = ui.visuals().weak_text_color();
+                        crate::widgets::dropdown::label(ui, pob_text(entry, 14.0, weak))
+                    }
                 };
                 note(ui, &key, response.rect);
             }

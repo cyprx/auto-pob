@@ -1069,6 +1069,23 @@ fn build_sites_match_pob() {
     );
     assert!(!our_view(&mut s).import.can_import_to_this_build);
     assert!(s.requests().pending.is_empty());
+    // PoB's mode drop-down is disabled for a build with no file: no comparison either
+    let err = s
+        .backend
+        .apply(
+            import_command(sites[0].link(), ImportMode::Comparison),
+            &|_| {},
+        )
+        .unwrap_err();
+    assert_eq!(format!("{err:#}"), "PoB doesn't offer that here");
+    up.eval::<()>(&format!(
+        "build.importTab.controls.importCodeIn:SetText('{}', true)",
+        sites[0].link()
+    ));
+    assert!(!up.eval::<bool>(
+        "local c = build.importTab.controls.importCodeMode return c:IsEnabled() and true or false"
+    ));
+    assert!(s.requests().pending.is_empty());
 
     // ---- Share to each site that takes uploads ----
     let our_code = s.backend.share_code().unwrap();
@@ -1257,6 +1274,58 @@ fn build_sites_match_pob() {
     // PoB stores no link here either (Step 0)
     assert_eq!(saved_import_link(&our_saved_xml(&s)), None);
     assert_eq!(up_dump(&up).import_link, None);
+
+    // ---- Import as comparison: the build stays, the Compare tab gains PoB's entry (R5) ----
+    let stats_before = s.backend.stats_view().unwrap().stats;
+    let unsaved_before = s.backend.build_view().unwrap().unsaved;
+    up.eval::<()>("act.code_import('https://pobb.in/gate', 'compare')");
+    up.pump(Duration::from_secs(15));
+    let affected = s
+        .backend
+        .apply(
+            import_command("https://pobb.in/gate", ImportMode::Comparison),
+            &|_| {},
+        )
+        .expect("import as comparison");
+    assert!(affected.requests && !affected.build, "{affected:?}");
+    let steps = s.settle_net(Duration::from_secs(15));
+    assert!(
+        steps
+            .iter()
+            .any(|a| a.as_ref().is_ok_and(|a| a.compare && !a.build && !a.recalc)),
+        "no step answered for the comparison"
+    );
+    let entry = s.requests().finished.remove(0);
+    assert_eq!(entry.label, "Fetching build from pobb.in");
+    assert_eq!((entry.error.clone(), entry.new_build), (None, false));
+    let their_entries = |up: &UpstreamNet| -> Vec<String> {
+        up.eval::<Vec<String>>(
+            "local out = {} for i, e in ipairs(build.compareTab.compareEntries) do out[i] = e.label end return out",
+        )
+    };
+    let ours = s.backend.compare_view().unwrap().expect("a comparison");
+    assert_eq!(ours.entries, ["Imported comparison"]);
+    assert_eq!(ours.entries, their_entries(&up));
+    assert!(!ours.summary.is_empty());
+    assert_eq!(s.backend.stats_view().unwrap().stats, stats_before);
+    assert_eq!(s.backend.build_view().unwrap().unsaved, unsaved_before);
+    s.assert_clean("comparison");
+    assert_eq!(up.eval::<usize>("return #main.popups"), 0);
+    // a share code is added at once, with no request
+    up.eval::<()>(&format!("act.code_import('{attack_code}', 'compare')"));
+    let affected = s
+        .backend
+        .apply(
+            import_command(&attack_code, ImportMode::Comparison),
+            &|_| {},
+        )
+        .expect("code as comparison");
+    assert!(affected.compare && !affected.build, "{affected:?}");
+    assert!(s.requests().pending.is_empty());
+    let ours = s.backend.compare_view().unwrap().expect("a comparison");
+    assert_eq!(ours.entries, their_entries(&up));
+    assert_eq!((ours.entries.len(), ours.active), (2, 1));
+    s.assert_clean("comparison code");
 
     // ---- A failure leaves nothing stuck, and the same request then works ----
     let pobbin = sites.iter().find(|site| site.id == "POBBin").unwrap();

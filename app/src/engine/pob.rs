@@ -2,18 +2,18 @@
 
 use super::buildpaths;
 use super::commands::{
-    CharacterPart, Command, ConfigValue, ControlTooltipQuery, DeleteKind, GemSearchQuery,
-    GemTarget, GemToggle, GemTooltipQuery, ImportMode, ItemDb, ItemDbQuery, ItemTooltipQuery,
-    PopupInput, PopupKind, SkillOption, SocketColour, Tab,
+    CharacterPart, Command, CompareSource, ConfigValue, ControlTooltipQuery, DeleteKind,
+    GemSearchQuery, GemTarget, GemToggle, GemTooltipQuery, ImportMode, ItemDb, ItemDbQuery,
+    ItemTooltipQuery, PopupInput, PopupKind, SkillOption, SocketColour, Tab,
 };
 use super::net::{Dispatch, NetHandle};
 use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Engine, Event};
 use super::views::{
-    AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView,
-    ControlTooltipView, DisplayItemView, GemRow, GemSearchView, GemTooltipView, GroupTooltipView,
-    ItemDbView, ItemText, ItemTooltip, ItemTooltipView, ItemsView, ModLineList, NodePower,
-    NodeTooltip, NotesView, PopupView, PowerReport, RequestsView, SettingsView, ShareView,
-    SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
+    AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, CompareView,
+    ConfigView, ControlTooltipView, DisplayItemView, GemRow, GemSearchView, GemTooltipView,
+    GroupTooltipView, ItemDbView, ItemText, ItemTooltip, ItemTooltipView, ItemsView, ModLineList,
+    NodePower, NodeTooltip, NotesView, PopupView, PowerReport, RequestsView, SettingsView,
+    ShareView, SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -144,6 +144,7 @@ impl PobBackend {
             ("@glue/net.lua", include_str!("glue/net.lua")),
             ("@glue/import.lua", include_str!("glue/import.lua")),
             ("@glue/settings.lua", include_str!("glue/settings.lua")),
+            ("@glue/compare.lua", include_str!("glue/compare.lua")),
         ] {
             lua.load(source)
                 .set_name(name)
@@ -359,6 +360,8 @@ impl PobBackend {
         affected.requests = true;
         // a request of the account import ends with PoB's status and stage changed
         affected.account = true;
+        // a link imported as a comparison lands here (R5)
+        affected.compare = true;
         affected.short_link = self.call("short_link_ready", ())?;
         if self.call::<_, bool>("popup_take_lost", ())? {
             affected.popup = true;
@@ -458,6 +461,11 @@ pub(crate) enum CancelScope {
 
 pub(crate) fn cancels_requests(command: &Command) -> Option<CancelScope> {
     match command {
+        // a comparison leaves the build as it is (R5)
+        Command::ImportFromUrl {
+            mode: ImportMode::Comparison,
+            ..
+        } => None,
         Command::OpenBuild { .. }
         | Command::NewBuild
         | Command::ImportShareCode { .. }
@@ -472,6 +480,19 @@ fn mode_name(mode: ImportMode) -> &'static str {
     match mode {
         ImportMode::ThisBuild => "this",
         ImportMode::NewBuild => "new",
+        ImportMode::Comparison => "compare",
+    }
+}
+
+/// The one Compare control that edits this build: the Items view's own item set (R6)
+const PRIMARY_ITEM_SET: &str = "primaryItemSetSelect";
+
+/// A Compare command changed the comparisons; the tree goes too, for the overlay (R7).
+fn compare_changed() -> Affected {
+    Affected {
+        compare: true,
+        tree: true,
+        ..Affected::default()
     }
 }
 
@@ -534,6 +555,9 @@ fn ends_gem_search(command: &Command) -> bool {
 /// Whether a command ends the popup session (R4). The session's own commands and the queries
 /// leave it open; anything else may change the item or the build under it.
 pub(crate) fn ends_popup_session(command: &Command) -> bool {
+    if let Command::SetCompareControl { name, .. } = command {
+        return name == PRIMARY_ITEM_SET;
+    }
     !matches!(
         command,
         Command::OpenPopup(_)
@@ -572,6 +596,12 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             // the tree search's debounce can land after a node-replacement open: it changes
             // neither the item nor the build
             | Command::SetTreeSearch { .. }
+            // the comparisons are apart from this build; only a copy into it, or a pick of its
+            // own item set, edits it (R5-R8)
+            | Command::LoadCompare { .. }
+            | Command::SelectCompare { .. }
+            | Command::RemoveCompare { .. }
+            | Command::SetCompareOverlay { .. }
             // a cancel runs PoB's failure path, which leaves the build alone (R12)
             | Command::CancelRequest { .. }
             | Command::Wake
@@ -800,11 +830,14 @@ impl PobBackend {
                 })
             }
             Command::ImportFromUrl { url, mode } => {
+                let comparison = mode == ImportMode::Comparison;
                 let mode = mode_name(mode);
                 // a link is a request, finished by a later Network step; a code imports at once
                 let request: Option<u64> = self.call("import_from_url", (url, mode))?;
                 let mut affected = match request {
                     Some(_) => self.network_affected()?,
+                    // a code added a comparison at once; the build is as it was (R5)
+                    None if comparison => compare_changed(),
                     // a code replaced the build at once; a link does so only when its request
                     // ends (`network_affected`), and a failed fetch keeps the build as it was
                     None => {
@@ -1011,6 +1044,61 @@ impl PobBackend {
             Command::RemoveAllTattoos => {
                 self.call::<_, ()>("remove_all_tattoos", ())?;
                 self.tree_edited()
+            }
+            Command::LoadCompare { source } => {
+                match source {
+                    CompareSource::File(path) => self
+                        .call::<_, ()>("compare_load_file", path.to_string_lossy().into_owned())?,
+                    CompareSource::Code(code) => self.call::<_, ()>("compare_load_code", code)?,
+                }
+                Ok(compare_changed())
+            }
+            Command::SelectCompare { index } => {
+                self.call::<_, ()>("compare_select", index + 1)?;
+                Ok(compare_changed())
+            }
+            Command::RemoveCompare { index } => {
+                self.call::<_, ()>("compare_remove", index + 1)?;
+                Ok(compare_changed())
+            }
+            Command::SetCompareControl { name, value } => {
+                let primary = name == PRIMARY_ITEM_SET;
+                match value {
+                    PopupInput::Choice { index, label } => {
+                        self.call::<_, ()>("compare_set", (name, "choice", index, label))?
+                    }
+                    PopupInput::Number(value) => {
+                        self.call::<_, ()>("compare_set", (name, "number", value, ()))?
+                    }
+                    PopupInput::Check(on) => {
+                        self.call::<_, ()>("compare_set", (name, "check", on, ()))?
+                    }
+                    PopupInput::Text(text) => {
+                        self.call::<_, ()>("compare_set", (name, "text", text, ()))?
+                    }
+                    PopupInput::Row(key) => {
+                        self.call::<_, ()>("compare_set", (name, "row", key, ()))?
+                    }
+                }
+                let mut affected = compare_changed();
+                // PoB's own item set selector, with an Items undo state (CompareTab.lua:781)
+                if primary {
+                    affected.merge(self.items_edited()?);
+                }
+                Ok(affected)
+            }
+            Command::CopyCompareTree { and_use } => {
+                self.call::<_, ()>("compare_copy_tree", and_use)?;
+                let mut affected = self.spec_edited(true)?;
+                affected.compare = true;
+                Ok(affected)
+            }
+            Command::SetCompareOverlay { on } => {
+                self.call::<_, ()>("compare_overlay", on)?;
+                Ok(Affected {
+                    tree: true,
+                    ..Affected::default()
+                })
             }
             Command::SetMastery { node, effect } => {
                 self.call::<_, ()>("set_mastery", (node, effect))?;
@@ -2041,6 +2129,10 @@ impl Backend for PobBackend {
         self.view("account_view", ())
     }
 
+    fn compare_view(&mut self) -> Result<Option<CompareView>> {
+        self.view("compare_view", ())
+    }
+
     fn set_waker(&mut self, wake: Waker) {
         self.net.set_waker(wake);
     }
@@ -2238,6 +2330,66 @@ mod tests {
             }),
             None
         );
+        // a comparison leaves the build as it is: nothing is cancelled (R5)
+        let (mut fake, log) = Fake::new();
+        fake.pending = vec![(1, "build"), (2, "list")];
+        let command = Command::ImportFromUrl {
+            url: "https://pobb.in/x".into(),
+            mode: ImportMode::Comparison,
+        };
+        let shown = format!("apply {command:?}");
+        let _ = fake.apply(command, &|_| {});
+        assert_eq!(log.lock().unwrap().requests, [shown]);
+        assert_eq!(fake.pending.len(), 2);
+    }
+
+    #[test]
+    fn compare_commands_keep_the_build_and_its_session() {
+        use crate::engine::CompareSource;
+        let keeps = [
+            Command::LoadCompare {
+                source: CompareSource::File("a.xml".into()),
+            },
+            Command::LoadCompare {
+                source: CompareSource::Code("x".into()),
+            },
+            Command::SelectCompare { index: 1 },
+            Command::RemoveCompare { index: 0 },
+            Command::SetCompareOverlay { on: true },
+            Command::SetCompareControl {
+                name: "cmpMainSkill".into(),
+                value: PopupInput::Choice {
+                    index: 1,
+                    label: "Double Strike".into(),
+                },
+            },
+            Command::ImportFromUrl {
+                url: "https://pobb.in/x".into(),
+                mode: ImportMode::Comparison,
+            },
+        ];
+        for command in keeps {
+            assert_eq!(cancels_requests(&command), None, "{command:?}");
+            assert!(!leaves_build(&command), "{command:?}");
+            assert!(!ends_popup_session(&command), "{command:?}");
+            assert!(!ends_item_db(&command), "{command:?}");
+            assert!(!ends_gem_search(&command), "{command:?}");
+        }
+        // a copy into this build, or a pick of its own item set, edits it
+        for command in [
+            Command::CopyCompareTree { and_use: true },
+            Command::SetCompareControl {
+                name: PRIMARY_ITEM_SET.into(),
+                value: PopupInput::Choice {
+                    index: 0,
+                    label: "Default".into(),
+                },
+            },
+        ] {
+            assert!(ends_popup_session(&command), "{command:?}");
+            assert!(!leaves_build(&command), "{command:?}");
+            assert_eq!(cancels_requests(&command), None, "{command:?}");
+        }
     }
 
     #[test]

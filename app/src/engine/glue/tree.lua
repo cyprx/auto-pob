@@ -265,21 +265,53 @@ end
 -- The colours the tree view gives the nodes when comparing with another spec: TreeTab.lua:445
 -- picks the spec, PassiveTreeView.lua:808 and :936 colour each node. A node that keeps its
 -- default colour (nil) isn't listed.
-local function compare_state(build)
-	local tab = build.treeTab
-	local compareSpec = tab.isComparing and tab.specList[tab.activeCompareSpec] or nil
-	tab.viewer.compareSpec = compareSpec
+local function compare_colours(build, compareSpec)
+	local viewer = build.treeTab.viewer
 	local colours = {}
 	if compareSpec then
 		for id, node in pairs(build.spec.nodes) do
-			local r, g, b = tab.viewer:GetCompareNodeColor(node, compareSpec.nodes[id], build.spec, build, nil)
+			local r, g, b = viewer:GetCompareNodeColor(node, compareSpec.nodes[id], build.spec, build, nil)
 			if r then
 				colours[#colours + 1] = { node = id, rgb = { r, g, b } }
 			end
 		end
 		table.sort(colours, function(a, b) return a.node < b.node end)
 	end
-	return colours, compareSpec and tab.activeCompareSpec - 1 or nil
+	return colours
+end
+
+-- With the Compare tab's Tree view on and a comparison active, the overlay goes first (R7): PoB
+-- draws this build's viewer with `compareSpec` set to the comparison's spec, then clears it
+-- (CompareTab.lua:3383-3405). Side by side (overlay unchecked) nothing is coloured. Returns
+-- nil when the Compare tab doesn't draw the tree.
+local function overlay_state(build)
+	local tab = build.compareTab
+	local entry = tab and tab.compareViewMode == "TREE" and tab:GetActiveCompare()
+	if not entry then
+		return nil
+	end
+	if not tab.treeOverlayMode then
+		return {}
+	end
+	local viewer = build.treeTab.viewer
+	viewer.compareSpec = entry.spec
+	local ok, colours = pcall(compare_colours, build, entry.spec)
+	viewer.compareSpec = nil
+	if not ok then
+		error(colours, 0)
+	end
+	return colours
+end
+
+local function compare_state(build)
+	local overlay = overlay_state(build)
+	if overlay then
+		return overlay, nil
+	end
+	local tab = build.treeTab
+	local compareSpec = tab.isComparing and tab.specList[tab.activeCompareSpec] or nil
+	tab.viewer.compareSpec = compareSpec
+	return compare_colours(build, compareSpec), compareSpec and tab.activeCompareSpec - 1 or nil
 end
 
 -- The words PassiveTreeView:Draw splits the search text into (PassiveTreeView.lua:783-798).

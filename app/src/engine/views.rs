@@ -1030,6 +1030,66 @@ mod tests {
     }
 
     #[test]
+    fn compare_view_round_trips() {
+        let row = |label: &str, diff: &str, better: Option<bool>| CompareRow {
+            label: format!("^7{label}"),
+            ours: "^7100".into(),
+            theirs: "^xFFD62A120".into(),
+            diff: diff.into(),
+            better,
+        };
+        let view = CompareView {
+            entries: vec!["dot".into(), "Imported build".into()],
+            active: 1,
+            headers: ["^x33FF77attack".into(), "^xFF9922Imported build".into()],
+            controls: vec![PopupControl {
+                name: "cmpMainSkill".into(),
+                kind: PopupControlKind::Dropdown,
+                label: String::new(),
+                pos: [0.0, 0.0],
+                size: [225.0, 20.0],
+                shown: true,
+                enabled: true,
+                choices: vec!["Vaal Double Strike".into(), "Double Strike".into()],
+                selected: 1,
+                value: 0.0,
+                divisions: None,
+                checked: false,
+                text: String::new(),
+                tooltip_text: None,
+                hover_tooltip: false,
+                rows: vec![],
+                row_selected: None,
+                note: None,
+            }],
+            summary: vec![
+                row("Life", "^x33FF77+20 (+20.0%)", Some(true)),
+                row("Mana", "^xDD0022-5", Some(false)),
+                row("Armour", "", None),
+            ],
+        };
+        let json = serde_json::to_string(&view).unwrap();
+        assert_eq!(serde_json::from_str::<CompareView>(&json).unwrap(), view);
+        // the Lua table the glue builds: a row with no diff leaves `diff` and `better` out
+        let from_lua: CompareView = lua_value(
+            r#"return { entries = { "dot", "Imported build" }, active = 1,
+              headers = { "^x33FF77attack", "^xFF9922Imported build" },
+              controls = { { name = "cmpMainSkill", kind = "Dropdown", label = "",
+                pos = { 0, 0 }, size = { 225, 20 }, shown = true, enabled = true,
+                choices = { "Vaal Double Strike", "Double Strike" }, selected = 1, value = 0,
+                checked = false, text = "", hover_tooltip = false, rows = {} } },
+              summary = {
+                { label = "^7Life", ours = "^7100", theirs = "^xFFD62A120",
+                  diff = "^x33FF77+20 (+20.0%)", better = true },
+                { label = "^7Mana", ours = "^7100", theirs = "^xFFD62A120",
+                  diff = "^xDD0022-5", better = false },
+                { label = "^7Armour", ours = "^7100", theirs = "^xFFD62A120" },
+              } }"#,
+        );
+        assert_eq!(from_lua, view);
+    }
+
+    #[test]
     fn settings_view_round_trips() {
         let view = SettingsView {
             rows: vec![
@@ -1285,6 +1345,35 @@ pub struct ItemTooltipView {
 pub struct ControlTooltipView {
     pub query: ControlTooltipQuery,
     pub tooltip: ItemTooltip,
+}
+
+/// One row of the Compare tab's Summary, as PoB's `DrawStatList` draws it (R4). The texts keep
+/// PoB's colour codes; `diff` is empty when the values are equal or the row has no number.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompareRow {
+    pub label: String,
+    pub ours: String,
+    pub theirs: String,
+    #[serde(default)]
+    pub diff: String,
+    /// The diff's colour: PoB's positive colour is better, its negative one worse
+    #[serde(default)]
+    pub better: Option<bool>,
+}
+
+/// The Compare tab with at least one comparison build (R4-R6).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompareView {
+    /// The comparisons' labels, in PoB's order
+    pub entries: Vec<String>,
+    /// 0-based in `entries`
+    pub active: usize,
+    /// The Summary's column headers for this build and the active comparison, colour codes kept
+    pub headers: [String; 2],
+    /// R6's controls, in that list's order
+    pub controls: Vec<PopupControl>,
+    #[serde(default)]
+    pub summary: Vec<CompareRow>,
 }
 
 /// The open popup, whatever it is: PoB's controls as data (R5).

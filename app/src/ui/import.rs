@@ -797,6 +797,11 @@ impl ImportUi {
                         });
                     }
                     ImportMode::NewBuild => out.confirm = Some(Confirm::NewBuild { url }),
+                    // the build stays as it is (no radio offers it yet)
+                    ImportMode::Comparison => out.commands.push(Command::ImportFromUrl {
+                        url,
+                        mode: ImportMode::Comparison,
+                    }),
                 }
             }
         });

@@ -23,6 +23,18 @@ pub enum ImportMode {
     ThisBuild,
     /// Opens a new, unsaved build
     NewBuild,
+    /// Adds the build as a comparison: PoB's "Import as comparison" (R5). PoB offers it only
+    /// for a build with a file.
+    Comparison,
+}
+
+/// Where a comparison build comes from (R5)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompareSource {
+    /// A build file, read by the engine; the comparison is named after the file
+    File(PathBuf),
+    /// A share code
+    Code(String),
 }
 
 /// A platform of PoB's account import (PoB's ids `"PC"`, `"XBOX"`, `"SONY"`).
@@ -708,6 +720,35 @@ pub enum Command {
     AddDbItem {
         db: ItemDb,
         name: String,
+    },
+
+    /// Adds a comparison build (R5); it becomes the active one. A build PoB can't load is
+    /// PoB's `Failed to import build for comparison.`
+    LoadCompare {
+        source: CompareSource,
+    },
+    /// PoB's "Compare with:" dropdown; `index` is 0-based in `CompareView.entries`
+    SelectCompare {
+        index: usize,
+    },
+    /// Selects the comparison, then presses PoB's Remove, which removes the active one (R5)
+    RemoveCompare {
+        index: usize,
+    },
+    /// Sets one of PoB's Compare controls, from R6's list (`CompareView.controls`)
+    SetCompareControl {
+        name: String,
+        value: PopupInput,
+    },
+    /// PoB's "Copy tree" (`and_use: false`) and "Copy and use" buttons (R8)
+    CopyCompareTree {
+        and_use: bool,
+    },
+    /// UI state, sent on entering (`on`) and leaving the Compare tab's Tree view: while on,
+    /// `TreeState.compare` colours the tree against the active comparison (R7). No undo, not
+    /// unsaved. A build change drops it with the comparisons.
+    SetCompareOverlay {
+        on: bool,
     },
 
     Undo(Tab),

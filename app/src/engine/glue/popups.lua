@@ -461,43 +461,56 @@ local function require_usable(control)
 	end
 end
 
--- Sets a control as the user would. `kind` is the input's kind ("choice", "number", "check",
--- "text" or "row"); a choice carries the label that was shown (R8).
+-- Sets `control` (of `control_kind`, from KIND_OF) as the user would. `kind` is the input's
+-- kind ("choice", "number", "check", "text" or "row"); a choice carries the label that was
+-- shown (R8). For the other glue files too (Compare's controls, R6).
+function glue.set_control(control, control_kind, kind, value, label)
+	if kind == "choice" and control_kind == "Dropdown" then
+		local entry = control.list[value + 1]
+		if entry == nil then
+			error("no such choice", 0)
+		end
+		if (type(entry) == "table" and entry.label or entry) ~= label then
+			error("the list changed; pick again", 0)
+		end
+		control:SetSel(value + 1)
+	elseif kind == "number" and control_kind == "Slider" then
+		control:SetVal(value)
+	elseif kind == "check" and control_kind == "Check" then
+		if (control.state and true or false) ~= value then
+			glue.press_check(control, value)
+		end
+	elseif kind == "text" and control_kind == "Edit" then
+		glue.paste_into(control, value)
+	elseif kind == "row" and control_kind == "List" then
+		glue.list_sync(control)
+		for i, entry in ipairs(control.list) do
+			if row_key(entry, i) == value then
+				control:SelectIndex(i)
+				control:OnSelClick(i, entry, false)
+				return
+			end
+		end
+		error("no such choice", 0)
+	else
+		error("no such control", 0)
+	end
+end
+
+-- A control outside a popup as the views show it (`PopupControl`), positions as `GetPos()`
+-- gives them; nil for a kind the views don't have
+function glue.describe_control(name, control)
+	local kind = kind_of(control)
+	return kind and control_view(name, control, kind, 0, 0), kind
+end
+
+-- Sets a control as the user would; see `glue.set_control`.
 function glue.popup_set(name, kind, value, label)
 	require_session()
 	with_session(function()
 		local control, control_kind = find(name)
 		require_usable(control)
-		if kind == "choice" and control_kind == "Dropdown" then
-			local entry = control.list[value + 1]
-			if entry == nil then
-				error("no such choice", 0)
-			end
-			if (type(entry) == "table" and entry.label or entry) ~= label then
-				error("the list changed; pick again", 0)
-			end
-			control:SetSel(value + 1)
-		elseif kind == "number" and control_kind == "Slider" then
-			control:SetVal(value)
-		elseif kind == "check" and control_kind == "Check" then
-			if (control.state and true or false) ~= value then
-				glue.press_check(control, value)
-			end
-		elseif kind == "text" and control_kind == "Edit" then
-			glue.paste_into(control, value)
-		elseif kind == "row" and control_kind == "List" then
-			glue.list_sync(control)
-			for i, entry in ipairs(control.list) do
-				if row_key(entry, i) == value then
-					control:SelectIndex(i)
-					control:OnSelClick(i, entry, false)
-					return
-				end
-			end
-			error("no such choice", 0)
-		else
-			error("no such control", 0)
-		end
+		glue.set_control(control, control_kind, kind, value, label)
 	end)
 end
 

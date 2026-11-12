@@ -12,11 +12,12 @@ use super::commands::{
 use super::pob::{CancelScope, cancels_requests, ends_item_db, ends_popup_session};
 use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Event};
 use super::views::{
-    AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView,
-    ControlTooltipView, DisplayItemView, DropList, GemSearchView, GemTooltipView, GroupTooltipView,
-    ItemDbView, ItemText, ItemTooltip, ItemTooltipView, ItemsView, NodePower, NodeTooltip,
-    NotesView, PendingRequest, Points, PopupView, PowerReport, RequestsView, SettingsView,
-    ShareView, SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
+    AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, CompareView,
+    ConfigView, ControlTooltipView, DisplayItemView, DropList, GemSearchView, GemTooltipView,
+    GroupTooltipView, ItemDbView, ItemText, ItemTooltip, ItemTooltipView, ItemsView, NodePower,
+    NodeTooltip, NotesView, PendingRequest, Points, PopupView, PowerReport, RequestsView,
+    SettingsView, ShareView, SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout,
+    TreeState,
 };
 
 #[derive(Default, Debug)]
@@ -45,6 +46,8 @@ pub struct Log {
     pub share_codes: usize,
     /// Share views asked for
     pub share_views: usize,
+    /// Compare views asked for
+    pub compare_views: usize,
     pub applies: usize,
 }
 
@@ -252,6 +255,14 @@ impl Fake {
             Command::ExportShareCode => Ok(Affected {
                 share: true,
                 share_code: true,
+                ..Affected::default()
+            }),
+            Command::LoadCompare { .. }
+            | Command::SelectCompare { .. }
+            | Command::RemoveCompare { .. }
+            | Command::SetCompareControl { .. } => Ok(Affected {
+                compare: true,
+                tree: true,
                 ..Affected::default()
             }),
             _ => Ok(Affected::default()),
@@ -624,6 +635,11 @@ impl Backend for Fake {
 
     fn account_view(&mut self) -> anyhow::Result<AccountView> {
         Ok(AccountView::default())
+    }
+
+    fn compare_view(&mut self) -> anyhow::Result<Option<CompareView>> {
+        self.log.lock().unwrap().compare_views += 1;
+        Ok(None)
     }
 
     fn share_code(&mut self) -> anyhow::Result<String> {

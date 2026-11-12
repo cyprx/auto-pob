@@ -173,11 +173,13 @@ local function import_through_tab(url, mode)
 	if not tab.importCodeValid then
 		error(not_imported(tab), 0)
 	end
-	if mode == "this" then
+	-- PoB enables the drop-down only for a build with a file, or once "Import as comparison" is
+	-- picked; its validator puts a build with no file back on "new" (ImportTab.lua:585, :681)
+	if mode == "this" or mode == "compare" then
 		if not controls.importCodeMode:IsEnabled() then
 			error("PoB doesn't offer that here", 0)
 		end
-		controls.importCodeMode:SetSel(1)
+		controls.importCodeMode:SetSel(mode == "this" and 1 or 3)
 	else
 		controls.importCodeMode:SetSel(2)
 	end
@@ -189,11 +191,17 @@ local function import_through_tab(url, mode)
 	if site then
 		label = "Fetching build from " .. site.label
 	end
+	-- a comparison adds an entry to the Compare tab and leaves the build as it is (R5)
+	local compare = mode == "compare" and pob.build.compareTab
+	local entries = compare and #compare.compareEntries
+	local function compared()
+		return compare and #compare.compareEntries > entries
+	end
 	local id, message = glue.net_begin(label, {
 		confirmed = true,
 		after = function(req)
 			-- PoB's flags say why nothing came of it; a new build means the import worked
-			if not req.new_build and not req.error then
+			if not req.new_build and not req.error and not compared() then
 				local reason = not_imported(tab)
 				req.error = reason
 			end
@@ -202,8 +210,11 @@ local function import_through_tab(url, mode)
 	if id then
 		return id
 	end
+	if compared() then
+		return nil
+	end
 	-- nothing was fetched: a code imports at once, with Init run by the press
-	if pob.build.importTab ~= tab then
+	if not compare and pob.build.importTab ~= tab then
 		-- Init ran inside the press; a frame calculates the new build, as opening one does
 		glue.frame()
 		return nil
@@ -248,6 +259,10 @@ local function normalise(url, mode)
 	end
 	if mode == "this" and not (glue.build_loaded() and pob.build.dbFileName) then
 		error("this build has no file yet; import into a new build", 0)
+	end
+	-- PoB's drop-down is disabled for a build with no file (ImportTab.lua:681)
+	if mode == "compare" and not (glue.build_loaded() and pob.build.dbFileName) then
+		error("PoB doesn't offer that here", 0)
 	end
 	return url
 end

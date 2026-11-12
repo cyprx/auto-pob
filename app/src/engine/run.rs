@@ -10,11 +10,11 @@ use crate::pob_files::DownloadProgress;
 
 use super::commands::{Command, ControlTooltipQuery, GemTooltipQuery, ItemTooltipQuery};
 use super::views::{
-    AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView,
-    ControlTooltipView, DisplayItemView, GemSearchView, GemTooltipView, GroupTooltipView,
-    ItemDbView, ItemText, ItemTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, PopupView,
-    PowerReport, RequestsView, SettingsView, ShareView, SkillsView, SocketGroupText, StatsView,
-    TreeLayout, TreeState,
+    AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, CompareView,
+    ConfigView, ControlTooltipView, DisplayItemView, GemSearchView, GemTooltipView,
+    GroupTooltipView, ItemDbView, ItemText, ItemTooltipView, ItemsView, NodePower, NodeTooltip,
+    NotesView, PopupView, PowerReport, RequestsView, SettingsView, ShareView, SkillsView,
+    SocketGroupText, StatsView, TreeLayout, TreeState,
 };
 use pob_runtime::net::Waker;
 
@@ -58,6 +58,8 @@ pub enum Snapshot {
     ShareCode(Arc<String>),
     /// The Import/Export tab's account import (R18, R19)
     Account(Arc<AccountView>),
+    /// The Compare tab; `None` with no comparison loaded (R4, R5)
+    Compare(Option<Arc<CompareView>>),
 }
 
 /// Long-running work the engine does between commands.
@@ -163,6 +165,9 @@ pub struct Affected {
     pub share_code: bool,
     /// The account import changed (R18, R19); build-only
     pub account: bool,
+    /// The Compare tab changed: its comparisons, or this build's stats it is diffed against
+    /// (R4); build-only
+    pub compare: bool,
 }
 
 impl Affected {
@@ -199,6 +204,7 @@ impl Affected {
         share: true,
         share_code: false,
         account: true,
+        compare: true,
     };
 
     /// Only views that need no build are asked for: the build list, the requests, the settings
@@ -259,6 +265,7 @@ impl Affected {
         self.share |= other.share;
         self.share_code |= other.share_code;
         self.account |= other.account;
+        self.compare |= other.compare;
     }
 }
 
@@ -339,6 +346,8 @@ pub trait Backend {
     fn share_code(&mut self) -> anyhow::Result<String>;
     /// The Import/Export tab's account import (R18, R19)
     fn account_view(&mut self) -> anyhow::Result<AccountView>;
+    /// The Compare tab; `None` with no comparison loaded (R4)
+    fn compare_view(&mut self) -> anyhow::Result<Option<CompareView>>;
     /// Hands back the memory the last busy stretch left behind. The loop calls it once it has
     /// been idle for a while after work, never between a background job's steps.
     fn release_memory(&mut self);
@@ -609,6 +618,19 @@ pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send
     if flags.account {
         emit(seq, send, backend.account_view(), Snapshot::Account);
     }
+    // "no comparison" is an answer too: a build change drops them
+    if flags.compare {
+        match backend.compare_view() {
+            Ok(view) => send(Event::Snapshot {
+                seq,
+                snapshot: Snapshot::Compare(view.map(Arc::new)),
+            }),
+            Err(e) => send(Event::Error {
+                seq,
+                message: format!("{e:#}"),
+            }),
+        }
+    }
 }
 
 /// Recalculates once when `affected` asks for it, and adds the views that depend on the result.
@@ -638,6 +660,8 @@ fn recalculate_if_asked(
     affected.display_item = true;
     // Draw restarts an open list on a new output revision (R14)
     affected.item_db = true;
+    // the Summary diffs the comparison against this build's stats (R4)
+    affected.compare = true;
 }
 
 /// Processes commands until `Shutdown` or until every sender is gone.
@@ -1009,6 +1033,7 @@ mod tests {
                     Snapshot::Requests(_) => "requests",
                     Snapshot::Share(_) => "share",
                     Snapshot::Account(_) => "account",
+                    Snapshot::Compare(_) => "compare",
                     other => panic!("unexpected {other:?}"),
                 }
             })
@@ -1031,7 +1056,8 @@ mod tests {
                 "popup",
                 "notes",
                 "share",
-                "account"
+                "account",
+                "compare"
             ]
         );
     }
@@ -1063,7 +1089,7 @@ mod tests {
         assert_eq!(log.lock().unwrap().set_configs, 1);
         // The command before Shutdown still produced its snapshots, tagged with Shutdown's seq.
         let snaps = snapshots(&events);
-        assert_eq!(snaps.len(), 7);
+        assert_eq!(snaps.len(), 8);
         assert!(matches!(snaps[0], (2, Snapshot::Stats(_))));
         assert!(matches!(snaps[1], (2, Snapshot::Config(_))));
         assert!(matches!(snaps[2], (2, Snapshot::Tree(_))));
@@ -1071,6 +1097,7 @@ mod tests {
         assert!(matches!(snaps[4], (2, Snapshot::Skills(_))));
         assert!(matches!(snaps[5], (2, Snapshot::Items(_))));
         assert!(matches!(snaps[6], (2, Snapshot::DisplayItem(_))));
+        assert!(matches!(snaps[7], (2, Snapshot::Compare(None))));
     }
 
     #[test]
@@ -1116,9 +1143,10 @@ mod tests {
         assert_eq!(stats_seq, Some(3));
         assert_eq!(config_seq, Some(3));
         assert_eq!(log.lock().unwrap().set_configs, 2);
-        // Ready + 16 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items + DisplayItem; the channel disconnect means the
-        // thread (and so every wake) is finished.
-        assert_eq!(wakes.load(Ordering::SeqCst), 24);
+        // Ready + 17 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items +
+        // DisplayItem + Compare; the channel disconnect means the thread (and so every wake) is
+        // finished.
+        assert_eq!(wakes.load(Ordering::SeqCst), 26);
     }
 
     #[test]
@@ -2205,6 +2233,47 @@ mod tests {
         assert_eq!(log.lock().unwrap().share_views, 0);
         assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
         assert_eq!(count_of(&events, |s| matches!(s, Snapshot::Requests(_))), 1);
+    }
+
+    #[test]
+    fn compare_is_build_only() {
+        use crate::engine::CompareSource;
+        let queries = || {
+            vec![Command::LoadCompare {
+                source: CompareSource::Code("x".into()),
+            }]
+        };
+        let compares = |events: &[Event]| count_of(events, |s| matches!(s, Snapshot::Compare(_)));
+        // with a build the view is answered, "no comparison" included
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(&mut fake, queries());
+        assert_eq!(compares(&events), 1);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::Snapshot {
+                    snapshot: Snapshot::Compare(None),
+                    ..
+                }
+            )),
+            "{events:?}"
+        );
+        assert_eq!(log.lock().unwrap().compare_views, 1);
+        // a recalculation of this build refreshes the diff
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(&mut fake, vec![set_config()]);
+        assert_eq!(compares(&events), 1);
+        assert_eq!(log.lock().unwrap().compare_views, 1);
+        // with none it never reaches the backend, nor does a whole-build refresh
+        for commands in [queries(), vec![Command::NewBuild]] {
+            let (mut fake, log) = Fake::new();
+            fake.build_loaded = false;
+            let events = run_queued(&mut fake, commands);
+            assert_eq!(compares(&events), 0);
+            assert_eq!(log.lock().unwrap().compare_views, 0);
+            assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
+        }
+        const { assert!(Affected::ALL_VIEWS.compare) };
     }
 
     #[test]

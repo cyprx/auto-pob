@@ -537,6 +537,8 @@ impl AutoPobApp {
                     Snapshot::Settings(view) => self.on_settings(&view, seq),
                     // the Import tab keeps its own
                     Snapshot::Share(_) | Snapshot::ShareCode(_) | Snapshot::Account(_) => {}
+                    // no Compare tab is drawn yet
+                    Snapshot::Compare(_) => {}
                     // power results of the build being left
                     Snapshot::NodePower(_) | Snapshot::PowerReport(_)
                         if self.entering.is_some() => {}
@@ -2050,6 +2052,10 @@ mod tests {
 
         fn account_view(&mut self) -> anyhow::Result<crate::engine::AccountView> {
             Ok(crate::engine::AccountView::default())
+        }
+
+        fn compare_view(&mut self) -> anyhow::Result<Option<crate::engine::CompareView>> {
+            Ok(None)
         }
 
         fn settings_view(&mut self) -> anyhow::Result<crate::engine::SettingsView> {

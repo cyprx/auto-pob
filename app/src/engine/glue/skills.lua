@@ -545,3 +545,80 @@ function glue.skills_group_tooltip(index)
 	end
 	return { group = index - 1, lines = tooltip:lines() }
 end
+
+-- ---- Set reorder and "what if" tooltips (R31, R22) ----
+
+-- A list row dragged to a new place and dropped (ListControl.lua:426-436), on the list PoB's own
+-- manager popup holds: `from` and `to` are 1-based, `to` the row's final position. The list's
+-- OnOrderChange runs as the drop runs it. Shared by the skill, config and tree managers.
+function glue.drop_list_row(list, from, to)
+	local value = list.list[from]
+	list.selIndex, list.selValue = from, value
+	table.remove(list.list, from)
+	table.insert(list.list, to, value)
+	if list.OnOrderChange then
+		list:OnOrderChange(from, to)
+	end
+	list.selValue = nil
+	list.selIndex = nil
+end
+
+-- The skill set manager's list (SkillSetListControl.lua:88-90 only sets modFlag); a frame then
+-- refreshes the unsaved marker as the classic app's next frame would
+function glue.skills_move_set(from, to)
+	local order = skills_tab().skillSetOrderList
+	if not (order[from] and order[to]) then
+		error("no such skill set", 0)
+	end
+	if from == to then
+		return
+	end
+	with_set_list(function(list)
+		glue.drop_list_row(list, from, to)
+	end)
+	glue.frame()
+end
+
+-- A PoB `Tooltip` as `TooltipLine`s, colour codes kept; a line without text is a separator
+function glue.tooltip_lines(tooltip)
+	local lines = {}
+	for i, line in ipairs(tooltip.lines) do
+		if line.text then
+			lines[i] = { size = line.size, text = line.text }
+		else
+			lines[i] = { separator = line.size }
+		end
+	end
+	return lines
+end
+
+-- What hovering a gem's Quality box, enable box or Count box shows (SkillsTab.lua:861-1000):
+-- the control's own `tooltipFunc`, run into a fresh PoB `Tooltip`. The group is shown the way
+-- the views show it (`displayGroup` set by hand, then put back), so the hover changes nothing.
+-- `which` is "quality", "enabled" or "count". Nil when the group or gem is gone.
+function glue.skills_hover(index, slot, which)
+	local tab = skills_tab()
+	local group = tab.socketGroupList[index]
+	if not (group and group.gemList[slot]) then
+		return nil
+	end
+	local c = tab.controls
+	local shown, slot_index = tab.displayGroup, c.groupSlot.selIndex
+	local tooltip = new("Tooltip")
+	local ok, err = pcall(function()
+		tab.displayGroup = group
+		c.groupSlot:SelByValue(group.slot, "slotName")
+		tab:UpdateGemSlots()
+		local control = tab.gemSlots[slot][which]
+		if not (control:IsShown() and control:IsEnabled()) then
+			error("PoB doesn't offer that here", 0)
+		end
+		control.tooltipFunc(tooltip)
+	end)
+	tab.displayGroup, c.groupSlot.selIndex = shown, slot_index
+	tab:UpdateGemSlots()
+	if not ok then
+		error(err, 0)
+	end
+	return glue.tooltip_lines(tooltip)
+end

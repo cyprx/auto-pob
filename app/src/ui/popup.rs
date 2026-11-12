@@ -27,6 +27,55 @@ pub struct PopupOutput {
     pub queries: Vec<Command>,
 }
 
+/// Where PoB's trade windows link to (R20); the engine keeps only these, and so does the UI
+pub const TRADE_SEARCH: &str = "https://www.pathofexile.com/trade/search/";
+
+/// The trade link of the user's own press (R20): a popup button press may answer with one, and
+/// only the answer to that press, by its seq, is opened in the browser and copied, once.
+#[derive(Debug, Default)]
+pub struct TradeLink {
+    /// The seq of the last button press, while it is unanswered
+    pressed: Option<u64>,
+    /// A link to open and copy on the next frame
+    ready: Option<String>,
+}
+
+impl TradeLink {
+    /// A popup button press went out as `seq`.
+    pub fn pressed(&mut self, seq: u64) {
+        self.pressed = Some(seq);
+    }
+
+    /// The engine's answer: a link for `seq`
+    pub fn on_link(&mut self, seq: u64, url: &str) {
+        if self.pressed != Some(seq) {
+            return;
+        }
+        self.pressed = None;
+        if url.starts_with(TRADE_SEARCH) {
+            self.ready = Some(url.to_owned());
+        }
+    }
+
+    /// The link to open and copy now, once
+    pub fn take(&mut self) -> Option<String> {
+        self.ready.take()
+    }
+}
+
+/// Extras a window adds around the engine's controls (the Options window's "auto-pob only"
+/// boxes and fields). They draw only; what they change is theirs to send.
+pub trait Decorate {
+    /// Drawn above a row, before its controls
+    fn before_row(&mut self, _ui: &mut egui::Ui, _view: &PopupView, _row: &[usize]) {}
+    /// Drawn right after a control, in its row
+    fn after_control(&mut self, _ui: &mut egui::Ui, _control: &PopupControl) {}
+}
+
+struct Plain;
+
+impl Decorate for Plain {}
+
 /// The shown controls of `view`, grouped by vertical centre and sorted by x within a row (R5).
 pub fn rows(view: &PopupView) -> Vec<Vec<usize>> {
     let centre = |i: usize| {
@@ -51,6 +100,41 @@ pub fn rows(view: &PopupView) -> Vec<Vec<usize>> {
             row
         })
         .collect()
+}
+
+/// Where a row dragged from `from` lands when dropped at height `y`: its 0-based place after
+/// the drop, counted over the other rows whose middle is above `y`.
+pub(crate) fn drop_place(rects: &[egui::Rect], from: usize, y: f32) -> usize {
+    rects
+        .iter()
+        .enumerate()
+        .filter(|&(i, r)| i != from && r.center().y < y)
+        .count()
+}
+
+/// The line that shows where a dragged row will land: across the row it goes before, or under
+/// the last one
+fn drop_line(rects: &[egui::Rect], from: usize, to: usize) -> Option<(egui::Rangef, f32)> {
+    let others: Vec<&egui::Rect> = rects
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| i != from)
+        .map(|(_, r)| r)
+        .collect();
+    let y = match others.get(to) {
+        Some(r) => r.top(),
+        None => others.last()?.bottom(),
+    };
+    let first = rects.first()?;
+    Some((first.x_range(), y))
+}
+
+/// The height of a popup list row: a selectable button around one line of 14 px text, at
+/// least the interact height (the button's own minimum)
+pub(crate) fn popup_row_height(ui: &egui::Ui) -> f32 {
+    let text = ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(14.0)));
+    let padding = ui.spacing().button_padding.y;
+    (text + 2.0 * padding).max(ui.spacing().interact_size.y)
 }
 
 /// Asks for a control's tooltip once the pointer has rested on it, and keeps the answer to the
@@ -136,6 +220,15 @@ struct SortState {
     failed: Option<String>,
 }
 
+/// The timeless window's search, which runs in the background (R17)
+#[derive(Default)]
+struct SearchState {
+    /// Running, this far along
+    percent: Option<u32>,
+    /// The last search failed with PoB's message
+    failed: Option<String>,
+}
+
 #[derive(Default)]
 pub struct PopupWindow {
     view: Option<Arc<PopupView>>,
@@ -144,6 +237,9 @@ pub struct PopupWindow {
     sliders: HashMap<String, f64>,
     tip: HoverTip,
     sort: SortState,
+    search: SearchState,
+    /// The seq of the last button press, so only its refusal ends the search line
+    press_seq: Option<u64>,
     /// A `ClosePopup` went out as this command: a view from before it is stale
     close_seq: Option<u64>,
     /// A text box had the focus when the last frame ended
@@ -151,6 +247,8 @@ pub struct PopupWindow {
     /// `OpenPopup` went out as this command and nothing has answered it yet
     opening: Option<u64>,
     pub(crate) rects: Rects,
+    /// The height the rows needed in the last frame
+    content_height: f32,
 }
 
 impl PopupWindow {
@@ -239,6 +337,12 @@ impl PopupWindow {
         self.sliders.clear();
         self.tip.reset();
         self.sort = SortState::default();
+        self.search = SearchState::default();
+    }
+
+    /// A button press of the window went out as `seq`.
+    pub fn press_sent(&mut self, seq: u64) {
+        self.press_seq = Some(seq);
     }
 
     /// The command that closed the window went out as `seq`.
@@ -249,6 +353,10 @@ impl PopupWindow {
     /// The engine refused something: a value shown ahead of its view is not what PoB has.
     pub fn on_error(&mut self, seq: u64) {
         self.sliders.clear();
+        // a refused Search started nothing
+        if self.press_seq == Some(seq) {
+            self.search.percent = None;
+        }
         if self.opening.is_some_and(|o| seq >= o) {
             self.opening = None;
         }
@@ -260,6 +368,27 @@ impl PopupWindow {
             self.sort.failed = None;
             self.sort.percent = Some(percent);
         }
+    }
+
+    /// The timeless search is at `percent`; at 100 it is over (R17).
+    pub fn on_search_progress(&mut self, percent: u32) {
+        if self.kind() == Some(&PopupKind::TimelessJewel) {
+            self.search.failed = None;
+            self.search.percent = (percent < 100).then_some(percent);
+        }
+    }
+
+    /// The timeless search failed with PoB's message, which the window shows (R17).
+    pub fn on_search_failed(&mut self, message: String) {
+        if self.kind() == Some(&PopupKind::TimelessJewel) {
+            self.search.percent = None;
+            self.search.failed = Some(message);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn search_state(&self) -> (Option<u32>, Option<&str>) {
+        (self.search.percent, self.search.failed.as_deref())
     }
 
     /// The Anoint stat sort failed; the list shows the error with Retry.
@@ -292,8 +421,72 @@ impl PopupWindow {
         Some(Command::ClosePopup)
     }
 
+    /// Draws `controls` with the window's renderers, outside any window (the Compare tab's
+    /// selectors). What they change comes back as `SetPopupControl`s for the caller to
+    /// readdress; a box still being typed in goes first. No tooltip is ever asked for: there is
+    /// no popup session to ask. Lists are not drawn.
+    pub(crate) fn inline_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        controls: &[&PopupControl],
+        busy: bool,
+    ) -> Vec<Command> {
+        let view = PopupView {
+            kind: PopupKind::Craft,
+            title: String::new(),
+            enter: None,
+            controls: Vec::new(),
+        };
+        let mut out = PopupOutput::default();
+        for c in controls.iter().filter(|c| c.kind != PopupControlKind::List) {
+            let first = out.commands.len();
+            self.draw_control(ui, &view, c, busy, &mut out);
+            if c.kind != PopupControlKind::Edit
+                && out.commands.len() > first
+                && let Some((name, text)) = self.boxes.take_pending()
+            {
+                out.commands.insert(
+                    first,
+                    Command::SetPopupControl {
+                        name,
+                        value: PopupInput::Text(text),
+                    },
+                );
+            }
+        }
+        out.commands
+    }
+
+    /// For `inline_controls`: the text typed into a box and not sent yet, once.
+    pub(crate) fn take_typed(&mut self) -> Option<(String, String)> {
+        self.boxes.take_pending()
+    }
+
+    /// For `inline_controls`, once per frame after drawing: the typed text of boxes that were
+    /// not drawn this frame, to send now.
+    pub(crate) fn end_inline_frame(&mut self) -> Vec<(String, String)> {
+        self.tip.reset();
+        self.boxes.end_frame()
+    }
+
+    /// For `inline_controls`: whether a box holds text not sent yet.
+    pub(crate) fn has_typed(&self) -> bool {
+        self.boxes.has_pending()
+    }
+
     /// Draws the window. `busy`: the engine hasn't caught up with what was sent.
     pub fn show(&mut self, ctx: &egui::Context, now: f64, busy: bool) -> PopupOutput {
+        self.show_with(ctx, now, busy, &mut Plain)
+    }
+
+    /// `show`, with `deco` drawing around the controls.
+    pub fn show_with(
+        &mut self,
+        ctx: &egui::Context,
+        now: f64,
+        busy: bool,
+        deco: &mut dyn Decorate,
+    ) -> PopupOutput {
         let mut out = PopupOutput::default();
         let Some(view) = self.view.clone() else {
             if self.opening.is_some() {
@@ -304,6 +497,13 @@ impl PopupWindow {
             }
             return out;
         };
+        // Enter clicks PoB's `enterControl` when no control has the keyboard
+        // (PopupDialog.lua:79-83; ControlHost.lua:39-42 gives a selected control the key)
+        let enter = view.enter.clone().filter(|_| {
+            !self.typing
+                && !egui::Popup::is_any_open(ctx)
+                && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+        });
         // Esc closes the window, unless it is closing a dropdown or reverting a box
         // (egui drops the focus as the frame begins, so what the last frame ended with counts)
         let escape = !std::mem::take(&mut self.typing)
@@ -312,6 +512,7 @@ impl PopupWindow {
         let mut close = escape;
 
         let width = window_width(&view);
+        let mut content_height = self.content_height;
         egui::Modal::new(egui::Id::unique("auto_pob_popup_window")).show(ctx, |ui| {
             ui.set_min_width(width);
             ui.set_max_width(width.max(MAX_CONTROL_WIDTH));
@@ -324,16 +525,30 @@ impl PopupWindow {
                 });
             });
             ui.separator();
-            egui::ScrollArea::vertical()
+            // the timeless search runs in the background: its progress, and a way to stop it
+            if view.kind == PopupKind::TimelessJewel {
+                self.search_line(ui, &mut out);
+            }
+            let searching = self.search.percent.is_some();
+            let max_height = (ctx.content_rect().height() - 140.0).max(200.0);
+            // The window's size is the last frame's, so a scroll area left to shrink would
+            // stay as small as the first view it held; it is given the height it needed last.
+            let shown = egui::ScrollArea::vertical()
                 .id_salt("popup_scroll")
-                .max_height((ctx.content_rect().height() - 140.0).max(200.0))
+                .max_height(max_height)
+                .min_scrolled_height(content_height.min(max_height))
                 .auto_shrink([true, true])
                 .show(ui, |ui| {
-                    for row in rows(&view) {
-                        self.row(ui, &view, &row, busy, &mut out);
-                    }
+                    // nothing but Cancel is offered while PoB's search runs (the engine refuses)
+                    ui.add_enabled_ui(!searching, |ui| {
+                        for row in rows(&view) {
+                            self.row(ui, &view, &row, busy, &mut out, deco);
+                        }
+                    });
                 });
+            content_height = shown.content_size.y;
         });
+        self.content_height = content_height;
 
         // a box not drawn this frame (its control was hidden) drops what was typed: the
         // engine refuses a control PoB doesn't show (R25)
@@ -342,11 +557,44 @@ impl PopupWindow {
             out.queries.push(query);
         }
         self.typing = ctx.text_edit_focused();
+        if let Some(name) = enter
+            && !close
+            && self.search.percent.is_none()
+            && view.controls.iter().any(|c| {
+                c.name == name && c.kind == PopupControlKind::Button && c.shown && c.enabled
+            })
+        {
+            out.commands.extend(self.flush());
+            out.commands.push(Command::PressPopupButton { name });
+        }
         if close {
             out.commands.extend(self.flush());
             out.commands.extend(self.close());
         }
         out
+    }
+
+    /// "Searching… n%" with Cancel while the timeless search runs; its failure after
+    fn search_line(&mut self, ui: &mut egui::Ui, out: &mut PopupOutput) {
+        if let Some(percent) = self.search.percent {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                let line = ui.label(format!("Searching\u{2026} {percent}%"));
+                self.rects.note(&line, || "timeless_progress".into());
+                let cancel = ui.button("Cancel search");
+                self.rects.note(&cancel, || "timeless_cancel".into());
+                if cancel.clicked() {
+                    out.commands.push(Command::CancelTimelessSearch);
+                    self.search.percent = None;
+                }
+            });
+        } else if let Some(message) = &self.search.failed {
+            let line = ui.colored_label(
+                ui.visuals().error_fg_color,
+                format!("The search failed: {message}"),
+            );
+            self.rects.note(&line, || "timeless_failed".into());
+        }
     }
 
     fn row(
@@ -356,13 +604,16 @@ impl PopupWindow {
         row: &[usize],
         busy: bool,
         out: &mut PopupOutput,
+        deco: &mut dyn Decorate,
     ) {
+        deco.before_row(ui, view, row);
         let has_list = row
             .iter()
             .any(|&i| view.controls[i].kind == PopupControlKind::List);
         let mut draw = |ui: &mut egui::Ui| {
             for &i in row {
                 self.control(ui, view, &view.controls[i], busy, out);
+                deco.after_control(ui, &view.controls[i]);
             }
         };
         if has_list {
@@ -413,6 +664,13 @@ impl PopupWindow {
                 self.rects.note(&response, || format!("btn_{name}"));
                 self.hint(&response, c, None);
                 if response.clicked() {
+                    // the timeless search starts in the background: its line shows at once
+                    if view.kind == PopupKind::TimelessJewel && name == "searchButton" {
+                        self.search = SearchState {
+                            percent: Some(0),
+                            failed: None,
+                        };
+                    }
                     out.commands.push(Command::PressPopupButton {
                         name: name.to_owned(),
                     });
@@ -474,6 +732,18 @@ impl PopupWindow {
                 }
                 let slider = ui.add_enabled(c.enabled, widget);
                 self.rects.note(&slider, || name.to_owned());
+                // the wheel and the arrows move it, to its divisions (SliderControl.lua:164-180)
+                if let Some(to) = crate::widgets::scroll_step::slider_step(ui, &slider, value) {
+                    let to = match c.divisions.filter(|d| *d > 0) {
+                        Some(d) => (to * f64::from(d)).round() / f64::from(d),
+                        None => to,
+                    };
+                    self.sliders.insert(name.to_owned(), to);
+                    out.commands.push(Command::SetPopupControl {
+                        name: name.to_owned(),
+                        value: PopupInput::Number(to),
+                    });
+                }
                 self.hint(&slider, c, None);
                 if slider.dragged() || slider.changed() {
                     self.sliders.insert(name.to_owned(), value);
@@ -590,16 +860,45 @@ impl PopupWindow {
                 });
             }
             let height = c.size[1].clamp(80.0, 320.0);
+            // one row's height, measured: rows are laid out only where the list is scrolled to
+            // (the Mod Browser has thousands, R28), so every row must be this tall. A row is
+            // one line of 14 px text (truncated, never wrapped) in a button's padding.
+            let row_height = popup_row_height(ui);
+            // a Shift+click range (the timeless results) shows selected end to end
+            let at = |key: &Option<String>| {
+                key.as_deref()
+                    .and_then(|k| c.rows.iter().position(|r| r.key == k))
+            };
+            let range = match (at(&c.row_selected), at(&c.row_highlight)) {
+                (Some(a), Some(b)) => Some((a.min(b), a.max(b))),
+                _ => None,
+            };
             egui::ScrollArea::vertical()
                 .id_salt(("popup_list", name))
                 .max_height(height)
                 .auto_shrink([false, true])
-                .show(ui, |ui| {
+                .show_rows(ui, row_height, c.rows.len(), |ui, shown| {
                     ui.set_min_width(c.size[0].clamp(120.0, MAX_CONTROL_WIDTH));
-                    for (i, row) in c.rows.iter().enumerate() {
-                        let selected = c.row_selected.as_deref() == Some(row.key.as_str());
-                        let response =
-                            ui.selectable_label(selected, pob_text(&row.label, 14.0, default));
+                    // a mutable list's rows are dragged to a new place, as in PoB; only the
+                    // rows laid out have rects, from `first` on
+                    let first = shown.start;
+                    let mut rects = Vec::with_capacity(shown.len());
+                    let mut dragged = None;
+                    for i in shown {
+                        let row = &c.rows[i];
+                        let selected = c.row_selected.as_deref() == Some(row.key.as_str())
+                            || range.is_some_and(|(a, b)| a <= i && i <= b);
+                        let mut response = ui.add(
+                            egui::Button::selectable(selected, pob_text(&row.label, 14.0, default))
+                                .truncate(),
+                        );
+                        if c.reorder {
+                            response = response.interact(egui::Sense::click_and_drag());
+                            rects.push(response.rect);
+                            if response.dragged() || response.drag_stopped() {
+                                dragged = Some((i, response.drag_stopped()));
+                            }
+                        }
                         self.rects.note(&response, || format!("{name}_row_{i}"));
                         self.tip.note(
                             &response,
@@ -608,19 +907,55 @@ impl PopupWindow {
                                 index: Some(i),
                             },
                         );
-                        if response.clicked() {
+                        // PoB's list takes the second click of a double click, and a click with
+                        // Shift held (ListControl.lua:338-372)
+                        let key = row.key.clone();
+                        let value = if response.double_clicked() {
+                            Some(PopupInput::RowDoubleClick(key))
+                        } else if response.clicked() {
+                            Some(if ui.input(|i| i.modifiers.shift) {
+                                PopupInput::RowShiftClick(key)
+                            } else {
+                                PopupInput::Row(key)
+                            })
+                        } else {
+                            None
+                        };
+                        if let Some(value) = value {
                             out.commands.push(Command::SetPopupControl {
                                 name: name.to_owned(),
-                                value: PopupInput::Row(row.key.clone()),
+                                value,
                             });
                         }
                     }
-                    if c.rows.is_empty()
-                        && let Some(note) = &c.note
+                    if let Some((from, dropped)) = dragged
+                        && let Some(pos) = ui.input(|i| i.pointer.latest_pos())
                     {
-                        ui.label(pob_text(note, 14.0, ui.visuals().weak_text_color()));
+                        // the rows above the laid-out ones all stay above the drop
+                        let local = from - first;
+                        let to_local = drop_place(&rects, local, pos.y);
+                        let to = first + to_local;
+                        if dropped {
+                            if to != from {
+                                out.commands.push(Command::SetPopupControl {
+                                    name: name.to_owned(),
+                                    value: PopupInput::RowMove {
+                                        key: c.rows[from].key.clone(),
+                                        to,
+                                    },
+                                });
+                            }
+                        } else if let Some(line) = drop_line(&rects, local, to_local) {
+                            let stroke = ui.visuals().selection.stroke;
+                            ui.painter().hline(line.0, line.1, stroke);
+                        }
                     }
                 });
+            if c.rows.is_empty()
+                && let Some(note) = &c.note
+            {
+                ui.label(pob_text(note, 14.0, ui.visuals().weak_text_color()));
+            }
         });
     }
 

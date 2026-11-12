@@ -53,8 +53,22 @@ pub fn list(
     id: egui::Id,
     columns: &[ListColumn],
     rows: usize,
+    row: impl FnMut(usize, &mut TableRow),
+    selected: &mut Option<usize>,
+) -> Option<ListAction> {
+    list_with(ui, id, columns, rows, row, selected, true)
+}
+
+/// [`list`], with header sorting switched off when `sortable` is false (the caller's order is
+/// then final, and the headers are plain titles).
+pub fn list_with(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    columns: &[ListColumn],
+    rows: usize,
     mut row: impl FnMut(usize, &mut TableRow),
     selected: &mut Option<usize>,
+    sortable: bool,
 ) -> Option<ListAction> {
     let mut action = None;
     let mut scroll_to = None;
@@ -124,7 +138,12 @@ pub fn list(
                     let text = egui::RichText::new(format!("{}{arrow}", c.title))
                         .color(theme::HEADING)
                         .strong();
-                    if ui.add(Label::new(text).sense(Sense::click())).clicked() {
+                    let sense = if sortable {
+                        Sense::click()
+                    } else {
+                        Sense::hover()
+                    };
+                    if ui.add(Label::new(text).sense(sense)).clicked() {
                         new_sort = Some(ListSort {
                             column: i,
                             ascending: !matches!(sort, Some(s) if s.column == i && s.ascending),

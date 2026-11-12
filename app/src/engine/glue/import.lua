@@ -24,6 +24,7 @@ local function trim(text)
 end
 
 local INVALID = "that isn't a link PoB can import"
+local COMPARE_FAILED = "Failed to import build for comparison."
 
 -- PoB's verdict on the box, without colour codes; "Invalid input" says nothing could be imported
 local function import_detail(tab)
@@ -173,11 +174,13 @@ local function import_through_tab(url, mode)
 	if not tab.importCodeValid then
 		error(not_imported(tab), 0)
 	end
-	if mode == "this" then
+	-- PoB enables the drop-down only for a build with a file, or once "Import as comparison" is
+	-- picked; its validator puts a build with no file back on "new" (ImportTab.lua:585, :681)
+	if mode == "this" or mode == "compare" then
 		if not controls.importCodeMode:IsEnabled() then
 			error("PoB doesn't offer that here", 0)
 		end
-		controls.importCodeMode:SetSel(1)
+		controls.importCodeMode:SetSel(mode == "this" and 1 or 3)
 	else
 		controls.importCodeMode:SetSel(2)
 	end
@@ -189,23 +192,45 @@ local function import_through_tab(url, mode)
 	if site then
 		label = "Fetching build from " .. site.label
 	end
-	local id, message = glue.net_begin(label, {
+	-- a comparison adds an entry to the Compare tab and leaves the build as it is (R5)
+	local compare = mode == "compare" and pob.build.compareTab
+	local entries = compare and #compare.compareEntries
+	local function compared()
+		return compare and #compare.compareEntries > entries
+	end
+	local id, message, failed_init = glue.net_begin(label, {
 		confirmed = true,
 		after = function(req)
-			-- PoB's flags say why nothing came of it; a new build means the import worked
+			if compared() then
+				glue.compare_landed()
+				return
+			end
+			-- PoB's flags say why nothing came of it; a new build means the import worked. A
+			-- comparison PoB couldn't build has already failed with PoB's message popup
+			-- (ImportTab.lua:660), which the request takes as its error
 			if not req.new_build and not req.error then
-				local reason = not_imported(tab)
-				req.error = reason
+				req.error = not_imported(tab)
 			end
 		end,
 	}, controls.importCodeGo.onClick)
 	if id then
 		return id
 	end
+	if compared() then
+		glue.compare_landed(true)
+		return nil
+	end
+	if compare then
+		error(message or COMPARE_FAILED, 0)
+	end
 	-- nothing was fetched: a code imports at once, with Init run by the press
-	if pob.build.importTab ~= tab then
+	if not compare and pob.build.importTab ~= tab then
 		-- Init ran inside the press; a frame calculates the new build, as opening one does
 		glue.frame()
+		-- an Init that couldn't open the build left a new one in its place (net.lua)
+		if failed_init then
+			error(failed_init, 0)
+		end
 		return nil
 	end
 	error(message or not_imported(tab), 0)
@@ -248,6 +273,10 @@ local function normalise(url, mode)
 	end
 	if mode == "this" and not (glue.build_loaded() and pob.build.dbFileName) then
 		error("this build has no file yet; import into a new build", 0)
+	end
+	-- PoB's drop-down is disabled for a build with no file (ImportTab.lua:681)
+	if mode == "compare" and not (glue.build_loaded() and pob.build.dbFileName) then
+		error("PoB doesn't offer that here", 0)
 	end
 	return url
 end
@@ -540,7 +569,7 @@ function glue.import_public_character(league, name, kind, a, b, c)
 	if not button:IsShown() or not button:IsEnabled() then
 		error(OFFERED, 0)
 	end
-	local id, message = glue.net_begin(label, { confirmed = true, after = status_after(tab, "import") }, button.onClick)
+	local id, message, failed_init = glue.net_begin(label, { confirmed = true, after = status_after(tab, "import") }, button.onClick)
 	if not id then
 		error(message or "couldn't start the request", 0)
 	end
@@ -716,4 +745,43 @@ function glue.import_character(realm_id, league, name, kind, a, b, c)
 	end
 	local id = press(tab, label, { confirmed = true, after = oauth_after(tab) }, button.onClick)
 	return id
+end
+
+-- ---- The account history and PoB's notes (NF-8) ----
+
+-- The history dropdown's pick and its X button (ImportTab.lua:378-393): the entry is
+-- selected, then removed from the list and from PoB's remembered accounts
+function glue.remove_account_history(account)
+	local controls = import_tab().controls
+	local history = controls.siteAccountHistory
+	local index
+	for i, name in ipairs(history.list) do
+		if name == account then
+			index = i
+		end
+	end
+	if not index then
+		error("no such account in the history", 0)
+	end
+	local remove = controls.siteRemoveAccount
+	if not (remove:IsShown() and remove:IsEnabled()) then
+		error(OFFERED, 0)
+	end
+	history:SetSel(index)
+	remove.onClick()
+end
+
+-- PoB's labels around the account name box and the character import, colour codes stripped:
+-- "Missing discriminator e.g. #1234" (ImportTab.lua:400-404) and the bandit tip (:463-465)
+local account_view = glue.account_view
+function glue.account_view()
+	local view = account_view()
+	local controls = import_tab().controls
+	view.public.missing_discriminator = StripEscapes(controls.siteAccountNameMissingDiscriminator.label)
+	view.public.bandit_note = StripEscapes(controls.siteCharBanditNote.label)
+	-- the history dropdown's own selection: PoB starts it on the last account used
+	-- (ImportTab.lua:382), so X works on it before any pick
+	local history = controls.siteAccountHistory
+	view.public.history_selected = history.list[history.selIndex]
+	return view
 end

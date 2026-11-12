@@ -12,11 +12,12 @@ use super::commands::{
 use super::pob::{CancelScope, cancels_requests, ends_item_db, ends_popup_session};
 use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Event};
 use super::views::{
-    AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView,
-    ControlTooltipView, DisplayItemView, DropList, GemSearchView, GemTooltipView, GroupTooltipView,
-    ItemDbView, ItemText, ItemTooltip, ItemTooltipView, ItemsView, NodePower, NodeTooltip,
-    NotesView, PendingRequest, Points, PopupView, PowerReport, RequestsView, ShareView, SkillsView,
-    SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
+    AccountView, BreakdownView, BuildBrowseView, BuildListView, BuildView, CalcsView, CellRef,
+    CompareView, ConfigView, ControlTooltipView, DisplayItemView, DropList, GemSearchView,
+    GemTooltipView, GroupTooltipView, ItemDbView, ItemText, ItemTooltip, ItemTooltipView,
+    ItemsView, NodePower, NodeTooltip, NotesView, PendingRequest, Points, PopupView, PowerReport,
+    RequestsView, SettingsView, ShareView, SkillsView, SocketGroupText, StatsView, TooltipLine,
+    TreeLayout, TreeState,
 };
 
 #[derive(Default, Debug)]
@@ -45,8 +46,17 @@ pub struct Log {
     pub share_codes: usize,
     /// Share views asked for
     pub share_views: usize,
+    /// Compare views asked for
+    pub compare_views: usize,
     pub applies: usize,
+    /// Hover tooltips answered (R22)
+    pub hovers: Vec<crate::engine::HoverTarget>,
+    /// `shutdown` calls that finished
+    pub shutdowns: usize,
 }
+
+/// The link a fake trade window's `search` press answers
+pub const FAKE_TRADE_URL: &str = "https://www.pathofexile.com/trade/search/Standard?q=fake";
 
 /// One scripted background step: what it affects, or the error it fails with.
 pub type Step = Result<Affected, String>;
@@ -60,6 +70,8 @@ pub struct Fake {
     pub gem_background: Arc<Mutex<VecDeque<Step>>>,
     /// Anoint sort steps still to run; they go after the gem steps and before the power steps.
     pub anoint_background: Arc<Mutex<VecDeque<Step>>>,
+    /// Timeless search steps still to run; after the Anoint sort, before the item databases
+    pub timeless_background: Arc<Mutex<VecDeque<Step>>>,
     /// Item database steps still to run; they go after the Anoint steps, before the power steps.
     pub item_db_background: Arc<Mutex<VecDeque<Step>>>,
     /// The open gem search
@@ -97,6 +109,8 @@ pub struct Fake {
     pub short_link: Option<String>,
     /// A Network step reports that it changed the build and asks for a recalculation
     pub network_recalc: bool,
+    /// How long `shutdown` takes, as PoB's exit save of `Settings.xml` does
+    pub shutdown_delay: std::time::Duration,
 }
 
 impl Fake {
@@ -109,6 +123,7 @@ impl Fake {
                 background: Arc::default(),
                 gem_background: Arc::default(),
                 anoint_background: Arc::default(),
+                timeless_background: Arc::default(),
                 item_db_background: Arc::default(),
                 item_db: None,
                 item_db_ended: false,
@@ -127,6 +142,7 @@ impl Fake {
                 waker: None,
                 short_link: None,
                 network_recalc: false,
+                shutdown_delay: std::time::Duration::ZERO,
             },
             log,
         )
@@ -160,6 +176,10 @@ impl Fake {
             }),
             Command::GroupTooltip { group } => Ok(Affected {
                 group_tooltip: Some(group),
+                ..Affected::default()
+            }),
+            Command::HoverTooltip(target) => Ok(Affected {
+                hover: Some(target),
                 ..Affected::default()
             }),
             Command::CopySocketGroup { group } => Ok(Affected {
@@ -200,6 +220,20 @@ impl Fake {
                     ..Affected::default()
                 })
             }
+            // a press answers with the popup, as the real engine's does; a trade window's
+            // search also with its link (R20)
+            Command::PressPopupButton { name } => Ok(Affected {
+                popup: true,
+                external_url: (name == "search").then(|| crate::engine::ExternalUrl {
+                    url: FAKE_TRADE_URL.into(),
+                }),
+                ..Affected::default()
+            }),
+            // the real engine answers with the settings (R12)
+            Command::SetOverrides { .. } => Ok(Affected {
+                settings: true,
+                ..Affected::default()
+            }),
             Command::ControlTooltip(query) => Ok(Affected {
                 control_tooltip: Some(query),
                 ..Affected::default()
@@ -249,12 +283,63 @@ impl Fake {
                 share_code: true,
                 ..Affected::default()
             }),
+            Command::BrowseBuilds { folder } => Ok(Affected {
+                browse: Some(folder),
+                ..Affected::default()
+            }),
+            // PoB's text for a code it can't load (CompareTab.lua:1256-1260)
+            Command::LoadCompare {
+                source: crate::engine::CompareSource::Code(code),
+            } if code == "bad" => anyhow::bail!("Failed to import build for comparison."),
+            Command::LoadCompare { .. }
+            | Command::SelectCompare { .. }
+            | Command::RemoveCompare { .. }
+            | Command::SetCompareControl { .. } => Ok(Affected {
+                compare: true,
+                tree: true,
+                ..Affected::default()
+            }),
+            // the copies edit the build, as the real engine answers them (R8)
+            Command::CopyCompareTree { .. } => Ok(Affected {
+                build: true,
+                tree: true,
+                recalc: true,
+                compare: true,
+                ..Affected::default()
+            }),
+            Command::CopyCompareItem { .. } => Ok(Affected {
+                build: true,
+                items: true,
+                recalc: true,
+                compare: true,
+                ..Affected::default()
+            }),
+            Command::CopyCompareConfig => Ok(Affected {
+                build: true,
+                config: true,
+                recalc: true,
+                compare: true,
+                ..Affected::default()
+            }),
+            Command::SetCompareOverlay { .. } => Ok(Affected {
+                tree: true,
+                ..Affected::default()
+            }),
+            Command::Help => Ok(Affected {
+                help: true,
+                ..Affected::default()
+            }),
             _ => Ok(Affected::default()),
         }
     }
 }
 
 impl Backend for Fake {
+    fn shutdown(&mut self) {
+        std::thread::sleep(self.shutdown_delay);
+        self.log.lock().unwrap().shutdowns += 1;
+    }
+
     fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
         if let Some(scope) = cancels_requests(&command) {
             let mut log = self.log.lock().unwrap();
@@ -307,6 +392,7 @@ impl Backend for Fake {
             unsaved: false,
             can_undo: false,
             can_redo: false,
+            ..BuildView::default()
         })
     }
 
@@ -318,6 +404,9 @@ impl Backend for Fake {
         Ok(BuildListView {
             folder: String::new(),
             entries: vec![],
+            sort: Default::default(),
+            filter: String::new(),
+            ..Default::default()
         })
     }
 
@@ -389,6 +478,8 @@ impl Backend for Fake {
             Some(BackgroundTask::GemDps)
         } else if !self.anoint_background.lock().unwrap().is_empty() {
             Some(BackgroundTask::AnointSort)
+        } else if !self.timeless_background.lock().unwrap().is_empty() {
+            Some(BackgroundTask::Timeless)
         } else if self.item_db.is_some() && !self.item_db_background.lock().unwrap().is_empty() {
             Some(BackgroundTask::ItemDb)
         } else if !self.background.lock().unwrap().is_empty() {
@@ -427,6 +518,7 @@ impl Backend for Fake {
             BackgroundTask::Network => unreachable!("handled above"),
             BackgroundTask::GemDps => self.gem_background.clone(),
             BackgroundTask::AnointSort => self.anoint_background.clone(),
+            BackgroundTask::Timeless => self.timeless_background.clone(),
             BackgroundTask::ItemDb => self.item_db_background.clone(),
             BackgroundTask::NodePower => self.background.clone(),
         };
@@ -519,11 +611,18 @@ impl Backend for Fake {
     }
 
     fn popup_view(&mut self) -> anyhow::Result<Option<PopupView>> {
-        Ok(self.popup.clone().map(|kind| PopupView {
-            kind,
-            title: "popup".into(),
-            controls: vec![],
-        }))
+        // a session of the item or the build ends with the build; only Options outlives it (R19)
+        let build_loaded = self.build_loaded;
+        Ok(self
+            .popup
+            .clone()
+            .filter(|kind| build_loaded || *kind == PopupKind::Options)
+            .map(|kind| PopupView {
+                kind,
+                title: "popup".into(),
+                enter: None,
+                controls: vec![],
+            }))
     }
 
     fn control_tooltip_view(
@@ -548,6 +647,7 @@ impl Backend for Fake {
         Ok(ItemText {
             id,
             text: String::new(),
+            shared: false,
         })
     }
 
@@ -566,6 +666,9 @@ impl Backend for Fake {
         Ok(PowerReport {
             stat: String::new(),
             rows: vec![],
+            listed: vec![],
+            filter: 0,
+            masteries: true,
         })
     }
 
@@ -576,6 +679,7 @@ impl Backend for Fake {
         }
         Ok(Some(NodeTooltip {
             id,
+            trace: vec![],
             lines: vec![TooltipLine::Line {
                 size: 14,
                 text: format!("node {id}"),
@@ -612,6 +716,21 @@ impl Backend for Fake {
         Ok(AccountView::default())
     }
 
+    fn compare_view(&mut self) -> anyhow::Result<Option<CompareView>> {
+        self.log.lock().unwrap().compare_views += 1;
+        Ok(None)
+    }
+
+    fn browse_view(&mut self, folder: &str) -> anyhow::Result<BuildBrowseView> {
+        Ok(BuildBrowseView {
+            folder: folder.to_owned(),
+            entries: vec![crate::engine::views::BuildBrowseEntry {
+                name: format!("{folder}fake"),
+                path: format!("/b/{folder}fake.xml").into(),
+            }],
+        })
+    }
+
     fn share_code(&mut self) -> anyhow::Result<String> {
         self.log.lock().unwrap().share_codes += 1;
         Ok("fake-code".into())
@@ -631,8 +750,23 @@ impl Backend for Fake {
         })
     }
 
+    fn settings_view(&mut self) -> anyhow::Result<SettingsView> {
+        Ok(SettingsView::default())
+    }
+
     fn set_waker(&mut self, wake: Waker) {
         self.waker = Some(wake);
+    }
+
+    fn hover_tooltip_view(
+        &mut self,
+        target: &crate::engine::HoverTarget,
+    ) -> anyhow::Result<Option<crate::engine::HoverTooltipView>> {
+        self.log.lock().unwrap().hovers.push(target.clone());
+        Ok(Some(crate::engine::HoverTooltipView {
+            target: target.clone(),
+            lines: vec![],
+        }))
     }
 
     fn release_memory(&mut self) {
@@ -644,6 +778,18 @@ impl Backend for Fake {
         if let Some(on_release) = &mut self.on_release {
             on_release(releases);
         }
+    }
+
+    fn help_view(&mut self) -> anyhow::Result<crate::engine::HelpView> {
+        Ok(crate::engine::HelpView {
+            sections: vec![crate::engine::HelpSection {
+                title: "Help File Introduction".into(),
+                lines: vec!["^7This file contains a list of shortcuts".into()],
+            }],
+            header: vec![],
+            changelog: vec![],
+            missing: vec![],
+        })
     }
 }
 
@@ -690,5 +836,8 @@ pub fn empty_tree_state() -> TreeState {
         max_depth: None,
         can_undo: false,
         can_redo: false,
+        heatmap_shown: false,
+        show_stat_differences: true,
+        versions: vec![],
     }
 }

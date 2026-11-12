@@ -1,10 +1,11 @@
 //! Commands the UI sends to the engine thread.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::views::{CellRef, ModLineRef};
+use super::views::{BuildSort, CellRef, ModLineRef};
 
 /// A socket's colour on the display item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,6 +23,18 @@ pub enum ImportMode {
     ThisBuild,
     /// Opens a new, unsaved build
     NewBuild,
+    /// Adds the build as a comparison: PoB's "Import as comparison" (R5). PoB offers it only
+    /// for a build with a file.
+    Comparison,
+}
+
+/// Where a comparison build comes from (R5)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompareSource {
+    /// A build file, read by the engine; the comparison is named after the file
+    File(PathBuf),
+    /// A share code
+    Code(String),
 }
 
 /// A platform of PoB's account import (PoB's ids `"PC"`, `"XBOX"`, `"SONY"`).
@@ -56,6 +69,17 @@ pub enum CharacterPart {
     },
 }
 
+/// The question a delete was confirmed under
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeleteKind {
+    /// A build file
+    Build,
+    /// A folder PoB deletes without asking, because it was empty
+    EmptyFolder,
+    /// A folder with things in it, deleted with them
+    Folder,
+}
+
 #[derive(Debug, Clone)]
 pub enum Command {
     /// Sub-path relative to the Builds folder; "" is the root.
@@ -63,6 +87,54 @@ pub enum Command {
         folder: String,
     },
     NewBuild,
+    /// PoB's Rename button on a build or a folder of the Builds folder (R16). `name` is the new
+    /// name without `.xml`. Refuses the open build (or a folder holding it).
+    RenameBuild {
+        path: PathBuf,
+        name: String,
+    },
+    /// PoB's Copy button: the entry copied under `name` in its own folder (R16)
+    CopyBuild {
+        path: PathBuf,
+        name: String,
+    },
+    /// PoB's permanent delete (R16). The UI asks first, with `BuildListEntry::delete_prompt`;
+    /// a folder goes with everything in it. Refuses the open build (or a folder holding it).
+    DeleteBuild {
+        path: PathBuf,
+        /// What the UI asked about, from the entry's `delete_prompt`. The engine deletes only
+        /// when PoB asks the same question (R16).
+        kind: DeleteKind,
+    },
+    /// PoB's Ctrl+X, Ctrl+V into `folder`, a sub-path of the Builds folder ("" is the root)
+    MoveBuild {
+        path: PathBuf,
+        folder: String,
+    },
+    /// PoB's Ctrl+C on an entry, then Ctrl+V in `folder` (a sub-path of the Builds folder, not
+    /// the entry's own: there PoB asks for a name, which is `CopyBuild`)
+    CopyBuildTo {
+        path: PathBuf,
+        folder: String,
+    },
+    /// PoB's New Folder in the listed folder
+    NewFolder {
+        name: String,
+    },
+    /// PoB's New Folder in the Save As picker: the folder is named by `folder`, whatever the
+    /// build list shows
+    NewFolderIn {
+        folder: String,
+        name: String,
+    },
+    /// PoB's sort dropdown; the choice is saved to `Settings.xml` at once (R16)
+    SetBuildSort {
+        sort: BuildSort,
+    },
+    /// Types into PoB's build list search box; not saved (R16)
+    SetBuildFilter {
+        text: String,
+    },
     OpenBuild {
         path: PathBuf,
     },
@@ -199,6 +271,31 @@ pub enum Command {
     SelectAscendancy {
         id: u32,
     },
+    /// Types the level into the top bar's level box (`characterLevel`, R21). PoB clamps it to
+    /// 1..=100 and switches to Manual.
+    SetCharacterLevel {
+        level: u32,
+    },
+    /// Presses the top bar's Auto/Manual button when the mode differs (R21).
+    SetLevelMode {
+        auto: bool,
+    },
+    /// Picks the bloodline (`secondaryAscendDrop`, R21) by its id; 0 is "None".
+    SelectSecondaryAscendancy {
+        id: u32,
+    },
+    /// Picks a loadout in the top bar's dropdown (R21): a real entry of `BuildView.loadouts`,
+    /// not one of PoB's headers or actions.
+    SelectLoadout {
+        label: String,
+    },
+    /// The loadouts dropdown's "New Loadout" and its name popup: a tree, item set, skill set and
+    /// config set with this title (R21).
+    NewLoadout {
+        name: String,
+    },
+    /// The loadouts dropdown's "Sync" (R21).
+    SyncLoadouts,
     ResetTree,
     /// "Remove All Tattoos" on the Reset window: presses PoB's button, which adds no undo state
     /// (R18).
@@ -622,8 +719,24 @@ pub enum Command {
     PressPopupButton {
         name: String,
     },
-    /// Cancel and Escape: drops the session.
+    /// Cancel and Escape: drops the session. On Options it presses PoB's own Cancel first.
     ClosePopup,
+    /// The app's own values for PoB's settings (R12), by `Settings.xml` key: replaces the whole
+    /// map, so a key left out goes back to its shared value. Needs no build. Sent after `Ready`
+    /// and after each Options Save. The engine never writes `auto-pob.toml`; the UI does.
+    SetOverrides {
+        values: BTreeMap<String, String>,
+    },
+    /// Stops the running timeless search (R17). PoB's previous results stay: it replaces them
+    /// only when a search finishes. A no-op with none running.
+    CancelTimelessSearch,
+    /// The app's trade realm ("PC", "PS4" or "Xbox") and league, from `auto-pob.toml` (R10,
+    /// R17): the trade windows take them instead of PoB's league fetch. Kept in the glue,
+    /// needs no build, answers nothing. Sent after `Ready` and after each Options Save.
+    SetTradeDefaults {
+        realm: String,
+        league: String,
+    },
     /// A query: the tooltip of a popup entry or button, an affix entry or a DB item (R6); the
     /// latest one in a batch is answered, as a `ControlTooltip`.
     ControlTooltip(ControlTooltipQuery),
@@ -638,10 +751,66 @@ pub enum Command {
         db: ItemDb,
         name: String,
     },
-    /// Ctrl+click on a database row: adds the item and equips it (R15).
+    /// Ctrl+click on a database row: adds the item and equips it (R15). `second_slot` is
+    /// Ctrl+Shift+click, which equips into the second slot where the item fits it (R23).
     AddDbItem {
         db: ItemDb,
         name: String,
+        second_slot: bool,
+    },
+
+    /// Adds a comparison build (R5); it becomes the active one. A build PoB can't load is
+    /// PoB's `Failed to import build for comparison.`
+    LoadCompare {
+        source: CompareSource,
+    },
+    /// PoB's "Compare with:" dropdown; `index` is 0-based in `CompareView.entries`
+    SelectCompare {
+        index: usize,
+    },
+    /// Selects the comparison, then presses PoB's Remove, which removes the active one (R5)
+    RemoveCompare {
+        index: usize,
+    },
+    /// Sets one of PoB's Compare controls, from R6's list (`CompareView.controls`)
+    SetCompareControl {
+        name: String,
+        value: PopupInput,
+    },
+    /// PoB's "Copy tree" (`and_use: false`) and "Copy and use" buttons (R8)
+    CopyCompareTree {
+        and_use: bool,
+    },
+    /// PoB's Copy (`and_use: false`) and Equip buttons on an Items row of the Compare tab: the
+    /// comparison's item in `slot` (`CompareItemRow.slot`) is added, and equipped (R8). An Items
+    /// undo state.
+    CopyCompareItem {
+        slot: String,
+        and_use: bool,
+    },
+    /// PoB's "Copy Config from Compare Build", plus a Config undo state of ours (R8)
+    CopyCompareConfig,
+    /// UI state, sent on entering (`on`) and leaving the Compare tab's Tree view: while on,
+    /// `TreeState.compare` colours the tree against the active comparison (R7). No undo, not
+    /// unsaved. A build change drops it with the comparisons.
+    SetCompareOverlay {
+        on: bool,
+    },
+    /// PoB's tree version dropdowns on the Compare tab's Tree view: `leftVersionSelect` (this
+    /// build's tree) or, with `theirs`, `rightVersionSelect` (the comparison's). The pick
+    /// opens PoB's "Convert to Version" popup, whose "Convert" (`keep_copy: false`) or
+    /// "Copy + Convert" is pressed. `index` is 0-based in the control's choices.
+    ConvertCompareTree {
+        theirs: bool,
+        index: usize,
+        label: String,
+        keep_copy: bool,
+    },
+    /// A query: the builds in `folder` (below the Builds folder, "" or "a/b/"), for the Compare
+    /// tab's saved-build picker. Read in Rust, no links followed, nothing outside the Builds
+    /// folder; unlike `ListBuilds` it doesn't leave the build or change anything.
+    BrowseBuilds {
+        folder: String,
     },
 
     Undo(Tab),
@@ -654,6 +823,206 @@ pub enum Command {
     /// Internal: a subscript thread woke the loop. The loop never applies it (R9).
     Wake,
     Shutdown,
+    /// A query: PoB's help, as its About window lists it (`Snapshot::Help`). It needs no build
+    /// and changes nothing.
+    Help,
+    /// P on the tree (PassiveTreeView.lua:204-205): shows or hides the heat map, keeping its
+    /// stat. With no stat chosen yet PoB shows damage against defence.
+    ToggleHeatmap,
+    /// Ctrl+D on the tree (PassiveTreeView.lua:206-207): whether a node's tooltip lists what
+    /// allocating it changes (PassiveTreeView.lua:1659)
+    SetTreeStatDifferences {
+        on: bool,
+    },
+    /// A click with Shift held on the last node of the traced path: PoB allocates the path
+    /// traced through the hovered nodes instead of the node's own (PassiveTreeView.lua:504).
+    /// `path` runs from the tree to `id`, which is its last.
+    AllocTracePath {
+        id: u32,
+        path: Vec<u32>,
+    },
+    /// A query, as `PreviewNode`, while Shift traces a path: the tooltip PoB shows then
+    /// (PassiveTreeView.lua:1662, 1715-1716)
+    PreviewTrace {
+        id: u32,
+        path: Vec<u32>,
+    },
+
+    /// Drags a skill set's row in the manager to a new place (R31). Positions are 0-based in
+    /// `SkillsView.sets`; `to` is the set's final position. PoB only marks the tab changed.
+    MoveSkillSet {
+        from: usize,
+        to: usize,
+    },
+    /// A query: what hovering this control shows, PoB's `tooltipFunc` with its "what if" stat
+    /// comparison (R22). The latest one in a batch is answered, as a `HoverTooltip`.
+    HoverTooltip(HoverTarget),
+    /// The config set manager's Copy button and its name popup (NF-4).
+    CopyConfigSet {
+        id: u32,
+        title: String,
+    },
+    /// Drags a config set's row in the manager (NF-4); 0-based positions in `ConfigView.sets`,
+    /// `to` the final one.
+    MoveConfigSet {
+        from: usize,
+        to: usize,
+    },
+    /// The tree manager's Copy button and its "Copy Tree" name popup (NF-3); 0-based.
+    CopySpec {
+        index: usize,
+        title: String,
+    },
+    /// Drags a tree's row in the tree manager (NF-3); 0-based positions in `TreeState.specs`,
+    /// `to` the final one.
+    MoveSpec {
+        from: usize,
+        to: usize,
+    },
+    /// The power report's filter dropdown (0-based: Show Unallocated, Show Unallocated &
+    /// Clusters, Show Allocated) and its Show Masteries box (NF-5). UI state of PoB's list,
+    /// not saved.
+    SetPowerReportFilter {
+        filter: usize,
+        masteries: bool,
+    },
+    /// The Import tab's X next to the account history: removes the account from the list
+    /// and from PoB's remembered accounts (NF-8)
+    RemoveAccountHistory {
+        account: String,
+    },
+    /// PoB's "Convert to <latest>" button under an older tree: the tree is copied into the
+    /// latest version beside it, and PoB's "Tree Converted" message comes as `Event::Message`
+    /// (TreeTab:610)
+    ConvertSpecLatest,
+    /// A click on another class's ascendancy node while the tree doesn't connect to that
+    /// class: PoB's "Class Change" question, answered with Continue (the tree is reset) or,
+    /// with `connect`, Connect Path (PassiveTreeView.lua:464-492)
+    AllocNodeChangingClass {
+        id: u32,
+        connect: bool,
+    },
+    /// A database row dragged onto a slot (R23): PoB's `CanReceiveDrag`, then `ReceiveDrag`,
+    /// which adds the item, equips it and records an undo state. A slot that can't take the
+    /// item is `that item can't go in that slot`.
+    DropDbItem {
+        db: ItemDb,
+        name: String,
+        slot: String,
+    },
+    /// Ctrl+click on an item list row (`ItemListControl:OnSelClick`): equips the item into its
+    /// slot, or takes it out when it is already there; `second_slot` is Ctrl+Shift+click,
+    /// the second slot where the item fits it.
+    QuickEquipItem {
+        id: u32,
+        second_slot: bool,
+    },
+    /// PoB's shared items (NF-2), kept in Settings.xml across builds. An edit of the shared
+    /// lists saves Settings.xml through PoB's `main:SaveSettings` (R29 amended by the
+    /// controller: shared item list edits), overrides kept out (R12).
+    ///
+    /// A build item or a database row dragged onto the shared list, dropped at 0-based row
+    /// `index` (`index` = the length appends).
+    AddSharedItem {
+        source: SharedItemSource,
+        index: usize,
+    },
+    /// Shared item `index` dragged onto `slot`, or onto the build's item list (`slot` `None`):
+    /// a copy is added to the build. On the item list it lands at 0-based row `at`, the row
+    /// under the cursor, as PoB's list marks it (ItemListControl.lua:275-283); `None`, or a list
+    /// PoB doesn't let reorder (a loadout filter), appends. The shared list is unchanged and
+    /// nothing is saved.
+    DropSharedItem {
+        index: usize,
+        slot: Option<String>,
+        at: Option<usize>,
+    },
+    /// The shared list's Delete, confirmed in the UI (PoB's "Delete Item" question)
+    DeleteSharedItem {
+        index: usize,
+    },
+    /// A shared item dragged within the shared list; `to` is its final position
+    MoveSharedItem {
+        from: usize,
+        to: usize,
+    },
+    /// The double click on a shared item: it goes to the display panel
+    ViewSharedItem {
+        index: usize,
+    },
+    /// The build's item set `id` dragged onto the Manage Item Sets window's shared set list
+    AddSharedItemSet {
+        id: u32,
+    },
+    /// Shared set `index` dragged onto the build's set list: a new item set with copies
+    ImportSharedItemSet {
+        index: usize,
+    },
+    /// The shared set list's Delete, confirmed in the UI (PoB's "Delete Item Set" question)
+    DeleteSharedItemSet {
+        index: usize,
+    },
+    /// The shared set list's Rename (or F2); a blank title is `that name isn't allowed`
+    RenameSharedItemSet {
+        index: usize,
+        title: String,
+    },
+    MoveSharedItemSet {
+        from: usize,
+        to: usize,
+    },
+    /// A database row dragged onto the build's item list: added at 0-based row `at` (as
+    /// `DropSharedItem`), not equipped (ItemsTab.lua:1184-1187, ItemListControl.lua:275-283)
+    DropDbItemOnList {
+        db: ItemDb,
+        name: String,
+        at: Option<usize>,
+    },
+    /// Ctrl+C on a shared item row (SharedItemListControl.lua:62-64): a query, answered with
+    /// the text PoB copies
+    CopySharedItem {
+        index: usize,
+    },
+    /// An item dragged onto the sidebar's minion dropdown while it shows an item set (Animate
+    /// Guardian): PoB equips it into that set for the minion (Build.lua:534-543)
+    DropOnMinion {
+        source: ItemDragSource,
+    },
+}
+
+/// A row being dragged from one of the Items tab's lists
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ItemDragSource {
+    /// A build item, by id
+    Item { id: u32 },
+    /// A database row
+    Db { db: ItemDb, name: String },
+    /// A shared item, by 0-based index
+    Shared { index: usize },
+}
+
+/// What is dragged onto the shared item list
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SharedItemSource {
+    /// A build item, by id
+    Item { id: u32 },
+    /// A database row
+    Db { db: ItemDb, name: String },
+}
+
+/// A control whose hover tooltip PoB computes (R22). Gem positions are 0-based.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HoverTarget {
+    /// A gem's Quality box: its quality lines and "Setting to 20 quality will give you:"
+    GemQuality { group: usize, slot: usize },
+    /// A gem's enable box: "Disabling/Enabling this gem will give you:"
+    GemEnabled { group: usize, slot: usize },
+    /// A gem's Count box: PoB's note on what the count does
+    GemCount { group: usize, slot: usize },
+    /// A Config option's control, as hovering its box shows it
+    ConfigOption { var: String },
+    /// A custom modifier group's enable box (0-based): "Disabling/Enabling this group..."
+    CustomModEnabled { group: usize },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -724,11 +1093,22 @@ pub struct GemTooltipQuery {
 }
 
 /// An item tooltip: `slot: None` is a hover in the item list, `Some(name)` a hover over that
-/// slot or one of its dropdown entries.
+/// slot or one of its dropdown entries; `theirs` asks for the comparison's item in the slot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemTooltipQuery {
     pub id: u32,
     pub slot: Option<String>,
+    /// The active comparison's item in `slot` (`id` is not used): what hovering it on the
+    /// Compare tab's Items view shows
+    #[serde(default)]
+    pub theirs: bool,
+    /// Shift is held: PoB's tooltip then fills the granted skills' child tooltips, and a list
+    /// hover reads the item's second-slot mods (R34)
+    #[serde(default)]
+    pub shift: bool,
+    /// Hovering shared item `shared` (0-based; `id` and `slot` are not used)
+    #[serde(default)]
+    pub shared: Option<usize>,
 }
 
 /// A window PoB opens from the Items tab's buttons (R3).
@@ -752,6 +1132,41 @@ pub enum PopupKind {
     NodeReplacement {
         node: u32,
     },
+    /// PoB's Options window, run as a main-owned session (R13, R19): it needs no build
+    Options,
+    /// PoB's "Buy Similar" window (`CompareBuySimilar.openPopup`, R10), a build-owned session;
+    /// its realm and league are the app's trade defaults (`SetTradeDefaults`)
+    BuySimilar {
+        source: BuySource,
+    },
+    /// The Tree tab's "Find Timeless Jewel" window (`TreeTab:FindTimelessJewel`, R17), a
+    /// build-owned session. Its `searchButton` press starts `BackgroundTask::Timeless`.
+    TimelessJewel,
+    /// PoB's "Spectre Library" (`build:OpenSpectreLibrary`, R18), a build-owned session opened
+    /// by the sidebar's or the Calcs selector's "Manage Spectres..." button; its Save commits
+    SpectreLibrary,
+    /// The Config tab's "Add Mod" on custom modifier group `group` (0-based):
+    /// `configTab:OpenAddModPopup(blockData)` as a build-owned session (R28). Its "Add" appends
+    /// the picked modifier to the group's text.
+    ModBrowser {
+        group: usize,
+    },
+    /// PoB's "Game Version" window (`build:OpenConversionPopup`, Build.lua:1323-1350): opening a
+    /// build made for another game version shows it instead of the build, as a main-owned
+    /// session. Its `convert` opens the build converted; `cancel` (or any other end) leaves the
+    /// new build behind it. Only an open makes it: `OpenPopup` refuses it.
+    GameVersion,
+}
+
+/// Where a "Buy similar" search starts from (R10): PoB's own three entry points
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BuySource {
+    /// The display panel's "Buy similar" button
+    DisplayItem,
+    /// A slot's context menu, with the slot's item
+    Slot(String),
+    /// The Compare tab's Items row: the comparison's item in this slot (`CompareItemRow.slot`)
+    CompareSlot(String),
 }
 
 /// What a popup control is set to.
@@ -767,6 +1182,18 @@ pub enum PopupInput {
     Text(String),
     /// A list row, by its key
     Row(String),
+    /// The second click of a double click on a list row (the timeless results add that jewel,
+    /// R17)
+    RowDoubleClick(String),
+    /// A list row clicked with Shift held: the other end of a range (the timeless results'
+    /// trade search, R17)
+    RowShiftClick(String),
+    /// A row of a mutable list dragged to `to` (0-based, its place after the drop), as PoB's
+    /// list reorders on release (the Spectre Library's "Spectres in Build")
+    RowMove {
+        key: String,
+        to: usize,
+    },
 }
 
 /// An item database (Task 6)
@@ -806,6 +1233,8 @@ pub enum ControlTooltipQuery {
     DbItem {
         db: ItemDb,
         name: String,
+        /// Shift held: PoB's child tooltips (R34)
+        shift: bool,
     },
 }
 

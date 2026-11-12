@@ -1,18 +1,21 @@
 //! Starts Path of Building's Lua with our own bootstrap.
 
+use super::buildpaths;
 use super::commands::{
-    CharacterPart, Command, ConfigValue, ControlTooltipQuery, GemSearchQuery, GemTarget, GemToggle,
-    GemTooltipQuery, ImportMode, ItemDb, ItemDbQuery, ItemTooltipQuery, PopupInput, PopupKind,
+    CharacterPart, Command, CompareSource, ConfigValue, ControlTooltipQuery, DeleteKind,
+    GemSearchQuery, GemTarget, GemToggle, GemTooltipQuery, HoverTarget, ImportMode, ItemDb,
+    ItemDbQuery, ItemDragSource, ItemTooltipQuery, PopupInput, PopupKind, SharedItemSource,
     SkillOption, SocketColour, Tab,
 };
 use super::net::{Dispatch, NetHandle};
 use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Engine, Event};
 use super::views::{
-    AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView,
-    ControlTooltipView, DisplayItemView, GemRow, GemSearchView, GemTooltipView, GroupTooltipView,
-    ItemDbView, ItemText, ItemTooltip, ItemTooltipView, ItemsView, ModLineList, NodePower,
-    NodeTooltip, NotesView, PopupView, PowerReport, RequestsView, ShareView, SkillsView,
-    SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
+    AccountView, BreakdownView, BuildBrowseView, BuildListView, BuildView, CalcsView, CellRef,
+    CompareView, ConfigView, ControlTooltipView, DisplayItemView, ExternalUrl, GemRow,
+    GemSearchView, GemTooltipView, GroupTooltipView, HoverTooltipView, ItemDbView, ItemText,
+    ItemTooltip, ItemTooltipView, ItemsView, ModLineList, NodePower, NodeTooltip, NotesView,
+    PopupView, PowerReport, RequestsView, SettingsView, ShareView, SkillsView, SocketGroupText,
+    StatsView, TooltipLine, TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -51,9 +54,22 @@ pub struct PobBackend {
     item_db_ended: bool,
     /// Lua's heap after the last memory release, in bytes
     released_lua_bytes: usize,
+    /// The UI shows the build list: it asked for a listing since it last opened or imported
+    /// a build, or no build was loaded at start. The exit save then records PoB's LIST mode,
+    /// as PoB's would after its CloseBuild (Build.lua:953-956), not the build left behind it.
+    on_list: bool,
     /// The subscripts of PoB's requests (R4, R9)
     net: NetHandle,
+    /// A timeless search was started; whether it still runs is the glue's (R17)
+    timeless_job: bool,
+    /// How long one timeless search step runs before it yields, in milliseconds (R17)
+    pub timeless_budget_ms: u32,
+    /// The path traced with Shift that the next node tooltip is built with (empty: none)
+    trace: Vec<u32>,
 }
+
+/// R17: a timeless search step yields once this much of `GetTime()` has passed
+pub const TIMELESS_BUDGET_MS: u32 = 50;
 
 /// Runs before the bootstrap.
 const PRELUDE: &str = r##"
@@ -125,6 +141,7 @@ impl PobBackend {
             .context("Starting Path of Building")?;
         for (name, source) in [
             ("@glue/builds.lua", include_str!("glue/builds.lua")),
+            ("@glue/buildlist.lua", include_str!("glue/buildlist.lua")),
             ("@glue/stats.lua", include_str!("glue/stats.lua")),
             ("@glue/tooltip.lua", include_str!("glue/tooltip.lua")),
             ("@glue/config.lua", include_str!("glue/config.lua")),
@@ -137,10 +154,17 @@ impl PobBackend {
             ("@glue/items.lua", include_str!("glue/items.lua")),
             ("@glue/crafting.lua", include_str!("glue/crafting.lua")),
             ("@glue/popups.lua", include_str!("glue/popups.lua")),
+            ("@glue/timeless.lua", include_str!("glue/timeless.lua")),
             ("@glue/itemdb.lua", include_str!("glue/itemdb.lua")),
+            (
+                "@glue/shared_items.lua",
+                include_str!("glue/shared_items.lua"),
+            ),
             ("@glue/notes.lua", include_str!("glue/notes.lua")),
             ("@glue/net.lua", include_str!("glue/net.lua")),
             ("@glue/import.lua", include_str!("glue/import.lua")),
+            ("@glue/settings.lua", include_str!("glue/settings.lua")),
+            ("@glue/compare.lua", include_str!("glue/compare.lua")),
         ] {
             lua.load(source)
                 .set_name(name)
@@ -148,6 +172,16 @@ impl PobBackend {
                 .map_err(lua_error)
                 .with_context(|| format!("Loading {name}"))?;
         }
+        // PoB has loaded Settings.xml: the shared values are what it holds now (R12)
+        let glue: mlua::Table = lua.globals().get("glue").map_err(lua_error)?;
+        let init: mlua::Function = glue.get("settings_init").map_err(lua_error)?;
+        init.call::<()>(()).map_err(lua_error)?;
+        // the build PoB opened at start, before the glue was there to see it
+        let settle: mlua::Function = glue.get("settle_startup").map_err(lua_error)?;
+        settle.call::<()>(()).map_err(lua_error)?;
+        // PoB reopened the build its last exit recorded: the UI shows it, as PoB does
+        let loaded: mlua::Function = glue.get("build_loaded").map_err(lua_error)?;
+        let on_list = !loaded.call::<bool>(()).map_err(lua_error)?;
         Ok(PobBackend {
             lua,
             game,
@@ -164,13 +198,35 @@ impl PobBackend {
             item_db_failed: false,
             item_db_ended: false,
             released_lua_bytes: 0,
+            on_list,
             net,
+            timeless_job: false,
+            timeless_budget_ms: TIMELESS_BUDGET_MS,
+            trace: Vec::new(),
         })
     }
 
     /// The subscripts and launch gate of this PoB (for the gate harness).
     pub fn net_handle(&self) -> &NetHandle {
         &self.net
+    }
+
+    /// The Builds folder as PoB holds it (`main.buildPath`).
+    fn build_root(&self) -> Result<String> {
+        let root: String = self.call("build_root", ())?;
+        // a recursive RemoveDir may delete only below it (R16)
+        if std::fs::canonicalize(&root).is_err() {
+            anyhow::bail!("the Builds folder doesn't exist");
+        }
+        if !super::native::set_builds_root(&self.lua, Some(Path::new(&root))) {
+            anyhow::bail!("that Builds folder isn't allowed");
+        }
+        Ok(root)
+    }
+
+    /// `path` as PoB spells an entry of the Builds folder, or why it is refused (R16).
+    fn build_entry(&self, path: &Path, walks: bool) -> Result<String> {
+        buildpaths::entry(&self.build_root()?, path, walks)
     }
 
     /// Calls `glue.<name>(args)`, keeping only the error message.
@@ -207,6 +263,8 @@ impl PobBackend {
         Ok(Affected {
             build: rebuild,
             recalc: rebuild,
+            // the Items tab's tree dropdown and its jewel sockets follow the spec list
+            items: rebuild,
             tree: true,
             tree_layout: self.layout_changed()?,
             ..Affected::default()
@@ -237,6 +295,22 @@ impl PobBackend {
         })
     }
 
+    /// A loadout pick or a new loadout (R21): the tree, item, skill and config sets may all
+    /// change, and with them every tab.
+    fn loadout_changed(&self) -> Result<Affected> {
+        Ok(Affected {
+            build: true,
+            tree: true,
+            items: true,
+            skills: true,
+            config: true,
+            calcs: true,
+            recalc: true,
+            tree_layout: self.layout_changed()?,
+            ..Affected::default()
+        })
+    }
+
     /// A build that is opened or replaced starts with the heat map off.
     fn reset_heatmap(&mut self) {
         self.heatmap_on = false;
@@ -257,8 +331,12 @@ impl PobBackend {
     fn left_build(&mut self) -> Result<Affected> {
         let mut affected = Affected::default();
         self.reset_heatmap();
-        if self.call::<_, bool>("popup_end", ())? {
+        // the session's timeless search ends with it (R17)
+        self.timeless_job = false;
+        // an Options window survives a build change (R19)
+        if self.call::<_, bool>("popup_end", true)? {
             affected.popup = true;
+            affected.settings = true;
         }
         if self.item_db.take().is_some() {
             self.item_db_failed = false;
@@ -316,6 +394,13 @@ impl PobBackend {
             affected.recalc = true;
             affected
         } else if effects.edited {
+            // the edit (a character import) changed what a build's or an item's window is
+            // about, and the tree a timeless search walks: such a window ends, as for a new
+            // build, and its search with it; a main one (Options) stays (R17, R19)
+            let ended = self.call::<_, bool>("popup_end", true)?;
+            if ended {
+                self.timeless_job = false;
+            }
             Affected {
                 build: true,
                 tree: true,
@@ -323,6 +408,7 @@ impl PobBackend {
                 skills: true,
                 config: true,
                 recalc: true,
+                popup: ended,
                 tree_layout: self.layout_changed()?,
                 ..Affected::default()
             }
@@ -332,7 +418,17 @@ impl PobBackend {
         affected.requests = true;
         // a request of the account import ends with PoB's status and stage changed
         affected.account = true;
+        // a link imported as a comparison lands here (R5), and the overlay may now colour the
+        // tree against it
+        affected.compare = true;
+        if self.call::<_, bool>("compare_take_landed", ())? {
+            affected.tree = true;
+        }
         affected.short_link = self.call("short_link_ready", ())?;
+        if self.call::<_, bool>("popup_take_lost", ())? {
+            affected.popup = true;
+            affected.settings = true;
+        }
         Ok(affected)
     }
 
@@ -348,6 +444,25 @@ impl PobBackend {
 
 /// A config change touches the build and the config tab, and needs a recalculation (after
 /// which the loop also refreshes the stats).
+/// A build list command changed the list and nothing else.
+fn list_changed() -> Affected {
+    Affected {
+        list: true,
+        ..Affected::default()
+    }
+}
+
+/// The level or its mode (R21): PoB rebuilds the config's mods and recalculates; in Auto mode
+/// the level itself comes out of the calculation.
+fn level_changed() -> Affected {
+    Affected {
+        build: true,
+        config: true,
+        recalc: true,
+        ..Affected::default()
+    }
+}
+
 fn config_changed() -> Affected {
     Affected {
         build: true,
@@ -379,6 +494,14 @@ fn items_listed() -> Affected {
 }
 
 /// A change to the display item only: PoB counts none of it as an edit of the build (R10).
+/// A shared list changed (NF-2): the Items view shows it
+fn shared_changed() -> Affected {
+    Affected {
+        items: true,
+        ..Affected::default()
+    }
+}
+
 fn display_changed() -> Affected {
     Affected {
         display_item: true,
@@ -419,6 +542,11 @@ pub(crate) enum CancelScope {
 
 pub(crate) fn cancels_requests(command: &Command) -> Option<CancelScope> {
     match command {
+        // a comparison leaves the build as it is (R5)
+        Command::ImportFromUrl {
+            mode: ImportMode::Comparison,
+            ..
+        } => None,
         Command::OpenBuild { .. }
         | Command::NewBuild
         | Command::ImportShareCode { .. }
@@ -433,11 +561,24 @@ fn mode_name(mode: ImportMode) -> &'static str {
     match mode {
         ImportMode::ThisBuild => "this",
         ImportMode::NewBuild => "new",
+        ImportMode::Comparison => "compare",
+    }
+}
+
+/// The one Compare control that edits this build: the Items view's own item set (R6)
+const PRIMARY_ITEM_SET: &str = "primaryItemSetSelect";
+
+/// A Compare command changed the comparisons; the tree goes too, for the overlay (R7).
+fn compare_changed() -> Affected {
+    Affected {
+        compare: true,
+        tree: true,
+        ..Affected::default()
     }
 }
 
 /// Commands that leave or replace the build (R14).
-fn leaves_build(command: &Command) -> bool {
+pub(crate) fn leaves_build(command: &Command) -> bool {
     matches!(
         command,
         Command::ListBuilds { .. }
@@ -482,6 +623,10 @@ fn ends_gem_search(command: &Command) -> bool {
             | Command::NewSkillSet { .. }
             | Command::CopySkillSet { .. }
             | Command::DeleteSkillSet { .. }
+            // a loadout picks or adds a skill set (R21)
+            | Command::SelectLoadout { .. }
+            | Command::NewLoadout { .. }
+            | Command::SyncLoadouts
             | Command::Undo(Tab::Skills)
             | Command::Redo(Tab::Skills)
             | Command::ListBuilds { .. }
@@ -492,25 +637,41 @@ fn ends_gem_search(command: &Command) -> bool {
     )
 }
 
-/// Whether a command ends the popup session (R4). The session's own commands and the queries
-/// leave it open; anything else may change the item or the build under it.
+/// Whether a command may end the popup session (R4). The session's own commands and the
+/// queries leave it open; anything else may change the item or the build under it. The glue
+/// then decides by the session's owner (R19): a build-owned one ends only with its build.
 pub(crate) fn ends_popup_session(command: &Command) -> bool {
+    if let Command::SetCompareControl { name, .. } = command {
+        return name == PRIMARY_ITEM_SET;
+    }
+    // converting the comparison's tree leaves this build alone
+    if let Command::ConvertCompareTree { theirs, .. } = command {
+        return !theirs;
+    }
     !matches!(
         command,
         Command::OpenPopup(_)
             | Command::SetPopupControl { .. }
             | Command::PressPopupButton { .. }
             | Command::ClosePopup
+            // the app's own values; they change neither the item nor the build (R12)
+            | Command::SetOverrides { .. }
+            | Command::SetTradeDefaults { .. }
+            | Command::CancelTimelessSearch
+            | Command::BrowseBuilds { .. }
             | Command::ControlTooltip(_)
             | Command::SetItemDb(_)
             | Command::CloseItemDb
             | Command::ItemTooltip(_)
             | Command::CopyItem { .. }
+            | Command::CopySharedItem { .. }
             | Command::Breakdown(_)
             | Command::GemTooltip(_)
             | Command::GroupTooltip { .. }
+            | Command::HoverTooltip(_)
             | Command::CopySocketGroup { .. }
             | Command::PreviewNode { .. }
+            | Command::PreviewTrace { .. }
             | Command::ExportTreeLink
             // a shrink only reads the tree and asks the network (R20)
             | Command::ShrinkTreeLink
@@ -531,10 +692,20 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             // the tree search's debounce can land after a node-replacement open: it changes
             // neither the item nor the build
             | Command::SetTreeSearch { .. }
+            // the comparisons are apart from this build; only a copy into it, or a pick of its
+            // own item set, edits it (R5-R8)
+            | Command::LoadCompare { .. }
+            | Command::SelectCompare { .. }
+            | Command::RemoveCompare { .. }
+            | Command::SetCompareOverlay { .. }
             // a cancel runs PoB's failure path, which leaves the build alone (R12)
             | Command::CancelRequest { .. }
             | Command::Wake
             | Command::Shutdown
+            | Command::Help
+            // what the tree shows, not the build or the item
+            | Command::ToggleHeatmap
+            | Command::SetTreeStatDifferences { .. }
     )
 }
 
@@ -554,6 +725,15 @@ fn part_args(part: &CharacterPart) -> (&'static str, bool, bool, bool) {
 #[derive(serde::Deserialize)]
 struct Pressed {
     build_flag: bool,
+    /// The trade link the press opened, if any (R20)
+    #[serde(default)]
+    url: Option<String>,
+    /// The press started a timeless search (R17)
+    #[serde(default)]
+    started: bool,
+    /// The press replaced the build: the Game Version window's Convert
+    #[serde(default)]
+    rebuilt: bool,
 }
 
 /// A popup session command changed the popup only (a press also flags the display item).
@@ -565,7 +745,7 @@ fn popup_changed() -> Affected {
 }
 
 impl PobBackend {
-    fn apply_command(&mut self, command: Command, _send: &dyn Fn(Event)) -> Result<Affected> {
+    fn apply_command(&mut self, command: Command, send: &dyn Fn(Event)) -> Result<Affected> {
         match command {
             Command::SearchGems(query) => {
                 let target = lua_target(&self.lua, query.target)?;
@@ -625,8 +805,96 @@ impl PobBackend {
                 self.call::<_, ()>("item_db_view_item", (db_name(db), name))?;
                 Ok(display_changed())
             }
-            Command::AddDbItem { db, name } => {
-                self.call::<_, ()>("item_db_add", (db_name(db), name))?;
+            Command::AddDbItem {
+                db,
+                name,
+                second_slot,
+            } => {
+                self.call::<_, ()>("item_db_add", (db_name(db), name, second_slot))?;
+                self.items_edited()
+            }
+            Command::DropDbItem { db, name, slot } => {
+                self.call::<_, ()>("item_db_drop", (db_name(db), name, slot))?;
+                self.items_edited()
+            }
+            Command::QuickEquipItem { id, second_slot } => {
+                self.call::<_, ()>("item_quick_equip", (id, second_slot))?;
+                self.items_edited()
+            }
+            Command::AddSharedItem { source, index } => {
+                match source {
+                    SharedItemSource::Item { id } => {
+                        self.call::<_, ()>("shared_add", ("item", id, mlua::Value::Nil, index))?
+                    }
+                    SharedItemSource::Db { db, name } => {
+                        self.call::<_, ()>("shared_add", ("db", db_name(db), name, index))?
+                    }
+                }
+                Ok(shared_changed())
+            }
+            Command::DropSharedItem { index, slot, at } => {
+                self.call::<_, ()>("shared_drop", (index + 1, slot, at.map(|a| a + 1)))?;
+                self.items_edited()
+            }
+            Command::DeleteSharedItem { index } => {
+                self.call::<_, ()>("shared_delete", index + 1)?;
+                Ok(shared_changed())
+            }
+            Command::MoveSharedItem { from, to } => {
+                self.call::<_, ()>("shared_move", (from + 1, to + 1))?;
+                Ok(shared_changed())
+            }
+            Command::ViewSharedItem { index } => {
+                self.call::<_, ()>("shared_view", index + 1)?;
+                Ok(display_changed())
+            }
+            Command::AddSharedItemSet { id } => {
+                self.call::<_, ()>("shared_set_add", id)?;
+                Ok(shared_changed())
+            }
+            Command::ImportSharedItemSet { index } => {
+                self.call::<_, ()>("shared_set_import", index + 1)?;
+                self.items_edited()
+            }
+            Command::DeleteSharedItemSet { index } => {
+                self.call::<_, ()>("shared_set_delete", index + 1)?;
+                Ok(shared_changed())
+            }
+            Command::RenameSharedItemSet { index, title } => {
+                self.call::<_, ()>("shared_set_rename", (index + 1, title))?;
+                // PoB's rename sets the tab's `modFlag` (SharedItemSetListControl.lua:37)
+                Ok(Affected {
+                    build: true,
+                    ..shared_changed()
+                })
+            }
+            Command::MoveSharedItemSet { from, to } => {
+                self.call::<_, ()>("shared_set_move", (from + 1, to + 1))?;
+                Ok(shared_changed())
+            }
+            Command::DropDbItemOnList { db, name, at } => {
+                self.call::<_, ()>(
+                    "item_db_drop_on_list",
+                    (db_name(db), name, at.map(|a| a + 1)),
+                )?;
+                self.items_edited()
+            }
+            Command::CopySharedItem { index } => Ok(Affected {
+                shared_text: Some(index),
+                ..Affected::default()
+            }),
+            Command::DropOnMinion { source } => {
+                match source {
+                    ItemDragSource::Item { id } => {
+                        self.call::<_, ()>("minion_drop", ("item", id, mlua::Value::Nil))?
+                    }
+                    ItemDragSource::Db { db, name } => {
+                        self.call::<_, ()>("minion_drop", ("db", db_name(db), name))?
+                    }
+                    ItemDragSource::Shared { index } => {
+                        self.call::<_, ()>("minion_drop", ("shared", index + 1, mlua::Value::Nil))?
+                    }
+                }
                 self.items_edited()
             }
             Command::ItemTooltip(query) => Ok(Affected {
@@ -651,27 +919,106 @@ impl PobBackend {
                 if folder.contains("..") || folder.starts_with('/') {
                     anyhow::bail!("that isn't a valid folder");
                 }
-                self.folder = if folder.is_empty() || folder.ends_with('/') {
-                    folder
-                } else {
-                    format!("{folder}/")
-                };
+                self.folder = buildpaths::folder(&self.build_root()?, &folder, false, false)?;
+                self.on_list = true;
                 Ok(Affected {
                     list: true,
                     ..Affected::default()
                 })
             }
+            Command::RenameBuild { path, name } => {
+                let path = self.build_entry(&path, false)?;
+                buildpaths::name_free(&path, &name, true)?;
+                self.call::<_, ()>("rename_build", (path, name))?;
+                Ok(list_changed())
+            }
+            Command::CopyBuild { path, name } => {
+                let path = self.build_entry(&path, true)?;
+                buildpaths::name_free(&path, &name, false)?;
+                self.call::<_, ()>("copy_build", (path, name))?;
+                Ok(list_changed())
+            }
+            Command::DeleteBuild { path, kind } => {
+                let path = self.build_entry(&path, false)?;
+                let kind_name = match kind {
+                    DeleteKind::Build => "build",
+                    DeleteKind::EmptyFolder => "empty",
+                    DeleteKind::Folder => "folder",
+                };
+                // the contents are looked at again: what the user was asked about must be
+                // what is deleted
+                // (a link to a folder is a folder, as PoB lists it)
+                let looked = std::fs::metadata(&path).ok();
+                let is_dir = looked.as_ref().is_some_and(|m| m.is_dir());
+                let has_contents = is_dir
+                    && std::fs::read_dir(&path).is_ok_and(|mut entries| entries.next().is_some());
+                let as_asked = match kind {
+                    DeleteKind::Build => looked.is_some() && !is_dir,
+                    DeleteKind::EmptyFolder => is_dir && !has_contents,
+                    DeleteKind::Folder => is_dir && has_contents,
+                };
+                if !as_asked {
+                    anyhow::bail!("the folder changed; look again");
+                }
+                self.call::<_, ()>("delete_build", (path.clone(), kind_name))?;
+                // PoB ignores what its delete answers: look at the file system
+                if std::fs::symlink_metadata(&path).is_ok() {
+                    anyhow::bail!("couldn't delete that build");
+                }
+                Ok(list_changed())
+            }
+            Command::MoveBuild { path, folder } => {
+                let root = self.build_root()?;
+                let path = self.build_entry(&path, true)?;
+                let folder = buildpaths::folder(&root, &folder, true, true)?;
+                buildpaths::move_target_free(&path, &root, &folder)?;
+                self.call::<_, ()>("move_build", (path, folder))?;
+                Ok(list_changed())
+            }
+            Command::CopyBuildTo { path, folder } => {
+                let root = self.build_root()?;
+                let path = self.build_entry(&path, true)?;
+                let folder = buildpaths::folder(&root, &folder, true, true)?;
+                buildpaths::move_target_free(&path, &root, &folder)?;
+                self.call::<_, ()>("copy_build_to", (path, folder))?;
+                Ok(list_changed())
+            }
+            Command::NewFolder { name } => {
+                let folder = buildpaths::folder(&self.build_root()?, &self.folder, true, true)?;
+                self.call::<_, ()>("new_folder", (folder, name))?;
+                Ok(list_changed())
+            }
+            Command::NewFolderIn { folder, name } => {
+                let folder = buildpaths::folder(&self.build_root()?, &folder, true, true)?;
+                self.call::<_, ()>("new_folder", (folder, name))?;
+                Ok(list_changed())
+            }
+            Command::SetBuildSort { sort } => {
+                self.call::<_, ()>("set_build_sort", sort.id())?;
+                // the sort is a setting too (R12)
+                Ok(Affected {
+                    settings: true,
+                    ..list_changed()
+                })
+            }
+            Command::SetBuildFilter { text } => {
+                self.call::<_, ()>("set_build_filter", text)?;
+                Ok(list_changed())
+            }
             Command::NewBuild => {
+                self.on_list = false;
                 self.reset_heatmap();
                 self.call::<_, ()>("new_build", ())?;
                 self.all_views()
             }
             Command::OpenBuild { path } => {
+                self.on_list = false;
                 self.reset_heatmap();
                 self.call::<_, ()>("open_build", path.to_string_lossy().into_owned())?;
                 self.all_views()
             }
             Command::ImportShareCode { code } => {
+                self.on_list = false;
                 self.reset_heatmap();
                 self.call::<_, ()>("import_code", code)?;
                 self.all_views()
@@ -684,11 +1031,17 @@ impl PobBackend {
                 })
             }
             Command::ImportFromUrl { url, mode } => {
+                let comparison = mode == ImportMode::Comparison;
+                if !comparison {
+                    self.on_list = false;
+                }
                 let mode = mode_name(mode);
                 // a link is a request, finished by a later Network step; a code imports at once
                 let request: Option<u64> = self.call("import_from_url", (url, mode))?;
                 let mut affected = match request {
                     Some(_) => self.network_affected()?,
+                    // a code added a comparison at once; the build is as it was (R5)
+                    None if comparison => compare_changed(),
                     // a code replaced the build at once; a link does so only when its request
                     // ends (`network_affected`), and a failed fetch keeps the build as it was
                     None => {
@@ -773,24 +1126,153 @@ impl PobBackend {
                 overwrite,
             } => {
                 self.call::<_, ()>("save_as", (folder, name, overwrite))?;
-                // PoB's save rewrites the notes' `^_` escapes
+                // PoB's save rewrites the notes' `^_` escapes; the Summary's header names the
+                // build (R4)
                 Ok(Affected {
                     build: true,
                     list: true,
                     notes: true,
+                    compare: true,
                     ..Affected::default()
                 })
             }
             // run_loop handles Shutdown before applying commands, and never applies Wake
             Command::Shutdown | Command::Wake => Ok(Affected::default()),
+            // read off PoB's About window when the view is asked for: nothing changes here
+            Command::Help => Ok(Affected {
+                help: true,
+                ..Affected::default()
+            }),
+            // unlike `SetHeatmap` nothing is recalculated: PoB only flips the flag
+            Command::ToggleHeatmap => {
+                self.heatmap_on = self.call::<_, bool>("toggle_heatmap", ())?;
+                self.power_failed = false;
+                Ok(Affected {
+                    tree: true,
+                    power: true,
+                    ..Affected::default()
+                })
+            }
+            Command::SetTreeStatDifferences { on } => {
+                self.call::<_, ()>("set_tree_stat_differences", on)?;
+                Ok(Affected {
+                    tree: true,
+                    ..Affected::default()
+                })
+            }
+            Command::MoveSkillSet { from, to } => {
+                let (Some(lua_from), Some(lua_to)) = (from.checked_add(1), to.checked_add(1))
+                else {
+                    return Err(anyhow!("no such skill set"));
+                };
+                self.call::<_, ()>("skills_move_set", (lua_from, lua_to))?;
+                // PoB's drop onto the same place changes nothing
+                if from == to {
+                    return Ok(Affected::default());
+                }
+                // the order feeds no calculation; the glue ran a frame for `unsaved`
+                Ok(Affected {
+                    build: true,
+                    skills: true,
+                    ..Affected::default()
+                })
+            }
+            Command::HoverTooltip(target) => Ok(Affected {
+                hover: Some(target),
+                ..Affected::default()
+            }),
+            Command::SetPowerReportFilter { filter, masteries } => {
+                self.call::<_, ()>("set_power_report_filter", (filter, masteries))?;
+                Ok(Affected {
+                    report: true,
+                    ..Affected::default()
+                })
+            }
+            Command::ConvertSpecLatest => {
+                #[derive(serde::Deserialize)]
+                struct Message {
+                    title: String,
+                    text: String,
+                }
+                let message: Option<Message> = self.view("convert_spec_latest", ())?;
+                if let Some(Message { title, text }) = message {
+                    send(Event::Message { title, text });
+                }
+                self.spec_edited(true)
+            }
+            Command::AllocNodeChangingClass { id, connect } => {
+                self.call::<_, ()>("alloc_changing_class", (id, connect))?;
+                self.tree_edited()
+            }
+            Command::RemoveAccountHistory { account } => {
+                self.call::<_, ()>("remove_account_history", account)?;
+                Ok(Affected {
+                    account: true,
+                    ..Affected::default()
+                })
+            }
+            Command::CopyConfigSet { id, title } => {
+                self.call::<_, ()>("copy_config_set", (id, title))?;
+                // the name popup's Save syncs the loadouts, which flags a rebuild
+                Ok(config_changed())
+            }
+            Command::MoveConfigSet { from, to } => {
+                let (Some(lua_from), Some(lua_to)) = (from.checked_add(1), to.checked_add(1))
+                else {
+                    return Err(anyhow!("no such config set"));
+                };
+                self.call::<_, ()>("move_config_set", (lua_from, lua_to))?;
+                if from == to {
+                    return Ok(Affected::default());
+                }
+                Ok(Affected {
+                    build: true,
+                    config: true,
+                    ..Affected::default()
+                })
+            }
+            Command::CopySpec { index, title } => {
+                let Some(lua_index) = index.checked_add(1) else {
+                    return Err(anyhow!("unknown tree {index}"));
+                };
+                self.call::<_, ()>("copy_spec", (lua_index, title))?;
+                self.spec_edited(false)
+                    .map(|a| Affected { build: true, ..a })
+            }
+            Command::MoveSpec { from, to } => {
+                let (Some(lua_from), Some(lua_to)) = (from.checked_add(1), to.checked_add(1))
+                else {
+                    return Err(anyhow!("unknown tree"));
+                };
+                self.call::<_, ()>("move_spec", (lua_from, lua_to))?;
+                if from == to {
+                    return Ok(Affected::default());
+                }
+                self.spec_edited(false)
+                    .map(|a| Affected { build: true, ..a })
+            }
             Command::CancelRequest { id } => {
                 self.cancel_request(id)?;
                 self.network_affected()
             }
-            Command::PreviewNode { id } => Ok(Affected {
-                preview: Some(id),
-                ..Affected::default()
-            }),
+            Command::PreviewNode { id } => {
+                self.trace.clear();
+                Ok(Affected {
+                    preview: Some(id),
+                    ..Affected::default()
+                })
+            }
+            Command::PreviewTrace { id, path } => {
+                self.trace = path;
+                Ok(Affected {
+                    preview: Some(id),
+                    ..Affected::default()
+                })
+            }
+            Command::AllocTracePath { id, path } => {
+                self.call::<_, ()>("alloc_trace", (id, path))?;
+                self.tree_edited()
+            }
             Command::Breakdown(cell) => Ok(Affected {
                 breakdown: Some(cell),
                 ..Affected::default()
@@ -892,9 +1374,135 @@ impl PobBackend {
                 self.call::<_, ()>("reset_tree", ())?;
                 self.tree_edited()
             }
+            Command::SetCharacterLevel { level } => {
+                self.call::<_, ()>("set_character_level", level)?;
+                Ok(level_changed())
+            }
+            Command::SetLevelMode { auto } => {
+                self.call::<_, ()>("set_level_mode", auto)?;
+                Ok(level_changed())
+            }
+            Command::SelectSecondaryAscendancy { id } => {
+                self.call::<_, ()>("select_secondary_ascendancy", id)?;
+                self.tree_edited()
+            }
+            Command::SelectLoadout { label } => {
+                self.call::<_, ()>("select_loadout", label)?;
+                self.loadout_changed()
+            }
+            Command::NewLoadout { name } => {
+                self.call::<_, ()>("new_loadout", name)?;
+                self.loadout_changed()
+            }
+            Command::SyncLoadouts => {
+                self.call::<_, ()>("sync_loadouts", ())?;
+                // the rebuilt list ends in a `SetSel`, whose callback can switch sets when a
+                // title only contains the loadout's name (`find` there, exact match in
+                // `findSetId`): treated as a loadout pick
+                self.loadout_changed()
+            }
             Command::RemoveAllTattoos => {
                 self.call::<_, ()>("remove_all_tattoos", ())?;
                 self.tree_edited()
+            }
+            Command::LoadCompare { source } => {
+                match source {
+                    CompareSource::File(path) => self
+                        .call::<_, ()>("compare_load_file", path.to_string_lossy().into_owned())?,
+                    CompareSource::Code(code) => self.call::<_, ()>("compare_load_code", code)?,
+                }
+                Ok(compare_changed())
+            }
+            Command::SelectCompare { index } => {
+                self.call::<_, ()>("compare_select", index + 1)?;
+                Ok(compare_changed())
+            }
+            Command::RemoveCompare { index } => {
+                self.call::<_, ()>("compare_remove", index + 1)?;
+                Ok(compare_changed())
+            }
+            Command::SetCompareControl { name, value } => {
+                let primary = name == PRIMARY_ITEM_SET;
+                match value {
+                    PopupInput::Choice { index, label } => {
+                        self.call::<_, ()>("compare_set", (name, "choice", index, label))?
+                    }
+                    PopupInput::Number(value) => {
+                        self.call::<_, ()>("compare_set", (name, "number", value, ()))?
+                    }
+                    PopupInput::Check(on) => {
+                        self.call::<_, ()>("compare_set", (name, "check", on, ()))?
+                    }
+                    PopupInput::Text(text) => {
+                        self.call::<_, ()>("compare_set", (name, "text", text, ()))?
+                    }
+                    PopupInput::Row(key) => {
+                        self.call::<_, ()>("compare_set", (name, "row", key, ()))?
+                    }
+                    PopupInput::RowDoubleClick(key) => {
+                        self.call::<_, ()>("compare_set", (name, "row_double", key, ()))?
+                    }
+                    PopupInput::RowShiftClick(key) => {
+                        self.call::<_, ()>("compare_set", (name, "row_shift", key, ()))?
+                    }
+                    PopupInput::RowMove { key, to } => {
+                        self.call::<_, ()>("compare_set", (name, "row_move", key, to))?
+                    }
+                }
+                let mut affected = compare_changed();
+                // PoB's own item set selector, with an Items undo state (CompareTab.lua:781)
+                if primary {
+                    affected.merge(self.items_edited()?);
+                }
+                Ok(affected)
+            }
+            Command::CopyCompareTree { and_use } => {
+                self.call::<_, ()>("compare_copy_tree", and_use)?;
+                let mut affected = self.spec_edited(true)?;
+                affected.compare = true;
+                Ok(affected)
+            }
+            Command::CopyCompareItem { slot, and_use } => {
+                self.call::<_, ()>("compare_copy_item", (slot, and_use))?;
+                let mut affected = self.items_edited()?;
+                affected.compare = true;
+                Ok(affected)
+            }
+            Command::CopyCompareConfig => {
+                self.call::<_, ()>("compare_copy_config", ())?;
+                let mut affected = config_changed();
+                affected.compare = true;
+                Ok(affected)
+            }
+            Command::ConvertCompareTree {
+                theirs,
+                index,
+                label,
+                keep_copy,
+            } => {
+                self.call::<_, ()>(
+                    "compare_convert_tree",
+                    (theirs, index + 1, label, keep_copy),
+                )?;
+                if theirs {
+                    Ok(compare_changed())
+                } else {
+                    let mut affected = self.spec_edited(true)?;
+                    affected.compare = true;
+                    Ok(affected)
+                }
+            }
+            // read in Rust when the view is asked for: nothing changes here
+            Command::BrowseBuilds { folder } => Ok(Affected {
+                browse: Some(folder),
+                ..Affected::default()
+            }),
+            Command::SetCompareOverlay { on } => {
+                self.call::<_, ()>("compare_overlay", on)?;
+                Ok(Affected {
+                    tree: true,
+                    ..Affected::default()
+                })
             }
             Command::SetMastery { node, effect } => {
                 self.call::<_, ()>("set_mastery", (node, effect))?;
@@ -1368,6 +1976,23 @@ impl PobBackend {
                     PopupKind::AddImplicit => ("add_implicit", 0),
                     PopupKind::AddCrucible => ("add_crucible", 0),
                     PopupKind::NodeReplacement { node } => ("node_replacement", i64::from(node)),
+                    PopupKind::Options => ("options", 0),
+                    PopupKind::TimelessJewel => ("timeless", 0),
+                    PopupKind::SpectreLibrary => ("spectre_library", 0),
+                    PopupKind::ModBrowser { group } => ("mod_browser", group as i64 + 1),
+                    // only opening an old build shows it (Build.lua:102-105)
+                    PopupKind::GameVersion => {
+                        anyhow::bail!(
+                            "the Game Version window opens with an old build, not on its own"
+                        )
+                    }
+                    PopupKind::BuySimilar { source } => {
+                        let source = self.lua.to_value(&source).map_err(|e| anyhow!("{e}"))?;
+                        self.call::<_, ()>("popup_open", ("buy_similar", source))?;
+                        // another window replaces the session and ends its search (R17)
+                        self.timeless_job = false;
+                        return Ok(popup_changed());
+                    }
                 };
                 // Enchant's flag is a boolean for the glue
                 if name == "enchant" {
@@ -1375,36 +2000,75 @@ impl PobBackend {
                 } else {
                     self.call::<_, ()>("popup_open", (name, arg))?;
                 }
+                // another window replaces the session and ends its search (R17); a refused
+                // open left the session, and its search, as they were
+                self.timeless_job = false;
                 Ok(popup_changed())
             }
             Command::SetPopupControl { name, value } => {
                 // a failed sort's builder is gone and a same-value pick runs no PoB code, so
                 // the control that restarts it is the glue's (Retry)
                 let restart = std::mem::take(&mut self.anoint_failed);
-                match value {
+                // the timeless results' double click adds that jewel to the build (R17)
+                let adds = matches!(value, PopupInput::RowDoubleClick(_));
+                let flagged = match value {
                     PopupInput::Choice { index, label } => {
-                        self.call::<_, ()>("popup_set", (name, "choice", index, label))?
+                        self.call::<_, bool>("popup_set", (name, "choice", index, label))?
                     }
                     PopupInput::Number(value) => {
-                        self.call::<_, ()>("popup_set", (name, "number", value, ()))?
+                        self.call::<_, bool>("popup_set", (name, "number", value, ()))?
                     }
                     PopupInput::Check(on) => {
-                        self.call::<_, ()>("popup_set", (name, "check", on, ()))?
+                        self.call::<_, bool>("popup_set", (name, "check", on, ()))?
                     }
                     PopupInput::Text(text) => {
-                        self.call::<_, ()>("popup_set", (name, "text", text, ()))?
+                        self.call::<_, bool>("popup_set", (name, "text", text, ()))?
                     }
                     PopupInput::Row(key) => {
-                        self.call::<_, ()>("popup_set", (name, "row", key, ()))?
+                        self.call::<_, bool>("popup_set", (name, "row", key, ()))?
                     }
-                }
+                    PopupInput::RowDoubleClick(key) => {
+                        self.call::<_, bool>("popup_set", (name, "row_double", key, ()))?
+                    }
+                    PopupInput::RowShiftClick(key) => {
+                        self.call::<_, bool>("popup_set", (name, "row_shift", key, ()))?
+                    }
+                    PopupInput::RowMove { key, to } => {
+                        self.call::<_, bool>("popup_set", (name, "row_move", key, to))?
+                    }
+                };
                 if restart {
                     self.call::<_, ()>("anoint_sort_restart", ())?;
                 }
-                Ok(popup_changed())
+                let mut affected = popup_changed();
+                if adds {
+                    // PoB's AddItem and PopulateSlots, no undo state (TimelessJewelListControl.lua:308-310)
+                    affected.build = true;
+                    affected.items = true;
+                }
+                // the Mod Browser's double click is its Add: the config changed (R28)
+                if flagged {
+                    affected.build = true;
+                    affected.config = true;
+                    affected.recalc = true;
+                }
+                Ok(affected)
             }
             Command::PressPopupButton { name } => {
                 let pressed: Pressed = self.view("popup_press", name)?;
+                // Convert opened the build: the same as an open, after the fact (R13, R14)
+                if pressed.rebuilt {
+                    self.reset_heatmap();
+                    self.cancel_all_requests(CancelScope::All)?;
+                    let mut affected = self.network_affected()?;
+                    affected.merge(self.left_build()?);
+                    affected.merge(self.all_views()?);
+                    return Ok(affected);
+                }
+                // the timeless window's Search started the job (R17)
+                if pressed.started {
+                    self.timeless_job = true;
+                }
                 // a tattoo sets PoB's `buildFlag`: the tree changed (R22)
                 let mut affected = if pressed.build_flag {
                     self.tree_edited()?
@@ -1413,17 +2077,56 @@ impl PobBackend {
                 };
                 affected.popup = true;
                 affected.display_item = true;
+                // the Mod Browser's Add edits a custom modifier group (R28)
+                affected.config |= pressed.build_flag;
+                // Options' Save changes the settings and may hand back overrides (R12)
+                affected.settings = true;
+                // a trade search the press opened (R20)
+                affected.external_url = pressed.url.map(|url| ExternalUrl { url });
                 // a popup PoB closed ends the session; the view says so by being empty
                 Ok(affected)
             }
             Command::ClosePopup => {
                 self.call::<_, ()>("popup_close", ())?;
-                Ok(popup_changed())
+                // closing the window ended its search (R17)
+                self.timeless_job = false;
+                // Escape on Options is its Cancel, which puts the settings back
+                Ok(Affected {
+                    settings: true,
+                    ..popup_changed()
+                })
+            }
+            Command::SetOverrides { values } => {
+                let table = self.lua.create_table().map_err(|e| anyhow!("{e}"))?;
+                for (key, value) in values {
+                    table.set(key, value).map_err(|e| anyhow!("{e}"))?;
+                }
+                self.call::<_, ()>("set_overrides", table)?;
+                Ok(Affected {
+                    settings: true,
+                    ..Affected::default()
+                })
             }
             Command::ControlTooltip(query) => Ok(Affected {
                 control_tooltip: Some(query),
                 ..Affected::default()
             }),
+            Command::CancelTimelessSearch => {
+                self.call::<_, ()>("timeless_cancel", ())?;
+                // a step that ran before the cancel already told its progress: the search is
+                // over, and the window's progress line goes
+                if std::mem::take(&mut self.timeless_job) {
+                    send(Event::Progress {
+                        task: BackgroundTask::Timeless,
+                        percent: 100,
+                    });
+                }
+                Ok(popup_changed())
+            }
+            Command::SetTradeDefaults { realm, league } => {
+                self.call::<_, ()>("trade_defaults", (realm, league))?;
+                Ok(Affected::default())
+            }
             Command::Undo(Tab::Items) => {
                 self.call::<_, ()>("items_undo", ())?;
                 self.items_edited()
@@ -1472,7 +2175,25 @@ impl Backend for PobBackend {
             }
             None => None,
         };
-        let mut affected = self.apply_command(command, send)?;
+        // a failed open or import still replaced the build: a new one stands in for the one
+        // PoB couldn't open (net.lua's Init wrapper)
+        let opens = leaves || matches!(command, Command::ImportFromUrl { .. });
+        let generation: Option<i64> = if opens {
+            Some(self.call("build_generation", ())?)
+        } else {
+            None
+        };
+        let mut affected = match self.apply_command(command, send) {
+            Ok(affected) => affected,
+            Err(e) => {
+                if let Some(before) = generation
+                    && self.call::<_, i64>("build_generation", ())? != before
+                {
+                    self.left_build()?;
+                }
+                return Err(e);
+            }
+        };
         if let Some(cancelled) = cancelled {
             affected.merge(cancelled);
         }
@@ -1482,8 +2203,15 @@ impl Backend for PobBackend {
         }
         // any other command may change what the popup is about, so it ends the session once
         // it went through, and the window is told (R4); a failed one changed nothing
-        if ends_popup && self.call::<_, bool>("popup_end", ())? {
+        if ends_popup && self.call::<_, bool>("popup_end", false)? {
             affected.popup = true;
+            // an Options window that ends is cancelled, which puts the settings back
+            affected.settings = true;
+        }
+        // a save PoB made by itself cancelled an open Options window first
+        if self.call::<_, bool>("popup_take_lost", ())? {
+            affected.popup = true;
+            affected.settings = true;
         }
         // the panel is told once that its database closed (R21)
         if ends_db && self.item_db.take().is_some() {
@@ -1509,12 +2237,31 @@ impl Backend for PobBackend {
         self.call::<_, ()>("recalculate", ())
     }
 
+    /// PoB's exit save (`main:Shutdown`, Main.lua:338-339): `Settings.xml` gets what PoB keeps
+    /// in memory until then (the import history, the last account and the open build), unless
+    /// another program wrote the file since we last read or wrote it, or PoB couldn't read it
+    /// (I-1). The build mode's own Shutdown only saves a build in PoB's dev mode, so it isn't run.
+    fn shutdown(&mut self) {
+        let list = self.on_list.then(|| self.folder.clone());
+        match self.call::<_, Option<String>>("settings_exit_save", list) {
+            Ok(None) => {}
+            Ok(Some(reason)) => log::warn!("Settings.xml not saved at exit: {reason}"),
+            Err(e) => log::warn!("Settings.xml not saved at exit: {e:#}"),
+        }
+    }
+
     fn build_view(&mut self) -> Result<BuildView> {
         self.view("build_view", ())
     }
 
     fn build_list_view(&mut self) -> Result<BuildListView> {
-        self.view("list_builds", self.folder.clone())
+        let mut view: BuildListView = self.view("list_builds", self.folder.clone())?;
+        // a missing Builds folder was already refused by the listing
+        let root = self.build_root()?;
+        view.tree = buildpaths::folder_tree(&root);
+        view.root = PathBuf::from(root);
+        view.build_open = !self.on_list;
+        Ok(view)
     }
 
     fn build_loaded(&mut self) -> Result<bool> {
@@ -1587,6 +2334,14 @@ impl Backend for PobBackend {
         {
             return Some(BackgroundTask::AnointSort);
         }
+        // R32: after the Anoint sort, before the item databases
+        if self.timeless_job
+            && self
+                .call::<_, bool>("timeless_running", ())
+                .unwrap_or(false)
+        {
+            return Some(BackgroundTask::Timeless);
+        }
         if let Some(query) = &self.item_db
             && !self.item_db_failed
             && self
@@ -1652,6 +2407,34 @@ impl Backend for PobBackend {
                 // the window shows the rows once the builder ends
                 Ok(Affected {
                     popup: step.finished,
+                    ..Affected::default()
+                })
+            }
+            BackgroundTask::Timeless => {
+                #[derive(serde::Deserialize)]
+                struct TimelessStep {
+                    done: bool,
+                    percent: u32,
+                }
+                let step: TimelessStep = match self.view("timeless_step", self.timeless_budget_ms) {
+                    Ok(step) => step,
+                    Err(e) => {
+                        // the glue ended the job and put PoB's message in the window
+                        self.timeless_job = false;
+                        return Err(e);
+                    }
+                };
+                send(Event::Progress {
+                    task: BackgroundTask::Timeless,
+                    percent: step.percent,
+                });
+                if step.done {
+                    self.timeless_job = false;
+                }
+                // the window shows PoB's results, its list and its trade button once the
+                // search returns
+                Ok(Affected {
+                    popup: step.done,
                     ..Affected::default()
                 })
             }
@@ -1788,8 +2571,13 @@ impl Backend for PobBackend {
     }
 
     fn item_tooltip_view(&mut self, query: &ItemTooltipQuery) -> Result<Option<ItemTooltipView>> {
-        let found: Option<ItemTooltip> =
-            self.view("item_tooltip", (query.id, query.slot.clone()))?;
+        let found: Option<ItemTooltip> = if let Some(index) = query.shared {
+            self.view("shared_tooltip", (index + 1, query.shift))?
+        } else if query.theirs {
+            self.view("compare_item_tooltip", query.slot.clone())?
+        } else {
+            self.view("item_tooltip", (query.id, query.slot.clone(), query.shift))?
+        };
         Ok(found.map(|tooltip| ItemTooltipView {
             query: query.clone(),
             tooltip,
@@ -1811,8 +2599,8 @@ impl Backend for PobBackend {
             ControlTooltipQuery::Affix { slot, index } => {
                 self.view("affix_tooltip", (*slot, index.map(|i| i as i64)))?
             }
-            ControlTooltipQuery::DbItem { db, name } => {
-                self.view("item_db_tooltip", (db_name(*db), name.clone()))?
+            ControlTooltipQuery::DbItem { db, name, shift } => {
+                self.view("item_db_tooltip", (db_name(*db), name.clone(), *shift))?
             }
         };
         Ok(found.map(|tooltip| ControlTooltipView {
@@ -1823,7 +2611,20 @@ impl Backend for PobBackend {
 
     fn item_text(&mut self, id: u32) -> Result<ItemText> {
         let text: String = self.call("item_copy", id)?;
-        Ok(ItemText { id, text })
+        Ok(ItemText {
+            id,
+            text,
+            shared: false,
+        })
+    }
+
+    fn shared_item_text(&mut self, index: usize) -> Result<ItemText> {
+        let text: String = self.call("shared_copy", index + 1)?;
+        Ok(ItemText {
+            id: index as u32,
+            text,
+            shared: true,
+        })
     }
 
     fn node_power_view(&mut self) -> Result<NodePower> {
@@ -1835,7 +2636,7 @@ impl Backend for PobBackend {
     }
 
     fn node_tooltip_view(&mut self, id: u32) -> Result<Option<NodeTooltip>> {
-        self.view("node_tooltip", id)
+        self.view("node_tooltip", (id, self.trace.clone()))
     }
 
     fn breakdown_view(&mut self, cell: &CellRef) -> Result<BreakdownView> {
@@ -1879,6 +2680,10 @@ impl Backend for PobBackend {
         self.view("requests_view", ())
     }
 
+    fn settings_view(&mut self) -> Result<SettingsView> {
+        self.view("settings_view", ())
+    }
+
     fn share_view(&mut self) -> Result<ShareView> {
         self.view("share_view", ())
     }
@@ -1891,8 +2696,42 @@ impl Backend for PobBackend {
         self.view("account_view", ())
     }
 
+    fn compare_view(&mut self) -> Result<Option<CompareView>> {
+        self.view("compare_view", ())
+    }
+
+    fn browse_view(&mut self, folder: &str) -> Result<BuildBrowseView> {
+        // PoB's `main.buildPath`, read only: unlike `build_root` nothing is set up
+        let root: String = self.call("build_root", ())?;
+        buildpaths::browse(&root, folder)
+    }
+
     fn set_waker(&mut self, wake: Waker) {
         self.net.set_waker(wake);
+    }
+
+    fn help_view(&mut self) -> Result<crate::engine::views::HelpView> {
+        self.view("help_view", ())
+    }
+
+    fn hover_tooltip_view(&mut self, target: &HoverTarget) -> Result<Option<HoverTooltipView>> {
+        let lines: Option<Vec<TooltipLine>> = match target {
+            HoverTarget::GemQuality { group, slot } => {
+                self.view("skills_hover", (group + 1, slot + 1, "quality"))?
+            }
+            HoverTarget::GemEnabled { group, slot } => {
+                self.view("skills_hover", (group + 1, slot + 1, "enabled"))?
+            }
+            HoverTarget::GemCount { group, slot } => {
+                self.view("skills_hover", (group + 1, slot + 1, "count"))?
+            }
+            HoverTarget::ConfigOption { var } => self.view("config_hover", var.clone())?,
+            HoverTarget::CustomModEnabled { group } => self.view("custom_mod_hover", group + 1)?,
+        };
+        Ok(lines.map(|lines| HoverTooltipView {
+            target: target.clone(),
+            lines,
+        }))
     }
 }
 
@@ -1920,12 +2759,19 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::BuySource;
 
     #[test]
     fn queries_do_not_end_the_popup_session() {
         use crate::engine::{CellRef, GemTarget, ItemDb};
         let keeps = [
-            Command::ItemTooltip(ItemTooltipQuery { id: 1, slot: None }),
+            Command::ItemTooltip(ItemTooltipQuery {
+                id: 1,
+                slot: None,
+                theirs: false,
+                shift: false,
+                shared: None,
+            }),
             Command::ControlTooltip(ControlTooltipQuery::Popup {
                 control: "save".into(),
                 index: None,
@@ -1933,8 +2779,10 @@ mod tests {
             Command::ControlTooltip(ControlTooltipQuery::DbItem {
                 db: ItemDb::Uniques,
                 name: "x".into(),
+                shift: false,
             }),
             Command::CopyItem { id: 1 },
+            Command::CopySharedItem { index: 0 },
             Command::Breakdown(CellRef {
                 section: "s".into(),
                 sub: 0,
@@ -1946,7 +2794,21 @@ mod tests {
                 target: GemTarget::Slot(0),
                 gem_id: None,
             }),
+            Command::HoverTooltip(crate::engine::HoverTarget::GemEnabled { group: 0, slot: 0 }),
             Command::OpenPopup(PopupKind::Craft),
+            Command::OpenPopup(PopupKind::Options),
+            Command::SetOverrides {
+                values: Default::default(),
+            },
+            Command::SetTradeDefaults {
+                realm: "PC".into(),
+                league: "Standard".into(),
+            },
+            Command::OpenPopup(PopupKind::BuySimilar {
+                source: BuySource::DisplayItem,
+            }),
+            Command::OpenPopup(PopupKind::TimelessJewel),
+            Command::CancelTimelessSearch,
             Command::OpenPopup(PopupKind::NodeReplacement { node: 1 }),
             Command::SetPopupControl {
                 name: "rarity".into(),
@@ -1994,6 +2856,7 @@ mod tests {
             Command::AddDbItem {
                 db: ItemDb::Uniques,
                 name: "x".into(),
+                second_slot: false,
             },
             Command::SetMainSkillCount {
                 control: crate::engine::CalcsCount::Stages,
@@ -2084,6 +2947,99 @@ mod tests {
             }),
             None
         );
+        // a comparison leaves the build as it is: nothing is cancelled (R5)
+        let (mut fake, log) = Fake::new();
+        fake.pending = vec![(1, "build"), (2, "list")];
+        let command = Command::ImportFromUrl {
+            url: "https://pobb.in/x".into(),
+            mode: ImportMode::Comparison,
+        };
+        let shown = format!("apply {command:?}");
+        let _ = fake.apply(command, &|_| {});
+        assert_eq!(log.lock().unwrap().requests, [shown]);
+        assert_eq!(fake.pending.len(), 2);
+    }
+
+    #[test]
+    fn loadout_commands_end_the_gem_search() {
+        // a loadout pick, a new loadout and Sync can each switch or add a skill set (R21)
+        for command in [
+            Command::SelectLoadout { label: "L2".into() },
+            Command::NewLoadout { name: "L3".into() },
+            Command::SyncLoadouts,
+        ] {
+            assert!(ends_gem_search(&command), "{command:?}");
+        }
+        assert!(!ends_gem_search(&Command::SetCharacterLevel { level: 75 }));
+    }
+
+    #[test]
+    fn compare_commands_keep_the_build_and_its_session() {
+        use crate::engine::CompareSource;
+        let keeps = [
+            Command::LoadCompare {
+                source: CompareSource::File("a.xml".into()),
+            },
+            Command::LoadCompare {
+                source: CompareSource::Code("x".into()),
+            },
+            Command::SelectCompare { index: 1 },
+            Command::RemoveCompare { index: 0 },
+            Command::SetCompareOverlay { on: true },
+            Command::BrowseBuilds {
+                folder: "a/".into(),
+            },
+            Command::ConvertCompareTree {
+                theirs: true,
+                index: 0,
+                label: "3.28".into(),
+                keep_copy: false,
+            },
+            Command::SetCompareControl {
+                name: "cmpMainSkill".into(),
+                value: PopupInput::Choice {
+                    index: 1,
+                    label: "Double Strike".into(),
+                },
+            },
+            Command::ImportFromUrl {
+                url: "https://pobb.in/x".into(),
+                mode: ImportMode::Comparison,
+            },
+        ];
+        for command in keeps {
+            assert_eq!(cancels_requests(&command), None, "{command:?}");
+            assert!(!leaves_build(&command), "{command:?}");
+            assert!(!ends_popup_session(&command), "{command:?}");
+            assert!(!ends_item_db(&command), "{command:?}");
+            assert!(!ends_gem_search(&command), "{command:?}");
+        }
+        // a copy into this build, or a pick of its own item set, edits it
+        for command in [
+            Command::CopyCompareTree { and_use: true },
+            Command::CopyCompareItem {
+                slot: "Body Armour".into(),
+                and_use: true,
+            },
+            Command::CopyCompareConfig,
+            Command::ConvertCompareTree {
+                theirs: false,
+                index: 0,
+                label: "3.28".into(),
+                keep_copy: true,
+            },
+            Command::SetCompareControl {
+                name: PRIMARY_ITEM_SET.into(),
+                value: PopupInput::Choice {
+                    index: 0,
+                    label: "Default".into(),
+                },
+            },
+        ] {
+            assert!(ends_popup_session(&command), "{command:?}");
+            assert!(!leaves_build(&command), "{command:?}");
+            assert_eq!(cancels_requests(&command), None, "{command:?}");
+        }
     }
 
     #[test]

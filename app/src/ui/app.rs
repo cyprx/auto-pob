@@ -2,26 +2,39 @@
 
 use std::sync::Arc;
 
+use crate::engine::commands::DeleteKind;
 use crate::engine::views::{BuildListView, BuildView, ConfigView, RequestsView, StatsView};
-use crate::engine::{BackgroundTask, Command, Engine, Event, ImportMode, Snapshot, Tab};
+use crate::engine::{BackgroundTask, Command, Engine, Event, ImportMode, PopupKind, Snapshot, Tab};
 use crate::game::Game;
 use crate::pob_files::DownloadProgress;
+use crate::settings::{self, AppSettings};
 use crate::theme;
 use crate::ui::build::{self, BuildAction, BuildTab};
 use crate::ui::build_list::{BuildListUi, ListScreenAction};
 use crate::ui::calcs::{CalcsOutput, CalcsUi};
+use crate::ui::compare::{CompareOutput, CompareUi};
 use crate::ui::config::ConfigUi;
+use crate::ui::folder_picker::{FolderPicker, PickerOutput};
+use crate::ui::help::{self, HelpStart, HelpUi};
 use crate::ui::import::{Confirm, ImportOutput, ImportUi, Plan};
 use crate::ui::items::{ItemsOutput, ItemsUi};
 use crate::ui::notes::NotesUi;
+use crate::ui::options::{self, OptionsUi};
 use crate::ui::popup::{self, PopupWindow};
 use crate::ui::requests;
+use crate::ui::shortcuts::{self, ShortcutAction, ShortcutState};
 use crate::ui::skills::{SkillsOutput, SkillsUi};
 use crate::ui::tree::{TreeOutput, TreeTab};
 use crate::ui::unsaved::{Pending, PromptChoice, Resolution, needs_prompt, resolve};
 use crate::ui::{sidebar, startup};
 use crate::update_notice::Release;
 use eframe::egui;
+
+/// Reads the system clipboard's text.
+pub type ClipboardRead = Box<dyn Fn() -> Option<String>>;
+
+/// Starts fetching PoB's help files in the background; the answer comes on the channel.
+pub type HelpDownload = Box<dyn Fn() -> std::sync::mpsc::Receiver<Result<(), String>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Screen {
@@ -39,6 +52,10 @@ struct SaveAsDialog {
     confirm_overwrite: bool,
     /// A `SaveAs` is on its way.
     waiting: bool,
+    /// PoB's folder list: where in the Builds tree the build goes
+    picker: FolderPicker,
+    /// A New Folder in the picker is on its way: the folder to go back to if it is refused
+    new_folder: Option<(u64, String)>,
 }
 
 /// A question asked before the tab or the pending line acts.
@@ -103,10 +120,30 @@ pub struct AutoPobApp {
     popup: PopupWindow,
     /// The tab that opened the popup: leaving it closes the window
     popup_tab: Option<BuildTab>,
+    /// A failed open or import (its seq) and the build generation before it: if the build that
+    /// follows is another one, PoB's Init failed and PoB would show its list (`on_failed_open`)
+    failed_open: Option<(u64, u64)>,
+    /// The trade link a popup press asked for: opened and copied for that press only (R20)
+    trade_link: popup::TradeLink,
+    /// The Options window, which any screen can open and a build change doesn't end (R19)
+    options: OptionsUi,
+    /// auto-pob.toml as it is on disk, and where it goes (None: nowhere, as in the tests)
+    settings: AppSettings,
+    config_path: Option<std::path::PathBuf>,
+    /// Why the file may not be written in this run (it could not be read)
+    settings_locked: Option<String>,
+    /// The zoom factor and window title the settings last asked for
+    applied_zoom: f32,
+    applied_title: String,
     /// The seq of the raw item text last sent, to keep its window open on an error
     text_seq: Option<u64>,
     sidebar: sidebar::SidebarState,
+    /// The top bar's level box and New Loadout name
+    top_bar: build::TopBarState,
     notes: NotesUi,
+    compare: CompareUi,
+    /// `SetCompareOverlay { on: true }` is the engine's state: the Compare tab's Tree view is up
+    compare_overlay: bool,
     import_ui: ImportUi,
     /// The pending network requests (the finished ones are turned into notices)
     requests: RequestsView,
@@ -117,6 +154,8 @@ pub struct AutoPobApp {
     confirm_id: egui::Id,
     config_ui: ConfigUi,
     list_ui: BuildListUi,
+    /// The `MoveBuild` of the last paste: if it is refused the cut mark comes back
+    list_move_seq: Option<u64>,
     /// A `pob://` link from the command line, asked about once the engine is ready (R4)
     startup_link: Option<String>,
     /// The release check's answer, and the newer release it found (until dismissed)
@@ -131,6 +170,23 @@ pub struct AutoPobApp {
     /// Actions waiting for the next frame (they need the egui context).
     ready_actions: Vec<Pending>,
     allow_close: bool,
+    /// PoB's About window: its help and version history (R25)
+    help: HelpUi,
+    /// Where the top bar and the sidebar were drawn last: a box there is Build's own control
+    bar_rects: Vec<egui::Rect>,
+    /// Starts fetching PoB's missing help files (the user's click), answering on the channel
+    help_download: Option<HelpDownload>,
+    help_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
+    /// Reads the system clipboard, for a right-click into a text box (EditControl.lua:527);
+    /// read only on that click
+    clipboard_read: Option<ClipboardRead>,
+    /// The text a right-click pastes into the box it focused, at the next frame's start
+    paste_next: Option<String>,
+    /// PoB's options for the wheel on dropdowns and sliders, as its settings last said
+    scroll_options: crate::widgets::scroll_step::ScrollOptions,
+    /// PoB's foot labels as drawn, for tests
+    #[cfg(test)]
+    label_texts: Vec<String>,
     /// Names of the commands sent through `send`, for tests.
     #[cfg(test)]
     sent_log: Vec<String>,
@@ -166,9 +222,20 @@ impl AutoPobApp {
             items: ItemsUi::default(),
             popup: PopupWindow::default(),
             popup_tab: None,
+            failed_open: None,
+            trade_link: popup::TradeLink::default(),
+            options: OptionsUi::default(),
+            settings: AppSettings::default(),
+            config_path: None,
+            settings_locked: None,
+            applied_zoom: 1.0,
+            applied_title: "auto-pob".into(),
             text_seq: None,
             sidebar: sidebar::SidebarState::default(),
+            top_bar: build::TopBarState::default(),
             notes: NotesUi::default(),
+            compare: CompareUi::default(),
+            compare_overlay: false,
             import_ui: ImportUi::default(),
             requests: RequestsView::default(),
             confirm: None,
@@ -176,6 +243,7 @@ impl AutoPobApp {
             confirm_id: egui::Id::unique("confirm_dialog"),
             config_ui: ConfigUi::default(),
             list_ui: BuildListUi::default(),
+            list_move_seq: None,
             startup_link: None,
             release_rx: None,
             release: None,
@@ -186,11 +254,34 @@ impl AutoPobApp {
             import: None,
             ready_actions: Vec::new(),
             allow_close: false,
+            help: HelpUi::default(),
+            bar_rects: Vec::new(),
+            help_download: None,
+            help_rx: None,
+            clipboard_read: None,
+            paste_next: None,
+            scroll_options: Default::default(),
+            #[cfg(test)]
+            label_texts: Vec::new(),
             #[cfg(test)]
             sent_log: Vec::new(),
             #[cfg(test)]
             sent_full: Vec::new(),
         }
+    }
+
+    /// How a right-click into a text box reads the clipboard.
+    #[must_use]
+    pub fn with_clipboard_reader(mut self, read: ClipboardRead) -> Self {
+        self.clipboard_read = Some(read);
+        self
+    }
+
+    /// How the Help window fetches PoB's help files when the user asks.
+    #[must_use]
+    pub fn with_help_download(mut self, download: HelpDownload) -> Self {
+        self.help_download = Some(download);
+        self
     }
 
     /// A `pob://` link to import after the user confirms it.
@@ -207,17 +298,178 @@ impl AutoPobApp {
         self
     }
 
+    /// The contents of `auto-pob.toml` (defaults when there is none) and the file to write them
+    /// to. The engine gets the overrides once it is ready.
+    #[must_use]
+    pub fn with_settings(mut self, settings: AppSettings, path: std::path::PathBuf) -> Self {
+        self.settings = settings;
+        self.config_path = Some(path);
+        self
+    }
+
+    /// The settings file could not be read (`reason`): it is never written in this run.
+    #[must_use]
+    pub fn with_locked_settings(mut self, reason: Option<String>) -> Self {
+        self.settings_locked = reason;
+        self
+    }
+
+    /// A message shown at the top until dismissed.
+    #[must_use]
+    pub fn with_notice(mut self, notice: String) -> Self {
+        self.notices.push(notice);
+        self
+    }
+
     fn restart(&mut self) {
         let spawn = std::mem::replace(&mut self.spawn, Box::new(|| unreachable!()));
+        let settings = std::mem::take(&mut self.settings);
+        let config_path = self.config_path.take();
+        let locked = self.settings_locked.take();
         *self = AutoPobApp::new(spawn);
+        self.settings = settings;
+        self.config_path = config_path;
+        self.settings_locked = locked;
+    }
+
+    /// The app's own values for PoB's settings go to the engine (R12).
+    fn send_overrides(&mut self) {
+        if !self.settings.overrides.is_empty() {
+            self.send_overrides_always();
+        }
+    }
+
+    fn send_overrides_always(&mut self) {
+        let values = self.settings.overrides.clone();
+        self.send(Command::SetOverrides { values });
+    }
+
+    /// The trade realm and league go to the engine, for PoB's trade windows (R10). Nothing
+    /// answers it, so the UI doesn't wait.
+    fn send_trade_defaults(&mut self) {
+        self.engine.send(Command::SetTradeDefaults {
+            realm: self.settings.trade_realm.clone(),
+            league: self.settings.trade_league.clone(),
+        });
+    }
+
+    /// Writes `settings` to `auto-pob.toml`. A damaged file moved aside is told to the user;
+    /// a failure is returned.
+    fn write_settings(&mut self, settings: &AppSettings) -> Result<(), String> {
+        if let Some(reason) = &self.settings_locked {
+            return Err(format!(
+                "the settings file wasn't read, so it is left alone ({reason})"
+            ));
+        }
+        let Some(path) = self.config_path.clone() else {
+            return Ok(());
+        };
+        match settings::save_noting(&path, settings) {
+            Ok(None) => Ok(()),
+            Ok(Some(backup)) => {
+                self.notices.push(format!(
+                    "{} could not be read, so it was moved to {} and a new one written.",
+                    path.display(),
+                    backup.display()
+                ));
+                Ok(())
+            }
+            Err(e) => Err(format!("Couldn't save {}: {e:#}", path.display())),
+        }
+    }
+
+    fn open_options(&mut self) {
+        self.send(Command::OpenPopup(PopupKind::Options));
+    }
+
+    /// PoB's settings, as the engine sees them now; the answer to an Options Save also carries
+    /// the overrides it moved, and then the file is written and the map sent again (R12).
+    fn on_settings(&mut self, view: &crate::engine::SettingsView, seq: u64) {
+        let on = |key: &str| view.rows.iter().any(|r| r.key == key && r.value == "true");
+        self.scroll_options = crate::widgets::scroll_step::ScrollOptions {
+            disable: on("disableScrollControlInteraction"),
+            invert_slider: on("invertSliderScrollDirection"),
+        };
+        let Some(next) = self.options.on_settings(view, seq) else {
+            return;
+        };
+        match self.write_settings(&next) {
+            Ok(()) => {
+                self.options.commit(&next);
+                self.settings = next;
+                self.send_overrides_always();
+                self.send_trade_defaults();
+            }
+            Err(error) => {
+                // not saved: the old settings stay, the draft comes back in a reopened window
+                let draft = self.options.save_failed(next, error);
+                self.send(Command::OpenPopup(PopupKind::Options));
+                self.send(Command::SetOverrides { values: draft });
+            }
+        }
+    }
+
+    fn on_popup_snapshot(&mut self, snapshot: &Snapshot, seq: u64) {
+        match snapshot {
+            Snapshot::Popup(Some(view)) if matches!(view.kind, PopupKind::Options) => {
+                self.options.window.on_snapshot_at(snapshot, seq);
+            }
+            Snapshot::Popup(Some(_)) => self.popup.on_snapshot_at(snapshot, seq),
+            _ => {
+                self.popup.on_snapshot_at(snapshot, seq);
+                self.options.window.on_snapshot_at(snapshot, seq);
+            }
+        }
+    }
+
+    /// Draws the Options window and sends what it asks.
+    fn options_window(&mut self, ui: &mut egui::Ui) {
+        if !self.options.window.is_blocking() {
+            return;
+        }
+        let now = ui.input(|i| i.time);
+        let behind = self.behind();
+        let out = self.options.show(ui.ctx(), now, behind);
+        let save_at = out.save_at;
+        for (i, command) in out.commands.into_iter().enumerate() {
+            let seq = self.send(command);
+            if save_at == Some(i) {
+                self.options.save_sent(seq);
+            }
+        }
+        // questions never leave the app waiting
+        for query in out.queries {
+            self.engine.send(query);
+        }
+    }
+
+    /// What the UI does for PoB's settings: the zoom and the window title (R13).
+    fn apply_ui_settings(&mut self, ctx: &egui::Context) {
+        let effects = options::ui_effects(self.options.rows());
+        if (effects.zoom - self.applied_zoom).abs() > f32::EPSILON {
+            ctx.set_zoom_factor(effects.zoom);
+            self.applied_zoom = effects.zoom;
+        }
+        let build = (self.screen == Screen::Build && self.entering.is_none())
+            .then(|| self.build.as_ref().map(|b| b.name.as_str()))
+            .flatten();
+        let title = options::window_title(effects.show_title, build);
+        if title != self.applied_title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.applied_title = title;
+        }
     }
 
     /// Sends a command whose snapshots the UI waits for.
     fn send(&mut self, command: Command) -> u64 {
-        if matches!(command, Command::OpenPopup(_)) {
+        if let Command::OpenPopup(kind) = &command {
             // a late edit would end the new session (R4), so every pending one goes first
             self.flush_edits();
-            self.popup_tab = Some(self.tab);
+            if matches!(kind, PopupKind::Options) {
+                self.options.begin(&self.settings);
+            } else {
+                self.popup_tab = Some(self.tab);
+            }
         }
         #[cfg(test)]
         self.sent_full.push(format!("{command:?}"));
@@ -229,8 +481,21 @@ impl AutoPobApp {
                 .unwrap_or_default()
                 .to_owned(),
         );
+        // a new open or import starts afresh: an earlier failure's check is for its own build
+        // view only, which may never have come (no build was loaded)
+        if matches!(
+            command,
+            Command::OpenBuild { .. } | Command::NewBuild | Command::ImportShareCode { .. }
+        ) || matches!(&command, Command::ImportFromUrl { mode, .. } if *mode != ImportMode::Comparison)
+        {
+            self.failed_open = None;
+        }
         let is_notes = matches!(command, Command::SetNotes { .. });
-        let is_import = matches!(command, Command::ImportFromUrl { .. });
+        // a comparison keeps the build: its answers never replace it
+        let is_import = matches!(
+            command,
+            Command::ImportFromUrl { mode, .. } if mode != ImportMode::Comparison
+        );
         // the Import tab follows the answers to these
         let echo = matches!(
             command,
@@ -242,13 +507,29 @@ impl AutoPobApp {
         )
         .then(|| command.clone());
         let is_close = matches!(command, Command::ClosePopup);
+        let is_press = matches!(command, Command::PressPopupButton { .. });
+        // only the trade windows' link buttons answer with a link (R20)
+        let is_link_press = matches!(
+            &command,
+            Command::PressPopupButton { name } if name == "search" || name == "searchTradeButton"
+        );
         let is_open = matches!(command, Command::OpenPopup(_));
+        let is_options = matches!(command, Command::OpenPopup(PopupKind::Options));
         let seq = self.engine.send(command);
-        if is_open {
+        if is_options {
+            self.options.window.open_sent(seq);
+        } else if is_open {
             self.popup.open_sent(seq);
         }
         if is_close {
             self.popup.close_sent(seq);
+            self.options.window.close_sent(seq);
+        }
+        if is_press {
+            self.popup.press_sent(seq);
+        }
+        if is_link_press {
+            self.trade_link.pressed(seq);
         }
         self.last_sent = seq;
         if let Some(command) = echo {
@@ -274,6 +555,8 @@ impl AutoPobApp {
             && (self.notes.has_pending()
                 || self.skills.has_pending()
                 || self.sidebar.has_pending()
+                || self.top_bar.has_pending()
+                || self.calcs.has_pending()
                 || self.build.as_ref().is_some_and(|b| b.unsaved))
     }
 
@@ -295,7 +578,11 @@ impl AutoPobApp {
     fn on_event(&mut self, event: Event) {
         match event {
             Event::Downloading(p) => self.progress = Some(p),
-            Event::Ready => self.ready = true,
+            Event::Ready => {
+                self.ready = true;
+                self.send_overrides();
+                self.send_trade_defaults();
+            }
             Event::StartupFailed { message } => self.startup_error = Some(message),
             Event::Snapshot { seq, snapshot } => {
                 self.last_snapshot = self.last_snapshot.max(seq);
@@ -320,42 +607,91 @@ impl AutoPobApp {
                     self.import_seq = None;
                 }
                 self.import_ui.on_snapshot(&snapshot, seq);
+                self.compare.on_snapshot(&snapshot);
+                // PoB switched to its Compare tab: an Import-tab comparison landed (R5). PoB
+                // switches at the user's Import click; a link's comparison lands later, so
+                // a window open by then keeps its tab, which leaving would end
+                if self.compare.take_switched() {
+                    if self.tab == BuildTab::Compare || !(self.modal() || self.popup.is_open()) {
+                        self.tab = BuildTab::Compare;
+                    } else {
+                        self.notices
+                            .push("Comparison imported: see the Compare tab".to_owned());
+                    }
+                }
                 match snapshot {
                     Snapshot::Build(view) => {
+                        let replaced = self
+                            .failed_open
+                            .take_if(|(at, _)| seq >= *at)
+                            .is_some_and(|(_, before)| view.generation != before);
                         self.build = Some(view);
+                        if replaced {
+                            self.on_failed_open();
+                        }
                         self.last_unsaved = self.current_unsaved();
                         if self.pending_save.as_ref().is_some_and(|p| seq >= p.seq) {
                             self.save_succeeded();
                         }
                     }
-                    Snapshot::BuildList(view) => self.list = Some(view),
+                    Snapshot::BuildList(view) => {
+                        // PoB reopened the build its last exit recorded: it starts on that
+                        // build, not on its list
+                        if seq == 0
+                            && view.build_open
+                            && self.screen == Screen::List
+                            && self.entering.is_none()
+                        {
+                            self.screen = Screen::Build;
+                            self.tab = BuildTab::default();
+                        }
+                        self.list = Some(view);
+                    }
                     Snapshot::Stats(view) => {
+                        // a new calculation: the "what if" answers compared against the old one
+                        self.skills.forget_hover();
+                        self.config_ui.forget_hover();
                         self.stats = Some(view);
                     }
-                    Snapshot::Config(view) => self.config = Some(view),
+                    Snapshot::Config(view) => {
+                        // the answers to hovers were about the options before
+                        self.config_ui.forget_hover();
+                        self.config = Some(view);
+                    }
                     Snapshot::Calcs(_) => self.calcs.on_snapshot(&snapshot),
                     Snapshot::Skills(_)
                     | Snapshot::SocketGroupText(_)
                     | Snapshot::GroupTooltip(_)
                     | Snapshot::GemSearch(_)
                     | Snapshot::GemTooltip(_) => self.skills.on_snapshot(&snapshot),
+                    // the Skills and Config tabs each keep the answers to their own hovers
+                    Snapshot::HoverTooltip(view) => {
+                        self.skills
+                            .on_snapshot(&Snapshot::HoverTooltip(view.clone()));
+                        self.config_ui.on_hover(&view);
+                    }
                     Snapshot::Items(_)
                     | Snapshot::DisplayItem(_)
                     | Snapshot::ItemTooltip(_)
                     | Snapshot::ItemText(_)
                     | Snapshot::ItemDb(_) => self.items.on_snapshot_at(&snapshot, seq),
                     Snapshot::Breakdown(_) => self.calcs.on_snapshot(&snapshot),
-                    Snapshot::Popup(_) => self.popup.on_snapshot_at(&snapshot, seq),
+                    Snapshot::Popup(_) => self.on_popup_snapshot(&snapshot, seq),
                     // the popup window, the display panel and the database panel each keep the
                     // answers to their own questions
                     Snapshot::ControlTooltip(_) => {
-                        self.popup.on_snapshot_at(&snapshot, seq);
+                        self.on_popup_snapshot(&snapshot, seq);
                         self.items.on_snapshot_at(&snapshot, seq);
                     }
                     Snapshot::Notes(_) => self.notes.on_snapshot(&snapshot, seq),
                     Snapshot::Requests(view) => self.on_requests(&view),
+                    Snapshot::Settings(view) => self.on_settings(&view, seq),
                     // the Import tab keeps its own
                     Snapshot::Share(_) | Snapshot::ShareCode(_) | Snapshot::Account(_) => {}
+                    // the Compare tab took it above
+                    Snapshot::Compare(_) => {}
+                    Snapshot::ExternalUrl(link) => self.trade_link.on_link(seq, &link.url),
+                    Snapshot::Help(view) => self.help.on_view(view),
                     // power results of the build being left
                     Snapshot::NodePower(_) | Snapshot::PowerReport(_)
                         if self.entering.is_some() => {}
@@ -383,6 +719,14 @@ impl AutoPobApp {
                 message,
             } => self.popup.on_failed(message),
             Event::Progress {
+                task: BackgroundTask::Timeless,
+                percent,
+            } => self.popup.on_search_progress(percent),
+            Event::BackgroundFailed {
+                task: BackgroundTask::Timeless,
+                message,
+            } => self.popup.on_search_failed(message),
+            Event::Progress {
                 task: BackgroundTask::ItemDb,
                 percent,
             } => self.items.on_db_progress(percent),
@@ -395,6 +739,8 @@ impl AutoPobApp {
                 self.tree.power_failed();
                 self.notices.push(message);
             }
+            // PoB's message popups (TreeTab:610's "Tree Converted") become notices
+            Event::Message { title, text } => self.notices.push(format!("{title}: {text}")),
         }
     }
 
@@ -407,8 +753,13 @@ impl AutoPobApp {
         self.popup.reset();
         self.popup_tab = None;
         self.sidebar = sidebar::SidebarState::default();
+        self.top_bar = build::TopBarState::default();
         self.notes.reset();
+        self.config_ui.reset();
         self.import_ui.reset();
+        self.compare.reset();
+        // the engine dropped the overlay with the comparisons
+        self.compare_overlay = false;
     }
 
     /// A network step replaced the build (R14): the build screen starts over, as for
@@ -431,7 +782,14 @@ impl AutoPobApp {
                 self.notices.push(format!("{}: {error}", done.label));
             }
         }
-        if view.finished.iter().any(|f| f.new_build) {
+        // a link whose build PoB couldn't open: a new one stands in, which PoB never shows
+        if view
+            .finished
+            .iter()
+            .any(|f| f.new_build && f.error.is_some() && !f.cancelled)
+        {
+            self.on_failed_open();
+        } else if view.finished.iter().any(|f| f.new_build) {
             // the step's other views follow this one (the engine sends the requests first)
             self.reset_for_new_build();
         }
@@ -444,12 +802,30 @@ impl AutoPobApp {
     }
 
     fn on_error(&mut self, seq: u64, message: String) {
+        // the Help window says it itself
+        if self.help.on_error(seq, &message) {
+            return;
+        }
+        if let Some(dialog) = &mut self.save_as
+            && let Some((_, back)) = dialog.new_folder.take_if(|(s, _)| *s == seq)
+        {
+            dialog.folder = back;
+        }
+        if self.list_move_seq == Some(seq) {
+            self.list_move_seq = None;
+            self.list_ui.move_refused();
+        }
         self.import_ui.on_error(seq);
+        if self.import_seq == Some(seq) || self.entering == Some(seq) {
+            let generation = self.build.as_ref().map_or(0, |b| b.generation);
+            self.failed_open = Some((seq, generation));
+        }
         if self.import_seq == Some(seq) {
             self.import_seq = None;
         }
         // the window stays open for another try (R4)
         self.popup.on_error(seq);
+        self.options.on_error(seq);
         if self.text_seq == Some(seq) {
             self.text_seq = None;
             // the raw-text window stays open for another try
@@ -523,6 +899,9 @@ impl AutoPobApp {
         if let Some(command) = self.sidebar.flush() {
             self.send(command);
         }
+        if let Some(command) = self.top_bar.flush() {
+            self.send(command);
+        }
         if let Some(command) = self.calcs.flush() {
             self.send(command);
         }
@@ -535,6 +914,9 @@ impl AutoPobApp {
         if let Some(command) = self.popup.flush() {
             self.send(command);
         }
+        if let Some(command) = self.options.window.flush() {
+            self.send(command);
+        }
     }
 
     fn run_action(&mut self, ctx: &egui::Context, action: Pending) {
@@ -544,15 +926,7 @@ impl AutoPobApp {
                 self.allow_close = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-            Pending::BackToList => {
-                self.screen = Screen::List;
-                // the heat map would go on calculating for a build nobody is looking at
-                if let Some(stop) = self.tree.stop_heatmap() {
-                    self.send(stop);
-                }
-                let folder = self.list_folder();
-                self.send(Command::ListBuilds { folder });
-            }
+            Pending::BackToList => self.back_to_list(),
             Pending::Open(path) => self.enter_build(Command::OpenBuild { path }),
             Pending::New => self.enter_build(Command::NewBuild),
             Pending::ImportNew(url) => {
@@ -562,6 +936,27 @@ impl AutoPobApp {
                 });
             }
         }
+    }
+
+    fn back_to_list(&mut self) {
+        self.screen = Screen::List;
+        // the heat map would go on calculating for a build nobody is looking at
+        if let Some(stop) = self.tree.stop_heatmap() {
+            self.send(stop);
+        }
+        let folder = self.list_folder();
+        self.send(Command::ListBuilds { folder });
+    }
+
+    /// An open or import failed after PoB's Init ran: the engine put a new build in the failed
+    /// one's place. PoB shows its build list, with its message (already a notice), so the app
+    /// does too, and forgets the old build's tab state.
+    fn on_failed_open(&mut self) {
+        self.entering = None;
+        self.import_seq = None;
+        self.reset_build_state();
+        self.tab = BuildTab::default();
+        self.back_to_list();
     }
 
     /// Sends a command that loads a different build and shows the build screen when it's done.
@@ -599,6 +994,8 @@ impl AutoPobApp {
             then,
             confirm_overwrite: false,
             waiting: false,
+            picker: FolderPicker::default(),
+            new_folder: None,
         });
     }
 
@@ -623,15 +1020,25 @@ impl AutoPobApp {
         });
     }
 
+    /// The engine history Undo and Redo work on here, if any.
+    fn undo_tab(&self) -> Option<Tab> {
+        match self.tab {
+            BuildTab::Config => Some(Tab::Config),
+            BuildTab::Tree => Some(Tab::Tree),
+            BuildTab::Skills => Some(Tab::Skills),
+            BuildTab::Items => Some(Tab::Items),
+            BuildTab::Calcs => Some(Tab::Calcs),
+            // the Compare tab's Tree view edits our tree, as the Tree tab does
+            BuildTab::Compare if self.compare.tree_shown() => Some(Tab::Tree),
+            // the notes editor keeps its own history; the Compare tab's copies use the
+            // target tab's undo (R8)
+            BuildTab::Notes | BuildTab::Compare | BuildTab::Import => None,
+        }
+    }
+
     fn undo_redo(&mut self, redo: bool) {
-        let tab = match self.tab {
-            BuildTab::Config => Tab::Config,
-            BuildTab::Tree => Tab::Tree,
-            BuildTab::Skills => Tab::Skills,
-            BuildTab::Items => Tab::Items,
-            BuildTab::Calcs => Tab::Calcs,
-            // the notes editor keeps its own history
-            BuildTab::Notes | BuildTab::Import => return,
+        let Some(tab) = self.undo_tab() else {
+            return;
         };
         self.send(if redo {
             Command::Redo(tab)
@@ -646,6 +1053,8 @@ impl AutoPobApp {
     pub fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.process_events();
+        crate::widgets::scroll_step::set_options(&ctx, self.scroll_options);
+        self.right_click_paste(&ctx);
 
         // closing the window with unsaved changes asks first
         if ctx.input(|i| i.viewport().close_requested())
@@ -657,6 +1066,9 @@ impl AutoPobApp {
             self.prompt = Some(Pending::Close);
             // the prompt sits under the window's modal layer, so the window goes first
             if let Some(command) = self.popup.close() {
+                self.send(command);
+            }
+            for command in self.options.close() {
                 self.send(command);
             }
         }
@@ -691,6 +1103,11 @@ impl AutoPobApp {
         if let Some(url) = self.import_ui.take_open_url() {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
+        // the user's own press asked for it; PoB copies it too (R20)
+        if let Some(url) = self.trade_link.take() {
+            ctx.open_url(egui::OpenUrl::new_tab(url.clone()));
+            ctx.copy_text(url);
+        }
         self.ask_about_startup_link();
         if let Some(rx) = &self.release_rx
             && let Ok(release) = rx.try_recv()
@@ -699,11 +1116,157 @@ impl AutoPobApp {
         }
         self.notices_panel(ui);
         self.pending_panel(ui);
+        self.main_labels(ui);
+        // the app's own windows sit above the screen's: Esc is theirs while one is open
+        crate::widgets::escape::hold(&ctx, self.app_window_open());
         match self.screen {
             Screen::List => self.list_screen(ui),
             Screen::Build => self.build_screen(ui),
         }
+        crate::widgets::escape::hold(&ctx, false);
+        self.options_window(ui);
+        self.help_window(&ctx);
+        self.apply_ui_settings(&ctx);
         self.dialogs(&ctx);
+    }
+
+    /// The Help window, and the fetch of PoB's help files its button asks for (I3): no
+    /// request is made without that click.
+    fn help_window(&mut self, ctx: &egui::Context) {
+        if self.help.show(ctx) && self.help_rx.is_none() {
+            match &self.help_download {
+                Some(download) => {
+                    self.help_rx = Some(download());
+                    self.help.download_started();
+                }
+                None => {
+                    self.help
+                        .download_done(Err("downloading isn't available here".into()));
+                }
+            }
+        }
+        if let Some(rx) = &self.help_rx
+            && let Ok(result) = rx.try_recv()
+        {
+            self.help_rx = None;
+            if let Some(query) = self.help.download_done(result) {
+                let seq = self.engine.send(query);
+                self.help.asked(seq);
+            }
+        }
+    }
+
+    /// Opens PoB's About window at `start`; its text is asked of the engine the first time.
+    /// A question: it never leaves the app waiting.
+    fn open_help(&mut self, start: HelpStart) {
+        if let Some(query) = self.help.open(start) {
+            #[cfg(test)]
+            self.sent_log.push("Help".into());
+            let seq = self.engine.send(query);
+            self.help.asked(seq);
+        }
+    }
+
+    /// What F1 would open on the wiki on this tab: the hovered node, item or gem.
+    fn wiki_target(&self) -> Option<String> {
+        match self.tab {
+            BuildTab::Tree => self.tree.hovered_wiki(),
+            BuildTab::Items => self.items.hovered_wiki(),
+            BuildTab::Skills => self.skills.hovered_wiki(),
+            _ => None,
+        }
+    }
+
+    /// Carries out a shortcut of the build screen; Ctrl+W and Mouse4 come back as Back.
+    fn run_shortcut(&mut self, ctx: &egui::Context, action: ShortcutAction) -> Option<BuildAction> {
+        use ShortcutAction as A;
+        match action {
+            A::Tab(tab) => self.tab = tab,
+            A::Import => {
+                self.tab = BuildTab::Import;
+                self.import_ui.focus_code();
+            }
+            A::Close => return Some(BuildAction::Back),
+            A::Help => self.open_help(HelpStart::Tab(help::tab_name(Some(self.tab)))),
+            // the user's own key asked for it (R20)
+            A::Wiki(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
+            A::Search => match self.tab {
+                BuildTab::Tree => self.tree.focus_search(),
+                BuildTab::Config => self.config_ui.focus_search = true,
+                BuildTab::Compare => self.compare.focus_search(),
+                BuildTab::Items => {
+                    if let Some(command) = self.items.focus_db_search(ctx) {
+                        self.send(command);
+                    }
+                }
+                _ => {}
+            },
+            A::CopyNode => {
+                if let Some(text) = self.tree.hovered_node_text() {
+                    ctx.copy_text(text);
+                }
+            }
+            A::EditSlot => {
+                if let Some(command) = self.items.edit_hovered_slot() {
+                    self.send(command);
+                }
+            }
+            tree => {
+                if let Some(command) = self.tree.on_shortcut(&tree, ctx) {
+                    self.send(command);
+                }
+            }
+        }
+        None
+    }
+
+    /// PoB's right-click into a text box selects it and pastes the clipboard there
+    /// (EditControl.lua:527). The box under the pointer is last frame's; it takes the focus
+    /// now and the paste at the next frame's start, when it has it.
+    fn right_click_paste(&mut self, ctx: &egui::Context) {
+        if let Some(text) = self.paste_next.take() {
+            ctx.input_mut(|i| i.events.insert(0, egui::Event::Paste(text)));
+        }
+        if !ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
+            return;
+        }
+        let Some(read) = &self.clipboard_read else {
+            return;
+        };
+        let hovered: Vec<egui::Id> =
+            ctx.interaction_snapshot(|s| s.hovered.iter().copied().collect());
+        let target = hovered
+            .into_iter()
+            .find(|id| egui::TextEdit::load_state(ctx, *id).is_some())
+            // a read-only or disabled box takes no paste (EditControl.lua:438)
+            .filter(|id| {
+                ctx.read_response(*id)
+                    .is_some_and(|r| r.enabled() && r.sense.senses_click())
+            });
+        if let Some(id) = target
+            && let Some(text) = read().filter(|t| !t.is_empty())
+        {
+            ctx.memory_mut(|m| m.request_focus(id));
+            self.paste_next = Some(text.replace("\r\n", "\n"));
+            ctx.request_repaint();
+        }
+    }
+
+    /// PoB's labels at the foot of every screen (Main.lua:230-237): the fork and its version.
+    fn main_labels(&mut self, ui: &mut egui::Ui) {
+        let grey = crate::widgets::pob_text::pob_colour("^8", ui.visuals().weak_text_color());
+        egui::Panel::bottom("pob_labels").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let fork = "PoB Community Fork".to_owned();
+                let version = format!("Version: {}", self.pob_version);
+                ui.colored_label(grey, &fork);
+                ui.colored_label(grey, &version);
+                #[cfg(test)]
+                {
+                    self.label_texts = vec![fork, version];
+                }
+            });
+        });
     }
 
     /// The `pob://` argument never imports by itself: the user is asked first (R4).
@@ -830,23 +1393,130 @@ impl AutoPobApp {
     }
 
     fn list_screen(&mut self, ui: &mut egui::Ui) {
+        // a Game Version window met on the list (the build PoB opened at start) is cancelled:
+        // PoB's Cancel goes to the list, where the user already is (Build.lua:1344-1347)
+        if matches!(self.popup.kind(), Some(PopupKind::GameVersion))
+            && self.list.as_ref().is_some_and(|l| !l.build_open)
+            && let Some(command) = self.popup.close()
+        {
+            self.send(command);
+        }
+        // PoB's edit box has no Ctrl+W (EditControl.lua:500-640): egui's word delete never
+        // sees it
+        strip_ctrl_w(ui);
         self.release_banner(ui);
         let mut action = None;
+        let blocked = self.prompt.is_some()
+            || self.save_as.is_some()
+            || self.import.is_some()
+            || self.confirm.is_some()
+            || self.popup.is_blocking()
+            || self.options.window.is_blocking()
+            || self.help.is_open();
+        crate::widgets::scroll_step::set_scope(
+            ui.ctx(),
+            crate::widgets::scroll_step::FocusScope {
+                typing: ui.ctx().text_edit_focused(),
+                modal: blocked,
+                ..Default::default()
+            },
+        );
+        // F1: the Help window ("Build List tab" matches no section: the first, Main.lua:441)
+        let state = ShortcutState {
+            typing: ui.ctx().text_edit_focused(),
+            modal: blocked,
+            ..ShortcutState::default()
+        };
+        let shortcut = ui.input_mut(|i| {
+            let a = shortcuts::shortcut_action(&state, i);
+            if let Some(a) = &a {
+                shortcuts::consume(a, i);
+            }
+            a
+        });
+        if shortcut == Some(ShortcutAction::Help) {
+            self.open_help(HelpStart::Tab(help::tab_name(None)));
+        }
         egui::CentralPanel::default().show(ui, |ui| match self.list.clone() {
-            Some(view) => action = self.list_ui.show(ui, &view),
+            Some(view) => action = self.list_ui.show(ui, &view, blocked),
             None => {
                 ui.spinner();
             }
         });
+        if let Some(action) = action {
+            self.on_list_action(action);
+        }
+    }
+
+    fn on_list_action(&mut self, action: ListScreenAction) {
         match action {
-            Some(ListScreenAction::OpenFolder(folder)) => {
+            ListScreenAction::OpenFolder(folder) => {
                 self.send(Command::ListBuilds { folder });
             }
-            Some(ListScreenAction::OpenBuild(path)) => self.request(Pending::Open(path)),
-            Some(ListScreenAction::New) => self.request(Pending::New),
-            Some(ListScreenAction::Import) => self.import = Some(String::new()),
-            None => {}
+            ListScreenAction::OpenBuild(path) => self.request(Pending::Open(path)),
+            ListScreenAction::New => self.request(Pending::New),
+            ListScreenAction::Import => self.import = Some(String::new()),
+            ListScreenAction::Options => self.open_options(),
+            // a refusal comes back as PoB's own text and is shown like any other error
+            ListScreenAction::NewFolder(name) => {
+                self.send(Command::NewFolder { name });
+            }
+            ListScreenAction::Rename { path, name } => {
+                self.send(Command::RenameBuild { path, name });
+            }
+            ListScreenAction::Copy { path, name } => {
+                self.send(Command::CopyBuild { path, name });
+            }
+            ListScreenAction::Delete { path, kind } => {
+                self.send(Command::DeleteBuild { path, kind });
+            }
+            ListScreenAction::Move { path, folder } => {
+                let seq = self.send(Command::MoveBuild { path, folder });
+                self.list_move_seq = Some(seq);
+            }
+            ListScreenAction::CopyTo { path, folder } => {
+                self.send(Command::CopyBuildTo { path, folder });
+            }
+            ListScreenAction::SetSort(sort) => {
+                self.send(Command::SetBuildSort { sort });
+            }
+            ListScreenAction::SetFilter(text) => {
+                self.send(Command::SetBuildFilter { text });
+            }
+            ListScreenAction::About => self.open_help(HelpStart::VersionHistory),
         }
+    }
+
+    /// One of the app's own windows is open, drawn after the screen and above its windows:
+    /// the questions, Save as, Import code, a popup session, Options and Help. The top bar's
+    /// Set Name takes its own Esc before the tabs' windows are drawn.
+    fn app_window_open(&self) -> bool {
+        self.top_bar.has_dialog()
+            || self.prompt.is_some()
+            || self.save_as.is_some()
+            || self.import.is_some()
+            || self.confirm.is_some()
+            || self.popup.is_blocking()
+            || self.options.window.is_blocking()
+            || self.help.is_open()
+    }
+
+    /// A window is open on the build screen that PoB would hold as a popup: nothing behind
+    /// it gets a key (Main.lua:365-367)
+    fn modal(&self) -> bool {
+        self.prompt.is_some()
+            || self.save_as.is_some()
+            || self.import.is_some()
+            || self.confirm.is_some()
+            || self.tree.has_dialog()
+            || self.skills.has_dialog()
+            || self.items.has_dialog()
+            || self.compare.has_dialog()
+            || self.top_bar.has_dialog()
+            || self.popup.is_blocking()
+            || self.options.window.is_blocking()
+            // PoB's About is a popup too
+            || self.help.is_open()
     }
 
     fn build_screen(&mut self, ui: &mut egui::Ui) {
@@ -863,14 +1533,10 @@ impl AutoPobApp {
 
         // Shortcuts. Nothing fires under a modal. While a text field has focus, Ctrl+Z and
         // Ctrl+Y are left unconsumed for the field's own undo; Ctrl+S still saves.
-        let modal = self.prompt.is_some()
-            || self.save_as.is_some()
-            || self.import.is_some()
-            || self.confirm.is_some()
-            || self.tree.has_dialog()
-            || self.skills.has_dialog()
-            || self.items.has_dialog()
-            || self.popup.is_blocking();
+        let modal = self.modal();
+        // a dropped list of the top bar's or the sidebar's is Build's selected control: it
+        // takes every key, as a Build box does (Build.lua:1230, ControlHost.lua:35-45)
+        let build_dropped = crate::widgets::scroll_step::take_build_dropped(ui.ctx());
         // a focused button or row doesn't take Ctrl+Z from the tab
         let typing = ui.ctx().text_edit_focused();
         let mut action = None;
@@ -881,7 +1547,7 @@ impl AutoPobApp {
                 if i.consume_key(command, egui::Key::S) {
                     action = Some(BuildAction::Save);
                 }
-                if !typing && self.tab.has_undo() {
+                if !typing && self.undo_tab().is_some() {
                     // the Shift variant first: `consume_key` ignores extra Shift
                     if i.consume_key(shift, egui::Key::Z) || i.consume_key(command, egui::Key::Y) {
                         action = action.or(Some(BuildAction::Redo));
@@ -891,29 +1557,102 @@ impl AutoPobApp {
                 }
             });
         }
+        // PoB's other shortcuts (R25)
+        let ctx = ui.ctx().clone();
+        let build_box = build_dropped
+            || (typing
+                && ctx
+                    .memory(|m| m.focused())
+                    .and_then(|id| ctx.read_response(id))
+                    .is_some_and(|r| self.bar_rects.iter().any(|b| b.contains(r.rect.center()))));
+        let typing = typing || build_dropped;
+        // the dropdowns and sliders hold their keys while their host has a box focused, and
+        // the panels' ones under a window
+        crate::widgets::scroll_step::set_scope(
+            &ctx,
+            crate::widgets::scroll_step::FocusScope {
+                typing,
+                build_box,
+                build_host: false,
+                modal,
+            },
+        );
+        // under a window only the gem list's own rows open a page
+        let wiki = if modal {
+            (self.tab == BuildTab::Skills && self.skills.picker_open())
+                .then(|| self.skills.hovered_wiki())
+                .flatten()
+        } else {
+            self.wiki_target()
+        };
+        let state = ShortcutState {
+            tab: Some(self.tab),
+            typing,
+            modal,
+            spec_select_busy: self.tree.spec_select_busy(),
+            wiki,
+            build_box,
+            copy_node: self.tab == BuildTab::Tree && self.tree.hovered_node_text().is_some(),
+            hover_wiki: self.tab != BuildTab::Tree,
+        };
+        let shortcut = ui.input_mut(|i| {
+            let a = shortcuts::shortcut_action(&state, i);
+            // while typing PoB's keys reach the box too
+            if let Some(a) = &a
+                && !typing
+            {
+                shortcuts::consume(a, i);
+            }
+            a
+        });
+        // PoB's edit box has no Ctrl+W (EditControl.lua:500-640): it closes the build and
+        // edits nothing, so egui's word delete never sees it, under a window too
+        strip_ctrl_w(ui);
+        if let Some(shortcut) = shortcut {
+            action = self.run_shortcut(ui.ctx(), shortcut).or(action);
+        }
 
-        egui::Panel::top("top_bar").show(ui, |ui| {
-            let history = match self.tab {
-                BuildTab::Tree => self.tree.history(),
-                BuildTab::Skills => self.skills.history(),
-                BuildTab::Items => self.items.history(),
-                BuildTab::Calcs => self.calcs.history(),
+        let behind = self.behind();
+        let mut top_commands = Vec::new();
+        // the top bar and the sidebar are Build's own controls (Build.lua:1230)
+        crate::widgets::scroll_step::set_build_host(ui.ctx(), true);
+        let top = egui::Panel::top("top_bar").show(ui, |ui| {
+            let history = match self.undo_tab() {
+                Some(Tab::Tree) => self.tree.history(),
+                Some(Tab::Skills) => self.skills.history(),
+                Some(Tab::Items) => self.items.history(),
+                Some(Tab::Calcs) => self.calcs.history(),
                 _ => (view.can_undo, view.can_redo),
             };
-            action = build::top_bar(ui, &view, self.tab, history).or(action);
+            let undo = self.undo_tab().is_some();
+            let out = build::top_bar(
+                ui,
+                &view,
+                undo,
+                history,
+                &mut self.top_bar,
+                &mut self.tree,
+                behind,
+            );
+            action = out.action.or(action);
+            top_commands = out.commands;
         });
-        let behind = self.behind();
+        for command in top_commands {
+            self.send(command);
+        }
         self.skills.set_modal(modal);
         self.items.set_modal(modal);
         self.import_ui.set_modal(modal);
         let mut sidebar_commands = Vec::new();
-        egui::Panel::left("stats_sidebar")
+        let side = egui::Panel::left("stats_sidebar")
             .resizable(true)
             .default_size(300.0)
             .show(ui, |ui| {
                 sidebar_commands =
                     sidebar::show(ui, self.stats.as_deref(), behind, &mut self.sidebar);
             });
+        self.bar_rects = vec![top.response.rect, side.response.rect];
+        crate::widgets::scroll_step::set_build_host(ui.ctx(), false);
         for command in sidebar_commands {
             self.send(command);
         }
@@ -925,6 +1664,7 @@ impl AutoPobApp {
         let mut items_out = ItemsOutput::default();
         let mut notes_command = None;
         let mut import_out = ImportOutput::default();
+        let mut compare_out = CompareOutput::default();
         let config = self.config.clone();
         egui::CentralPanel::default().show(ui, |ui| {
             build::tab_strip(ui, &mut self.tab);
@@ -947,6 +1687,14 @@ impl AutoPobApp {
                     let now = ui.input(|i| i.time);
                     notes_command = self.notes.show(ui, now);
                 }
+                BuildTab::Compare => {
+                    compare_out = self.compare.show(ui, behind);
+                    // R7's overlay: our tree, coloured against the comparison
+                    if compare_out.tree {
+                        self.tree.set_enabled_sockets(self.items.enabled_sockets());
+                        tree_out = self.tree.show_compare(ui, behind);
+                    }
+                }
                 BuildTab::Import => {
                     let now = epoch_now();
                     import_out = self.import_ui.show(ui, now);
@@ -962,7 +1710,12 @@ impl AutoPobApp {
             }
         });
         for command in config_commands {
-            self.send(command);
+            // a hover is a question: it never leaves the app waiting
+            if matches!(command, Command::HoverTooltip(_)) {
+                self.engine.send(command);
+            } else {
+                self.send(command);
+            }
         }
         if let Some(command) = notes_command {
             self.send(command);
@@ -976,8 +1729,31 @@ impl AutoPobApp {
         {
             self.send(command);
         }
-        if self.tab != BuildTab::Tree {
-            self.tree.close_dialog();
+        // the Items tab's Manage Passive Trees window keeps its own dialogs
+        if self.tab != BuildTab::Tree && !self.tree.spec_manager_open() {
+            // the Compare tab's tree view asks the Class Change question too
+            let compare_tree = self.tab == BuildTab::Compare && self.compare.tree_shown();
+            self.tree.close_dialog_off_tab(compare_tree);
+        }
+        if self.tab != BuildTab::Compare {
+            // leaving the tab sends a count still being typed and closes its windows
+            if let Some(command) = self.compare.flush() {
+                self.send(command);
+            }
+            self.compare.close_dialog();
+        }
+        for command in compare_out.commands {
+            self.send(command);
+        }
+        // questions never leave the app waiting
+        for query in compare_out.queries {
+            self.engine.send(query);
+        }
+        // the overlay is on while the Compare tab's Tree view shows (R7)
+        let overlay = self.tab == BuildTab::Compare && self.compare.tree_shown();
+        if overlay != self.compare_overlay {
+            self.compare_overlay = overlay;
+            self.send(Command::SetCompareOverlay { on: overlay });
         }
         if self.tab != BuildTab::Skills {
             // leaving the tab sends an edit still being typed and closes its dialogs
@@ -998,8 +1774,11 @@ impl AutoPobApp {
                 self.send(command);
             }
         }
+        // PoB's Game Version window is main's, not a tab's (Build.lua:1323-1350): no tab
+        // switch ends it
+        let game_version = matches!(self.popup.kind(), Some(PopupKind::GameVersion));
         // leaving the tab that opened the window ends its session
-        if self.popup.is_open() && self.popup_tab != Some(self.tab) {
+        if self.popup.is_open() && self.popup_tab != Some(self.tab) && !game_version {
             for command in self.popup.flush().into_iter().chain(self.popup.close()) {
                 self.send(command);
             }
@@ -1010,12 +1789,37 @@ impl AutoPobApp {
         } else {
             popup::PopupOutput::default()
         };
+        // the Game Version window ending any way but Convert is PoB's Cancel, which goes back
+        // to the build list (Build.lua:1344-1347)
+        let mut to_list = false;
         for command in popup_out.commands {
+            to_list |= game_version
+                && match &command {
+                    Command::PressPopupButton { name } => name != "convert",
+                    Command::ClosePopup => true,
+                    _ => false,
+                };
             self.send(command);
+        }
+        if to_list {
+            self.run_action(ui.ctx(), Pending::BackToList);
         }
         // questions never leave the app waiting
         for query in popup_out.queries {
             self.engine.send(query);
+        }
+        // the Items tab's "Manage..." under its tree dropdown: PoB's Manage Passive Trees window
+        if items_out.manage_trees {
+            self.tree.open_spec_manager();
+        }
+        // the Tree tab draws its own; on the Items tab it is that tab's window, and leaving
+        // for any other tab closes it
+        if self.tab == BuildTab::Items {
+            for command in self.tree.spec_manager(ui.ctx()) {
+                self.send(command);
+            }
+        } else if self.tab != BuildTab::Tree && self.tree.spec_manager_open() {
+            self.tree.close_spec_manager();
         }
         for command in items_out.commands {
             let is_text = matches!(command, Command::SetDisplayItemText { .. });
@@ -1049,6 +1853,10 @@ impl AutoPobApp {
             self.engine.send(query);
         }
 
+        // the Calcs sections popped out float over every tab, as PoB's overlay panes (R24)
+        if self.tab != BuildTab::Calcs {
+            calcs_out.commands.extend(self.calcs.show_popouts(ui.ctx()));
+        }
         for command in calcs_out.commands {
             self.send(command);
         }
@@ -1071,6 +1879,9 @@ impl AutoPobApp {
             Some(BuildAction::SaveAs) => self.open_save_as(None),
             Some(BuildAction::Undo) => self.undo_redo(false),
             Some(BuildAction::Redo) => self.undo_redo(true),
+            Some(BuildAction::Options) => self.open_options(),
+            Some(BuildAction::Help) => self.open_help(HelpStart::Section(7)),
+            Some(BuildAction::About) => self.open_help(HelpStart::VersionHistory),
             None => {}
         }
     }
@@ -1122,7 +1933,9 @@ impl AutoPobApp {
         let Some(confirm) = &self.confirm else {
             return;
         };
-        let mut choice = None;
+        // Esc answers No, as PoB's confirm popup (PopupDialog.lua:72-77)
+        let window = egui::Id::unique("app_confirm");
+        let mut choice = crate::widgets::escape::escape(ctx, window).then_some(false);
         // modal: the screen behind can't be used while the question is open, so the answer
         // is about the state the question was asked in
         egui::Modal::new(self.confirm_id).show(ctx, |ui| {
@@ -1143,6 +1956,7 @@ impl AutoPobApp {
                 });
             }
         });
+        crate::widgets::escape::note(ctx, window);
         if let Some(yes) = choice {
             self.answer_confirm(yes);
         }
@@ -1185,7 +1999,10 @@ impl AutoPobApp {
         let Some(pending) = self.prompt.clone() else {
             return;
         };
-        let mut choice = None;
+        // Esc is the Cancel (PopupDialog.lua:72-77)
+        let window = egui::Id::unique("app_unsaved");
+        let mut choice =
+            crate::widgets::escape::escape(ctx, window).then_some(PromptChoice::Cancel);
         egui::Window::new("Unsaved changes")
             .collapsible(false)
             .resizable(false)
@@ -1208,9 +2025,15 @@ impl AutoPobApp {
                     }
                 });
             });
+        crate::widgets::escape::note(ctx, window);
         let Some(choice) = choice else {
             return;
         };
+        self.answer_prompt(pending, choice);
+    }
+
+    /// The unsaved prompt's answer for what was about to happen.
+    fn answer_prompt(&mut self, pending: Pending, choice: PromptChoice) {
         self.prompt = None;
         let has_path = self.build.as_ref().is_some_and(|b| b.path.is_some());
         match resolve(choice, has_path) {
@@ -1221,6 +2044,7 @@ impl AutoPobApp {
                 self.notes.discard();
                 self.skills.discard();
                 self.sidebar.discard();
+                self.top_bar.discard();
                 self.calcs.discard();
                 self.ready_actions.push(pending);
             }
@@ -1234,21 +2058,24 @@ impl AutoPobApp {
         };
         let mut submit = false;
         let mut overwrite = false;
-        let mut cancel = false;
+        // Esc is the Cancel, once the name box is left (PopupDialog.lua:72-77)
+        let window = egui::Id::unique("app_save_as");
+        let mut cancel = !dialog.waiting && crate::widgets::escape::escape(ctx, window);
+        let mut picker_out = None;
+        let list = self.list.clone();
         egui::Window::new("Save as")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.add_enabled_ui(!dialog.waiting, |ui| {
-                    ui.label(format!(
-                        "Folder: Builds/{}",
-                        dialog.folder.trim_end_matches('/')
-                    ));
                     let name = ui
                         .add(egui::TextEdit::singleline(&mut dialog.name).hint_text("Build name"));
                     if name.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         submit = true;
+                    }
+                    if let Some(view) = &list {
+                        picker_out = dialog.picker.show(ui, &mut dialog.folder, view);
                     }
                     if dialog.confirm_overwrite {
                         ui.colored_label(
@@ -1282,6 +2109,13 @@ impl AutoPobApp {
                     }
                 });
             });
+        crate::widgets::escape::note(ctx, window);
+        if let Some(out) = picker_out {
+            self.on_picker(out);
+        }
+        let Some(dialog) = &mut self.save_as else {
+            return;
+        };
         if cancel {
             self.save_as = None;
         } else if overwrite {
@@ -1291,12 +2125,42 @@ impl AutoPobApp {
         }
     }
 
+    /// What the Save As folder list asked for. A refusal comes back as the engine's own text.
+    fn on_picker(&mut self, out: PickerOutput) {
+        match out {
+            PickerOutput::Notice(text) => self.notices.push(text),
+            PickerOutput::DeleteFolder(path) => {
+                let Some(root) = self.list.as_ref().map(|l| l.root.clone()) else {
+                    return;
+                };
+                let full = format!("{}{}", root.display(), path.trim_end_matches('/'));
+                self.send(Command::DeleteBuild {
+                    path: full.into(),
+                    kind: DeleteKind::EmptyFolder,
+                });
+            }
+            PickerOutput::NewFolder { folder, name } => {
+                let seq = self.send(Command::NewFolderIn {
+                    folder: folder.clone(),
+                    name: name.clone(),
+                });
+                // PoB goes into the folder it made; if that fails the dialog comes back
+                if let Some(dialog) = &mut self.save_as {
+                    dialog.new_folder = Some((seq, folder.clone()));
+                    dialog.folder = format!("{folder}{name}/");
+                }
+            }
+        }
+    }
+
     fn import_dialog(&mut self, ctx: &egui::Context) {
         let Some(text) = &mut self.import else {
             return;
         };
         let mut import = false;
-        let mut cancel = false;
+        // Esc is the Cancel, once the code box is left (PopupDialog.lua:72-77)
+        let window = egui::Id::unique("app_import_code");
+        let mut cancel = crate::widgets::escape::escape(ctx, window);
         egui::Window::new("Import code")
             .collapsible(false)
             .resizable(false)
@@ -1320,6 +2184,7 @@ impl AutoPobApp {
                     }
                 });
             });
+        crate::widgets::escape::note(ctx, window);
         if import {
             let code = std::mem::take(text);
             self.import = None;
@@ -1358,6 +2223,27 @@ impl eframe::App for AutoPobApp {
     }
 }
 
+#[cfg(test)]
+#[path = "app_options_tests.rs"]
+mod options_tests;
+
+#[cfg(test)]
+#[path = "app_compare_tests.rs"]
+mod compare_tests;
+
+#[cfg(test)]
+#[path = "app_trade_tests.rs"]
+mod trade_tests;
+
+/// Takes Ctrl+W out of the frame, so no text box deletes a word on it
+fn strip_ctrl_w(ui: &egui::Ui) {
+    ui.input_mut(|i| {
+        i.events.retain(|e| {
+            !matches!(e, egui::Event::Key { key: egui::Key::W, modifiers, .. }
+                if modifiers.command || modifiers.ctrl)
+        })
+    });
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1489,6 +2375,10 @@ mod tests {
                         ..Affected::default()
                     })
                 }
+                Command::Help => Ok(Affected {
+                    help: true,
+                    ..Affected::default()
+                }),
                 _ => Ok(Affected::default()),
             }
         }
@@ -1507,6 +2397,7 @@ mod tests {
                 unsaved: self.unsaved,
                 can_undo: true,
                 can_redo: false,
+                ..BuildView::default()
             })
         }
 
@@ -1518,14 +2409,19 @@ mod tests {
             let entry = |name: &str, is_folder| BuildListEntry {
                 name: name.into(),
                 is_folder,
+                folder: self.folder.clone(),
                 path: format!("/b/{}{name}.xml", self.folder).into(),
                 class: Some("Witch".into()),
                 ascendancy: None,
                 level: Some(90),
+                delete_prompt: String::new(),
             };
             Ok(BuildListView {
                 folder: self.folder.clone(),
                 entries: vec![entry("sub", true), entry("one", false), entry("bad", false)],
+                sort: Default::default(),
+                filter: String::new(),
+                ..Default::default()
             })
         }
 
@@ -1711,6 +2607,7 @@ mod tests {
             Ok(crate::engine::ItemText {
                 id,
                 text: String::new(),
+                shared: false,
             })
         }
 
@@ -1767,8 +2664,65 @@ mod tests {
             Ok(crate::engine::AccountView::default())
         }
 
+        fn compare_view(&mut self) -> anyhow::Result<Option<crate::engine::CompareView>> {
+            Ok(None)
+        }
+
+        fn browse_view(
+            &mut self,
+            folder: &str,
+        ) -> anyhow::Result<crate::engine::views::BuildBrowseView> {
+            Ok(crate::engine::views::BuildBrowseView {
+                folder: folder.to_owned(),
+                entries: vec![],
+            })
+        }
+
+        fn settings_view(&mut self) -> anyhow::Result<crate::engine::SettingsView> {
+            Ok(crate::engine::SettingsView::default())
+        }
         fn requests_view(&mut self) -> anyhow::Result<crate::engine::RequestsView> {
             Ok(crate::engine::RequestsView::default())
+        }
+        fn hover_tooltip_view(
+            &mut self,
+            _target: &crate::engine::HoverTarget,
+        ) -> anyhow::Result<Option<crate::engine::HoverTooltipView>> {
+            Ok(None)
+        }
+        fn help_view(&mut self) -> anyhow::Result<crate::engine::HelpView> {
+            Ok(fake_help())
+        }
+    }
+
+    /// PoB's help.txt section titles, with a line each
+    fn fake_help() -> crate::engine::HelpView {
+        let titles = [
+            "Help File Introduction",
+            "Contents",
+            "FAQ",
+            "Hotkeys",
+            "Other Notable Things",
+            "Timeless Jewels",
+            "Loadouts",
+            "Party Tab",
+            "Skills Tab",
+            "Items Tab",
+        ];
+        crate::engine::HelpView {
+            sections: titles
+                .iter()
+                .map(|t| crate::engine::HelpSection {
+                    title: (*t).into(),
+                    lines: vec![format!("^7About {t}"), "^7Ctrl+1\t^7Tree tab".into()],
+                })
+                .collect(),
+            header: vec!["^7Path of Building Community Fork v2.67.2".into()],
+            changelog: vec![crate::engine::HelpSection {
+                title: "Version 2.67.2 (2026/08/07)".into(),
+                lines: vec!["^7* Fix a thing".into()],
+            }],
+            missing: vec![],
         }
     }
 
@@ -1829,6 +2783,226 @@ mod tests {
             repeat: false,
             modifiers: egui::Modifiers::COMMAND,
         }]
+    }
+
+    #[test]
+    fn list_actions_become_their_commands_and_refusals_show_pobs_text() {
+        use crate::engine::commands::DeleteKind;
+        use crate::engine::views::BuildSort;
+        let (mut app, _ctx) = started();
+        let path: PathBuf = "/b/one.xml".into();
+        let actions = vec![
+            ListScreenAction::NewFolder("f".into()),
+            ListScreenAction::Rename {
+                path: path.clone(),
+                name: "n".into(),
+            },
+            ListScreenAction::Copy {
+                path: path.clone(),
+                name: "c".into(),
+            },
+            ListScreenAction::Delete {
+                path: path.clone(),
+                kind: DeleteKind::Folder,
+            },
+            ListScreenAction::Move {
+                path,
+                folder: "sub/".into(),
+            },
+            ListScreenAction::CopyTo {
+                path: "/b/one.xml".into(),
+                folder: "sub/".into(),
+            },
+            ListScreenAction::SetSort(BuildSort::Level),
+            ListScreenAction::SetFilter("class:witch".into()),
+        ];
+        let before = app.sent_full.len();
+        for action in actions {
+            app.on_list_action(action);
+        }
+        assert_eq!(
+            sent_since(&app, before),
+            [
+                r#"NewFolder { name: "f" }"#,
+                r#"RenameBuild { path: "/b/one.xml", name: "n" }"#,
+                r#"CopyBuild { path: "/b/one.xml", name: "c" }"#,
+                r#"DeleteBuild { path: "/b/one.xml", kind: Folder }"#,
+                r#"MoveBuild { path: "/b/one.xml", folder: "sub/" }"#,
+                r#"CopyBuildTo { path: "/b/one.xml", folder: "sub/" }"#,
+                "SetBuildSort { sort: Level }",
+                r#"SetBuildFilter { text: "class:witch" }"#,
+            ]
+        );
+        // a refusal is the engine's own sentence, shown like any other error
+        let seq = app.send(Command::RenameBuild {
+            path: "/b/one.xml".into(),
+            name: "two".into(),
+        });
+        app.on_event(Event::Error {
+            seq,
+            message: "a build with that name already exists".into(),
+        });
+        assert_eq!(app.notices, ["a build with that name already exists"]);
+    }
+
+    /// A list view for the Save As picker: `sub/` holds things, `sub/inner/` is empty
+    fn picker_list() -> Snapshot {
+        use crate::engine::views::FolderNode;
+        let node = |path: &str, empty| FolderNode {
+            path: path.into(),
+            modified: 1,
+            empty,
+        };
+        Snapshot::BuildList(Arc::new(BuildListView {
+            root: "/b/".into(),
+            tree: vec![node("sub/", false), node("sub/inner/", true)],
+            ..BuildListView::default()
+        }))
+    }
+
+    fn double_click_mark(app: &mut AutoPobApp, ctx: &egui::Context, key: &str) {
+        crate::ui::import::clear_marks();
+        frame(app, ctx, vec![]);
+        let pos = marked(key)
+            .unwrap_or_else(|| panic!("no widget {key}"))
+            .center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(app, ctx, vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false, true, false] {
+            frame(app, ctx, vec![button(pressed)]);
+        }
+        frame(app, ctx, vec![]);
+    }
+
+    #[test]
+    fn ctrl_w_in_the_list_search_deletes_nothing() {
+        // PoB's edit box has no Ctrl+W (EditControl.lua:500-640)
+        let (mut app, ctx) = started();
+        click_mark(&mut app, &ctx, "search");
+        frame(&mut app, &ctx, vec![egui::Event::Text("witch".into())]);
+        assert_eq!(app.list_ui.filter_for_test(), "witch");
+        frame(
+            &mut app,
+            &ctx,
+            key_with(
+                egui::Key::W,
+                egui::Modifiers::COMMAND | egui::Modifiers::CTRL,
+            ),
+        );
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.list_ui.filter_for_test(), "witch");
+    }
+
+    #[test]
+    fn esc_cancels_save_as_once_its_name_box_is_left() {
+        let (mut app, ctx) = started();
+        deliver(&mut app, picker_list());
+        app.open_save_as(None);
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        let esc = key_with(egui::Key::Escape, egui::Modifiers::NONE);
+        frame(&mut app, &ctx, esc.clone());
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.save_as.is_none(), "Esc left it open");
+        assert!(app.sent_full.iter().all(|c| !c.starts_with("SaveAs")));
+    }
+
+    #[test]
+    fn save_as_picks_a_folder_makes_one_and_deletes_an_empty_one() {
+        let (mut app, ctx) = started();
+        deliver(&mut app, picker_list());
+        app.open_save_as(None);
+        frame(&mut app, &ctx, vec![]);
+        // walking into a folder and saving puts the build there
+        double_click_mark(&mut app, &ctx, "picker_row:sub/");
+        assert_eq!(app.save_as.as_ref().unwrap().folder, "sub/");
+        app.save_as.as_mut().unwrap().name = "mine".into();
+        let before = app.sent_full.len();
+        app.send_save_as(false);
+        assert_eq!(
+            sent_since(&app, before),
+            [r#"SaveAs { folder: "sub/", name: "mine", overwrite: false }"#]
+        );
+        // the engine saved it: the box is gone; open it again for the folder tests
+        pump_until(&mut app, &ctx, "saved", |a| a.save_as.is_none());
+        deliver(&mut app, picker_list());
+        app.open_save_as(None);
+        frame(&mut app, &ctx, vec![]);
+        app.save_as.as_mut().unwrap().folder = "sub/".into();
+        // New Folder names its folder, goes into it, and comes back if refused
+        click_mark(&mut app, &ctx, "picker_new");
+        click_mark(&mut app, &ctx, "picker_name");
+        frame(&mut app, &ctx, vec![egui::Event::Text("de/ep".into())]);
+        let before = app.sent_full.len();
+        click_mark(&mut app, &ctx, "picker_create");
+        assert_eq!(
+            sent_since(&app, before),
+            [r#"NewFolderIn { folder: "sub/", name: "deep" }"#]
+        );
+        assert_eq!(app.save_as.as_ref().unwrap().folder, "sub/deep/");
+        let seq = app.save_as.as_ref().unwrap().new_folder.as_ref().unwrap().0;
+        app.on_event(Event::Error {
+            seq,
+            message: "Couldn't create 'deep': File exists".into(),
+        });
+        assert_eq!(app.save_as.as_ref().unwrap().folder, "sub/");
+        assert_eq!(app.notices, ["Couldn't create 'deep': File exists"]);
+        // a folder with things in it is refused with PoB's text; an empty one is asked about
+        app.notices.clear();
+        click_mark(&mut app, &ctx, "picker_row:sub/inner/");
+        let before = app.sent_full.len();
+        click_mark(&mut app, &ctx, "picker_delete");
+        assert!(
+            sent_since(&app, before).is_empty(),
+            "deleted without asking"
+        );
+        click_mark(&mut app, &ctx, "picker_delete_yes");
+        assert_eq!(
+            sent_since(&app, before),
+            [r#"DeleteBuild { path: "/b/sub/inner", kind: EmptyFolder }"#]
+        );
+        // the Builds folder holds `sub/`, which has things in it
+        click_mark(&mut app, &ctx, "picker_crumb:0");
+        click_mark(&mut app, &ctx, "picker_row:sub/");
+        click_mark(&mut app, &ctx, "picker_delete");
+        assert_eq!(app.notices, ["The folder is not empty."]);
+    }
+
+    #[test]
+    fn a_refused_paste_move_gives_the_cut_mark_back() {
+        let (mut app, _ctx) = started();
+        // a mark, then the paste that spends it
+        let entry = BuildListEntry {
+            name: "one".into(),
+            is_folder: false,
+            folder: String::new(),
+            path: "/b/one.xml".into(),
+            class: None,
+            ascendancy: None,
+            level: None,
+            delete_prompt: String::new(),
+        };
+        app.list_ui.mark_for_test(entry);
+        app.list_ui.spend_for_test();
+        assert!(app.list_ui.marked_path().is_none());
+        let seq = app.send(Command::MoveBuild {
+            path: "/b/one.xml".into(),
+            folder: "sub/".into(),
+        });
+        app.list_move_seq = Some(seq);
+        app.on_event(Event::Error {
+            seq,
+            message: "couldn't move that build".into(),
+        });
+        assert_eq!(
+            app.list_ui.marked_path(),
+            Some(std::path::Path::new("/b/one.xml"))
+        );
     }
 
     #[test]
@@ -2429,6 +3603,26 @@ mod tests {
     }
 
     #[test]
+    fn another_build_starts_with_no_config_set_question() {
+        // PoB makes a new ConfigTab for each build: an unanswered Delete question doesn't
+        // carry over to a set of the next build with the same id
+        let (mut app, ctx) = config_app(sample_config());
+        click(&mut app, &ctx, "set_delete");
+        assert!(app.config_ui.rects.contains_key("set_delete_yes"));
+        app.request(Pending::New);
+        pump_until(&mut app, &ctx, "another build", |a| {
+            a.screen == Screen::Build && a.entering.is_none()
+        });
+        app.config = Some(Arc::new(sample_config()));
+        app.tab = BuildTab::Config;
+        app.config_ui.rects.clear();
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.config_ui.rects.contains_key("set_delete"));
+        assert!(!app.config_ui.rects.contains_key("set_delete_yes"));
+    }
+
+    #[test]
     fn picking_another_config_set_selects_it() {
         let (mut app, ctx) = config_app(sample_config());
         let before = app.sent_full.len();
@@ -2967,6 +4161,26 @@ mod tests {
     }
 
     #[test]
+    fn class_question_is_asked_on_any_tab() {
+        let (mut app, ctx) = tree_app();
+        // PoB's class dropdown is in the top bar on every tab
+        app.tab = BuildTab::Config;
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "class_combo");
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "class:1");
+        assert!(app.tree.has_dialog(), "the question is open");
+        // a frame off the Tree tab keeps it
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "class_connect");
+        assert_eq!(
+            sent_since(&app, before),
+            ["SelectClass { id: 1, connect: true }"]
+        );
+    }
+
+    #[test]
     fn reset_asks_first() {
         let (mut app, ctx) = tree_app();
         let before = app.sent_full.len();
@@ -3074,6 +4288,9 @@ mod tests {
             snapshot: Snapshot::PowerReport(Arc::new(crate::engine::PowerReport {
                 stat: "Life".into(),
                 rows: vec![row(1, "First"), row(2, "Second")],
+                listed: vec![0, 1],
+                filter: 0,
+                masteries: true,
             })),
         });
         frame(&mut app, &ctx, vec![]);
@@ -3194,6 +4411,9 @@ mod tests {
             snapshot: Snapshot::PowerReport(Arc::new(crate::engine::PowerReport {
                 stat: "Life".into(),
                 rows: vec![],
+                listed: vec![],
+                filter: 0,
+                masteries: true,
             })),
         });
         app.on_event(Event::BackgroundFailed {
@@ -3356,6 +4576,105 @@ mod tests {
             !sent.iter().any(|c| c.contains("SetMainSkillCount")),
             "{sent:?}"
         );
+    }
+
+    /// Where the top bar drew `key` last frame
+    fn top_rect(ctx: &egui::Context, key: &str) -> egui::Rect {
+        ctx.data(|d| d.get_temp(egui::Id::NULL.with(("top_bar_rect", key.to_owned()))))
+            .unwrap_or_else(|| panic!("the top bar drew no {key}"))
+    }
+
+    fn click_at(app: &mut AutoPobApp, ctx: &egui::Context, pos: egui::Pos2) {
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![],
+        ] {
+            frame(app, ctx, events);
+        }
+    }
+
+    /// Clicks the level box and types `text` over what it shows
+    fn type_level(app: &mut AutoPobApp, ctx: &egui::Context, text: &str) {
+        let pos = top_rect(ctx, "level").center();
+        click_at(app, ctx, pos);
+        frame(app, ctx, key_with(egui::Key::A, egui::Modifiers::COMMAND));
+        frame(app, ctx, vec![egui::Event::Text(text.into())]);
+    }
+
+    #[test]
+    fn a_level_being_typed_counts_as_unsaved_and_flushes_before_save() {
+        let (mut app, ctx) = notes_app();
+        frame(&mut app, &ctx, vec![]);
+        type_level(&mut app, &ctx, "75");
+        assert!(app.top_bar.has_pending());
+        assert!(app.current_unsaved());
+        let before = app.sent_full.len();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::S, egui::Modifiers::COMMAND),
+        );
+        assert_eq!(
+            sent_since(&app, before),
+            ["SetCharacterLevel { level: 75 }", "Save"]
+        );
+        assert!(!app.top_bar.has_pending());
+    }
+
+    #[test]
+    fn dont_save_drops_a_level_being_typed() {
+        let (mut app, ctx) = notes_app();
+        frame(&mut app, &ctx, vec![]);
+        type_level(&mut app, &ctx, "75");
+        assert!(app.top_bar.has_pending());
+        let before = app.sent_full.len();
+        app.answer_prompt(Pending::BackToList, PromptChoice::Discard);
+        assert!(!app.top_bar.has_pending());
+        let sent = sent_since(&app, before);
+        assert!(
+            !sent.iter().any(|c| c.contains("SetCharacterLevel")),
+            "{sent:?}"
+        );
+    }
+
+    #[test]
+    fn the_new_loadout_window_holds_the_shortcuts() {
+        let (mut app, ctx) = notes_app();
+        let mut build = (**app.build.as_ref().unwrap()).clone();
+        build.loadouts = [
+            "^7^7Loadouts:",
+            "Default",
+            "^7^7-----",
+            "^7^7New Loadout",
+            "^7^7Sync",
+            "^7^7Help >>",
+        ]
+        .map(String::from)
+        .to_vec();
+        build.loadout_selected = Some(1);
+        app.build = Some(Arc::new(build));
+        frame(&mut app, &ctx, vec![]);
+        let pos = top_rect(&ctx, "loadouts").center();
+        click_at(&mut app, &ctx, pos);
+        frame(&mut app, &ctx, vec![]);
+        let pos = top_rect(&ctx, "loadout_3").center();
+        click_at(&mut app, &ctx, pos);
+        assert!(app.top_bar.has_dialog());
+        let before = app.sent_full.len();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::S, egui::Modifiers::COMMAND),
+        );
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
     }
 
     #[test]
@@ -3573,6 +4892,7 @@ mod tests {
         crate::engine::PopupView {
             kind,
             title: "Corrupt Item".into(),
+            enter: None,
             controls: vec![],
         }
     }
@@ -3623,6 +4943,249 @@ mod tests {
             )))),
         });
         assert!(!app.popup.is_open());
+    }
+
+    #[test]
+    fn a_failed_import_that_replaced_the_build_shows_the_list_with_pobs_message() {
+        // PoB's Init fails, PoB closes the build and shows its list with the message; the
+        // engine puts a new build in its place, which the app never shows
+        let message = "Unknown Passive Tree Version: the tree version of this build isn't known";
+        let fail = |app: &mut AutoPobApp, generation: u64| {
+            let seq = app.send(Command::ImportFromUrl {
+                url: "eNrtWk1z".into(),
+                mode: ImportMode::ThisBuild,
+            });
+            app.on_event(Event::Error {
+                seq,
+                message: message.into(),
+            });
+            let mut view = (**app.build.as_ref().unwrap()).clone();
+            view.generation = generation;
+            view.name = "Unnamed build".into();
+            app.on_event(Event::Snapshot {
+                seq,
+                snapshot: Snapshot::Build(Arc::new(view)),
+            });
+        };
+        let (mut app, ctx) = open_new_build();
+        app.tab = BuildTab::Import;
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        let generation = app.build.as_ref().unwrap().generation;
+        fail(&mut app, generation + 1);
+        assert_eq!(app.screen, Screen::List);
+        assert!(
+            app.notices.iter().any(|n| n == message),
+            "{:?}",
+            app.notices
+        );
+        assert!(
+            sent_since(&app, before)
+                .iter()
+                .any(|c| c.starts_with("ListBuilds")),
+        );
+        // an import refused before PoB's Init (a bad code) leaves the build as it was
+        let (mut app, ctx) = open_new_build();
+        app.tab = BuildTab::Import;
+        frame(&mut app, &ctx, vec![]);
+        let generation = app.build.as_ref().unwrap().generation;
+        fail(&mut app, generation);
+        assert_eq!(app.screen, Screen::Build);
+        assert_eq!(app.tab, BuildTab::Import);
+    }
+
+    #[test]
+    fn the_app_starts_on_the_build_pob_reopened() {
+        // PoB starts on the build its last exit recorded, and on its list otherwise
+        for (open, screen) in [(true, Screen::Build), (false, Screen::List)] {
+            let (mut app, ctx) = started();
+            app.screen = Screen::List;
+            app.on_event(Event::Snapshot {
+                seq: 0,
+                snapshot: Snapshot::BuildList(Arc::new(BuildListView {
+                    build_open: open,
+                    ..(**app.list.as_ref().unwrap()).clone()
+                })),
+            });
+            frame(&mut app, &ctx, vec![]);
+            assert_eq!(app.screen, screen, "build_open {open}");
+        }
+        // only the start's listing: a later one never takes the user off the list
+        let (mut app, ctx) = started();
+        app.on_event(Event::Snapshot {
+            seq: app.last_sent.max(1),
+            snapshot: Snapshot::BuildList(Arc::new(BuildListView {
+                build_open: true,
+                ..(**app.list.as_ref().unwrap()).clone()
+            })),
+        });
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.screen, Screen::List);
+    }
+
+    #[test]
+    fn a_failure_with_no_build_loaded_doesnt_bounce_the_next_open() {
+        // no build loaded: the failed code's error comes with no Build view, so its check is
+        // never answered; the next good open must not take it for its own
+        let (mut app, ctx) = started();
+        app.build = None;
+        app.enter_build(Command::ImportShareCode { code: "bad".into() });
+        let bad = app.entering.expect("an import");
+        app.on_event(Event::Error {
+            seq: bad,
+            message: "that isn't a valid build code".into(),
+        });
+        assert_eq!(app.screen, Screen::List);
+        app.enter_build(Command::OpenBuild {
+            path: "/b/x.xml".into(),
+        });
+        let open = app.entering.expect("an open");
+        let view = BuildView {
+            name: "x".into(),
+            path: Some("/b/x.xml".into()),
+            generation: 1,
+            ..BuildView::default()
+        };
+        app.on_event(Event::Snapshot {
+            seq: open,
+            snapshot: Snapshot::Build(Arc::new(view)),
+        });
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(
+            app.screen,
+            Screen::Build,
+            "the good open bounced to the list"
+        );
+    }
+
+    #[test]
+    fn a_failed_link_import_that_replaced_the_build_shows_the_list() {
+        let (mut app, ctx) = open_new_build();
+        frame(&mut app, &ctx, vec![]);
+        app.on_requests(&RequestsView {
+            pending: vec![],
+            finished: vec![crate::engine::views::FinishedRequest {
+                id: 1,
+                label: "Import".into(),
+                error: Some("Unknown Passive Tree Version".into()),
+                cancelled: false,
+                new_build: true,
+            }],
+        });
+        assert_eq!(app.screen, Screen::List);
+        assert!(
+            app.notices
+                .iter()
+                .any(|n| n.contains("Unknown Passive Tree Version"))
+        );
+    }
+
+    /// PoB's Game Version window as the engine reports it after an open that needs it
+    fn game_version_app() -> (AutoPobApp, egui::Context) {
+        let (mut app, ctx) = open_new_build();
+        let button = |name: &str, x: f32| crate::engine::views::PopupControl {
+            name: name.into(),
+            kind: crate::engine::views::PopupControlKind::Button,
+            label: name.into(),
+            pos: [x, 40.0],
+            size: [80.0, 20.0],
+            shown: true,
+            enabled: true,
+            choices: vec![],
+            selected: 0,
+            value: 0.0,
+            divisions: None,
+            checked: false,
+            text: String::new(),
+            tooltip_text: None,
+            hover_tooltip: false,
+            rows: vec![],
+            row_selected: None,
+            row_highlight: None,
+            note: None,
+            reorder: false,
+        };
+        // an open whose build needs it: the engine's window comes with the open's views, the
+        // first of them here, before the build screen's reset
+        app.run_action(&ctx, Pending::Open("/b/old.xml".into()));
+        let seq = app.entering.expect("an open");
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::Popup(Some(Arc::new(crate::engine::PopupView {
+                kind: crate::engine::PopupKind::GameVersion,
+                title: "Game Version".into(),
+                enter: None,
+                controls: vec![button("convert", 0.0), button("cancel", 100.0)],
+            }))),
+        });
+        pump_until(&mut app, &ctx, "the open's views", |a| a.entering.is_none());
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        (app, ctx)
+    }
+
+    fn click_popup(app: &mut AutoPobApp, ctx: &egui::Context, key: &str) {
+        let pos = app.popup.rects.map[key].center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![],
+        ] {
+            frame(app, ctx, events);
+        }
+    }
+
+    #[test]
+    fn game_version_stays_up_and_its_cancel_goes_to_the_list() {
+        // PoB's window is main's: it stays up over the build, whatever the tab
+        // (Build.lua:1323-1350)
+        let (mut app, ctx) = game_version_app();
+        assert!(app.popup.is_open(), "the window went at once");
+        app.tab = BuildTab::Items;
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.popup.is_open(), "a tab switch ended it");
+        assert!(!app.sent_full.iter().any(|c| c == "ClosePopup"));
+        // Cancel goes back to the build list (Build.lua:1344-1347)
+        let before = app.sent_full.len();
+        click_popup(&mut app, &ctx, "btn_cancel");
+        assert_eq!(app.screen, Screen::List);
+        let sent = sent_since(&app, before);
+        assert!(
+            sent.first()
+                .is_some_and(|c| c.starts_with("PressPopupButton { name: \"cancel\"")),
+            "{sent:?}"
+        );
+        assert!(sent.iter().any(|c| c.starts_with("ListBuilds")), "{sent:?}");
+
+        // Esc is Cancel too
+        let (mut app, ctx) = game_version_app();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Escape, egui::Modifiers::NONE),
+        );
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.screen, Screen::List);
+
+        // Convert stays on the build screen
+        let (mut app, ctx) = game_version_app();
+        let before = app.sent_full.len();
+        click_popup(&mut app, &ctx, "btn_convert");
+        assert_eq!(app.screen, Screen::Build);
+        assert!(
+            sent_since(&app, before)
+                .iter()
+                .any(|c| c.starts_with("PressPopupButton { name: \"convert\"")),
+        );
     }
 
     #[test]
@@ -4529,6 +6092,7 @@ mod tests {
             unsaved: false,
             can_undo: false,
             can_redo: false,
+            ..BuildView::default()
         };
         let items = crate::engine::ItemsView {
             can_undo: true,
@@ -5062,5 +6626,88 @@ mod tests {
             marked("release_dismiss").is_none(),
             "hidden for the session"
         );
+    }
+
+    /// The Items tab's "Manage..." under its tree dropdown opens PoB's Manage Passive Trees
+    /// window, whose controls are the Tree tab's spec controls
+    #[test]
+    fn items_manage_opens_the_tree_manager() {
+        let (mut app, ctx) = tree_app();
+        let mut view = crate::ui::items::tests::sample();
+        view.specs = Some(crate::engine::views::DropList {
+            labels: vec!["Main".into()],
+            selected: 0,
+            enabled: false,
+        });
+        app.on_event(Event::Snapshot {
+            seq: 90,
+            snapshot: Snapshot::Items(Arc::new(view)),
+        });
+        app.tab = BuildTab::Items;
+        for _ in 0..4 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        click_item_key(&mut app, &ctx, "spec_manage");
+        assert_eq!(app.tab, BuildTab::Items, "the tab stays");
+        assert!(app.tree.spec_manager_open());
+        // the window reaches its place over a few frames
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        assert!(
+            app.tree.rects.map.contains_key("spec_manager_done"),
+            "the window is not drawn"
+        );
+        // its New is the Tree tab's New tree, with the same dialog
+        let pos = app.tree.rects.map["spec_manager_new"].center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        assert!(app.tree.has_dialog(), "no New tree dialog");
+        // leaving the tab closes the window
+        app.tab = BuildTab::Config;
+        frame(&mut app, &ctx, vec![]);
+        assert!(!app.tree.spec_manager_open());
+    }
+
+    /// "Add Mod" on the Config tab opens the Mod Browser there; leaving the tab ends it (R28)
+    #[test]
+    fn add_mod_opens_the_mod_browser_on_the_config_tab() {
+        let (mut app, ctx) = config_app(sample_config());
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "mod_add:0");
+        assert_eq!(
+            sent_since(&app, before),
+            ["OpenPopup(ModBrowser { group: 0 })"]
+        );
+        assert_eq!(app.popup_tab, Some(BuildTab::Config));
+        app.on_event(Event::Snapshot {
+            seq: app.last_sent,
+            snapshot: Snapshot::Popup(Some(Arc::new(popup_view(
+                crate::engine::PopupKind::ModBrowser { group: 0 },
+            )))),
+        });
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.popup.is_open());
+        let before = app.sent_full.len();
+        app.tab = BuildTab::Items;
+        frame(&mut app, &ctx, vec![]);
+        assert!(sent_since(&app, before).contains(&"ClosePopup"));
+    }
+
+    // the shortcuts' tests (R25), with this module's helpers
+    mod shortcut_tests {
+        include!("app_shortcut_tests.rs");
     }
 }

@@ -25,7 +25,9 @@ fn control(name: &str, kind: PopupControlKind, pos: [f32; 2], size: [f32; 2]) ->
         hover_tooltip: false,
         rows: vec![],
         row_selected: None,
+        row_highlight: None,
         note: None,
+        reorder: false,
     }
 }
 
@@ -45,6 +47,7 @@ fn popup(controls: Vec<PopupControl>) -> PopupView {
     PopupView {
         kind: PopupKind::Corrupt,
         title: "Corrupt Item".into(),
+        enter: None,
         controls,
     }
 }
@@ -448,6 +451,76 @@ fn list_row_click_sends_row_key() {
     );
 }
 
+fn three_rows(reorder: bool) -> PopupControl {
+    PopupControl {
+        rows: ["a", "b", "c"]
+            .iter()
+            .map(|k| PopupRow {
+                key: (*k).into(),
+                label: k.to_uppercase(),
+            })
+            .collect(),
+        reorder,
+        ..control("list", PopupControlKind::List, [0.0, 0.0], [300.0, 200.0])
+    }
+}
+
+/// Presses on `from`, moves in steps to `to` and lets go there
+fn drag(h: &mut Harness, from: Pos2, to: Pos2) -> Vec<String> {
+    let mut all = Vec::new();
+    let button = |pos, pressed| Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    all.extend(debug(&h.frame(vec![Event::PointerMoved(from)]).commands));
+    all.extend(debug(&h.frame(vec![button(from, true)]).commands));
+    for step in 1..=6 {
+        let pos = from + (to - from) * (step as f32 / 6.0);
+        all.extend(debug(&h.frame(vec![Event::PointerMoved(pos)]).commands));
+    }
+    all.extend(debug(&h.frame(vec![button(to, false)]).commands));
+    all.extend(debug(&h.frame(vec![]).commands));
+    all
+}
+
+#[test]
+fn a_mutable_list_reorders_by_drag() {
+    let mut h = Harness::new(popup(vec![three_rows(true)]));
+    let last = h.rect("list_row_2").center();
+    let first = h.rect("list_row_0");
+    // dropped above the first row: the last row goes first
+    let sent = drag(&mut h, last, Pos2::new(last.x, first.top() + 2.0));
+    assert_eq!(
+        sent,
+        [set(
+            "list",
+            PopupInput::RowMove {
+                key: "c".into(),
+                to: 0
+            }
+        )]
+    );
+    // a list PoB doesn't let the user reorder only takes clicks
+    let mut h = Harness::new(popup(vec![three_rows(false)]));
+    let last = h.rect("list_row_2").center();
+    let first = h.rect("list_row_0");
+    let sent = drag(&mut h, last, Pos2::new(last.x, first.top() + 2.0));
+    assert!(sent.iter().all(|c| !c.contains("RowMove")), "{sent:?}");
+}
+
+#[test]
+fn drop_place_counts_the_other_rows_above() {
+    let rows: Vec<Rect> = (0..3)
+        .map(|i| Rect::from_min_size(Pos2::new(0.0, i as f32 * 20.0), Vec2::new(100.0, 20.0)))
+        .collect();
+    assert_eq!(drop_place(&rows, 2, 1.0), 0);
+    assert_eq!(drop_place(&rows, 0, 55.0), 2);
+    assert_eq!(drop_place(&rows, 0, 25.0), 0);
+    assert_eq!(drop_place(&rows, 0, 35.0), 1);
+}
+
 fn tip_for(control: &str, index: Option<usize>) -> Arc<ControlTooltipView> {
     Arc::new(ControlTooltipView {
         query: ControlTooltipQuery::Popup {
@@ -659,6 +732,7 @@ fn anoint_view(rows: usize) -> PopupView {
     PopupView {
         kind: PopupKind::Anoint { slot: 0 },
         title: "Anoint Item".into(),
+        enter: None,
         controls: vec![
             dropdown("notableDB.sort", &["Sort by Dps", "Sort by Life"], 1),
             list,
@@ -734,4 +808,355 @@ fn a_hidden_box_with_a_pending_edit_is_discarded_not_sent() {
     let out = h.frame(vec![]);
     assert!(out.commands.is_empty(), "{:?}", out.commands);
     assert!(h.popup.flush().is_none(), "nothing stays pending");
+}
+
+#[test]
+fn progress_line_and_cancel() {
+    let mut h = Harness::new(PopupView {
+        kind: PopupKind::TimelessJewel,
+        title: "Find a Timeless Jewel".into(),
+        enter: None,
+        controls: vec![
+            button("searchButton", 0.0, 0.0),
+            button("closeButton", 120.0, 0.0),
+        ],
+    });
+    // Search starts the job: its line shows at once
+    let out = h.click("btn_searchButton");
+    assert_eq!(debug(&out.commands), [press("searchButton")]);
+    assert_eq!(h.popup.search_state(), (Some(0), None));
+    h.popup.on_search_progress(40);
+    h.frame(vec![]);
+    assert_eq!(h.popup.search_state(), (Some(40), None));
+    assert!(h.has("timeless_progress"));
+    // nothing else is offered while it runs
+    let out = h.click("btn_searchButton");
+    assert!(out.commands.is_empty(), "{:?}", out.commands);
+    // Cancel stops it
+    let out = h.click("timeless_cancel");
+    assert_eq!(debug(&out.commands), ["CancelTimelessSearch"]);
+    assert_eq!(h.popup.search_state(), (None, None));
+    // a step that ran before the cancel reached the engine reports late; the engine's answer
+    // to the cancel (100) ends the line
+    h.popup.on_search_progress(40);
+    h.popup.on_search_progress(100);
+    assert_eq!(h.popup.search_state(), (None, None));
+    // a search that finishes takes its line away
+    h.click("btn_searchButton");
+    h.popup.on_search_progress(100);
+    assert_eq!(h.popup.search_state(), (None, None));
+    // a failure shows PoB's message
+    h.click("btn_searchButton");
+    h.popup.on_search_failed("boom".into());
+    h.frame(vec![]);
+    assert_eq!(h.popup.search_state(), (None, Some("boom")));
+    assert!(h.has("timeless_failed"));
+    // another window has no search line
+    let mut other = Harness::new(popup(vec![button("save", 0.0, 0.0)]));
+    other.popup.on_search_progress(40);
+    assert_eq!(other.popup.search_state(), (None, None));
+}
+
+#[test]
+fn list_double_and_shift_clicks_and_the_range() {
+    let rows: Vec<PopupRow> = (1..=4)
+        .map(|i| PopupRow {
+            key: i.to_string(),
+            label: format!("seed {i}"),
+        })
+        .collect();
+    let list = PopupControl {
+        rows,
+        row_selected: Some("1".into()),
+        row_highlight: Some("3".into()),
+        ..control(
+            "searchResults",
+            PopupControlKind::List,
+            [0.0, 0.0],
+            [300.0, 200.0],
+        )
+    };
+    let mut h = Harness::new(PopupView {
+        kind: PopupKind::TimelessJewel,
+        ..popup(vec![list])
+    });
+    // a double click: PoB's list takes the first click, then the second as a double click
+    let pos = h.rect("searchResults_row_1").center();
+    let button = |pressed| Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    h.step = 0.05;
+    let mut sent = Vec::new();
+    for events in [
+        vec![Event::PointerMoved(pos)],
+        vec![button(true)],
+        vec![button(false)],
+        vec![button(true)],
+        vec![button(false)],
+        vec![],
+    ] {
+        sent.extend(h.frame(events).commands);
+    }
+    assert_eq!(
+        debug(&sent),
+        [
+            set("searchResults", PopupInput::Row("2".into())),
+            set("searchResults", PopupInput::RowDoubleClick("2".into())),
+        ]
+    );
+    // Shift held: the other end of a range
+    h.step = 1.0;
+    h.frame(vec![]);
+    h.step = 0.2;
+    let pos = h.rect("searchResults_row_3").center();
+    let shift = |pressed| Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::SHIFT,
+    };
+    let mut sent = Vec::new();
+    for events in [
+        vec![
+            Event::ModifiersChanged(Modifiers::SHIFT),
+            Event::PointerMoved(pos),
+        ],
+        vec![Event::ModifiersChanged(Modifiers::SHIFT), shift(true)],
+        vec![Event::ModifiersChanged(Modifiers::SHIFT), shift(false)],
+        vec![Event::ModifiersChanged(Modifiers::NONE)],
+    ] {
+        sent.extend(h.frame(events).commands);
+    }
+    assert_eq!(
+        debug(&sent),
+        [set("searchResults", PopupInput::RowShiftClick("4".into()))]
+    );
+}
+
+#[test]
+fn only_the_searchs_own_refusal_ends_its_line() {
+    let mut h = Harness::new(PopupView {
+        kind: PopupKind::TimelessJewel,
+        title: "Find a Timeless Jewel".into(),
+        enter: None,
+        controls: vec![button("searchButton", 0.0, 0.0)],
+    });
+    h.click("btn_searchButton");
+    h.popup.press_sent(7);
+    // another command's refusal leaves the running search's line
+    h.popup.on_error(6);
+    assert_eq!(h.popup.search_state(), (Some(0), None));
+    // the Search's own refusal started nothing
+    h.popup.on_error(7);
+    assert_eq!(h.popup.search_state(), (None, None));
+}
+
+#[test]
+fn enter_presses_pobs_enter_control_unless_a_box_has_the_keyboard() {
+    let edit = control("custom", PopupControlKind::Edit, [0.0, 0.0], [200.0, 20.0]);
+    let mut view = popup(vec![
+        edit,
+        button("save", 0.0, 30.0),
+        button("close", 0.0, 60.0),
+    ]);
+    view.enter = Some("save".into());
+    let mut h = Harness::new(view.clone());
+    let out = h.key(Key::Enter);
+    assert_eq!(debug(&out.commands), [press("save")]);
+
+    // a box with the keyboard takes the key, as PoB's selected control does
+    h.click("edit_custom");
+    h.frame(vec![Event::Text("abc".into())]);
+    let out = h.key(Key::Enter);
+    assert!(
+        !debug(&out.commands).contains(&press("save")),
+        "{:?}",
+        out.commands
+    );
+
+    // a window without an enter control ignores Enter
+    let mut h = Harness::new(popup(vec![button("save", 0.0, 30.0)]));
+    assert!(h.key(Key::Enter).commands.is_empty());
+    // nor is a disabled button pressed
+    let mut disabled = button("save", 0.0, 30.0);
+    disabled.enabled = false;
+    let mut view = popup(vec![disabled]);
+    view.enter = Some("save".into());
+    let mut h = Harness::new(view);
+    assert!(h.key(Key::Enter).commands.is_empty());
+}
+
+/// The Mod Browser's 6188 rows (R28): a long list lays out only the rows its scroll area shows,
+/// and a click on one still picks it
+#[test]
+fn a_long_list_lays_out_only_the_visible_rows() {
+    let rows: Vec<PopupRow> = (0..6000)
+        .map(|i| PopupRow {
+            key: format!("mod {i}"),
+            label: format!("+{i} to maximum Life"),
+        })
+        .collect();
+    let list = PopupControl {
+        rows,
+        row_selected: Some("mod 0".into()),
+        ..control(
+            "listControl",
+            PopupControlKind::List,
+            [0.0, 0.0],
+            [700.0, 454.0],
+        )
+    };
+    let mut h = Harness::new(popup(vec![list]));
+    h.frame(vec![]);
+    let laid_out = (0..6000)
+        .filter(|i| h.has(&format!("listControl_row_{i}")))
+        .count();
+    assert!(laid_out > 0 && laid_out < 40, "{laid_out} rows laid out");
+    assert!(!h.has("listControl_row_5999"));
+    let out = h.click("listControl_row_3");
+    assert_eq!(
+        debug(&out.commands),
+        [set("listControl", PopupInput::Row("mod 3".into()))]
+    );
+}
+
+#[test]
+fn long_rows_keep_one_height_to_the_end_of_the_list() {
+    // labels far wider than the list: a wrapped row would be taller than the rest, and the
+    // virtual rows past it would be placed wrong
+    let rows: Vec<PopupRow> = (0..300)
+        .map(|i| PopupRow {
+            key: format!("mod {i}"),
+            label: format!("^7{i} {}", "a very long modifier line ".repeat(12)),
+        })
+        .collect();
+    let list = PopupControl {
+        rows,
+        ..control(
+            "listControl",
+            PopupControlKind::List,
+            [0.0, 0.0],
+            [300.0, 454.0],
+        )
+    };
+    let mut h = Harness::new(popup(vec![list]));
+    // rows taller than the interact height: the virtual list must use their real height
+    h.ctx
+        .all_styles_mut(|style| style.spacing.button_padding.y = 8.0);
+    h.frame(vec![]);
+    h.frame(vec![]);
+    let first = h.rect("listControl_row_0");
+    assert!(first.height() > h.ctx.global_style().spacing.interact_size.y + 1.0);
+    // the height the virtual list lays rows out by is a row's real height
+    let mut measured = 0.0;
+    let _ = h.ctx.run_ui(RawInput::default(), |ui| {
+        measured = popup_row_height(ui);
+    });
+    assert!(
+        (first.height() - measured).abs() < 0.5,
+        "a row is {} tall, the list assumes {measured}",
+        first.height()
+    );
+    // the list's viewport: it starts at the first row and is at most 320 tall
+    let bottom = first.top() + 320.0;
+    // scrolled to the end
+    h.frame(vec![Event::PointerMoved(first.center())]);
+    for _ in 0..20 {
+        h.frame(vec![Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, -2000.0),
+            modifiers: Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+        }]);
+    }
+    h.frame(vec![]);
+    let last = h.rect("listControl_row_299");
+    // the rows laid out at the end (rects of rows laid out earlier stay in the map)
+    let shown: Vec<Rect> = (250..300)
+        .filter_map(|i| {
+            h.popup
+                .rects
+                .map
+                .get(&format!("listControl_row_{i}"))
+                .copied()
+        })
+        .collect();
+    assert!(shown.len() > 3, "{} rows laid out", shown.len());
+    for rect in &shown {
+        assert!(
+            (rect.height() - first.height()).abs() < 0.5,
+            "a row is {} tall, the first {}",
+            rect.height(),
+            first.height()
+        );
+    }
+    // the last row is drawn inside the list, not cut off below it
+    assert!(
+        last.bottom() <= bottom + 0.5,
+        "the last row ends at {}, the list at {bottom}",
+        last.bottom()
+    );
+    let out = h.click("listControl_row_299");
+    assert_eq!(
+        debug(&out.commands),
+        [set("listControl", PopupInput::Row("mod 299".into()))]
+    );
+}
+
+/// The hand-merged path: 13b lays only the shown rows out (`show_rows`), Task 14 drags them.
+/// Scrolled down, a drag between shown rows sends the rows' own places in the whole list.
+#[test]
+fn a_drag_between_scrolled_rows_moves_by_their_place_in_the_whole_list() {
+    let mut list = three_rows(true);
+    list.rows = (0..60)
+        .map(|i| PopupRow {
+            key: format!("k{i}"),
+            label: format!("Row {i}"),
+        })
+        .collect();
+    let mut h = Harness::new(popup(vec![list]));
+    let top = h.rect("list_row_0").center();
+    for _ in 0..12 {
+        h.frame(vec![
+            Event::PointerMoved(top),
+            Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: Vec2::new(0.0, -3.0),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+                modifiers: Modifiers::NONE,
+            },
+        ]);
+    }
+    // only the rows laid out this frame are noted
+    h.popup.rects.map.clear();
+    h.frame(vec![]);
+    // the list scrolled: its first rows aren't laid out, later ones are
+    let shown: Vec<usize> = (0..60)
+        .filter(|i| h.popup.rects.map.contains_key(&format!("list_row_{i}")))
+        .collect();
+    let first = *shown.first().expect("no row shown");
+    assert!(first > 0, "the list didn't scroll: {shown:?}");
+    let (from, onto) = (shown[3], shown[1]);
+    let from_pos = h.rect(&format!("list_row_{from}")).center();
+    let onto_rect = h.rect(&format!("list_row_{onto}"));
+    let sent = drag(
+        &mut h,
+        from_pos,
+        Pos2::new(from_pos.x, onto_rect.top() + 2.0),
+    );
+    assert_eq!(
+        sent,
+        [set(
+            "list",
+            PopupInput::RowMove {
+                key: format!("k{from}"),
+                to: onto
+            }
+        )]
+    );
 }

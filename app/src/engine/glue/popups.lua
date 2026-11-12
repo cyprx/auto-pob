@@ -10,8 +10,19 @@ glue = glue or {}
 
 local NOT_SHOWN = "PoB doesn't show that control for this item"
 
--- { popup, kind, item, build }: nil while no session is open
+-- { popup, kind, owner, item, gen }: nil while no session is open (`gen`: the build's
+-- `glue.build_generation()` when it opened). The owner (R19) says what
+-- ends it: `item` (the displayed item or the build changed), `build` (the build changed) or
+-- `main` (nothing but PoB or a command; it needs no build and survives build changes).
 local session
+
+-- Ends the session; a timeless search in it ends too (R17)
+local function drop()
+	session = nil
+	if glue.timeless_cancel then
+		glue.timeless_cancel()
+	end
+end
 
 local function main()
 	return pob.main.main
@@ -23,13 +34,33 @@ end
 
 -- ---- The session ----
 
--- A session whose item is no longer displayed (or whose build was replaced) is over
+-- A session whose owner is gone is over: an item session's item is no longer displayed or
+-- its build was replaced; a build session's build was replaced; a main session has no owner
+-- to lose (R19)
 local function live()
 	if not session then
 		return false
 	end
-	if session.build ~= pob.build or session.item ~= pob.build.itemsTab.displayItem then
-		session = nil
+	-- the Game Version window stands over the new build its open left; another build ends it
+	if session.kind == "GameVersion" and session.gen ~= glue.build_generation() then
+		drop()
+		return false
+	end
+	if session.owner == "main" then
+		return true
+	end
+	if session.gen ~= glue.build_generation() then
+		drop()
+		return false
+	end
+	if session.owner == "item" and session.item ~= pob.build.itemsTab.displayItem then
+		drop()
+		return false
+	end
+	-- a session over something PoB's modal popup would have kept still (the Mod Browser's
+	-- custom modifier group) is over once that thing is gone (R28)
+	if session.still_valid and not session.still_valid() then
+		drop()
 		return false
 	end
 	return true
@@ -69,12 +100,17 @@ local function settle(mine, depth)
 		close_above(depth)
 		session = session or {}
 		session.popup = top
-		session.kind = "EditText"
-		session.item = items_tab().displayItem
-		session.build = pob.build
+		-- only an item session's follow-up is the item text editor; any other keeps the
+		-- opener's kind (Options' DPI dropdown closes the window and opens it again)
+		if session.owner == nil or session.owner == "item" then
+			session.kind = "EditText"
+			session.owner = "item"
+			session.item = items_tab().displayItem
+			session.gen = glue.build_generation()
+		end
 		return false
 	end
-	session = nil
+	drop()
 	return true
 end
 
@@ -94,11 +130,228 @@ local function with_session(fn)
 end
 
 -- Ends the session; true when one was open (the engine then sends `Popup(None)`)
-function glue.popup_end()
+function glue.popup_end(keep_main)
+	-- a main-owned session survives a build change (R19); the Game Version window then ends
+	-- in `live()`
+	if keep_main and session ~= nil and session.owner == "main" then
+		return false
+	end
+	-- a build-owned session ends with its build only (R19): a command that keeps the build
+	-- leaves it, and a timeless search in it, running
+	if not keep_main and session ~= nil and session.owner == "build" and session.gen == glue.build_generation()
+		and not (session.still_valid and not session.still_valid()) then
+		return false
+	end
 	-- not `live()`: the command that just ran may itself have replaced the item (R4)
 	local was = session ~= nil
-	session = nil
+	-- an Options window that goes away unanswered is cancelled, so PoB's half-edited values
+	-- don't stay in `main` for the next save to write
+	if was and session.kind == "Options" then
+		glue.popup_cancel_options()
+	end
+	drop()
 	return was
+end
+
+-- Whether a save PoB made by itself cancelled the Options window since the last call
+local lost = false
+function glue.popup_take_lost()
+	local was = lost
+	lost = false
+	return was
+end
+
+-- Whether the Options window's own button is being pressed (its Save writes the settings)
+function glue.popup_options_pressing()
+	return session ~= nil and session.kind == "Options" and session.pressing == true
+end
+
+-- A save PoB makes by itself while Options is open (a token, Shutdown) would write the window's
+-- unsaved edits: the window is cancelled first (R29)
+function glue.popup_cancel_for_save()
+	if glue.popup_is_options() and not glue.popup_options_pressing() then
+		glue.popup_cancel_options()
+		drop()
+		lost = true
+	end
+end
+
+-- PoB's "Game Version" window (Build.lua:1323-1350), which a build made for another game
+-- version opens instead of loading (`enter_build`): a main-owned session, so the open that
+-- made it doesn't end it; the next build does. `convert` is the Init arguments its Convert
+-- button reopens the build with. Any way it ends but Convert is its Cancel, which leaves the new
+-- build behind it.
+function glue.popup_adopt_game_version(popup, convert)
+	glue.popup_cancel_options()
+	drop()
+	session = { popup = popup, kind = "GameVersion", owner = "main", convert = convert, gen = glue.build_generation() }
+end
+
+-- Presses the Game Version window's button. PoB's Convert closes the window and runs Init
+-- again with the conversion flag, outside a frame (Build.lua:1340-1343); here the build is
+-- entered as an open does, so a frame initialises and calculates it. PoB's Cancel goes back to
+-- the build list (Build.lua:1344-1347); here the new build behind the window stays.
+local function game_version_press(name)
+	if name ~= "convert" and name ~= "cancel" then
+		error("no such control", 0)
+	end
+	local convert = session.convert
+	drop()
+	if name == "convert" then
+		glue.enter_build(unpack(convert, 1, 4))
+		return { ended = true, build_flag = false, rebuilt = true }
+	end
+	return { ended = true, build_flag = false }
+end
+
+-- Whether the open session is PoB's Options window
+function glue.popup_is_options()
+	return session ~= nil and session.kind == "Options"
+end
+
+-- ---- Trade links (R10, R20) ----
+
+-- The app's trade realm and league (`SetTradeDefaults`): what PoB's league fetch would have
+-- offered, since that fetch is refused
+local trade = { realm = "PC", league = "Standard" }
+
+function glue.trade_defaults(realm, league)
+	trade.realm = realm
+	trade.league = league
+end
+
+-- PoB's leagues that every realm has, in the order its fetch callback lists them
+-- (CompareBuySimilar.lua:333-336)
+local FIXED_LEAGUES = { "Standard", "Hardcore", "Ruthless", "Hardcore Ruthless" }
+
+-- The league list PoB's fetch would build from the app's league, and that league's index. A
+-- blank league is Standard.
+function glue.trade_leagues()
+	local league = trade.league
+	if league == nil or league == "" then
+		league = "Standard"
+	end
+	local list = {}
+	if not isValueInArray(FIXED_LEAGUES, league) then
+		table.insert(list, league)
+	end
+	for _, name in ipairs(FIXED_LEAGUES) do
+		table.insert(list, name)
+	end
+	return list, isValueInArray(list, league)
+end
+
+function glue.trade_realm()
+	return trade.realm
+end
+
+local TRADE_URL = "^https://www%.pathofexile%.com/trade/search/"
+
+-- Runs `fn` with PoB's `OpenURL` recording a trade search link, and returns the last one. Any
+-- other link is dropped; nothing is opened (the engine never opens a browser, R20).
+function glue.capture_url(fn)
+	local saved = OpenURL
+	local url
+	OpenURL = function(link)
+		if type(link) == "string" and link:match(TRADE_URL) then
+			url = link
+		end
+	end
+	local ok, err = pcall(fn)
+	OpenURL = saved
+	if not ok then
+		error(err, 0)
+	end
+	return url
+end
+
+-- Runs `fn` with every subscript launch refused, as inside `Build:Init` (R4): the trade
+-- windows' league fetch never reaches the network
+local function no_launches(fn)
+	__net_in_init(true)
+	local ok, err = pcall(fn)
+	__net_in_init(false)
+	if not ok then
+		error(err, 0)
+	end
+	return err
+end
+
+-- `CompareBuySimilar`, loaded on first use and kept: its top level builds the trade stat table
+-- (about 130 ms). It is our own instance, so its remembered realm and league are ours (R10).
+local buy_similar
+
+local function buy_module()
+	if not buy_similar then
+		buy_similar = LoadModule("Classes/CompareBuySimilar")
+	end
+	return buy_similar
+end
+
+-- The item and slot name PoB passes to `openPopup` for a `BuySource`
+local function buy_target(source)
+	local tab = items_tab()
+	if source == "DisplayItem" then
+		-- the panel's button (ItemsTab.lua:342-350)
+		local control = tab.controls.displayItemBuySimilar
+		if not (tab.displayItem and control:IsShown()) then
+			error("PoB doesn't offer that here", 0)
+		end
+		return tab.displayItem, tab:GetComparisonSlotNameForItem(tab.displayItem)
+	elseif type(source) == "table" and source.Slot then
+		local slot = tab.slots[source.Slot]
+		local item = slot and slot:IsShown() and tab.items[slot.selItemId]
+		if not item then
+			error("PoB doesn't offer that here", 0)
+		end
+		return item, source.Slot
+	elseif type(source) == "table" and source.CompareSlot then
+		return glue.compare_buy_item(source.CompareSlot), source.CompareSlot
+	end
+	error("PoB doesn't offer that here", 0)
+end
+
+-- The leagues PoB's fetch would have set (its callback, CompareBuySimilar.lua:323-339), from
+-- the app's league; the pick is PoB's own selection callback, which rebuilds the URL. The list
+-- starts as "Loading..." at index 1, so a `SetSel` to index 1 would run nothing.
+-- (Its `selFunc` also records `M.lastLeagueByRealm`, as a user's pick does; only the fetch
+-- callback reads that, and it never runs.)
+local function buy_leagues(popup)
+	local leagues = popup.controls.leagueDrop
+	local list, index = glue.trade_leagues()
+	leagues:SetList(list)
+	leagues.selIndex = index
+	leagues.selFunc(index, list[index])
+end
+
+-- The app's realm, picked as the user would; a change refetches the leagues (refused)
+local function buy_realm(popup)
+	local realms = popup.controls.realmDrop
+	realms:SetSel(isValueInArray(realms.list, trade.realm) or 1)
+end
+
+local function is_timeless(s)
+	return s ~= nil and s.kind == "TimelessJewel"
+end
+
+-- The trade windows: Buy similar (R10) and the timeless search's trade button (R17)
+local function is_trade(s)
+	return s ~= nil and (is_timeless(s) or (type(s.kind) == "table" and s.kind.BuySimilar ~= nil))
+end
+
+-- The timeless window's realms, as PoB lists them ("PC", "Sony", "Xbox"), by the app's realm
+local TIMELESS_REALM = { PC = 1, PS4 = 2, Xbox = 3 }
+
+-- The leagues PoB would have fetched for every realm, so the window never fetches (R17): its
+-- cache `tradeLeaguesList` is filled from the app's league, which is also the pick. PoB's
+-- dropdown takes a cached list as its own and wipes it on the next `SetList`, so each realm
+-- gets a copy, made again before every realm pick.
+local function timeless_leagues(tab)
+	local list, index = glue.trade_leagues()
+	for _, realm in ipairs({ "pc", "sony", "xbox" }) do
+		tab.tradeLeaguesList[realm] = copyTable(list)
+	end
+	tab.timelessJewelLeagueSelect = list[index]
 end
 
 -- ---- Opening ----
@@ -157,6 +410,156 @@ end
 -- slot) and keeps the popup it opens as the session.
 function glue.popup_open(kind, arg)
 	local open
+	if kind == "options" then
+		-- a window opened over another Options window would take its edits as the state to
+		-- go back to
+		glue.popup_cancel_options()
+		-- PoB's Save writes `main.connectionProtocol` into `launch`, but only the window's
+		-- dropdown ever sets it: start from what is stored, on every open
+		main().connectionProtocol = pob.main.connectionProtocol or 0
+		-- PoB's own opener; the window needs no build (R13)
+		local popups = main().popups
+		local depth = #popups
+		local ok, err = pcall(function()
+			main():OpenOptionsPopup()
+		end)
+		local count = #popups - depth
+		local top = popups[1]
+		close_above(depth)
+		if not ok then
+			error(err, 0)
+		end
+		if count == 0 then
+			error("PoB didn't open that window", 0)
+		end
+		drop()
+		session = { popup = top, kind = "Options", owner = "main" }
+		return
+	end
+	if kind == "buy_similar" then
+		glue.popup_cancel_options()
+		local item, slot_name = buy_target(arg)
+		local module = buy_module()
+		local popups = main().popups
+		local depth = #popups
+		local ok, err = pcall(no_launches, function()
+			module.openPopup(item, slot_name, pob.build)
+			if #popups > depth then
+				buy_realm(popups[1])
+				buy_leagues(popups[1])
+			end
+		end)
+		local count = #popups - depth
+		local top = popups[1]
+		close_above(depth)
+		if not ok then
+			error(err, 0)
+		end
+		if count == 0 then
+			error("PoB didn't open that window", 0)
+		end
+		drop()
+		session = { popup = top, kind = { BuySimilar = { source = arg } }, owner = "build", gen = glue.build_generation() }
+		return
+	end
+	if kind == "timeless" then
+		glue.popup_cancel_options()
+		local tab = pob.build.treeTab
+		timeless_leagues(tab)
+		-- the window opens on PC and the app's realm is picked in it, as a user would: opened on
+		-- a remembered realm, PoB sets that realm's cached list twice, and the second `SetList`
+		-- wipes it (TreeTab.lua:2376-2384, DropDownControl.lua:524-530)
+		tab.selectedRealmIndex = 1
+		local popups = main().popups
+		local depth = #popups
+		local ok, err = pcall(no_launches, function()
+			tab:FindTimelessJewel()
+			if #popups > depth then
+				popups[1].controls.realmSelection:SetSel(TIMELESS_REALM[glue.trade_realm()] or 1)
+			end
+		end)
+		local count = #popups - depth
+		local top = popups[1]
+		close_above(depth)
+		if not ok then
+			error(err, 0)
+		end
+		if count == 0 then
+			error("PoB didn't open that window", 0)
+		end
+		drop()
+		session = { popup = top, kind = "TimelessJewel", owner = "build", gen = glue.build_generation() }
+		return
+	end
+	if kind == "spectre_library" then
+		glue.popup_cancel_options()
+		-- PoB's own buttons (Build.lua:552, CalcsTab.lua:105-109): the sidebar's, else the
+		-- Calcs selector's; their main skills can differ, so each is refreshed as PoB draws it
+		local button = glue.sidebar_spectre_library() or glue.calcs_spectre_library()
+		if not (button and button:IsEnabled()) then
+			error("PoB doesn't offer that here", 0)
+		end
+		local popups = main().popups
+		local depth = #popups
+		local ok, err = pcall(button.onClick)
+		local count = #popups - depth
+		local top = popups[1]
+		close_above(depth)
+		if not ok then
+			error(err, 0)
+		end
+		if count == 0 then
+			error("PoB didn't open that window", 0)
+		end
+		drop()
+		session = { popup = top, kind = "SpectreLibrary", owner = "build", gen = glue.build_generation() }
+		return
+	end
+	if kind == "mod_browser" then
+		glue.popup_cancel_options()
+		-- the group's own "Add Mod" button (ConfigTab.lua:42-44); `arg` is 1-based
+		local tab = pob.build.configTab
+		local blocks = tab.customModsBlockControls
+		local block = blocks and blocks[arg]
+		local list = tab.configSets[tab.activeConfigSetId].customModsList
+		local data = list and list[arg]
+		if not (block and data and block.blockData == data) then
+			error("no custom modifier group " .. tostring(arg), 0)
+		end
+		local button = block.controls.addModBtn
+		if not (button:IsShown() and button:IsEnabled()) then
+			error("PoB doesn't offer that here", 0)
+		end
+		local popups = main().popups
+		local depth = #popups
+		local ok, err = pcall(button.onClick)
+		local count = #popups - depth
+		local top = popups[1]
+		close_above(depth)
+		if not ok then
+			error(err, 0)
+		end
+		if count == 0 then
+			error("PoB didn't open that window", 0)
+		end
+		drop()
+		-- the window's Add writes into the group's table it was opened with: an undo, a set
+		-- switch or a removed group replaces that table, which PoB's modal popup never lets
+		-- happen, so the session ends then
+		local function still_valid()
+			local now = pob.build.configTab
+			local set = now.configSets[now.activeConfigSetId]
+			return now == tab and set ~= nil and set.customModsList ~= nil and set.customModsList[arg] == data
+		end
+		session = {
+			popup = top,
+			kind = { ModBrowser = { group = arg - 1 } },
+			owner = "build",
+			gen = glue.build_generation(),
+			still_valid = still_valid,
+		}
+		return
+	end
 	if kind == "node_replacement" then
 		-- the right-click's body (PassiveTreeView.lua:519-533) without `buildFlag`, which
 		-- changes nothing: the node must pass PoB's rule; an allocated mastery is the effect
@@ -180,6 +583,7 @@ function glue.popup_open(kind, arg)
 		end
 		open = control.onClick
 	end
+	glue.popup_cancel_options()
 	local tab = items_tab()
 	local popups = main().popups
 	local depth = #popups
@@ -199,7 +603,8 @@ function glue.popup_open(kind, arg)
 	end
 	-- a failed open above left the session it found alone; this one replaces it (R4)
 	local shown = kind == "node_replacement" and { NodeReplacement = { node = arg } } or KINDS[kind](arg)
-	session = { popup = top, kind = shown, item = tab.displayItem, build = pob.build }
+	drop()
+	session = { popup = top, kind = shown, owner = "item", item = tab.displayItem, gen = glue.build_generation() }
 end
 
 -- ---- Controls ----
@@ -243,10 +648,12 @@ end
 -- (`notableDB.search`). Numeric keys are named by their number.
 local function all_controls(popup)
 	local found = {}
+	local options = session ~= nil and session.kind == "Options" and session.popup == popup
 	for key, control in pairs(popup.controls) do
 		local name = tostring(key)
 		local kind = kind_of(control)
-		if kind then
+		-- the rows the app doesn't offer are not in the window at all (R13)
+		if kind and not (options and glue.settings_hidden(name)) then
 			found[name] = { control = control, kind = kind }
 			if kind == "List" and control.controls then
 				for child_key, child in pairs(control.controls) do
@@ -265,6 +672,9 @@ end
 local function find(name)
 	local entry = all_controls(session.popup)[name]
 	if not entry then
+		if glue.popup_is_options() and glue.settings_hidden(name) then
+			error("PoB doesn't offer that here", 0)
+		end
 		error("no such control", 0)
 	end
 	return entry.control, entry.kind
@@ -301,6 +711,7 @@ local function control_view(name, control, kind, popup_x, popup_y)
 		value = 0,
 		checked = false,
 		text = "",
+		-- a list's rows are asked for one by one (`glue.popup_tooltip` with an index)
 		hover_tooltip = kind ~= "List" and control.tooltipFunc ~= nil,
 		rows = {},
 	}
@@ -325,14 +736,27 @@ local function control_view(name, control, kind, popup_x, popup_y)
 			local ok, label = pcall(control.GetRowValue, control, 1, i, value)
 			view.rows[i] = { key = row_key(value, i), label = ok and text_of(label) or "" }
 		end
-		if control.selValue ~= nil then
+		-- the selected row is `selIndex`: a Shift+click moves `selValue` but not the
+		-- selection (ListControl.lua:76-85)
+		local sel = control.selIndex and control.list[control.selIndex]
+		if sel ~= nil then
+			view.row_selected = row_key(sel, control.selIndex)
+		elseif control.selValue ~= nil then
 			for i, value in ipairs(control.list) do
 				if value == control.selValue then
 					view.row_selected = row_key(value, i)
 				end
 			end
 		end
+		-- the other end of a Shift+click range (TimelessJewelListControl.lua:50-58)
+		local far = control.highlightIndex and control.list[control.highlightIndex]
+		if far ~= nil then
+			view.row_highlight = row_key(far, control.highlightIndex)
+		end
 		view.note = control.defaultText and text_of(control:GetProperty("defaultText")) or nil
+		-- PoB lets the user drag rows to reorder this list (left out otherwise, so the view
+		-- keeps the shape the item gate compares)
+		view.reorder = control.isMutable and true or nil
 	end
 	return view
 end
@@ -359,6 +783,10 @@ function glue.popup_view()
 			end
 			return a.name < b.name
 		end)
+		-- what Enter clicks when no control is selected (PopupDialog.lua:79-83)
+		if type(popup.enterControl) == "string" then
+			view.enter = popup.enterControl
+		end
 	end)
 	return view
 end
@@ -377,65 +805,200 @@ local function require_usable(control)
 	end
 end
 
--- Sets a control as the user would. `kind` is the input's kind ("choice", "number", "check",
--- "text" or "row"); a choice carries the label that was shown (R8).
+-- Sets `control` (of `control_kind`, from KIND_OF) as the user would. `kind` is the input's
+-- kind ("choice", "number", "check", "text" or "row"); a choice carries the label that was
+-- shown (R8). For the other glue files too (Compare's controls, R6).
+function glue.set_control(control, control_kind, kind, value, label)
+	if kind == "choice" and control_kind == "Dropdown" then
+		local entry = control.list[value + 1]
+		if entry == nil then
+			error("no such choice", 0)
+		end
+		if (type(entry) == "table" and entry.label or entry) ~= label then
+			error("the list changed; pick again", 0)
+		end
+		control:SetSel(value + 1)
+	elseif kind == "number" and control_kind == "Slider" then
+		control:SetVal(value)
+	elseif kind == "check" and control_kind == "Check" then
+		if (control.state and true or false) ~= value then
+			glue.press_check(control, value)
+		end
+	elseif kind == "text" and control_kind == "Edit" then
+		glue.paste_into(control, value)
+	elseif (kind == "row" or kind == "row_double" or kind == "row_shift") and control_kind == "List" then
+		-- a click on the row (ListControl.lua:338-372): a double click is PoB's second click, and
+		-- Shift is held for a range pick (`OverrideSelectIndex`, which then takes the click)
+		glue.list_sync(control)
+		for i, entry in ipairs(control.list) do
+			if row_key(entry, i) == value then
+				local real = IsKeyDown
+				if kind == "row_shift" then
+					IsKeyDown = function(key)
+						return key == "SHIFT"
+					end
+				end
+				local ok, err = pcall(function()
+					if control:SelectIndex(i) ~= false and control.OnSelClick then
+						control:OnSelClick(i, entry, kind == "row_double")
+					end
+				end)
+				IsKeyDown = real
+				if not ok then
+					error(err, 0)
+				end
+				return
+			end
+		end
+		error("no such choice", 0)
+	elseif kind == "row_move" and control_kind == "List" then
+		-- a drag inside a mutable list, and the drop (ListControl.lua:425-437); `label` is the
+		-- row's 0-based place after it
+		if not control.isMutable then
+			error("PoB doesn't offer that here", 0)
+		end
+		local from
+		for i, entry in ipairs(control.list) do
+			if row_key(entry, i) == value then
+				from = i
+			end
+		end
+		if not from then
+			error("no such choice", 0)
+		end
+		local to = (tonumber(label) or -1) + 1
+		if to < 1 or to > #control.list then
+			error("no such place", 0)
+		end
+		if to ~= from then
+			local entry = control.list[from]
+			control:SelectIndex(from)
+			table.remove(control.list, from)
+			table.insert(control.list, to, entry)
+			if control.OnOrderChange then
+				control:OnOrderChange(from, to)
+			end
+			control.selValue = nil
+		end
+	else
+		error("no such control", 0)
+	end
+end
+
+-- A control outside a popup as the views show it (`PopupControl`), positions as `GetPos()`
+-- gives them; nil for a kind the views don't have
+function glue.describe_control(name, control)
+	local kind = kind_of(control)
+	return kind and control_view(name, control, kind, 0, 0), kind
+end
+
+-- While a timeless search runs, only its window's Cancel is offered: PoB's press is
+-- synchronous, so nothing else could change what the search reads
+local function refuse_while_searching(name)
+	if is_timeless(session) and glue.timeless_running() and name ~= "closeButton" then
+		error("a timeless search is already running", 0)
+	end
+end
+
+-- Sets a control as the user would; see `glue.set_control`. Returns whether PoB asked for a
+-- recalculation (the Mod Browser's double click adds the mod, R28).
 function glue.popup_set(name, kind, value, label)
 	require_session()
+	refuse_while_searching(name)
+	local flag_before = pob.build and pob.build.buildFlag and true or false
+	local trading = is_trade(session)
+	if is_timeless(session) and name == "realmSelection" then
+		timeless_leagues(pob.build.treeTab)
+	end
 	with_session(function()
 		local control, control_kind = find(name)
 		require_usable(control)
-		if kind == "choice" and control_kind == "Dropdown" then
-			local entry = control.list[value + 1]
-			if entry == nil then
-				error("no such choice", 0)
-			end
-			if (type(entry) == "table" and entry.label or entry) ~= label then
-				error("the list changed; pick again", 0)
-			end
-			control:SetSel(value + 1)
-		elseif kind == "number" and control_kind == "Slider" then
-			control:SetVal(value)
-		elseif kind == "check" and control_kind == "Check" then
-			if (control.state and true or false) ~= value then
-				glue.press_check(control, value)
-			end
-		elseif kind == "text" and control_kind == "Edit" then
-			glue.paste_into(control, value)
-		elseif kind == "row" and control_kind == "List" then
-			glue.list_sync(control)
-			for i, entry in ipairs(control.list) do
-				if row_key(entry, i) == value then
-					control:SelectIndex(i)
-					control:OnSelClick(i, entry, false)
-					return
-				end
-			end
-			error("no such choice", 0)
-		else
-			error("no such control", 0)
+		if not trading then
+			glue.set_control(control, control_kind, kind, value, label)
+			return
 		end
+		no_launches(function()
+			glue.set_control(control, control_kind, kind, value, label)
+			-- a realm pick refetches the leagues, which leaves "Loading..." (R10)
+			if name == "realmDrop" and not is_timeless(session) then
+				buy_leagues(session.popup)
+			end
+		end)
 	end)
+	return (pob.build and pob.build.buildFlag and not flag_before) and true or false
 end
 
 -- Presses a button. Returns whether the session ended and whether PoB asked for a
 -- recalculation (`buildFlag`, which a tattoo sets).
 function glue.popup_press(name)
 	require_session()
+	if session.kind == "GameVersion" then
+		return game_version_press(name)
+	end
 	local flag_before = pob.build.buildFlag and true or false
-	local ended = with_session(function()
+	refuse_while_searching(name)
+	local options = session.kind == "Options"
+	-- Options' Save writes Settings.xml: it is refused, with the window and its edits left
+	-- open, when the write would lose another program's changes or never happen (I-1)
+	if options and name == "save" then
+		glue.settings_check_writable("save Options")
+	end
+	local trading = is_trade(session)
+	local timeless = is_timeless(session)
+	session.pressing = true
+	local url
+	local started = false
+	local ok, ended = pcall(with_session, function()
 		local control, kind = find(name)
 		if kind ~= "Button" then
 			error("no such control", 0)
 		end
 		require_usable(control)
-		control.onClick()
+		if timeless and name == "searchButton" then
+			-- the search runs as a background job; the press returns at once (R17)
+			glue.timeless_start(session.popup, control)
+			started = true
+		elseif trading then
+			-- the user's own press: a trade link it opens goes to the UI (R20)
+			url = no_launches(function()
+				return glue.capture_url(control.onClick)
+			end)
+		else
+			control.onClick()
+		end
 	end)
-	return { ended = ended, build_flag = (pob.build.buildFlag and not flag_before) and true or false }
+	if session then
+		session.pressing = nil
+	end
+	if not ok then
+		error(ended, 0)
+	end
+	if options then
+		-- a Cancel put the shared values back over an override
+		glue.settings_reapply()
+	end
+	return { ended = ended, build_flag = (pob.build.buildFlag and not flag_before) and true or false, url = url, started = started }
 end
 
--- Cancel and Escape: PoB only closes the popup
+-- Presses Options' Cancel (which restores the values the window changed as it went)
+function glue.popup_cancel_options()
+	if not glue.popup_is_options() then
+		return
+	end
+	local cancel = session.popup.controls.cancel
+	if cancel then
+		pcall(with_session, function()
+			cancel.onClick()
+		end)
+	end
+	-- Cancel puts back what the window opened with, an override included
+	glue.settings_reapply()
+end
+
+-- Cancel and Escape: PoB only closes the popup. Escape on Options is PoB's `cancel` button.
 function glue.popup_close()
-	session = nil
+	glue.popup_cancel_options()
+	drop()
 end
 
 -- The tooltip of a dropdown entry (`index`, 0-based) or of a button, as PoB would build it on
@@ -448,6 +1011,17 @@ function glue.popup_tooltip(name, index)
 	with_session(function()
 		local entry = all_controls(session.popup)[name]
 		local control = entry and entry.control
+		-- a list row's tooltip, as hovering the row builds it (ListControl.lua:319-321)
+		if control and not control.tooltipFunc and control.AddValueTooltip and index and control:IsShown() then
+			local value = control.list and control.list[index + 1]
+			if value == nil then
+				return
+			end
+			local tooltip = new("Tooltip")
+			control:AddValueTooltip(tooltip, index + 1, value)
+			out = glue.read_tooltip(tooltip)
+			return
+		end
 		if not (control and control.tooltipFunc and control:IsShown()) then
 			return
 		end

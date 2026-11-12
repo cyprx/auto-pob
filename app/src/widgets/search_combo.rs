@@ -31,6 +31,22 @@ pub fn search_combo_ui(
     let filter_id = id.with("filter");
     let open_id = id.with("opened");
     let mut picked = None;
+    // PoB's SearchHost (SearchHost.lua:109-115): Esc empties a search and keeps the list
+    // dropped; only an empty search lets Esc close it
+    let button = ui.make_persistent_id(egui::IdSalt::new(id));
+    let open = egui::Popup::is_id_open(ui.ctx(), button.with("popup"));
+    let searching = ui
+        .data(|d| d.get_temp::<String>(filter_id))
+        .is_some_and(|f| !f.is_empty());
+    if open
+        && searching
+        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        ui.data_mut(|d| d.insert_temp(filter_id, String::new()));
+        // egui dropped the box's focus on Esc; typing goes on searching
+        // (DropDownControl.lua:422-436)
+        ui.memory_mut(|m| m.request_focus(filter_id));
+    }
     let mut combo = egui::ComboBox::from_id_salt(id)
         .selected_text(pob_text(current, 14.0, default))
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
@@ -52,7 +68,7 @@ pub fn search_combo_ui(
         if first {
             edit.request_focus();
         }
-        let needle = filter.to_lowercase();
+        super::scroll_step::note_search(ui.ctx(), filter_id);
         let mut first_match = None;
         egui::ScrollArea::vertical()
             .max_height(320.0)
@@ -60,7 +76,7 @@ pub fn search_combo_ui(
             .show(ui, |ui| {
                 for (i, label) in list.iter().enumerate() {
                     let text = pob_text(label, 14.0, default);
-                    if !needle.is_empty() && !text.text.to_lowercase().contains(&needle) {
+                    if !super::dropdown::search_matches(&filter, &text.text) {
                         continue;
                     }
                     first_match.get_or_insert(i);
@@ -94,6 +110,23 @@ pub fn search_combo_ui(
             d.insert_temp(open_id, false);
             d.insert_temp(filter_id, String::new());
         });
+    }
+    // the wheel and the arrows step it, as PoB's dropdown (DropDownControl.lua:476-516)
+    // through the search's matches only (DropDownControl.lua:57-107)
+    if picked.is_none() {
+        let filter: String = ui.data(|d| d.get_temp(filter_id)).unwrap_or_default();
+        let visible: Vec<bool> = list
+            .iter()
+            .map(|l| super::dropdown::search_matches(&filter, &pob_text(l, 14.0, default).text))
+            .collect();
+        picked = crate::widgets::scroll_step::dropdown_step_in(
+            ui,
+            &shown.response,
+            list.len(),
+            selected,
+            shown.inner.is_some(),
+            Some(&visible),
+        );
     }
     (shown.response, picked)
 }
@@ -186,6 +219,91 @@ mod tests {
             self.frame(vec![]);
             assert!(!self.entries.is_empty(), "the combo did not open");
         }
+    }
+
+    fn wheel(y: f32) -> Event {
+        Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: Vec2::new(0.0, y),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    fn key(key: Key) -> Event {
+        Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn the_wheel_and_keys_step_a_pointed_at_dropdown() {
+        let mut h = Harness::new(&["Alpha", "Beta", "Gamma"], 1);
+        // not pointed at: nothing
+        h.frame(vec![wheel(-1.0)]);
+        assert!(h.picks.is_empty());
+        h.frame(vec![Event::PointerMoved(h.combo.center())]);
+        // the wheel down steps one entry down, up one up (DropDownControl.lua:488-512)
+        h.frame(vec![wheel(-1.0)]);
+        h.frame(vec![wheel(1.0)]);
+        h.frame(vec![key(Key::ArrowDown)]);
+        h.frame(vec![key(Key::PageUp)]);
+        assert_eq!(h.picks, [2, 0, 2, 0]);
+        // SetSel clamps: no step past the ends
+        h.selected = 2;
+        h.picks.clear();
+        h.frame(vec![wheel(-1.0)]);
+        assert!(h.picks.is_empty());
+        // PoB's "Disable control scroll interaction" stops the wheel, not the keys
+        crate::widgets::scroll_step::set_options(
+            &h.ctx,
+            crate::widgets::scroll_step::ScrollOptions {
+                disable: true,
+                invert_slider: false,
+            },
+        );
+        h.frame(vec![wheel(1.0)]);
+        assert!(h.picks.is_empty());
+        h.frame(vec![key(Key::ArrowUp)]);
+        assert_eq!(h.picks, [1]);
+    }
+
+    #[test]
+    fn escape_empties_the_search_and_keeps_the_list_dropped() {
+        let mut h = Harness::new(&["Alpha", "Beta", "Gamma", "Delta"], 0);
+        h.open();
+        h.frame(vec![Event::Text("alx".into())]);
+        h.frame(vec![]);
+        assert!(h.entries.is_empty());
+        // Backspace takes the search's last letter (SearchHost.lua:112-114)
+        h.frame(vec![key(Key::Backspace)]);
+        h.frame(vec![]);
+        assert_eq!(h.entries.len(), 1, "\"al\" matches Alpha");
+        // Esc empties it and the list stays dropped (SearchHost.lua:109-111)
+        h.frame(vec![key(Key::Escape)]);
+        h.frame(vec![]);
+        assert_eq!(h.entries.len(), 4);
+        // the box keeps the keyboard: typing goes on searching (DropDownControl.lua:422-436)
+        h.frame(vec![Event::Text("del".into())]);
+        h.frame(vec![]);
+        assert_eq!(h.entries.len(), 1, "typing after Esc searched nothing");
+        h.frame(vec![key(Key::Backspace)]);
+        h.frame(vec![key(Key::Backspace)]);
+        h.frame(vec![key(Key::Backspace)]);
+        h.frame(vec![]);
+        // with no search, Esc closes it
+        h.frame(vec![key(Key::Escape)]);
+        h.frame(vec![]);
+        h.frame(vec![]);
+        assert!(
+            h.entries.is_empty(),
+            "Esc with no search didn't close the list"
+        );
     }
 
     #[test]

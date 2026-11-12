@@ -19,6 +19,13 @@ const ROW_HEIGHT: f32 = 18.0;
 /// Filter dropdowns per line, so they fit a narrow column.
 const PER_ROW: usize = 3;
 
+/// The payload of a database row being dragged: onto a slot to add and equip it (R23)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DbDrag {
+    pub db: ItemDb,
+    pub name: String,
+}
+
 pub struct DbState {
     /// The panel is open; the engine has a database open while this is so and the tab shows
     pub expanded: bool,
@@ -34,6 +41,12 @@ pub struct DbState {
     selected: Option<String>,
     tip: HoverTip,
     pub(crate) rects: Rects,
+    /// The search box's id, and Ctrl+F's ask that it take the keyboard when next drawn
+    search_id: Option<egui::Id>,
+    focus_search: bool,
+    /// The wiki page of the row under the pointer: a unique's name, a rare's base
+    /// (ItemDBControl.lua:375-382, ItemTools.lua:395-399)
+    pub(super) hovered_wiki: Option<String>,
 }
 
 fn default_query(db: ItemDb) -> ItemDbQuery {
@@ -63,11 +76,33 @@ impl Default for DbState {
             selected: None,
             tip: HoverTip::default(),
             rects: Rects::default(),
+            search_id: None,
+            focus_search: false,
+            hovered_wiki: None,
         }
     }
 }
 
 impl DbState {
+    /// Ctrl+F (ItemsTab.lua:1471-1480): from the uniques' search, or anywhere while the rares
+    /// show, the rares' search; else the uniques'. Ours is one box over both, so the panel
+    /// opens on that database and its box takes the keyboard. Returns the query to resend
+    /// when the database changed under an open panel.
+    pub fn focus_search(&mut self, ctx: &egui::Context) -> Option<Command> {
+        let in_box = self
+            .search_id
+            .is_some_and(|id| ctx.memory(|m| m.has_focus(id)));
+        let db = match (self.query.db, in_box) {
+            (ItemDb::Uniques, true) | (ItemDb::Rares, false) => ItemDb::Rares,
+            _ => ItemDb::Uniques,
+        };
+        let changed = db != self.query.db;
+        self.toggle_db(db);
+        self.expanded = true;
+        self.focus_search = true;
+        (changed && self.open_sent).then(|| Command::SetItemDb(self.query.clone()))
+    }
+
     /// The engine's answer (or its end). A view of another database than the toggles say is
     /// stale and ignored by the panel.
     pub fn on_view(&mut self, view: Option<&ItemDbView>) {
@@ -177,13 +212,17 @@ fn drop_list(
     let current = list.labels.get(selected).map_or("", String::as_str);
     let mut picked = None;
     let combo = ui.add_enabled_ui(list.enabled, |ui| {
-        egui::ComboBox::from_id_salt(("items_db", key))
+        crate::widgets::dropdown::Dropdown::from_id_salt(("items_db", key))
             .width(100.0)
             .truncate()
             .selected_text(pob_text(current, 14.0, default))
             .show_ui(ui, |ui| {
                 for (i, label) in list.labels.iter().enumerate() {
-                    let item = ui.selectable_label(i == selected, pob_text(label, 14.0, default));
+                    let item = crate::widgets::dropdown::item(
+                        ui,
+                        i == selected,
+                        pob_text(label, 14.0, default),
+                    );
                     rects.note(&item, || format!("db_{key}_{i}"));
                     if item.clicked() && i != selected {
                         picked = Some(i);
@@ -192,7 +231,15 @@ fn drop_list(
             })
     });
     rects.note(&combo.inner.response, || format!("db_{key}"));
-    picked
+    // the wheel and the arrows step it (DropDownControl.lua:476-516)
+    picked.or_else(|| {
+        crate::widgets::scroll_step::combo_step(
+            ui,
+            &combo.inner.response,
+            list.labels.len(),
+            selected,
+        )
+    })
 }
 
 pub fn show(
@@ -202,6 +249,7 @@ pub fn show(
     now: f64,
 ) -> ItemsOutput {
     let mut out = ItemsOutput::default();
+    state.hovered_wiki = None;
     let header = egui::CollapsingHeader::new("Item databases")
         .id_salt("items_db_header")
         .open(Some(state.expanded))
@@ -305,6 +353,10 @@ fn body(
             .search
             .show(ui, id, &state.query.search.clone(), false, &opts);
         state.rects.note(&response, || "db_search".into());
+        state.search_id = Some(id);
+        if std::mem::take(&mut state.focus_search) {
+            response.request_focus();
+        }
         if let Some(text) = send {
             state.query.search = text;
             changed = true;
@@ -331,6 +383,7 @@ fn body(
             out.commands.push(Command::AddDbItem {
                 db: state.query.db,
                 name,
+                second_slot: false,
             });
         }
     });
@@ -420,7 +473,12 @@ fn rows(ui: &mut egui::Ui, view: &ItemDbView, state: &mut DbState, out: &mut Ite
                         }
                     })
                     .response
-                    .interact(egui::Sense::click());
+                    .interact(egui::Sense::click_and_drag());
+                // PoB's drag of a row onto a slot (R23)
+                response.dnd_set_drag_payload(DbDrag {
+                    db,
+                    name: row.name.clone(),
+                });
                 if selected {
                     ui.painter().rect_filled(
                         response.rect,
@@ -430,6 +488,7 @@ fn rows(ui: &mut egui::Ui, view: &ItemDbView, state: &mut DbState, out: &mut Ite
                 }
                 state.rects.note(&response, || format!("db_row_{i}"));
                 let ctrl = ui.input(|inp| inp.modifiers.ctrl || inp.modifiers.command);
+                let shift = ui.input(|inp| inp.modifiers.shift);
                 if response.double_clicked() && !ctrl {
                     // PoB's double click: shows the item on the display panel (R15)
                     state.selected = Some(row.name.clone());
@@ -439,20 +498,30 @@ fn rows(ui: &mut egui::Ui, view: &ItemDbView, state: &mut DbState, out: &mut Ite
                     });
                 } else if response.clicked() {
                     state.selected = Some(row.name.clone());
-                    // PoB's Ctrl+click adds the item and equips it (R15)
+                    // PoB's Ctrl+click adds the item and equips it (R15), Ctrl+Shift+click
+                    // into the second slot (R23)
                     // (the second click of a double click is the same gesture: once)
                     if ctrl && !response.double_clicked() {
                         out.commands.push(Command::AddDbItem {
                             db,
                             name: row.name.clone(),
+                            second_slot: shift,
                         });
                     }
+                }
+                if response.hovered() {
+                    state.hovered_wiki = Some(match db {
+                        ItemDb::Uniques => row.name.clone(),
+                        ItemDb::Rares => row.base.clone(),
+                    });
                 }
                 state.tip.note(
                     &response,
                     ControlTooltipQuery::DbItem {
                         db,
                         name: row.name.clone(),
+                        // Shift held asks for PoB's child tooltips (R34)
+                        shift,
                     },
                 );
             }

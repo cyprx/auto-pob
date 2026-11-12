@@ -1,0 +1,3551 @@
+# PoB 2.67.2 parity inventory (SP7 R2), checked by the gate test
+# parity::parity_inventory_is_complete. Every control, popup and key upstream PoB has must have
+# a row here, with exactly one of:
+#   ported    = where the egui app offers the same function (a different widget is fine)
+#   ruled_out = the R# (SP7 plan) or D-# (ledger) ruling that drops it
+#   gap       = the task that closes it (Task 16 fails while any gap is left)
+# plus an optional note. A widget's own scroll bars and +/-/x buttons share its status.
+# NF-n rows are new findings from the Task 2 audit; the controller ruled all of them in scope.
+
+# ---- controls ----
+
+[controls."build.ascendDrop"]
+ported = "app/src/ui/build.rs top_bar Ascendancy combo (tree/toolbar.rs class), on every tab"
+
+[controls."build.ascendDrop.scrollBar"]
+ported = "app/src/ui/build.rs top_bar Ascendancy combo"
+note = "part of build.ascendDrop"
+
+[controls."build.back"]
+ported = "app/src/ui/build.rs top_bar < Builds"
+
+[controls."build.buildLoadouts"]
+ported = "app/src/ui/build.rs top_bar loadouts combo: loadouts, headers as labels, New Loadout, Sync (R21)"
+note = "its Help >> entry opens the Help window at section 7, as Build.lua:312 (Task 14)"
+
+[controls."build.buildLoadouts.scrollBar"]
+ported = "app/src/ui/build.rs top_bar loadouts combo"
+note = "part of build.buildLoadouts"
+
+[controls."build.buildName"]
+ported = "app/src/ui/build.rs top_bar name with unsaved marker"
+
+[controls."build.characterLevel"]
+ported = "app/src/ui/build.rs top_bar level box (EditBox: Enter or blur sends, Esc reverts; %D filter, 3 characters; a keystroke in Auto is Manual) with PoB's Experience multiplier tooltip"
+
+[controls."build.characterLevel.buttonDown"]
+ported = "app/src/ui/build.rs top_bar level box"
+note = "part of build.characterLevel"
+
+[controls."build.characterLevel.buttonUp"]
+ported = "app/src/ui/build.rs top_bar level box"
+note = "part of build.characterLevel"
+
+[controls."build.characterLevel.scrollBarH"]
+ported = "app/src/ui/build.rs top_bar level box"
+note = "part of build.characterLevel"
+
+[controls."build.characterLevel.scrollBarV"]
+ported = "app/src/ui/build.rs top_bar level box"
+note = "part of build.characterLevel"
+
+[controls."build.classDrop"]
+ported = "app/src/ui/build.rs top_bar Class combo (tree/toolbar.rs class, with the class question), on every tab"
+
+[controls."build.classDrop.scrollBar"]
+ported = "app/src/ui/build.rs top_bar Class combo"
+note = "part of build.classDrop"
+
+[controls."build.levelScalingButton"]
+ported = "app/src/ui/build.rs top_bar Auto/Manual button (R21)"
+
+[controls."build.mainSkill"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+
+[controls."build.mainSkill.scrollBar"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+note = "part of build.mainSkill"
+
+[controls."build.mainSkillLabel"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+note = "label"
+
+[controls."build.mainSkillMineCount"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+
+[controls."build.mainSkillMineCount.buttonDown"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+note = "part of build.mainSkillMineCount"
+
+[controls."build.mainSkillMineCount.buttonUp"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+note = "part of build.mainSkillMineCount"
+
+[controls."build.mainSkillMineCount.scrollBarH"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+note = "part of build.mainSkillMineCount"
+
+[controls."build.mainSkillMineCount.scrollBarV"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+note = "part of build.mainSkillMineCount"
+
+[controls."build.mainSkillMineCountLabel"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+note = "label"
+
+[controls."build.mainSkillMinion"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+note = "drag target (Build.lua:534-543): items from the item list, the databases and the shared list dropped on it go to the minion's item set (DropOnMinion, sidebar.rs minion_drop)"
+
+[controls."build.mainSkillMinion.scrollBar"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+note = "part of build.mainSkillMinion"
+
+[controls."build.mainSkillMinionLibrary"]
+ported = "app/src/ui/sidebar.rs Manage Spectres button (PoB popup session, R18)"
+
+[controls."build.mainSkillMinionSkill"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+
+[controls."build.mainSkillMinionSkill.scrollBar"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+note = "part of build.mainSkillMinionSkill"
+
+[controls."build.mainSkillPart"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+
+[controls."build.mainSkillPart.scrollBar"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+note = "part of build.mainSkillPart"
+
+[controls."build.mainSkillStageCount"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+
+[controls."build.mainSkillStageCount.buttonDown"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+note = "part of build.mainSkillStageCount"
+
+[controls."build.mainSkillStageCount.buttonUp"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+note = "part of build.mainSkillStageCount"
+
+[controls."build.mainSkillStageCount.scrollBarH"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+note = "part of build.mainSkillStageCount"
+
+[controls."build.mainSkillStageCount.scrollBarV"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+note = "part of build.mainSkillStageCount"
+
+[controls."build.mainSkillStageCountLabel"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+note = "label"
+
+[controls."build.mainSocketGroup"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+
+[controls."build.mainSocketGroup.scrollBar"]
+ported = "app/src/ui/sidebar.rs main-skill selector"
+note = "part of build.mainSocketGroup"
+
+[controls."build.modeCalcs"]
+ported = "app/src/ui/build.rs tab_strip"
+
+[controls."build.modeCompare"]
+ported = "app/src/ui/build.rs tab_strip Compare tab"
+note = "Compare tab"
+
+[controls."build.modeConfig"]
+ported = "app/src/ui/build.rs tab_strip"
+
+[controls."build.modeImport"]
+ported = "app/src/ui/build.rs tab_strip"
+
+[controls."build.modeItems"]
+ported = "app/src/ui/build.rs tab_strip"
+
+[controls."build.modeNotes"]
+ported = "app/src/ui/build.rs tab_strip"
+
+[controls."build.modeParty"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."build.modeSkills"]
+ported = "app/src/ui/build.rs tab_strip"
+
+[controls."build.modeTree"]
+ported = "app/src/ui/build.rs tab_strip"
+
+[controls."build.pointDisplay"]
+ported = "app/src/ui/build.rs top_bar points (tree/toolbar.rs points) with PoB's progress tooltip, on every tab"
+
+[controls."build.save"]
+ported = "app/src/ui/build.rs top_bar Save"
+
+[controls."build.saveAs"]
+ported = "app/src/ui/build.rs top_bar Save as"
+
+[controls."build.secondaryAscendDrop"]
+ported = "app/src/ui/build.rs top_bar bloodline combo (R21)"
+
+[controls."build.secondaryAscendDrop.scrollBar"]
+ported = "app/src/ui/build.rs top_bar bloodline combo"
+note = "part of build.secondaryAscendDrop"
+
+[controls."build.statBox"]
+ported = "app/src/ui/sidebar.rs stat rows"
+
+[controls."build.statBox.scrollBar"]
+ported = "app/src/ui/sidebar.rs stat rows"
+note = "part of build.statBox"
+
+[controls."build.statBoxAnchor"]
+ported = "app/src/ui/sidebar.rs"
+note = "layout anchor"
+
+[controls."build.warnings"]
+ported = "app/src/ui/sidebar.rs N Warnings line with PoB's lines on hover (NF-1)"
+
+[controls."calcs.#CalcSectionControl"]
+ported = "app/src/ui/calcs/mod.rs sections with PoB's per-column widths (CalcsSection.col_widths, R24)"
+
+[controls."calcs.#CalcSectionControl.mainSkill"]
+ported = "app/src/ui/calcs/mod.rs selector row"
+
+[controls."calcs.#CalcSectionControl.mainSkillMineCount"]
+ported = "app/src/ui/calcs/mod.rs selector row"
+
+[controls."calcs.#CalcSectionControl.mainSkillMinion"]
+ported = "app/src/ui/calcs/mod.rs selector row"
+
+[controls."calcs.#CalcSectionControl.mainSkillMinionLibrary"]
+ported = "app/src/ui/calcs/mod.rs selector Manage Spectres button (R18)"
+
+[controls."calcs.#CalcSectionControl.mainSkillMinionSkill"]
+ported = "app/src/ui/calcs/mod.rs selector row"
+
+[controls."calcs.#CalcSectionControl.mainSkillPart"]
+ported = "app/src/ui/calcs/mod.rs selector row"
+
+[controls."calcs.#CalcSectionControl.mainSkillStageCount"]
+ported = "app/src/ui/calcs/mod.rs selector row"
+
+[controls."calcs.#CalcSectionControl.mainSocketGroup"]
+ported = "app/src/ui/calcs/mod.rs selector row"
+
+[controls."calcs.#CalcSectionControl.mode"]
+ported = "app/src/ui/calcs/mod.rs selector row"
+
+[controls."calcs.#CalcSectionControl.popOut"]
+ported = "app/src/ui/calcs/mod.rs ^ button: the section pops out into a floating window over every tab (R24)"
+
+[controls."calcs.#CalcSectionControl.showMinion"]
+ported = "app/src/ui/calcs/mod.rs selector row"
+
+[controls."calcs.#CalcSectionControl.toggle1"]
+ported = "app/src/ui/calcs/grid.rs collapse"
+
+[controls."calcs.#CalcSectionControl.toggle2"]
+ported = "app/src/ui/calcs/grid.rs collapse"
+
+[controls."calcs.#CalcSectionControl.toggle3"]
+ported = "app/src/ui/calcs/grid.rs collapse"
+
+[controls."calcs.#CalcSectionControl.toggle4"]
+ported = "app/src/ui/calcs/grid.rs collapse"
+
+[controls."calcs.#CalcSectionControl.toggle5"]
+ported = "app/src/ui/calcs/grid.rs collapse"
+
+[controls."calcs.#CalcSectionControl.toggle6"]
+ported = "app/src/ui/calcs/grid.rs collapse"
+
+[controls."calcs.#CalcSectionControl.toggle7"]
+ported = "app/src/ui/calcs/grid.rs collapse"
+
+[controls."calcs.#EditControl"]
+ported = "app/src/ui/calcs/mod.rs search"
+note = "the same object as calcs.search, also held in the array part"
+
+[controls."calcs.#EditControl.buttonClear"]
+ported = "app/src/ui/calcs/mod.rs search"
+note = "part of calcs.#EditControl"
+
+[controls."calcs.#EditControl.scrollBarH"]
+ported = "app/src/ui/calcs/mod.rs search"
+note = "part of calcs.#EditControl"
+
+[controls."calcs.#EditControl.scrollBarV"]
+ported = "app/src/ui/calcs/mod.rs search"
+note = "part of calcs.#EditControl"
+
+[controls."calcs.breakdown"]
+ported = "app/src/ui/calcs/breakdown.rs"
+
+[controls."calcs.breakdown.scrollBar"]
+ported = "app/src/ui/calcs/breakdown.rs"
+note = "part of calcs.breakdown"
+
+[controls."calcs.scrollBar"]
+ported = "app/src/ui/calcs/mod.rs scroll area"
+note = "the tab's own scroll bar"
+
+[controls."calcs.search"]
+ported = "app/src/ui/calcs/mod.rs search"
+
+[controls."calcs.search.buttonClear"]
+ported = "app/src/ui/calcs/mod.rs search"
+note = "part of calcs.search"
+
+[controls."calcs.search.scrollBarH"]
+ported = "app/src/ui/calcs/mod.rs search"
+note = "part of calcs.search"
+
+[controls."calcs.search.scrollBarV"]
+ported = "app/src/ui/calcs/mod.rs search"
+note = "part of calcs.search"
+
+[controls."compare.calcsScrollBar"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.calcsShowOnlyDifferencesCheck"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.cmpCalcsMainSkill"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.cmpCalcsMainSkill.scrollBar"]
+ruled_out = "R9"
+note = "part of compare.cmpCalcsMainSkill"
+
+[controls."compare.cmpCalcsMineCount"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.cmpCalcsMineCount.buttonDown"]
+ruled_out = "R9"
+note = "part of compare.cmpCalcsMineCount"
+
+[controls."compare.cmpCalcsMineCount.buttonUp"]
+ruled_out = "R9"
+note = "part of compare.cmpCalcsMineCount"
+
+[controls."compare.cmpCalcsMineCount.scrollBarH"]
+ruled_out = "R9"
+note = "part of compare.cmpCalcsMineCount"
+
+[controls."compare.cmpCalcsMineCount.scrollBarV"]
+ruled_out = "R9"
+note = "part of compare.cmpCalcsMineCount"
+
+[controls."compare.cmpCalcsMinion"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.cmpCalcsMinion.scrollBar"]
+ruled_out = "R9"
+note = "part of compare.cmpCalcsMinion"
+
+[controls."compare.cmpCalcsMinionSkill"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.cmpCalcsMinionSkill.scrollBar"]
+ruled_out = "R9"
+note = "part of compare.cmpCalcsMinionSkill"
+
+[controls."compare.cmpCalcsMode"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.cmpCalcsMode.scrollBar"]
+ruled_out = "R9"
+note = "part of compare.cmpCalcsMode"
+
+[controls."compare.cmpCalcsShowMinion"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.cmpCalcsSkillPart"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.cmpCalcsSkillPart.scrollBar"]
+ruled_out = "R9"
+note = "part of compare.cmpCalcsSkillPart"
+
+[controls."compare.cmpCalcsSocketGroup"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.cmpCalcsSocketGroup.scrollBar"]
+ruled_out = "R9"
+note = "part of compare.cmpCalcsSocketGroup"
+
+[controls."compare.cmpCalcsStageCount"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.cmpCalcsStageCount.buttonDown"]
+ruled_out = "R9"
+note = "part of compare.cmpCalcsStageCount"
+
+[controls."compare.cmpCalcsStageCount.buttonUp"]
+ruled_out = "R9"
+note = "part of compare.cmpCalcsStageCount"
+
+[controls."compare.cmpCalcsStageCount.scrollBarH"]
+ruled_out = "R9"
+note = "part of compare.cmpCalcsStageCount"
+
+[controls."compare.cmpCalcsStageCount.scrollBarV"]
+ruled_out = "R9"
+note = "part of compare.cmpCalcsStageCount"
+
+[controls."compare.cmpMainSkill"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "R6 selector"
+
+[controls."compare.cmpMainSkill.scrollBar"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "part of compare.cmpMainSkill"
+
+[controls."compare.cmpMineCount"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "R6 selector"
+
+[controls."compare.cmpMineCount.buttonDown"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "part of compare.cmpMineCount"
+
+[controls."compare.cmpMineCount.buttonUp"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "part of compare.cmpMineCount"
+
+[controls."compare.cmpMineCount.scrollBarH"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "part of compare.cmpMineCount"
+
+[controls."compare.cmpMineCount.scrollBarV"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "part of compare.cmpMineCount"
+
+[controls."compare.cmpMineCountLabel"]
+ported = "app/src/ui/compare/mod.rs selector captions drawn with their controls"
+note = "label of an R6 selector"
+
+[controls."compare.cmpMinion"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "R6 selector"
+
+[controls."compare.cmpMinion.scrollBar"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "part of compare.cmpMinion"
+
+[controls."compare.cmpMinionSkill"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "R6 selector"
+
+[controls."compare.cmpMinionSkill.scrollBar"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "part of compare.cmpMinionSkill"
+
+[controls."compare.cmpSkillLabel"]
+ported = "app/src/ui/compare/mod.rs selector captions drawn with their controls"
+note = "label of an R6 selector"
+
+[controls."compare.cmpSkillPart"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "R6 selector"
+
+[controls."compare.cmpSkillPart.scrollBar"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "part of compare.cmpSkillPart"
+
+[controls."compare.cmpSocketGroup"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "R6 selector"
+
+[controls."compare.cmpSocketGroup.scrollBar"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "part of compare.cmpSocketGroup"
+
+[controls."compare.cmpStageCount"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "R6 selector"
+
+[controls."compare.cmpStageCount.buttonDown"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "part of compare.cmpStageCount"
+
+[controls."compare.cmpStageCount.buttonUp"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "part of compare.cmpStageCount"
+
+[controls."compare.cmpStageCount.scrollBarH"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "part of compare.cmpStageCount"
+
+[controls."compare.cmpStageCount.scrollBarV"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "part of compare.cmpStageCount"
+
+[controls."compare.cmpStageCountLabel"]
+ported = "app/src/ui/compare/mod.rs selector captions drawn with their controls"
+note = "label of an R6 selector"
+
+[controls."compare.compareBuildLabel"]
+ported = "app/src/ui/compare/mod.rs header 'Compare with:'"
+note = "entries, load and remove (R5)"
+
+[controls."compare.compareBuildSelect"]
+ported = "app/src/ui/compare/mod.rs header entries combo (SelectCompare)"
+note = "entries, load and remove (R5)"
+
+[controls."compare.compareBuildSelect.scrollBar"]
+ported = "app/src/ui/compare/mod.rs header entries combo (SelectCompare)"
+note = "part of compare.compareBuildSelect"
+
+[controls."compare.compareConfigSetLabel"]
+ported = "app/src/ui/compare/mod.rs selector captions drawn with their controls"
+note = "label of an R6 selector"
+
+[controls."compare.compareConfigSetSelect"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "R6 selector"
+
+[controls."compare.compareConfigSetSelect.scrollBar"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "part of compare.compareConfigSetSelect"
+
+[controls."compare.compareItemSetLabel"]
+ported = "app/src/ui/compare/mod.rs selector captions drawn with their controls"
+note = "label of an R6 selector"
+
+[controls."compare.compareItemSetLabel2"]
+ported = "app/src/ui/compare/mod.rs selector captions drawn with their controls"
+note = "label of an R6 selector"
+
+[controls."compare.compareItemSetSelect"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "R6 selector"
+
+[controls."compare.compareItemSetSelect.scrollBar"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "part of compare.compareItemSetSelect"
+
+[controls."compare.compareItemSetSelect2"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "R6 selector"
+
+[controls."compare.compareItemSetSelect2.scrollBar"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "part of compare.compareItemSetSelect2"
+
+[controls."compare.comparePowerConfigCheck"]
+ruled_out = "R9"
+note = "Compare power report out (D-004)"
+
+[controls."compare.comparePowerGemsCheck"]
+ruled_out = "R9"
+note = "Compare power report out (D-004)"
+
+[controls."compare.comparePowerItemsCheck"]
+ruled_out = "R9"
+note = "Compare power report out (D-004)"
+
+[controls."compare.comparePowerReportList"]
+ruled_out = "R9"
+note = "Compare power report out (D-004)"
+
+[controls."compare.comparePowerReportList.scrollBarH"]
+ruled_out = "R9"
+note = "part of compare.comparePowerReportList"
+
+[controls."compare.comparePowerReportList.scrollBarV"]
+ruled_out = "R9"
+note = "part of compare.comparePowerReportList"
+
+[controls."compare.comparePowerStatSelect"]
+ruled_out = "R9"
+note = "Compare power report out (D-004)"
+
+[controls."compare.comparePowerStatSelect.scrollBar"]
+ruled_out = "R9"
+note = "part of compare.comparePowerStatSelect"
+
+[controls."compare.comparePowerSupportGemsCheck"]
+ruled_out = "R9"
+note = "Compare power report out (D-004)"
+
+[controls."compare.comparePowerTreeCheck"]
+ruled_out = "R9"
+note = "Compare power report out (D-004)"
+
+[controls."compare.compareSkillSetLabel"]
+ported = "app/src/ui/compare/mod.rs selector captions drawn with their controls"
+note = "label of an R6 selector"
+
+[controls."compare.compareSkillSetSelect"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "R6 selector"
+
+[controls."compare.compareSkillSetSelect.scrollBar"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "part of compare.compareSkillSetSelect"
+
+[controls."compare.compareSpecLabel"]
+ported = "app/src/ui/compare/mod.rs selector captions drawn with their controls"
+note = "label of an R6 selector"
+
+[controls."compare.compareSpecSelect"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "R6 selector"
+
+[controls."compare.compareSpecSelect.scrollBar"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "part of compare.compareSpecSelect"
+
+[controls."compare.compareTreeSetLabel"]
+ported = "app/src/ui/compare/mod.rs selector row 'Tree set:' (compareSpecSelect, the same function)"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list"
+
+[controls."compare.compareTreeSetSelect"]
+ported = "app/src/ui/compare/mod.rs selector row compareSpecSelect, the same function (their tree set)"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; same function as compareSpecSelect (their tree set)"
+
+[controls."compare.compareTreeSetSelect.scrollBar"]
+ported = "app/src/ui/compare/mod.rs selector row compareSpecSelect, the same function (their tree set)"
+note = "part of compare.compareTreeSetSelect"
+
+[controls."compare.configPrimarySetLabel"]
+ported = "app/src/ui/compare/config.rs 'Config set:' caption"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list"
+
+[controls."compare.configPrimarySetSelect"]
+ported = "app/src/ui/compare/config.rs our config set combo (SelectConfigSet), off with one set as PoB"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; switches our own config set from the Compare tab"
+
+[controls."compare.configPrimarySetSelect.scrollBar"]
+ported = "app/src/ui/compare/config.rs our config set combo (SelectConfigSet), off with one set as PoB"
+note = "part of compare.configPrimarySetSelect"
+
+[controls."compare.configSearchEdit"]
+ported = "app/src/ui/compare/config.rs search box over the option labels"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; R25 already has Ctrl+F on Compare Config, so the box is implied"
+
+[controls."compare.configSearchEdit.buttonClear"]
+ported = "app/src/ui/compare/config.rs search box over the option labels"
+note = "part of compare.configSearchEdit"
+
+[controls."compare.configSearchEdit.scrollBarH"]
+ported = "app/src/ui/compare/config.rs search box over the option labels"
+note = "part of compare.configSearchEdit"
+
+[controls."compare.configSearchEdit.scrollBarV"]
+ported = "app/src/ui/compare/config.rs search box over the option labels"
+note = "part of compare.configSearchEdit"
+
+[controls."compare.configToggleBtn"]
+ported = "app/src/ui/compare/config.rs toggle button (SetCompareControl check); the engine lists PoB's common rows (CompareConfigRow.common), gate compare_views_and_copies_match_pob"
+
+[controls."compare.copyConfigBtn"]
+ported = "app/src/ui/compare/config.rs 'Copy Config from Compare Build' (CopyCompareConfig)"
+note = "Copy config (R8)"
+
+[controls."compare.copySpecBtn"]
+ported = "app/src/ui/compare/mod.rs Tree view 'Copy tree' (CopyCompareTree)"
+note = "Copy tree (R8)"
+
+[controls."compare.copySpecUseBtn"]
+ported = "app/src/ui/compare/mod.rs Tree view 'Copy and use' (CopyCompareTree and_use)"
+note = "Copy and use (R8)"
+
+[controls."compare.importBtn"]
+ported = "app/src/ui/compare/mod.rs header 'Load build…' menu (LoadCompare, ImportFromUrl Comparison)"
+note = "entries, load and remove (R5)"
+
+[controls."compare.itemsExpandedCheck"]
+ported = "app/src/ui/compare/items.rs expanded mode: both items' tooltips inline per row (PoB's DrawItemExpanded cards), the box sent as SetCompareControl"
+
+[controls."compare.itemsHScrollBar"]
+ported = "app/src/ui/compare/items.rs ScrollArea"
+note = "Items view scrolling"
+
+[controls."compare.leftFooterAnchor"]
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
+note = "layout anchor of the side-by-side footer"
+
+[controls."compare.leftSpecSelect"]
+ported = "app/src/ui/tree/mod.rs show_compare our tree set combo (SelectSpec)"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; switches our own tree set from the Compare tree header"
+
+[controls."compare.leftSpecSelect.scrollBar"]
+ported = "app/src/ui/tree/mod.rs show_compare our tree set combo (SelectSpec)"
+note = "part of compare.leftSpecSelect"
+
+[controls."compare.leftTreeSearch"]
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; tree search, side by side"
+
+[controls."compare.leftTreeSearch.buttonClear"]
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
+note = "part of compare.leftTreeSearch"
+
+[controls."compare.leftTreeSearch.scrollBarH"]
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
+note = "part of compare.leftTreeSearch"
+
+[controls."compare.leftTreeSearch.scrollBarV"]
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
+note = "part of compare.leftTreeSearch"
+
+[controls."compare.leftVersionSelect"]
+ported = "app/src/ui/compare/mod.rs Tree view version dropdown, PoB's Convert to Version popup as a window; ConvertCompareTree presses it (glue compare_convert_tree), gate compare_views_and_copies_match_pob"
+
+[controls."compare.leftVersionSelect.scrollBar"]
+ported = "app/src/ui/compare/mod.rs Tree view version dropdown, PoB's Convert to Version popup as a window; ConvertCompareTree presses it (glue compare_convert_tree), gate compare_views_and_copies_match_pob"
+note = "part of compare.leftVersionSelect"
+
+[controls."compare.overlayTreeSearch"]
+ported = "app/src/ui/tree/mod.rs show_compare search box (SetTreeSearch)"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; tree search in the overlay view"
+
+[controls."compare.overlayTreeSearch.buttonClear"]
+ported = "app/src/ui/tree/mod.rs show_compare search box (SetTreeSearch)"
+note = "part of compare.overlayTreeSearch"
+
+[controls."compare.overlayTreeSearch.scrollBarH"]
+ported = "app/src/ui/tree/mod.rs show_compare search box (SetTreeSearch)"
+note = "part of compare.overlayTreeSearch"
+
+[controls."compare.overlayTreeSearch.scrollBarV"]
+ported = "app/src/ui/tree/mod.rs show_compare search box (SetTreeSearch)"
+note = "part of compare.overlayTreeSearch"
+
+[controls."compare.primaryItemSetLabel"]
+ported = "app/src/ui/compare/mod.rs selector captions drawn with their controls"
+note = "label of an R6 selector"
+
+[controls."compare.primaryItemSetSelect"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "R6 selector"
+
+[controls."compare.primaryItemSetSelect.scrollBar"]
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+note = "part of compare.primaryItemSetSelect"
+
+[controls."compare.primaryTreeSetLabel"]
+ported = "app/src/ui/compare/mod.rs Items view 'Tree set:' caption"
+
+[controls."compare.primaryTreeSetSelect"]
+ported = "app/src/ui/compare/mod.rs Items view our tree set combo (SelectSpec), as PoB's on Items; also on the Tree view (tree/mod.rs show_compare)"
+
+[controls."compare.primaryTreeSetSelect.scrollBar"]
+ported = "app/src/ui/compare/mod.rs Items view our tree set combo (SelectSpec), as PoB's on Items; also on the Tree view (tree/mod.rs show_compare)"
+
+[controls."compare.primCalcsMainSkill"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.primCalcsMainSkill.scrollBar"]
+ruled_out = "R9"
+note = "part of compare.primCalcsMainSkill"
+
+[controls."compare.primCalcsMineCount"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.primCalcsMineCount.buttonDown"]
+ruled_out = "R9"
+note = "part of compare.primCalcsMineCount"
+
+[controls."compare.primCalcsMineCount.buttonUp"]
+ruled_out = "R9"
+note = "part of compare.primCalcsMineCount"
+
+[controls."compare.primCalcsMineCount.scrollBarH"]
+ruled_out = "R9"
+note = "part of compare.primCalcsMineCount"
+
+[controls."compare.primCalcsMineCount.scrollBarV"]
+ruled_out = "R9"
+note = "part of compare.primCalcsMineCount"
+
+[controls."compare.primCalcsMinion"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.primCalcsMinion.scrollBar"]
+ruled_out = "R9"
+note = "part of compare.primCalcsMinion"
+
+[controls."compare.primCalcsMinionSkill"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.primCalcsMinionSkill.scrollBar"]
+ruled_out = "R9"
+note = "part of compare.primCalcsMinionSkill"
+
+[controls."compare.primCalcsMode"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.primCalcsMode.scrollBar"]
+ruled_out = "R9"
+note = "part of compare.primCalcsMode"
+
+[controls."compare.primCalcsShowMinion"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.primCalcsSkillPart"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.primCalcsSkillPart.scrollBar"]
+ruled_out = "R9"
+note = "part of compare.primCalcsSkillPart"
+
+[controls."compare.primCalcsSocketGroup"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.primCalcsSocketGroup.scrollBar"]
+ruled_out = "R9"
+note = "part of compare.primCalcsSocketGroup"
+
+[controls."compare.primCalcsStageCount"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.primCalcsStageCount.buttonDown"]
+ruled_out = "R9"
+note = "part of compare.primCalcsStageCount"
+
+[controls."compare.primCalcsStageCount.buttonUp"]
+ruled_out = "R9"
+note = "part of compare.primCalcsStageCount"
+
+[controls."compare.primCalcsStageCount.scrollBarH"]
+ruled_out = "R9"
+note = "part of compare.primCalcsStageCount"
+
+[controls."compare.primCalcsStageCount.scrollBarV"]
+ruled_out = "R9"
+note = "part of compare.primCalcsStageCount"
+
+[controls."compare.reimportBtn"]
+ruled_out = "R5"
+note = "Re-import Current: the Import/Export tab has the same buttons"
+
+[controls."compare.removeBtn"]
+ported = "app/src/ui/compare/mod.rs header Remove (RemoveCompare)"
+note = "entries, load and remove (R5)"
+
+[controls."compare.rightFooterAnchor"]
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
+note = "layout anchor of the side-by-side footer"
+
+[controls."compare.rightSpecSelect"]
+ported = "app/src/ui/compare/mod.rs selector row compareSpecSelect, the same function (their tree set)"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; same function as compareSpecSelect, in the tree header"
+
+[controls."compare.rightSpecSelect.scrollBar"]
+ported = "app/src/ui/compare/mod.rs selector row compareSpecSelect, the same function (their tree set)"
+note = "part of compare.rightSpecSelect"
+
+[controls."compare.rightTreeSearch"]
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
+note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; tree search, side by side"
+
+[controls."compare.rightTreeSearch.buttonClear"]
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
+note = "part of compare.rightTreeSearch"
+
+[controls."compare.rightTreeSearch.scrollBarH"]
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
+note = "part of compare.rightTreeSearch"
+
+[controls."compare.rightTreeSearch.scrollBarV"]
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
+note = "part of compare.rightTreeSearch"
+
+[controls."compare.rightVersionSelect"]
+ported = "app/src/ui/compare/mod.rs Tree view version dropdown, PoB's Convert to Version popup as a window; ConvertCompareTree presses it (glue compare_convert_tree), gate compare_views_and_copies_match_pob"
+
+[controls."compare.rightVersionSelect.scrollBar"]
+ported = "app/src/ui/compare/mod.rs Tree view version dropdown, PoB's Convert to Version popup as a window; ConvertCompareTree presses it (glue compare_convert_tree), gate compare_views_and_copies_match_pob"
+note = "part of compare.rightVersionSelect"
+
+[controls."compare.skillsHScrollBar"]
+ported = "app/src/ui/compare/skills.rs ScrollArea"
+note = "Skills view scrolling"
+
+[controls."compare.subTabAnchor"]
+ported = "app/src/ui/compare/mod.rs sub_tabs"
+note = "Compare sub-tabs"
+
+[controls."compare.subTabCalcs"]
+ruled_out = "R9"
+note = "Compare Calcs sub-view out"
+
+[controls."compare.subTabConfig"]
+ported = "app/src/ui/compare/mod.rs sub_tabs Config (app/src/ui/compare/config.rs)"
+note = "Compare sub-tabs"
+
+[controls."compare.subTabItems"]
+ported = "app/src/ui/compare/mod.rs sub_tabs Items (app/src/ui/compare/items.rs)"
+note = "Compare sub-tabs"
+
+[controls."compare.subTabSkills"]
+ported = "app/src/ui/compare/mod.rs sub_tabs Skills (app/src/ui/compare/skills.rs)"
+note = "Compare sub-tabs"
+
+[controls."compare.subTabSummary"]
+ported = "app/src/ui/compare/mod.rs sub_tabs Summary (app/src/ui/compare/summary.rs)"
+note = "Compare sub-tabs"
+
+[controls."compare.subTabTree"]
+ported = "app/src/ui/compare/mod.rs sub_tabs Tree (overlay, R7)"
+note = "Compare sub-tabs"
+
+[controls."compare.treeOverlayCheck"]
+ruled_out = "R7 fallback: no side-by-side tree; app/src/ui/compare/mod.rs shows the box ticked and disabled with a hover note"
+note = "R6 selector"
+
+[controls."compare.viewScrollBar"]
+ported = "app/src/ui/compare/mod.rs views in egui ScrollAreas"
+note = "Compare sub-tabs"
+
+[controls."config.#CheckBoxControl"]
+ported = "app/src/ui/config.rs check boxes with PoB's tooltips and its what-if hover comparison (HoverTooltip ConfigOption, R22)"
+
+[controls."config.#Control"]
+ported = "app/src/ui/config.rs option rows"
+note = "PoB's per-option wrapper controls"
+
+[controls."config.#CustomModBlockControl"]
+ported = "app/src/ui/config.rs custom mod groups (D-038)"
+
+[controls."config.#CustomModBlockControl.addModBtn"]
+ported = "app/src/ui/config.rs Add Mod opens PoB's Mod Browser for the group (PopupKind::ModBrowser, R28)"
+
+[controls."config.#CustomModBlockControl.deleteBtn"]
+ported = "app/src/ui/config.rs remove custom mod group"
+
+[controls."config.#CustomModBlockControl.enableCheck"]
+ported = "app/src/ui/config.rs custom group enable box with PoB's what-if hover (HoverTooltip CustomModEnabled, NF-10)"
+
+[controls."config.#CustomModBlockControl.textEdit"]
+ported = "app/src/ui/config.rs custom mod group text"
+
+[controls."config.#CustomModBlockControl.titleEdit"]
+ported = "app/src/ui/config.rs custom mod group title"
+
+[controls."config.#DropDownControl"]
+ported = "app/src/ui/config.rs dropdowns with PoB's tooltipFunc on hover (HoverTooltip ConfigOption, R22)"
+note = "per-entry tooltips inside the open list are out (R34)"
+
+[controls."config.#DropDownControl.scrollBar"]
+ported = "app/src/ui/config.rs dropdowns"
+note = "part of config.#DropDownControl"
+
+[controls."config.#EditControl"]
+ported = "app/src/ui/config.rs edit boxes with PoB's tooltipFunc on hover (HoverTooltip ConfigOption, R22)"
+note = "PoB adds no what-if comparison to number inputs (ConfigTab.lua:719-721)"
+
+[controls."config.#EditControl.buttonDown"]
+ported = "app/src/ui/config.rs edit boxes"
+note = "part of config.#EditControl"
+
+[controls."config.#EditControl.buttonUp"]
+ported = "app/src/ui/config.rs edit boxes"
+note = "part of config.#EditControl"
+
+[controls."config.#EditControl.scrollBarH"]
+ported = "app/src/ui/config.rs edit boxes"
+note = "part of config.#EditControl"
+
+[controls."config.#EditControl.scrollBarV"]
+ported = "app/src/ui/config.rs edit boxes"
+note = "part of config.#EditControl"
+
+[controls."config.#LabelControl"]
+ported = "app/src/ui/config.rs option labels"
+
+[controls."config.#SectionControl"]
+ported = "app/src/ui/config.rs sections"
+
+[controls."config.customModsAddBlock"]
+ported = "app/src/ui/config.rs add custom mod group"
+
+[controls."config.scrollBar"]
+ported = "app/src/ui/config.rs scroll area"
+note = "the tab's own scroll bar"
+
+[controls."config.search"]
+ported = "app/src/ui/config.rs Search options"
+
+[controls."config.search.buttonClear"]
+ported = "app/src/ui/config.rs Search options"
+note = "part of config.search"
+
+[controls."config.search.scrollBarH"]
+ported = "app/src/ui/config.rs Search options"
+note = "part of config.search"
+
+[controls."config.search.scrollBarV"]
+ported = "app/src/ui/config.rs Search options"
+note = "part of config.search"
+
+[controls."config.sectionAnchor"]
+ported = "app/src/ui/config.rs"
+note = "layout anchor"
+
+[controls."config.setLabel"]
+ported = "app/src/ui/config.rs set combo"
+
+[controls."config.setManage"]
+ported = "app/src/ui/config.rs set buttons: New, Rename, Delete, Copy (CopyConfigSet) and the Manage Config Sets window (MoveConfigSet, NF-4)"
+
+[controls."config.setSelect"]
+ported = "app/src/ui/config.rs set combo"
+
+[controls."config.setSelect.scrollBar"]
+ported = "app/src/ui/config.rs set combo"
+note = "part of config.setSelect"
+
+[controls."config.toggleConfigs"]
+ported = "app/src/ui/config.rs Show all"
+
+[controls."import.accountRealm"]
+ported = "app/src/ui/import.rs sign-in import"
+
+[controls."import.accountRealm.scrollBar"]
+ported = "app/src/ui/import.rs sign-in import"
+note = "part of import.accountRealm"
+
+[controls."import.accountRealmFetchButton"]
+ported = "app/src/ui/import.rs sign-in import"
+
+[controls."import.authenticateButton"]
+ported = "app/src/ui/import.rs sign-in import"
+
+[controls."import.characterImportAnchor"]
+ported = "app/src/ui/import.rs sign-in import"
+
+[controls."import.charImportHeader"]
+ported = "app/src/ui/import.rs sign-in import"
+
+[controls."import.charImportItems"]
+ported = "app/src/ui/import.rs sign-in import"
+
+[controls."import.charImportItemsClearItems"]
+ported = "app/src/ui/import.rs sign-in import"
+
+[controls."import.charImportItemsClearSkills"]
+ported = "app/src/ui/import.rs sign-in import"
+
+[controls."import.charImportItemsIgnoreWeaponSwap"]
+ported = "app/src/ui/import.rs sign-in import"
+
+[controls."import.charImportStatusLabel"]
+ported = "app/src/ui/import.rs sign-in import"
+
+[controls."import.charImportTree"]
+ported = "app/src/ui/import.rs sign-in import"
+
+[controls."import.charImportTreeClearJewels"]
+ported = "app/src/ui/import.rs sign-in import"
+
+[controls."import.charSelect"]
+ported = "app/src/ui/import.rs sign-in import"
+
+[controls."import.charSelect.scrollBar"]
+ported = "app/src/ui/import.rs sign-in import"
+note = "part of import.charSelect"
+
+[controls."import.charSelectHeader"]
+ported = "app/src/ui/import.rs sign-in import"
+
+[controls."import.charSelectLeague"]
+ported = "app/src/ui/import.rs sign-in import"
+
+[controls."import.charSelectLeague.scrollBar"]
+ported = "app/src/ui/import.rs sign-in import"
+note = "part of import.charSelectLeague"
+
+[controls."import.charSelectLeagueLabel"]
+ported = "app/src/ui/import.rs sign-in import"
+
+[controls."import.enablePartyExportBuffs"]
+ruled_out = "D-003"
+note = "party export"
+
+[controls."import.exportFrom"]
+ported = "app/src/ui/import.rs build sharing"
+
+[controls."import.exportFrom.scrollBar"]
+ported = "app/src/ui/import.rs build sharing"
+note = "part of import.exportFrom"
+
+[controls."import.generateCode"]
+ported = "app/src/ui/import.rs build sharing"
+
+[controls."import.generateCodeByLink"]
+ported = "app/src/ui/import.rs build sharing"
+
+[controls."import.generateCodeCopy"]
+ported = "app/src/ui/import.rs build sharing"
+
+[controls."import.generateCodeLabel"]
+ported = "app/src/ui/import.rs build sharing"
+
+[controls."import.generateCodeNote"]
+ported = "app/src/ui/import.rs build sharing"
+
+[controls."import.generateCodeOut"]
+ported = "app/src/ui/import.rs build sharing"
+
+[controls."import.generateCodeOut.scrollBarH"]
+ported = "app/src/ui/import.rs build sharing"
+note = "part of import.generateCodeOut"
+
+[controls."import.generateCodeOut.scrollBarV"]
+ported = "app/src/ui/import.rs build sharing"
+note = "part of import.generateCodeOut"
+
+[controls."import.importCodeGo"]
+ported = "app/src/ui/import.rs build sharing"
+
+[controls."import.importCodeHeader"]
+ported = "app/src/ui/import.rs build sharing"
+
+[controls."import.importCodeIn"]
+ported = "app/src/ui/import.rs build sharing"
+
+[controls."import.importCodeIn.buttonClear"]
+ported = "app/src/ui/import.rs build sharing"
+note = "part of import.importCodeIn"
+
+[controls."import.importCodeIn.scrollBarH"]
+ported = "app/src/ui/import.rs build sharing"
+note = "part of import.importCodeIn"
+
+[controls."import.importCodeIn.scrollBarV"]
+ported = "app/src/ui/import.rs build sharing"
+note = "part of import.importCodeIn"
+
+[controls."import.importCodeMode"]
+ported = "app/src/ui/import.rs build sharing"
+
+[controls."import.importCodeMode.scrollBar"]
+ported = "app/src/ui/import.rs build sharing"
+note = "part of import.importCodeMode"
+
+[controls."import.importCodeState"]
+ported = "app/src/ui/import.rs build sharing"
+
+[controls."import.logoutApiButton"]
+ported = "app/src/ui/import.rs sign-in import"
+
+[controls."import.oauthErrorLabel"]
+ported = "app/src/ui/import.rs sign-in import"
+
+[controls."import.sectionBuild"]
+ported = "app/src/ui/import.rs build sharing"
+
+[controls."import.sectionCharSiteImport"]
+ported = "app/src/ui/import.rs import by account name"
+
+[controls."import.sectionOauthCharImport"]
+ported = "app/src/ui/import.rs sign-in import"
+
+[controls."import.siteAccountHistory"]
+ported = "app/src/ui/import.rs recent accounts dropdown: a pick fills the name box (PublicView.history, NF-8)"
+
+[controls."import.siteAccountHistory.scrollBar"]
+ported = "app/src/ui/import.rs recent accounts dropdown"
+note = "part of import.siteAccountHistory"
+
+[controls."import.siteAccountName"]
+ported = "app/src/ui/import.rs import by account name"
+
+[controls."import.siteAccountName.buttonClear"]
+ported = "app/src/ui/import.rs import by account name"
+note = "part of import.siteAccountName"
+
+[controls."import.siteAccountName.scrollBarH"]
+ported = "app/src/ui/import.rs import by account name"
+note = "part of import.siteAccountName"
+
+[controls."import.siteAccountName.scrollBarV"]
+ported = "app/src/ui/import.rs import by account name"
+note = "part of import.siteAccountName"
+
+[controls."import.siteAccountNameGo"]
+ported = "app/src/ui/import.rs import by account name"
+
+[controls."import.siteAccountNameHeader"]
+ported = "app/src/ui/import.rs import by account name"
+
+[controls."import.siteAccountNameMissingDiscriminator"]
+ported = "app/src/ui/import.rs PoB's label under the name box and Start disabled as PoB's (PublicView.missing_discriminator, account_name_state)"
+
+[controls."import.siteAccountNameUnicode"]
+ported = "app/src/ui/import.rs"
+note = "hint only; egui text boxes take non-ASCII text"
+
+[controls."import.siteAccountRealm"]
+ported = "app/src/ui/import.rs import by account name"
+
+[controls."import.siteAccountRealm.scrollBar"]
+ported = "app/src/ui/import.rs import by account name"
+note = "part of import.siteAccountRealm"
+
+[controls."import.siteCharBanditNote"]
+ported = "app/src/ui/import.rs PoB's bandit tip under the character list (PublicView.bandit_note)"
+
+[controls."import.siteCharClose"]
+ported = "app/src/ui/import.rs import by account name"
+
+[controls."import.siteCharImportHeader"]
+ported = "app/src/ui/import.rs import by account name"
+
+[controls."import.siteCharImportItems"]
+ported = "app/src/ui/import.rs import by account name"
+
+[controls."import.siteCharImportItemsClearItems"]
+ported = "app/src/ui/import.rs import by account name"
+
+[controls."import.siteCharImportItemsClearSkills"]
+ported = "app/src/ui/import.rs import by account name"
+
+[controls."import.siteCharImportItemsIgnoreWeaponSwap"]
+ported = "app/src/ui/import.rs import by account name"
+
+[controls."import.siteCharImportStatusLabel"]
+ported = "app/src/ui/import.rs import by account name"
+
+[controls."import.siteCharImportTree"]
+ported = "app/src/ui/import.rs import by account name"
+
+[controls."import.siteCharImportTreeClearJewels"]
+ported = "app/src/ui/import.rs import by account name"
+
+[controls."import.siteCharSelect"]
+ported = "app/src/ui/import.rs import by account name"
+
+[controls."import.siteCharSelect.scrollBar"]
+ported = "app/src/ui/import.rs import by account name"
+note = "part of import.siteCharSelect"
+
+[controls."import.siteCharSelectHeader"]
+ported = "app/src/ui/import.rs import by account name"
+
+[controls."import.siteCharSelectLeague"]
+ported = "app/src/ui/import.rs import by account name"
+
+[controls."import.siteCharSelectLeague.scrollBar"]
+ported = "app/src/ui/import.rs import by account name"
+note = "part of import.siteCharSelectLeague"
+
+[controls."import.siteCharSelectLeagueLabel"]
+ported = "app/src/ui/import.rs import by account name"
+
+[controls."import.siteRemoveAccount"]
+ported = "app/src/ui/import.rs X next to the recent accounts (RemoveAccountHistory, NF-8)"
+
+[controls."items.#ItemSlotControl"]
+ported = "app/src/ui/items/slots.rs slots; Ring 3 and Graft 1/2 shown, equipped and round-tripped as PoB's slot.shown decides (R30, app/tests/gate/parity_gaps_items.rs ring3_graft)"
+
+[controls."items.#ItemSlotControl.activate"]
+ported = "app/src/ui/items/slots.rs flask active box"
+
+[controls."items.#ItemSlotControl.scrollBar"]
+ported = "app/src/ui/items/slots.rs slot dropdown lists (part of items.#ItemSlotControl)"
+
+[controls."items.addDisplayItem"]
+ported = "app/src/ui/items/display.rs Save / Add to build"
+
+[controls."items.craftDisplayItem"]
+ported = "app/src/ui/items/display.rs Craft item (PoB popup session)"
+
+[controls."items.craftingSorting"]
+ported = "app/src/ui/items/crafting.rs Modifier sorting"
+
+[controls."items.craftingSorting.scrollBar"]
+ported = "app/src/ui/items/crafting.rs Modifier sorting"
+note = "part of items.craftingSorting"
+
+[controls."items.craftingSortingLabel"]
+ported = "app/src/ui/items/crafting.rs Modifier sorting"
+
+[controls."items.displayItemAddCrucible"]
+ported = "app/src/ui/items/crafting.rs Add Crucible mod button (PoB popup session)"
+
+[controls."items.displayItemAddCustom"]
+ported = "app/src/ui/items/crafting.rs Add modifier button (PoB popup session)"
+
+[controls."items.displayItemAddImplicit"]
+ported = "app/src/ui/items/crafting.rs Add Implicit button (PoB popup session)"
+
+[controls."items.displayItemAddSocket"]
+ported = "app/src/ui/items/display.rs sockets +"
+
+[controls."items.displayItemAffix1"]
+ported = "app/src/ui/items/crafting.rs affix combo"
+
+[controls."items.displayItemAffix1.scrollBar"]
+ported = "app/src/ui/items/crafting.rs affix combo"
+note = "part of items.displayItemAffix1"
+
+[controls."items.displayItemAffix2"]
+ported = "app/src/ui/items/crafting.rs affix combo"
+
+[controls."items.displayItemAffix2.scrollBar"]
+ported = "app/src/ui/items/crafting.rs affix combo"
+note = "part of items.displayItemAffix2"
+
+[controls."items.displayItemAffix3"]
+ported = "app/src/ui/items/crafting.rs affix combo"
+
+[controls."items.displayItemAffix3.scrollBar"]
+ported = "app/src/ui/items/crafting.rs affix combo"
+note = "part of items.displayItemAffix3"
+
+[controls."items.displayItemAffix4"]
+ported = "app/src/ui/items/crafting.rs affix combo"
+
+[controls."items.displayItemAffix4.scrollBar"]
+ported = "app/src/ui/items/crafting.rs affix combo"
+note = "part of items.displayItemAffix4"
+
+[controls."items.displayItemAffix5"]
+ported = "app/src/ui/items/crafting.rs affix combo"
+
+[controls."items.displayItemAffix5.scrollBar"]
+ported = "app/src/ui/items/crafting.rs affix combo"
+note = "part of items.displayItemAffix5"
+
+[controls."items.displayItemAffix6"]
+ported = "app/src/ui/items/crafting.rs affix combo"
+
+[controls."items.displayItemAffix6.scrollBar"]
+ported = "app/src/ui/items/crafting.rs affix combo"
+note = "part of items.displayItemAffix6"
+
+[controls."items.displayItemAffix7"]
+ported = "app/src/ui/items/crafting.rs affix combo"
+
+[controls."items.displayItemAffix7.scrollBar"]
+ported = "app/src/ui/items/crafting.rs affix combo"
+note = "part of items.displayItemAffix7"
+
+[controls."items.displayItemAffix8"]
+ported = "app/src/ui/items/crafting.rs affix combo"
+
+[controls."items.displayItemAffix8.scrollBar"]
+ported = "app/src/ui/items/crafting.rs affix combo"
+note = "part of items.displayItemAffix8"
+
+[controls."items.displayItemAffix9"]
+ported = "app/src/ui/items/crafting.rs affix combo"
+
+[controls."items.displayItemAffix9.scrollBar"]
+ported = "app/src/ui/items/crafting.rs affix combo"
+note = "part of items.displayItemAffix9"
+
+[controls."items.displayItemAffixLabel1"]
+ported = "app/src/ui/items/crafting.rs affix rows"
+
+[controls."items.displayItemAffixLabel2"]
+ported = "app/src/ui/items/crafting.rs affix rows"
+
+[controls."items.displayItemAffixLabel3"]
+ported = "app/src/ui/items/crafting.rs affix rows"
+
+[controls."items.displayItemAffixLabel4"]
+ported = "app/src/ui/items/crafting.rs affix rows"
+
+[controls."items.displayItemAffixLabel5"]
+ported = "app/src/ui/items/crafting.rs affix rows"
+
+[controls."items.displayItemAffixLabel6"]
+ported = "app/src/ui/items/crafting.rs affix rows"
+
+[controls."items.displayItemAffixLabel7"]
+ported = "app/src/ui/items/crafting.rs affix rows"
+
+[controls."items.displayItemAffixLabel8"]
+ported = "app/src/ui/items/crafting.rs affix rows"
+
+[controls."items.displayItemAffixLabel9"]
+ported = "app/src/ui/items/crafting.rs affix rows"
+
+[controls."items.displayItemAffixRange1"]
+ported = "app/src/ui/items/crafting.rs tier slider"
+
+[controls."items.displayItemAffixRange2"]
+ported = "app/src/ui/items/crafting.rs tier slider"
+
+[controls."items.displayItemAffixRange3"]
+ported = "app/src/ui/items/crafting.rs tier slider"
+
+[controls."items.displayItemAffixRange4"]
+ported = "app/src/ui/items/crafting.rs tier slider"
+
+[controls."items.displayItemAffixRange5"]
+ported = "app/src/ui/items/crafting.rs tier slider"
+
+[controls."items.displayItemAffixRange6"]
+ported = "app/src/ui/items/crafting.rs tier slider"
+
+[controls."items.displayItemAffixRange7"]
+ported = "app/src/ui/items/crafting.rs tier slider"
+
+[controls."items.displayItemAffixRange8"]
+ported = "app/src/ui/items/crafting.rs tier slider"
+
+[controls."items.displayItemAffixRange9"]
+ported = "app/src/ui/items/crafting.rs tier slider"
+
+[controls."items.displayItemAffixRangeLabel1"]
+ported = "app/src/ui/items/crafting.rs tier slider"
+
+[controls."items.displayItemAffixRangeLabel2"]
+ported = "app/src/ui/items/crafting.rs tier slider"
+
+[controls."items.displayItemAffixRangeLabel3"]
+ported = "app/src/ui/items/crafting.rs tier slider"
+
+[controls."items.displayItemAffixRangeLabel4"]
+ported = "app/src/ui/items/crafting.rs tier slider"
+
+[controls."items.displayItemAffixRangeLabel5"]
+ported = "app/src/ui/items/crafting.rs tier slider"
+
+[controls."items.displayItemAffixRangeLabel6"]
+ported = "app/src/ui/items/crafting.rs tier slider"
+
+[controls."items.displayItemAffixRangeLabel7"]
+ported = "app/src/ui/items/crafting.rs tier slider"
+
+[controls."items.displayItemAffixRangeLabel8"]
+ported = "app/src/ui/items/crafting.rs tier slider"
+
+[controls."items.displayItemAffixRangeLabel9"]
+ported = "app/src/ui/items/crafting.rs tier slider"
+
+[controls."items.displayItemAltVariant"]
+ported = "app/src/ui/items/display.rs variants"
+
+[controls."items.displayItemAltVariant.scrollBar"]
+ported = "app/src/ui/items/display.rs variants"
+note = "part of items.displayItemAltVariant"
+
+[controls."items.displayItemAltVariant2"]
+ported = "app/src/ui/items/display.rs variants"
+
+[controls."items.displayItemAltVariant2.scrollBar"]
+ported = "app/src/ui/items/display.rs variants"
+note = "part of items.displayItemAltVariant2"
+
+[controls."items.displayItemAltVariant3"]
+ported = "app/src/ui/items/display.rs variants"
+
+[controls."items.displayItemAltVariant3.scrollBar"]
+ported = "app/src/ui/items/display.rs variants"
+note = "part of items.displayItemAltVariant3"
+
+[controls."items.displayItemAltVariant4"]
+ported = "app/src/ui/items/display.rs variants"
+
+[controls."items.displayItemAltVariant4.scrollBar"]
+ported = "app/src/ui/items/display.rs variants"
+note = "part of items.displayItemAltVariant4"
+
+[controls."items.displayItemAltVariant5"]
+ported = "app/src/ui/items/display.rs variants"
+
+[controls."items.displayItemAltVariant5.scrollBar"]
+ported = "app/src/ui/items/display.rs variants"
+note = "part of items.displayItemAltVariant5"
+
+[controls."items.displayItemAnoint"]
+ported = "app/src/ui/items/crafting.rs Anoint button (PoB popup session)"
+
+[controls."items.displayItemAnoint2"]
+ported = "app/src/ui/items/crafting.rs Anoint 2 button (PoB popup session)"
+
+[controls."items.displayItemAnoint3"]
+ported = "app/src/ui/items/crafting.rs Anoint 3 button (PoB popup session)"
+
+[controls."items.displayItemAnoint4"]
+ported = "app/src/ui/items/crafting.rs Anoint 4 button (PoB popup session)"
+
+[controls."items.displayItemBuySimilar"]
+ported = "app/src/ui/items/display.rs Buy similar button (PoB popup session, R10)"
+note = "Buy similar (R10)"
+
+[controls."items.displayItemCatalyst"]
+ported = "app/src/ui/items/display.rs catalyst"
+
+[controls."items.displayItemCatalyst.scrollBar"]
+ported = "app/src/ui/items/display.rs catalyst"
+note = "part of items.displayItemCatalyst"
+
+[controls."items.displayItemCatalystQualityEdit"]
+ported = "app/src/ui/items/display.rs catalyst quality"
+
+[controls."items.displayItemCatalystQualityEdit.buttonDown"]
+ported = "app/src/ui/items/display.rs catalyst quality"
+note = "part of items.displayItemCatalystQualityEdit"
+
+[controls."items.displayItemCatalystQualityEdit.buttonUp"]
+ported = "app/src/ui/items/display.rs catalyst quality"
+note = "part of items.displayItemCatalystQualityEdit"
+
+[controls."items.displayItemCatalystQualityEdit.scrollBarH"]
+ported = "app/src/ui/items/display.rs catalyst quality"
+note = "part of items.displayItemCatalystQualityEdit"
+
+[controls."items.displayItemCatalystQualityEdit.scrollBarV"]
+ported = "app/src/ui/items/display.rs catalyst quality"
+note = "part of items.displayItemCatalystQualityEdit"
+
+[controls."items.displayItemClusterJewelNodeCount"]
+ported = "app/src/ui/items/crafting.rs node count"
+
+[controls."items.displayItemClusterJewelNodeCountLabel"]
+ported = "app/src/ui/items/crafting.rs node count"
+
+[controls."items.displayItemClusterJewelSkill"]
+ported = "app/src/ui/items/crafting.rs cluster skill"
+
+[controls."items.displayItemClusterJewelSkill.scrollBar"]
+ported = "app/src/ui/items/crafting.rs cluster skill"
+note = "part of items.displayItemClusterJewelSkill"
+
+[controls."items.displayItemCorrupt"]
+ported = "app/src/ui/items/crafting.rs Corrupt button (PoB popup session)"
+
+[controls."items.displayItemEnchant"]
+ported = "app/src/ui/items/crafting.rs Change Enchantment button (PoB popup session)"
+
+[controls."items.displayItemEnchant2"]
+ported = "app/src/ui/items/crafting.rs Change Enchantment 2 button (PoB popup session)"
+
+[controls."items.displayItemInfluence"]
+ported = "app/src/ui/items/display.rs influences"
+
+[controls."items.displayItemInfluence.scrollBar"]
+ported = "app/src/ui/items/display.rs influences"
+note = "part of items.displayItemInfluence"
+
+[controls."items.displayItemInfluence2"]
+ported = "app/src/ui/items/display.rs influences"
+
+[controls."items.displayItemInfluence2.scrollBar"]
+ported = "app/src/ui/items/display.rs influences"
+note = "part of items.displayItemInfluence2"
+
+[controls."items.displayItemLink1"]
+ported = "app/src/ui/items/display.rs socket links"
+
+[controls."items.displayItemLink2"]
+ported = "app/src/ui/items/display.rs socket links"
+
+[controls."items.displayItemLink3"]
+ported = "app/src/ui/items/display.rs socket links"
+
+[controls."items.displayItemLink4"]
+ported = "app/src/ui/items/display.rs socket links"
+
+[controls."items.displayItemLink5"]
+ported = "app/src/ui/items/display.rs socket links"
+
+[controls."items.displayItemMutatedCheckbox"]
+ported = "app/src/ui/items/display.rs Foulborn"
+
+[controls."items.displayItemQuality"]
+ported = "app/src/ui/items/display.rs quality"
+
+[controls."items.displayItemQualityEdit"]
+ported = "app/src/ui/items/display.rs quality"
+
+[controls."items.displayItemQualityEdit.buttonDown"]
+ported = "app/src/ui/items/display.rs quality"
+note = "part of items.displayItemQualityEdit"
+
+[controls."items.displayItemQualityEdit.buttonUp"]
+ported = "app/src/ui/items/display.rs quality"
+note = "part of items.displayItemQualityEdit"
+
+[controls."items.displayItemQualityEdit.scrollBarH"]
+ported = "app/src/ui/items/display.rs quality"
+note = "part of items.displayItemQualityEdit"
+
+[controls."items.displayItemQualityEdit.scrollBarV"]
+ported = "app/src/ui/items/display.rs quality"
+note = "part of items.displayItemQualityEdit"
+
+[controls."items.displayItemRangeLine"]
+ported = "app/src/ui/items/display.rs range line combo"
+
+[controls."items.displayItemRangeLine.scrollBar"]
+ported = "app/src/ui/items/display.rs range line combo"
+note = "part of items.displayItemRangeLine"
+
+[controls."items.displayItemRangeSlider"]
+ported = "app/src/ui/items/display.rs range slider"
+
+[controls."items.displayItemSectionAffix"]
+ported = "app/src/ui/items/crafting.rs prefix/suffix rows"
+
+[controls."items.displayItemSectionCatalyst"]
+ported = "app/src/ui/items/display.rs catalyst"
+
+[controls."items.displayItemSectionClusterJewel"]
+ported = "app/src/ui/items/crafting.rs cluster jewel"
+
+[controls."items.displayItemSectionCustom"]
+ported = "app/src/ui/items/crafting.rs custom mod list"
+
+[controls."items.displayItemSectionEnchant"]
+ported = "app/src/ui/items/display.rs enchant/anoint/corrupt buttons"
+
+[controls."items.displayItemSectionInfluence"]
+ported = "app/src/ui/items/display.rs influences"
+
+[controls."items.displayItemSectionQuality"]
+ported = "app/src/ui/items/display.rs quality"
+
+[controls."items.displayItemSectionRange"]
+ported = "app/src/ui/items/display.rs range lines"
+
+[controls."items.displayItemSectionSockets"]
+ported = "app/src/ui/items/display.rs sockets"
+
+[controls."items.displayItemSectionVariant"]
+ported = "app/src/ui/items/display.rs variants"
+
+[controls."items.displayItemSocket1"]
+ported = "app/src/ui/items/display.rs socket colours"
+
+[controls."items.displayItemSocket1.scrollBar"]
+ported = "app/src/ui/items/display.rs socket colours"
+note = "part of items.displayItemSocket1"
+
+[controls."items.displayItemSocket2"]
+ported = "app/src/ui/items/display.rs socket colours"
+
+[controls."items.displayItemSocket2.scrollBar"]
+ported = "app/src/ui/items/display.rs socket colours"
+note = "part of items.displayItemSocket2"
+
+[controls."items.displayItemSocket3"]
+ported = "app/src/ui/items/display.rs socket colours"
+
+[controls."items.displayItemSocket3.scrollBar"]
+ported = "app/src/ui/items/display.rs socket colours"
+note = "part of items.displayItemSocket3"
+
+[controls."items.displayItemSocket4"]
+ported = "app/src/ui/items/display.rs socket colours"
+
+[controls."items.displayItemSocket4.scrollBar"]
+ported = "app/src/ui/items/display.rs socket colours"
+note = "part of items.displayItemSocket4"
+
+[controls."items.displayItemSocket5"]
+ported = "app/src/ui/items/display.rs socket colours"
+
+[controls."items.displayItemSocket5.scrollBar"]
+ported = "app/src/ui/items/display.rs socket colours"
+note = "part of items.displayItemSocket5"
+
+[controls."items.displayItemSocket6"]
+ported = "app/src/ui/items/display.rs socket colours"
+
+[controls."items.displayItemSocket6.scrollBar"]
+ported = "app/src/ui/items/display.rs socket colours"
+note = "part of items.displayItemSocket6"
+
+[controls."items.displayItemStackedMutatedCheckbox1"]
+ported = "app/src/ui/items/display.rs stacked range row 1: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedMutatedCheckbox10"]
+ported = "app/src/ui/items/display.rs stacked range row 10: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedMutatedCheckbox11"]
+ported = "app/src/ui/items/display.rs stacked range row 11: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedMutatedCheckbox12"]
+ported = "app/src/ui/items/display.rs stacked range row 12: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedMutatedCheckbox13"]
+ported = "app/src/ui/items/display.rs stacked range row 13: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedMutatedCheckbox14"]
+ported = "app/src/ui/items/display.rs stacked range row 14: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedMutatedCheckbox15"]
+ported = "app/src/ui/items/display.rs stacked range row 15: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedMutatedCheckbox16"]
+ported = "app/src/ui/items/display.rs stacked range row 16: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedMutatedCheckbox17"]
+ported = "app/src/ui/items/display.rs stacked range row 17: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedMutatedCheckbox18"]
+ported = "app/src/ui/items/display.rs stacked range row 18: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedMutatedCheckbox19"]
+ported = "app/src/ui/items/display.rs stacked range row 19: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedMutatedCheckbox2"]
+ported = "app/src/ui/items/display.rs stacked range row 2: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedMutatedCheckbox20"]
+ported = "app/src/ui/items/display.rs stacked range row 20: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedMutatedCheckbox3"]
+ported = "app/src/ui/items/display.rs stacked range row 3: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedMutatedCheckbox4"]
+ported = "app/src/ui/items/display.rs stacked range row 4: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedMutatedCheckbox5"]
+ported = "app/src/ui/items/display.rs stacked range row 5: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedMutatedCheckbox6"]
+ported = "app/src/ui/items/display.rs stacked range row 6: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedMutatedCheckbox7"]
+ported = "app/src/ui/items/display.rs stacked range row 7: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedMutatedCheckbox8"]
+ported = "app/src/ui/items/display.rs stacked range row 8: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedMutatedCheckbox9"]
+ported = "app/src/ui/items/display.rs stacked range row 9: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine1"]
+ported = "app/src/ui/items/display.rs stacked range row 1: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine10"]
+ported = "app/src/ui/items/display.rs stacked range row 10: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine11"]
+ported = "app/src/ui/items/display.rs stacked range row 11: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine12"]
+ported = "app/src/ui/items/display.rs stacked range row 12: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine13"]
+ported = "app/src/ui/items/display.rs stacked range row 13: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine14"]
+ported = "app/src/ui/items/display.rs stacked range row 14: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine15"]
+ported = "app/src/ui/items/display.rs stacked range row 15: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine16"]
+ported = "app/src/ui/items/display.rs stacked range row 16: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine17"]
+ported = "app/src/ui/items/display.rs stacked range row 17: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine18"]
+ported = "app/src/ui/items/display.rs stacked range row 18: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine19"]
+ported = "app/src/ui/items/display.rs stacked range row 19: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine2"]
+ported = "app/src/ui/items/display.rs stacked range row 2: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine20"]
+ported = "app/src/ui/items/display.rs stacked range row 20: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine3"]
+ported = "app/src/ui/items/display.rs stacked range row 3: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine4"]
+ported = "app/src/ui/items/display.rs stacked range row 4: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine5"]
+ported = "app/src/ui/items/display.rs stacked range row 5: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine6"]
+ported = "app/src/ui/items/display.rs stacked range row 6: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine7"]
+ported = "app/src/ui/items/display.rs stacked range row 7: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine8"]
+ported = "app/src/ui/items/display.rs stacked range row 8: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeLine9"]
+ported = "app/src/ui/items/display.rs stacked range row 9: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider1"]
+ported = "app/src/ui/items/display.rs stacked range row 1: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider10"]
+ported = "app/src/ui/items/display.rs stacked range row 10: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider11"]
+ported = "app/src/ui/items/display.rs stacked range row 11: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider12"]
+ported = "app/src/ui/items/display.rs stacked range row 12: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider13"]
+ported = "app/src/ui/items/display.rs stacked range row 13: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider14"]
+ported = "app/src/ui/items/display.rs stacked range row 14: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider15"]
+ported = "app/src/ui/items/display.rs stacked range row 15: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider16"]
+ported = "app/src/ui/items/display.rs stacked range row 16: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider17"]
+ported = "app/src/ui/items/display.rs stacked range row 17: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider18"]
+ported = "app/src/ui/items/display.rs stacked range row 18: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider19"]
+ported = "app/src/ui/items/display.rs stacked range row 19: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider2"]
+ported = "app/src/ui/items/display.rs stacked range row 2: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider20"]
+ported = "app/src/ui/items/display.rs stacked range row 20: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider3"]
+ported = "app/src/ui/items/display.rs stacked range row 3: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider4"]
+ported = "app/src/ui/items/display.rs stacked range row 4: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider5"]
+ported = "app/src/ui/items/display.rs stacked range row 5: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider6"]
+ported = "app/src/ui/items/display.rs stacked range row 6: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider7"]
+ported = "app/src/ui/items/display.rs stacked range row 7: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider8"]
+ported = "app/src/ui/items/display.rs stacked range row 8: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemStackedRangeSlider9"]
+ported = "app/src/ui/items/display.rs stacked range row 9: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+
+[controls."items.displayItemTip"]
+ported = "app/src/ui/items/display.rs empty-panel hint"
+
+[controls."items.displayItemTooltipAnchor"]
+ported = "app/src/ui/items/display.rs tooltip"
+
+[controls."items.displayItemVariant"]
+ported = "app/src/ui/items/display.rs variants"
+
+[controls."items.displayItemVariant.scrollBar"]
+ported = "app/src/ui/items/display.rs variants"
+note = "part of items.displayItemVariant"
+
+[controls."items.displayItemVersion"]
+ported = "app/src/ui/items/display.rs version"
+
+[controls."items.displayItemVersion.scrollBar"]
+ported = "app/src/ui/items/display.rs version"
+note = "part of items.displayItemVersion"
+
+[controls."items.editDisplayItem"]
+ported = "app/src/ui/items/display.rs Edit (text_window.rs)"
+
+[controls."items.itemList"]
+ported = "app/src/ui/items/list.rs list, sort, drag, Delete, Ctrl+C; Ctrl+click equips into the item's slot and Ctrl+Shift+click into the second (QuickEquipItem, NF-16); shared items and database rows dropped on it land at the row under the cursor (DropSharedItem, DropDbItemOnList); its rows drag onto the sidebar's minion dropdown (DropOnMinion)"
+
+[controls."items.itemList.delete"]
+ported = "app/src/ui/items/list.rs Delete"
+
+[controls."items.itemList.deleteAll"]
+ported = "app/src/ui/items/list.rs Delete all"
+
+[controls."items.itemList.deleteUnused"]
+ported = "app/src/ui/items/list.rs Delete unused"
+
+[controls."items.itemList.loadoutFilter"]
+ported = "app/src/ui/items/list.rs set filter combo"
+
+[controls."items.itemList.scrollBarH"]
+ported = "app/src/ui/items/list.rs scroll area (part of items.itemList)"
+
+[controls."items.itemList.scrollBarV"]
+ported = "app/src/ui/items/list.rs scroll area (part of items.itemList)"
+
+[controls."items.itemList.sort"]
+ported = "app/src/ui/items/list.rs Sort"
+
+[controls."items.newDisplayItem"]
+ported = "app/src/ui/items/display.rs Create custom (text_window.rs)"
+
+[controls."items.priceDisplayItem"]
+ruled_out = "D-005"
+note = "trade price queries out"
+
+[controls."items.rareDB"]
+ported = "app/src/ui/items/db.rs as uniqueDB: Ctrl+Shift+click adds into the second slot, a row dragged onto a slot is DropDbItem (R23), onto the item list DropDbItemOnList, onto the shared list AddSharedItem, onto the sidebar's minion dropdown DropOnMinion; Shift on a hovered row shows the child tooltips"
+
+[controls."items.rareDB.scrollBarH"]
+ported = "app/src/ui/items/db.rs rows scroll area (part of items.rareDB)"
+
+[controls."items.rareDB.scrollBarV"]
+ported = "app/src/ui/items/db.rs rows scroll area (part of items.rareDB)"
+
+[controls."items.rareDB.search"]
+ported = "app/src/ui/items/db.rs search"
+
+[controls."items.rareDB.searchMode"]
+ported = "app/src/ui/items/db.rs search mode"
+
+[controls."items.rareDB.slot"]
+ported = "app/src/ui/items/db.rs filters"
+
+[controls."items.rareDB.type"]
+ported = "app/src/ui/items/db.rs filters"
+
+[controls."items.removeDisplayItem"]
+ported = "app/src/ui/items/display.rs Cancel"
+
+[controls."items.scrollBarH"]
+ported = "app/src/ui/items/slots.rs, list.rs and display.rs scroll areas"
+note = "the tab's own scroll bar"
+
+[controls."items.scrollBarV"]
+ported = "app/src/ui/items/slots.rs, list.rs and display.rs scroll areas"
+note = "the tab's own scroll bar"
+
+[controls."items.selectDB"]
+ported = "app/src/ui/items/db.rs Uniques / Rares"
+
+[controls."items.selectDB.scrollBar"]
+ported = "app/src/ui/items/db.rs Uniques / Rares"
+note = "part of items.selectDB"
+
+[controls."items.selectDBLabel"]
+ported = "app/src/ui/items/db.rs"
+
+[controls."items.setLabel"]
+ported = "app/src/ui/items/sets.rs"
+
+[controls."items.setManage"]
+ported = "app/src/ui/items/sets.rs Manage"
+note = "PoB's popup also holds the shared item sets: see NF-2"
+
+[controls."items.setSelect"]
+ported = "app/src/ui/items/sets.rs set combo"
+
+[controls."items.setSelect.scrollBar"]
+ported = "app/src/ui/items/sets.rs set combo"
+note = "part of items.setSelect"
+
+[controls."items.sharedItemList"]
+ported = "app/src/ui/items/shared.rs shared items under Craft item...: rows, hover (Shift: child tooltips), double-click, Ctrl+C (CopySharedItem), drag onto slots, onto the item list at the row under the cursor and onto the sidebar's minion dropdown, build items and database rows dragged in, reorder; edits save Settings.xml through main:SaveSettings (R29 amended by the controller: shared item list edits), refused when another program changed the file since we last read or wrote it"
+note = "its arrows, Home/End, Delete and Backspace are the ListControl key rows (items/shared.rs)"
+
+[controls."items.sharedItemList.delete"]
+ported = "app/src/ui/items/shared.rs Delete with PoB's question (DeleteSharedItem)"
+
+[controls."items.sharedItemList.scrollBarH"]
+ported = "app/src/ui/items/shared.rs rows (part of items.sharedItemList)"
+
+[controls."items.sharedItemList.scrollBarV"]
+ported = "app/src/ui/items/shared.rs rows (part of items.sharedItemList)"
+
+[controls."items.slotHeader"]
+ported = "app/src/ui/items/slots.rs"
+
+[controls."items.specButton"]
+ported = "app/src/ui/tree/mod.rs Manage... opens the Tree tab's Manage Passive Trees window and its questions over the Items tab (opened from app/src/ui/items/slots.rs)"
+note = "the window's own parity is the Manage Passive Trees popup row (NF-3); one window serves the Tree tab's Manage..., Ctrl+M and this button since the Task 13 merge"
+
+[controls."items.specLabel"]
+ported = "app/src/ui/items/slots.rs Passive tree: label"
+
+[controls."items.specSelect"]
+ported = "app/src/ui/items/slots.rs Passive tree dropdown under the slots (ItemsView.specs, PoB's GetSpecList labels; SelectSpec)"
+
+[controls."items.specSelect.scrollBar"]
+ported = "app/src/ui/items/slots.rs Passive tree dropdown list (part of items.specSelect)"
+
+[controls."items.uniqueDB"]
+ported = "app/src/ui/items/db.rs list, hover, double-click, Ctrl+click; Ctrl+Shift+click adds into the second slot, a row dragged onto a slot is DropDbItem (R23), onto the item list DropDbItemOnList, onto the shared list AddSharedItem, onto the sidebar's minion dropdown DropOnMinion; Shift on a hovered row shows the child tooltips"
+
+[controls."items.uniqueDB.league"]
+ported = "app/src/ui/items/db.rs filters"
+
+[controls."items.uniqueDB.obtainable"]
+ported = "app/src/ui/items/db.rs filters (source)"
+
+[controls."items.uniqueDB.requirement"]
+ported = "app/src/ui/items/db.rs filters"
+
+[controls."items.uniqueDB.scrollBarH"]
+ported = "app/src/ui/items/db.rs rows scroll area (part of items.uniqueDB)"
+
+[controls."items.uniqueDB.scrollBarV"]
+ported = "app/src/ui/items/db.rs rows scroll area (part of items.uniqueDB)"
+
+[controls."items.uniqueDB.search"]
+ported = "app/src/ui/items/db.rs search"
+
+[controls."items.uniqueDB.searchMode"]
+ported = "app/src/ui/items/db.rs search mode"
+
+[controls."items.uniqueDB.slot"]
+ported = "app/src/ui/items/db.rs filters"
+
+[controls."items.uniqueDB.sort"]
+ported = "app/src/ui/items/db.rs stat sort"
+
+[controls."items.uniqueDB.type"]
+ported = "app/src/ui/items/db.rs filters"
+
+[controls."items.weaponSwap1"]
+ported = "app/src/ui/items/sets.rs weapon set I/II"
+
+[controls."items.weaponSwap2"]
+ported = "app/src/ui/items/sets.rs weapon set I/II"
+
+[controls."items.weaponSwapLabel"]
+ported = "app/src/ui/items/sets.rs weapon set I/II"
+
+[controls."list.buildList"]
+ported = "app/src/ui/build_list.rs table: PoB order, row menu, drag to folders, Ctrl+X/Ctrl+V, F2, Enter, Delete key; Ctrl+C then Ctrl+V into another folder"
+
+[controls."list.buildList.path"]
+ported = "app/src/ui/build_list.rs top_rows clickable path segments, Mouse4/5 history"
+
+[controls."list.buildList.scrollBarH"]
+ported = "app/src/ui/build_list.rs table (the list's own scroll area)"
+note = "part of list.buildList"
+
+[controls."list.buildList.scrollBarV"]
+ported = "app/src/ui/build_list.rs table (the list's own scroll area)"
+note = "part of list.buildList"
+
+[controls."list.copy"]
+ported = "app/src/ui/build_list.rs row menu Copy… and name dialog"
+note = "R16"
+
+[controls."list.delete"]
+ported = "app/src/ui/build_list.rs row menu Delete…, Delete key and confirm dialog"
+note = "R16"
+
+[controls."list.new"]
+ported = "app/src/ui/build_list.rs New"
+
+[controls."list.newFolder"]
+ported = "app/src/ui/build_list.rs top_rows New Folder and name dialog"
+note = "R16"
+
+[controls."list.open"]
+ported = "app/src/ui/build_list.rs row click"
+
+[controls."list.rename"]
+ported = "app/src/ui/build_list.rs row menu Rename…, F2 and name dialog"
+note = "R16"
+
+[controls."list.searchText"]
+ported = "app/src/ui/build_list.rs search_box, sent 200 ms after typing stops"
+note = "search filter (R16)"
+
+[controls."list.searchText.buttonClear"]
+ported = "app/src/ui/build_list.rs search_box x button"
+note = "part of list.searchText"
+
+[controls."list.searchText.scrollBarH"]
+ported = "app/src/ui/build_list.rs search_box"
+note = "part of list.searchText"
+
+[controls."list.searchText.scrollBarV"]
+ported = "app/src/ui/build_list.rs search_box"
+note = "part of list.searchText"
+
+[controls."list.sort"]
+ported = "app/src/ui/build_list.rs top_rows sort combo with PoB's four labels"
+note = "PoB's four sort modes (R16)"
+
+[controls."list.sort.scrollBar"]
+ported = "app/src/ui/build_list.rs top_rows sort combo"
+note = "part of list.sort"
+
+[controls."main.about"]
+ported = "app/src/ui/build_list.rs and app/src/ui/build.rs About buttons open app/src/ui/help.rs HelpUi on the version history; help and changelog read off PoB's own About window (glue/builds.lua help_view)"
+
+[controls."main.applyUpdate"]
+ruled_out = "D-009"
+note = "PoB self-update is off; R14 release notice replaces it"
+
+[controls."main.checkUpdate"]
+ruled_out = "D-009"
+note = "PoB self-update is off; R14 release notice replaces it"
+
+[controls."main.devMode"]
+ruled_out = "R13"
+note = "devMode is off in our engine"
+
+[controls."main.forkLabel"]
+ported = "app/src/ui/app.rs main_labels: PoB Community Fork at the foot of every screen (Main.lua:230-233)"
+
+[controls."main.options"]
+ported = "app/src/ui/build.rs top_bar and app/src/ui/build_list.rs Options buttons open app/src/ui/options.rs OptionsUi"
+
+[controls."main.versionLabel"]
+ported = "app/src/ui/app.rs main_labels: Version and PoB's pinned version at the foot of every screen (Main.lua:234-237)"
+
+[controls."notes.chaos"]
+ported = "app/src/ui/notes.rs colour buttons"
+
+[controls."notes.cold"]
+ported = "app/src/ui/notes.rs colour buttons"
+
+[controls."notes.default"]
+ported = "app/src/ui/notes.rs colour buttons"
+
+[controls."notes.dexterity"]
+ported = "app/src/ui/notes.rs colour buttons"
+
+[controls."notes.edit"]
+ported = "app/src/ui/notes.rs editor"
+
+[controls."notes.edit.scrollBarH"]
+ported = "app/src/ui/notes.rs editor"
+note = "part of notes.edit"
+
+[controls."notes.edit.scrollBarV"]
+ported = "app/src/ui/notes.rs editor"
+note = "part of notes.edit"
+
+[controls."notes.fire"]
+ported = "app/src/ui/notes.rs colour buttons"
+
+[controls."notes.intelligence"]
+ported = "app/src/ui/notes.rs colour buttons"
+
+[controls."notes.lightning"]
+ported = "app/src/ui/notes.rs colour buttons"
+
+[controls."notes.magic"]
+ported = "app/src/ui/notes.rs colour buttons"
+
+[controls."notes.normal"]
+ported = "app/src/ui/notes.rs colour buttons"
+
+[controls."notes.notesDesc"]
+ported = "app/src/ui/notes.rs PoB's description; Ctrl +/-/0 and Ctrl+wheel zoom the notes text only (zoom_line_height)"
+
+[controls."notes.rare"]
+ported = "app/src/ui/notes.rs colour buttons"
+
+[controls."notes.strength"]
+ported = "app/src/ui/notes.rs colour buttons"
+
+[controls."notes.toggleColorCodes"]
+ported = "app/src/ui/notes.rs raw editor plus Preview"
+note = "R34: already equivalent"
+
+[controls."notes.unique"]
+ported = "app/src/ui/notes.rs colour buttons"
+
+[controls."party.appendNotReplace"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.clear"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editAuras"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editAuras.scrollBarH"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editAuras.scrollBarV"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editAurasLabel"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editCurses"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editCurses.scrollBarH"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editCurses.scrollBarV"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editCursesLabel"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editLinks"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editLinks.scrollBarH"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editLinks.scrollBarV"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editLinksLabel"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editPartyMemberStats"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editPartyMemberStats.scrollBarH"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editPartyMemberStats.scrollBarV"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editPartyMemberStatsLabel"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editWarcries"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editWarcries.scrollBarH"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editWarcries.scrollBarV"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.editWarcriesLabel"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.enemyCond"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.enemyCond.scrollBarH"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.enemyCond.scrollBarV"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.enemyCondLabel"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.enemyMods"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.enemyMods.scrollBarH"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.enemyMods.scrollBarV"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.enemyModsLabel"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.importCodeDestination"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.importCodeDestination.scrollBar"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.importCodeGo"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.importCodeHeader"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.importCodeIn"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.importCodeIn.scrollBarH"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.importCodeIn.scrollBarV"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.importCodeState"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.notesDesc"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.rebuild"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.removeEffects"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.ShowAdvanceTools"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.simpleAuras"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.simpleCurses"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.simpleEnemyCond"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.simpleEnemyMods"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.simpleLinks"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."party.simpleWarcries"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[controls."skills.defaultLevel"]
+ported = "app/src/ui/skills/groups.rs gem options"
+
+[controls."skills.defaultLevel.scrollBar"]
+ported = "app/src/ui/skills/groups.rs gem options"
+note = "part of skills.defaultLevel"
+
+[controls."skills.defaultLevelLabel"]
+ported = "app/src/ui/skills/groups.rs gem options"
+
+[controls."skills.defaultQuality"]
+ported = "app/src/ui/skills/groups.rs gem options"
+
+[controls."skills.defaultQuality.buttonDown"]
+ported = "app/src/ui/skills/groups.rs gem options"
+note = "part of skills.defaultQuality"
+
+[controls."skills.defaultQuality.buttonUp"]
+ported = "app/src/ui/skills/groups.rs gem options"
+note = "part of skills.defaultQuality"
+
+[controls."skills.defaultQuality.scrollBarH"]
+ported = "app/src/ui/skills/groups.rs gem options"
+note = "part of skills.defaultQuality"
+
+[controls."skills.defaultQuality.scrollBarV"]
+ported = "app/src/ui/skills/groups.rs gem options"
+note = "part of skills.defaultQuality"
+
+[controls."skills.defaultQualityLabel"]
+ported = "app/src/ui/skills/groups.rs gem options"
+
+[controls."skills.gemCountHeader"]
+ported = "app/src/ui/skills/group.rs gem table"
+
+[controls."skills.gemEnableHeader"]
+ported = "app/src/ui/skills/group.rs gem table"
+
+[controls."skills.gemLevelHeader"]
+ported = "app/src/ui/skills/group.rs gem table"
+
+[controls."skills.gemNameHeader"]
+ported = "app/src/ui/skills/group.rs gem table"
+
+[controls."skills.gemQualityHeader"]
+ported = "app/src/ui/skills/group.rs gem table"
+
+[controls."skills.gemSlot#Count"]
+ported = "app/src/ui/skills/group.rs Count box with PoB's what-if hover tooltip (HoverTooltip, R22)"
+
+[controls."skills.gemSlot#Count.buttonDown"]
+ported = "app/src/ui/skills/group.rs Count box"
+note = "part of skills.gemSlot#Count"
+
+[controls."skills.gemSlot#Count.buttonUp"]
+ported = "app/src/ui/skills/group.rs Count box"
+note = "part of skills.gemSlot#Count"
+
+[controls."skills.gemSlot#Count.scrollBarH"]
+ported = "app/src/ui/skills/group.rs Count box"
+note = "part of skills.gemSlot#Count"
+
+[controls."skills.gemSlot#Count.scrollBarV"]
+ported = "app/src/ui/skills/group.rs Count box"
+note = "part of skills.gemSlot#Count"
+
+[controls."skills.gemSlot#Delete"]
+ported = "app/src/ui/skills/group.rs gem table"
+
+[controls."skills.gemSlot#Enable"]
+ported = "app/src/ui/skills/group.rs enable box with PoB's what-if hover tooltip (HoverTooltip, R22)"
+
+[controls."skills.gemSlot#EnableGlobal1"]
+ported = "app/src/ui/skills/group.rs Vaal toggles"
+
+[controls."skills.gemSlot#EnableGlobal2"]
+ported = "app/src/ui/skills/group.rs Vaal toggles"
+
+[controls."skills.gemSlot#ErrMsg"]
+ported = "app/src/ui/skills/group.rs unknown gems in red"
+
+[controls."skills.gemSlot#Level"]
+ported = "app/src/ui/skills/group.rs gem table"
+
+[controls."skills.gemSlot#Level.buttonDown"]
+ported = "app/src/ui/skills/group.rs gem table"
+note = "part of skills.gemSlot#Level"
+
+[controls."skills.gemSlot#Level.buttonUp"]
+ported = "app/src/ui/skills/group.rs gem table"
+note = "part of skills.gemSlot#Level"
+
+[controls."skills.gemSlot#Level.scrollBarH"]
+ported = "app/src/ui/skills/group.rs gem table"
+note = "part of skills.gemSlot#Level"
+
+[controls."skills.gemSlot#Level.scrollBarV"]
+ported = "app/src/ui/skills/group.rs gem table"
+note = "part of skills.gemSlot#Level"
+
+[controls."skills.gemSlot#Name"]
+ported = "app/src/ui/skills/picker.rs gem picker"
+
+[controls."skills.gemSlot#Name.scrollBar"]
+ported = "app/src/ui/skills/picker.rs gem picker"
+note = "part of skills.gemSlot#Name"
+
+[controls."skills.gemSlot#Name.scrollBarH"]
+ported = "app/src/ui/skills/picker.rs gem picker"
+note = "part of skills.gemSlot#Name"
+
+[controls."skills.gemSlot#Name.scrollBarV"]
+ported = "app/src/ui/skills/picker.rs gem picker"
+note = "part of skills.gemSlot#Name"
+
+[controls."skills.gemSlot#Quality"]
+ported = "app/src/ui/skills/group.rs Quality box with PoB's what-if hover tooltip (HoverTooltip, R22)"
+
+[controls."skills.gemSlot#Quality.buttonDown"]
+ported = "app/src/ui/skills/group.rs Quality box"
+note = "part of skills.gemSlot#Quality"
+
+[controls."skills.gemSlot#Quality.buttonUp"]
+ported = "app/src/ui/skills/group.rs Quality box"
+note = "part of skills.gemSlot#Quality"
+
+[controls."skills.gemSlot#Quality.scrollBarH"]
+ported = "app/src/ui/skills/group.rs Quality box"
+note = "part of skills.gemSlot#Quality"
+
+[controls."skills.gemSlot#Quality.scrollBarV"]
+ported = "app/src/ui/skills/group.rs Quality box"
+note = "part of skills.gemSlot#Quality"
+
+[controls."skills.groupCount"]
+ported = "app/src/ui/skills/group.rs count (item groups)"
+
+[controls."skills.groupCount.buttonDown"]
+ported = "app/src/ui/skills/group.rs count (item groups)"
+note = "part of skills.groupCount"
+
+[controls."skills.groupCount.buttonUp"]
+ported = "app/src/ui/skills/group.rs count (item groups)"
+note = "part of skills.groupCount"
+
+[controls."skills.groupCount.scrollBarH"]
+ported = "app/src/ui/skills/group.rs count (item groups)"
+note = "part of skills.groupCount"
+
+[controls."skills.groupCount.scrollBarV"]
+ported = "app/src/ui/skills/group.rs count (item groups)"
+note = "part of skills.groupCount"
+
+[controls."skills.groupCountLabel"]
+ported = "app/src/ui/skills/group.rs count"
+
+[controls."skills.groupEnabled"]
+ported = "app/src/ui/skills/group.rs enabled"
+
+[controls."skills.groupLabel"]
+ported = "app/src/ui/skills/group.rs label"
+
+[controls."skills.groupLabel.scrollBarH"]
+ported = "app/src/ui/skills/group.rs label"
+note = "part of skills.groupLabel"
+
+[controls."skills.groupLabel.scrollBarV"]
+ported = "app/src/ui/skills/group.rs label"
+note = "part of skills.groupLabel"
+
+[controls."skills.groupList"]
+ported = "app/src/ui/skills/groups.rs list, drag reorder, menu, Ctrl+C/V, Delete or Backspace, Up/Down/Home/End, Ctrl+click enable and Ctrl+right-click Full DPS"
+
+[controls."skills.groupList.delete"]
+ported = "app/src/ui/skills/groups.rs Delete"
+
+[controls."skills.groupList.deleteAll"]
+ported = "app/src/ui/skills/groups.rs Delete All"
+
+[controls."skills.groupList.new"]
+ported = "app/src/ui/skills/groups.rs New"
+
+[controls."skills.groupList.scrollBarH"]
+ported = "app/src/ui/skills/groups.rs list"
+note = "part of skills.groupList"
+
+[controls."skills.groupList.scrollBarV"]
+ported = "app/src/ui/skills/groups.rs list"
+note = "part of skills.groupList"
+
+[controls."skills.groupSlot"]
+ported = "app/src/ui/skills/group.rs slot"
+
+[controls."skills.groupSlot.scrollBar"]
+ported = "app/src/ui/skills/group.rs slot"
+note = "part of skills.groupSlot"
+
+[controls."skills.groupSlotLabel"]
+ported = "app/src/ui/skills/group.rs slot"
+
+[controls."skills.groupTip"]
+ported = "app/src/ui/skills/groups.rs GROUP_TIP: PoB's usage tips under the list"
+
+[controls."skills.imbuedSupport"]
+ported = "app/src/ui/skills/group.rs imbued support"
+
+[controls."skills.imbuedSupport.scrollBar"]
+ported = "app/src/ui/skills/group.rs imbued support"
+note = "part of skills.imbuedSupport"
+
+[controls."skills.imbuedSupport.scrollBarH"]
+ported = "app/src/ui/skills/group.rs imbued support"
+note = "part of skills.imbuedSupport"
+
+[controls."skills.imbuedSupport.scrollBarV"]
+ported = "app/src/ui/skills/group.rs imbued support"
+note = "part of skills.imbuedSupport"
+
+[controls."skills.imbuedSupportClear"]
+ported = "app/src/ui/skills/group.rs imbued support"
+
+[controls."skills.imbuedSupportLabel"]
+ported = "app/src/ui/skills/group.rs imbued support"
+
+[controls."skills.includeInFullDPS"]
+ported = "app/src/ui/skills/group.rs Full DPS"
+
+[controls."skills.optimiseSockets"]
+ported = "app/src/ui/skills/group.rs Optimise"
+
+[controls."skills.optionSection"]
+ported = "app/src/ui/skills/groups.rs gem options"
+
+[controls."skills.scrollBarH"]
+ported = "app/src/ui/skills/mod.rs scroll area"
+note = "the tab's own scroll bar"
+
+[controls."skills.setLabel"]
+ported = "app/src/ui/skills/sets.rs"
+
+[controls."skills.setManage"]
+ported = "app/src/ui/skills/sets.rs manager"
+
+[controls."skills.setSelect"]
+ported = "app/src/ui/skills/sets.rs set combo"
+
+[controls."skills.setSelect.scrollBar"]
+ported = "app/src/ui/skills/sets.rs set combo"
+note = "part of skills.setSelect"
+
+[controls."skills.showLegacyGems"]
+ported = "app/src/ui/skills/groups.rs gem options"
+
+[controls."skills.showSupportGemTypes"]
+ported = "app/src/ui/skills/groups.rs gem options"
+
+[controls."skills.showSupportGemTypes.scrollBar"]
+ported = "app/src/ui/skills/groups.rs gem options"
+note = "part of skills.showSupportGemTypes"
+
+[controls."skills.showSupportGemTypesLabel"]
+ported = "app/src/ui/skills/groups.rs gem options"
+
+[controls."skills.socketsLabel"]
+ported = "app/src/ui/skills/group.rs sockets line"
+
+[controls."skills.sortGemsByDPS"]
+ported = "app/src/ui/skills/groups.rs gem options"
+
+[controls."skills.sortGemsByDPSFieldControl"]
+ported = "app/src/ui/skills/groups.rs gem options"
+
+[controls."skills.sortGemsByDPSFieldControl.scrollBar"]
+ported = "app/src/ui/skills/groups.rs gem options"
+note = "part of skills.sortGemsByDPSFieldControl"
+
+[controls."skills.sourceNote"]
+ported = "app/src/ui/skills/group.rs item group note"
+
+[controls."tree.compareCheck"]
+ported = "app/src/ui/tree/toolbar.rs Compare combo"
+note = "None stands for the unchecked box"
+
+[controls."tree.compareSelect"]
+ported = "app/src/ui/tree/toolbar.rs Compare combo"
+
+[controls."tree.compareSelect.scrollBar"]
+ported = "app/src/ui/tree/toolbar.rs Compare combo"
+note = "part of tree.compareSelect"
+
+[controls."tree.findTimelessJewel"]
+ported = "app/src/ui/tree/toolbar.rs Find timeless jewel button (PoB popup session, R17)"
+note = "timeless jewel search (R17)"
+
+[controls."tree.nodePowerMaxDepthCustom"]
+ported = "app/src/ui/tree/toolbar.rs heat map depth Custom entry and its digits box (SetHeatmap max_depth, NF-6)"
+
+[controls."tree.nodePowerMaxDepthCustom.buttonDown"]
+ported = "app/src/ui/tree/toolbar.rs heat map depth Custom box"
+note = "part of tree.nodePowerMaxDepthCustom"
+
+[controls."tree.nodePowerMaxDepthCustom.buttonUp"]
+ported = "app/src/ui/tree/toolbar.rs heat map depth Custom box"
+note = "part of tree.nodePowerMaxDepthCustom"
+
+[controls."tree.nodePowerMaxDepthCustom.scrollBarH"]
+ported = "app/src/ui/tree/toolbar.rs heat map depth Custom box"
+note = "part of tree.nodePowerMaxDepthCustom"
+
+[controls."tree.nodePowerMaxDepthCustom.scrollBarV"]
+ported = "app/src/ui/tree/toolbar.rs heat map depth Custom box"
+note = "part of tree.nodePowerMaxDepthCustom"
+
+[controls."tree.nodePowerMaxDepthSelect"]
+ported = "app/src/ui/tree/toolbar.rs depth combo"
+note = "All, 5, 10, 15; PoB's Custom entry is nodePowerMaxDepthCustom"
+
+[controls."tree.nodePowerMaxDepthSelect.scrollBar"]
+ported = "app/src/ui/tree/toolbar.rs depth combo"
+note = "part of tree.nodePowerMaxDepthSelect"
+
+[controls."tree.powerReport"]
+ported = "app/src/ui/tree/toolbar.rs Power report toggle"
+
+[controls."tree.powerReportList"]
+ported = "app/src/ui/tree/power_report.rs"
+
+[controls."tree.powerReportList.filterSelect"]
+ported = "app/src/ui/tree/power_report.rs filter dropdown (SetPowerReportFilter, PowerReport.listed, NF-5)"
+
+[controls."tree.powerReportList.masteryCheck"]
+ported = "app/src/ui/tree/power_report.rs Show Masteries box (SetPowerReportFilter, NF-5)"
+
+[controls."tree.powerReportList.scrollBarH"]
+ported = "app/src/ui/tree/power_report.rs"
+note = "part of tree.powerReportList"
+
+[controls."tree.powerReportList.scrollBarV"]
+ported = "app/src/ui/tree/power_report.rs"
+note = "part of tree.powerReportList"
+
+[controls."tree.reset"]
+ported = "app/src/ui/tree/toolbar.rs Reset and Remove all tattoos"
+
+[controls."tree.specConvert"]
+ported = "app/src/ui/tree/toolbar.rs Link menu Convert this tree"
+
+[controls."tree.specConvertAll"]
+ported = "app/src/ui/tree/toolbar.rs Link menu Convert all trees"
+
+[controls."tree.specConvertText"]
+ported = "app/src/ui/tree/toolbar.rs Link menu"
+note = "the convert entries appear only for an older tree"
+
+[controls."tree.specSelect"]
+ported = "app/src/ui/tree/toolbar.rs spec combo"
+
+[controls."tree.specSelect.scrollBar"]
+ported = "app/src/ui/tree/toolbar.rs spec combo"
+note = "part of tree.specSelect"
+
+[controls."tree.treeHeatMap"]
+ported = "app/src/ui/tree/toolbar.rs Heat map combo"
+note = "Off stands for the unchecked box"
+
+[controls."tree.treeHeatMapStatSelect"]
+ported = "app/src/ui/tree/toolbar.rs Heat map combo"
+
+[controls."tree.treeHeatMapStatSelect.scrollBar"]
+ported = "app/src/ui/tree/toolbar.rs Heat map combo"
+note = "part of tree.treeHeatMapStatSelect"
+
+[controls."tree.treeSearch"]
+ported = "app/src/ui/tree/toolbar.rs Search nodes"
+
+[controls."tree.treeSearch.buttonClear"]
+ported = "app/src/ui/tree/toolbar.rs Search nodes"
+note = "part of tree.treeSearch"
+
+[controls."tree.treeSearch.scrollBarH"]
+ported = "app/src/ui/tree/toolbar.rs Search nodes"
+note = "part of tree.treeSearch"
+
+[controls."tree.treeSearch.scrollBarV"]
+ported = "app/src/ui/tree/toolbar.rs Search nodes"
+note = "part of tree.treeSearch"
+
+[controls."tree.versionSelect"]
+ported = "app/src/ui/tree/toolbar.rs Version dropdown of every tree version and its Convert / Copy + Convert dialog (ConvertSpec, NF-7)"
+
+[controls."tree.versionSelect.scrollBar"]
+ported = "app/src/ui/tree/toolbar.rs Version dropdown"
+note = "part of tree.versionSelect"
+
+[controls."tree.versionText"]
+ported = "app/src/ui/tree/toolbar.rs"
+note = "label; the version shows in the Link menu"
+
+# ---- popups ----
+
+[popups."About"]
+ported = "app/src/ui/help.rs HelpUi: help sections, version history, labels and GitHub link from PoB's About window (Command::Help); F1, About and the loadouts' Help >> open it"
+
+[popups."Add Crucible Modifier to Item"]
+ported = "app/src/ui/popup.rs session (SP5b)"
+
+[popups."Add Implicit to Item"]
+ported = "app/src/ui/popup.rs session (SP5b)"
+
+[popups."Add Modifier to Item"]
+ported = "app/src/ui/popup.rs session (SP5b)"
+
+[popups."Anoint Item"]
+ported = "app/src/ui/popup.rs session (SP5b)"
+
+[popups."Build Import"]
+ported = "app/src/ui/import.rs confirm"
+note = "PoB's warning text"
+
+[popups."Build:2071"]
+ported = "app/src/ui/app.rs save error"
+note = "a failed save shows the error"
+
+[popups."BuildList:143"]
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
+note = "PoB's message: a folder cannot be copied into itself (NF-13) (R16 operations show PoB's text)"
+
+[popups."BuildList:158"]
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
+note = "PoB's message: a folder cannot be moved into itself (R16 operations show PoB's text)"
+
+[popups."BuildListControl:121"]
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
+note = "PoB's message: rename failure (R16 operations show PoB's text)"
+
+[popups."BuildListControl:131"]
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
+note = "PoB's message: copy failure (R16 operations show PoB's text)"
+
+[popups."BuildListControl:137"]
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
+note = "PoB's message: rename failure (R16 operations show PoB's text)"
+
+[popups."BuildListControl:152"]
+ported = "app/src/ui/build_list.rs name dialog (Copy and Rename, PoB's character filter and 100 character limit)"
+note = "Copy/Rename Build/Folder name popup (R16)"
+
+[popups."BuildListControl:167"]
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
+note = "PoB's message: delete failure (R16 operations show PoB's text)"
+
+[popups."BuildListControl:238"]
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
+note = "PoB's message: move (drag) failure (R16 operations show PoB's text)"
+
+[popups."BuildListControl:41"]
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
+note = "PoB's message: move failure (R16 operations show PoB's text)"
+
+[popups."Change Settings Path"]
+ruled_out = "R3"
+note = "our first-run choice replaces it (R15)"
+
+[popups."Character Import"]
+ported = "app/src/ui/import.rs confirm"
+note = "PoB's text"
+
+[popups."Class Change"]
+ported = "app/src/ui/tree/toolbar.rs class question for the class dropdown, and PoB's Class Change for a canvas click on another class's ascendancy node (AllocNodeChangingClass: Continue / Connect Path)"
+
+[popups."CompareBuySimilar:531"]
+ported = "app/src/engine/glue/popups.lua Buy Similar session (openPopup, R10)"
+note = "Buy similar popup (R10)"
+
+[popups."CompareTab:1566"]
+ported = "app/src/ui/app.rs on_error shows the engine's PoB failure text as a notice (app_compare_tests a_comparison_pob_refuses_shows_pobs_text; gate compare_summary_matches_pob checks the engine texts)"
+note = "comparison load failure text (R5)"
+
+[popups."CompareTab:1572"]
+ported = "app/src/ui/app.rs on_error shows the engine's PoB failure text as a notice (app_compare_tests a_comparison_pob_refuses_shows_pobs_text; gate compare_summary_matches_pob checks the engine texts)"
+note = "comparison load failure text (R5)"
+
+[popups."CompareTab:1578"]
+ported = "app/src/ui/app.rs on_error shows the engine's PoB failure text as a notice (app_compare_tests a_comparison_pob_refuses_shows_pobs_text; gate compare_summary_matches_pob checks the engine texts)"
+note = "comparison load failure text (R5)"
+
+[popups."Confirm Delete"]
+ported = "app/src/ui/build_list.rs delete dialog with PoB's text"
+note = "build list delete confirm (R16)"
+
+[popups."Confirm Folder Delete"]
+ported = "app/src/ui/build_list.rs delete dialog with PoB's text"
+note = "folder delete confirm (R16); an empty folder, which PoB deletes without asking, is asked about too (R29)"
+
+[popups."Craft Item"]
+ported = "app/src/ui/popup.rs session (SP5b)"
+
+[popups."Create Custom Item from Text"]
+ported = "app/src/ui/items/text_window.rs"
+
+[popups."Delete All"]
+ported = "app/src/ui/items/list.rs and skills/groups.rs confirms"
+note = "two sites: items and socket groups"
+
+[popups."Delete Config Set"]
+ported = "app/src/ui/config.rs confirm"
+
+[popups."Delete Item"]
+ported = "app/src/ui/items/list.rs item list sites with PoB's texts; app/src/ui/items/shared.rs the shared item site"
+
+[popups."Delete Item Set"]
+ported = "app/src/ui/items/sets.rs item set and shared item set sites, app/src/ui/skills/sets.rs skill sets"
+
+[popups."Delete Socket Group"]
+ported = "app/src/ui/skills/groups.rs confirm"
+
+[popups."Delete Tree"]
+ported = "app/src/ui/tree/toolbar.rs confirm"
+
+[popups."Edit Item Text"]
+ported = "app/src/ui/items/text_window.rs"
+
+[popups."Enchant Item"]
+ported = "app/src/ui/popup.rs session (SP5b)"
+
+[popups."Export Tree"]
+ported = "app/src/ui/tree/toolbar.rs Link menu Copy link"
+
+[popups."Find a Timeless Jewel"]
+ported = "app/src/engine/glue/timeless.lua search job over the FindTimelessJewel session (R17); result list double click, Shift range and row tooltips via popups.lua"
+note = "R17"
+
+[popups."FolderListControl:84"]
+ported = "app/src/ui/folder_picker.rs ask_delete: PoB's text The folder is not empty. as a notice"
+
+[popups."FolderListControl:88"]
+ported = "app/src/ui/app.rs on_picker sends DeleteBuild; a failure shows the engine's PoB text as a notice"
+
+[popups."Game Version"]
+ported = "app/src/engine/glue/net.lua Build:Init wrapper adopts PoB's window as a main-owned GameVersion popup session over a new Unnamed build; Convert reopens the build converted (gate build_open::game_version_matches_pob, game_version_on_the_first_open, starting_on_the_build_the_exit_save_recorded). app/src/ui/app.rs keeps the window up on every tab, and its Cancel, Esc or close box goes back to the build list as PoB's Cancel (Build.lua:1344-1347); one met on the list at start is cancelled there (test game_version_stays_up_and_its_cancel_goes_to_the_list)"
+note = "never the previous build's tabs under the new name; an import's Convert makes an empty build, as upstream's"
+
+[popups."Import Comparison Build"]
+ported = "app/src/ui/compare/mod.rs 'Load build…' menu: from a saved build, a code or a link (R5)"
+note = "R5"
+
+[popups."Import from Folder"]
+ruled_out = "R5"
+note = "our list picker does it"
+
+[popups."Import Tree"]
+ported = "app/src/ui/tree/toolbar.rs Import link"
+
+[popups."ImportTab:548"]
+ported = "app/src/ui/import.rs share error"
+note = "PoB's Error creating link text (SP6)"
+
+[popups."ImportTab:660"]
+ported = "app/src/ui/app.rs on_error shows the engine's PoB failure text as a notice (app_compare_tests a_comparison_pob_refuses_shows_pobs_text; gate network::build_sites_match_pob checks the engine text)"
+note = "Import as comparison failure text (R5)"
+
+[popups."ItemsTab:3340"]
+ported = "app/src/ui/popup.rs session (SP5b)"
+note = "Corrupt Item and its implicit / roll range pages (title modType Item)"
+
+[popups."Main:1551"]
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
+note = "PoB's message: MoveFolder failure (R16 operations show PoB's text)"
+
+[popups."Main:1572"]
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
+note = "PoB's message: MoveFolder failure (R16 operations show PoB's text)"
+
+[popups."Main:1583"]
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
+note = "PoB's message: MoveFolder delete failure (R16 operations show PoB's text)"
+
+[popups."Main:1592"]
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
+note = "PoB's message: CopyFolder failure (R16 operations show PoB's text)"
+
+[popups."Main:1614"]
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
+note = "PoB's message: CopyFolder failure (R16 operations show PoB's text)"
+
+[popups."Main:1643"]
+ported = "app/src/ui/app.rs error and notice display"
+note = "OpenMessagePopup: PoB's messages reach the UI as errors"
+
+[popups."Main:1679"]
+ported = "app/src/ui/app.rs AppConfirm and each tab's own confirm"
+note = "OpenConfirmPopup body; every confirm title is its own row"
+
+[popups."Main:1689"]
+ported = "app/src/ui/app.rs AppConfirm and each tab's own confirm"
+note = "OpenConfirmPopup body; every confirm title is its own row"
+
+[popups."Main:1703"]
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
+note = "PoB's message: New Folder failure (R16 operations show PoB's text)"
+
+[popups."Main:1747"]
+ported = "app/src/engine/glue/net.lua Build:Init wrapper and glue/builds.lua popup_text: a build load PoB answers with OpenCloudErrorPopup (Build.lua:1981-1983) fails the open with that popup's text as the error notice; an unreadable Settings.xml at start (Main.lua:488-490, 651-653) makes every Settings.xml writer refuse with a notice (glue/settings.lua settings_check_writable, gate parity_gaps_items::settings_writers_refuse_outside_changes)"
+note = "PoB opens this popup on load failures only, never on a save; the build list's (BuildListHelpers.lua:23) is closed with the list's other popups. The startup popup itself is not shown: the refusal says why instead. PoB's OneDrive hint is Windows-only"
+
+[popups."Main:804"]
+ruled_out = "R3"
+note = "Change Settings Path is out (R15)"
+
+[popups."Manage Config Sets"]
+ported = "app/src/ui/config.rs set buttons and the Manage Config Sets window: rows drag (MoveConfigSet), a row click selects it for Copy; arrows, Home/End, F2 (Rename) and Delete act on the selected row (NF-4)"
+
+[popups."Manage Item Sets"]
+ported = "app/src/ui/items/sets.rs item sets and PoB's shared set list: drag a set in, drag a shared set to the build, rename, delete, reorder"
+
+[popups."Manage Passive Trees"]
+ported = "app/src/ui/tree/toolbar.rs manager_window: rows drag (MoveSpec), a click selects; Copy (CopySpec), Delete, Rename, New act on the selected row, as do arrows, Home/End, F2 and Delete; opened by Manage..., Ctrl+M and the Items tab's Manage... (NF-3)"
+
+[popups."Manage Skill Sets"]
+ported = "app/src/ui/skills/sets.rs set manager window: New, Rename, Copy, Delete and drag-reorder (MoveSkillSet, R31)"
+
+[popups."Mod Browser"]
+ported = "app/src/engine/glue/popups.lua PopupKind::ModBrowser, a build-owned session over the group's own Add Mod button (R28); opened from app/src/ui/config.rs Add Mod"
+
+[popups."New Folder"]
+ported = "app/src/ui/build_list.rs New Folder name dialog"
+note = "R16"
+
+[popups."Options"]
+ported = "app/src/ui/options.rs OptionsUi draws PoB's Options popup through PopupWindow, with auto-pob-only boxes"
+
+[popups."PassiveSpecListControl:69"]
+ported = "app/src/ui/tree/toolbar.rs New, Rename and Copy Tree name dialogs (NF-3)"
+
+[popups."Please Wait"]
+ruled_out = "D-005"
+note = "trade query generator"
+
+[popups."Query Options"]
+ruled_out = "D-005"
+note = "trade query generator"
+
+[popups."Rename"]
+ported = "app/src/ui/items/sets.rs item set and shared item set sites; config and skill set sites ported"
+
+[popups."Replace Modifier of Node"]
+ported = "app/src/ui/popup.rs session (tattoos, SP5b)"
+
+[popups."Reset Tree/Tattoos"]
+ported = "app/src/ui/tree/toolbar.rs Reset tree and Remove all tattoos confirms"
+
+[popups."Save"]
+ported = "app/src/ui/app.rs save_as_dialog with the folder list (app/src/ui/folder_picker.rs): path, New Folder, sort, delete"
+
+[popups."Save As"]
+ported = "app/src/ui/app.rs save_as_dialog with the folder list (app/src/ui/folder_picker.rs): path, New Folder, sort, delete"
+
+[popups."Save Changes"]
+ported = "app/src/ui/unsaved.rs prompt"
+
+[popups."Set Name"]
+ported = "app/src/ui/build.rs New Loadout name window (R21; opens on New Loadout, Esc cancels); set-manager sites in items/sets.rs, skills/sets.rs, tree/toolbar.rs, config.rs"
+note = "the shared item set site is NF-2, tracked by the items.sharedItemList rows"
+
+[popups."Similar Builds"]
+ruled_out = "R3"
+note = "Archives and Similar Builds out (SP6)"
+
+[popups."SkillListControl:166"]
+ported = "app/src/ui/skills/groups.rs"
+note = "Delete is disabled for item-granted groups, so the message can't arise"
+
+[popups."Spectre Library"]
+ported = "app/src/engine/glue/popups.lua Spectre Library session (R18), opened from the sidebar and the Calcs selector; add, double-click add, remove, search and drag-reorder of Spectres in Build (ui/popup.rs list drag, PopupInput::RowMove)"
+
+[popups."Stat Weight Multipliers"]
+ruled_out = "D-005"
+note = "trade query"
+
+[popups."Trader"]
+ruled_out = "D-005"
+note = "trade query"
+
+[popups."TreeTab:1034"]
+ported = "app/src/ui/tree/mod.rs mastery picker"
+
+[popups."TreeTab:508"]
+ported = "app/src/engine/glue/net.lua Build:Init wrapper: PoB's Unknown Passive Tree Version message is the open's error notice (by file, code or link), the popup is closed and a new build takes the failed one's place, gate build_open::unknown_tree_version_matches_pob"
+
+[popups."TreeTab:610"]
+ported = "app/src/ui/tree/toolbar.rs Convert to <latest> button (ConvertSpecLatest); PoB's Tree Converted message arrives as Event::Message and shows as a notice"
+
+[popups."TreeTab:665"]
+ported = "app/src/ui/tree/toolbar.rs Link menu Convert this tree"
+
+[popups."TreeTab:679"]
+ported = "app/src/ui/tree/toolbar.rs Link menu Convert all trees"
+
+[popups."TreeTab:824"]
+ported = "app/src/ui/tree/toolbar.rs"
+note = "PoEURL shrink failure shows PoB's text (SP6)"
+
+[popups."Update Available"]
+ruled_out = "D-009"
+note = "PoB self-update off"
+
+# ---- keys ----
+
+[keys."build.1"]
+ported = "app/src/ui/shortcuts.rs Ctrl+1 Tree tab"
+
+[keys."build.2"]
+ported = "app/src/ui/shortcuts.rs Ctrl+2 Skills tab"
+
+[keys."build.3"]
+ported = "app/src/ui/shortcuts.rs Ctrl+3 Items tab"
+
+[keys."build.4"]
+ported = "app/src/ui/shortcuts.rs Ctrl+4 Calcs tab"
+
+[keys."build.5"]
+ported = "app/src/ui/shortcuts.rs Ctrl+5 Config tab"
+
+[keys."build.6"]
+ported = "app/src/ui/shortcuts.rs Ctrl+6 Notes tab"
+
+[keys."build.7"]
+ruled_out = "R25"
+note = "Ctrl+7 is Party, out"
+
+[keys."build.i"]
+ported = "app/src/ui/shortcuts.rs Ctrl+I: the Import/Export tab with its code box selected (import.rs focus_code)"
+
+[keys."build.MOUSE4"]
+ported = "app/src/ui/shortcuts.rs Mouse4 closes the build through the unsaved prompt"
+
+[keys."build.s"]
+ported = "app/src/ui/app.rs Ctrl+S"
+
+[keys."build.w"]
+ported = "app/src/ui/shortcuts.rs Ctrl+W closes the build through the unsaved prompt"
+
+[keys."BuildListControl.F2"]
+ported = "app/src/ui/build_list.rs keys F2 opens Rename"
+note = "NF-13 rename"
+
+[keys."BuildListControl.RETURN"]
+ported = "app/src/ui/build_list.rs table Enter opens the selected row"
+note = "NF-13 open"
+
+[keys."ButtonControl.LEFTBUTTON"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."calcs.f"]
+ported = "app/src/ui/calcs/mod.rs Ctrl+F"
+
+[keys."calcs.y"]
+ported = "app/src/ui/app.rs Ctrl+Y redo"
+
+[keys."calcs.z"]
+ported = "app/src/ui/app.rs Ctrl+Z undo"
+
+[keys."CalcSectionControl.LEFTBUTTON"]
+ported = "app/src/ui/calcs/mod.rs pop-out windows: drag, close, toggles and cells (R24)"
+
+[keys."CheckBoxControl.LEFTBUTTON"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."compare.f"]
+ported = "app/src/ui/compare/mod.rs Ctrl+F selects the Config view's search"
+
+[keys."compare.LEFTBUTTON"]
+ported = "app/src/ui/compare/items.rs Copy and Equip buttons on each Items row"
+note = "Compare Items row Copy / Copy and use clicks (R8)"
+
+[keys."compare.WHEELDOWN"]
+ported = "app/src/ui/compare/mod.rs views in egui ScrollAreas (wheel scrolling)"
+note = "Compare view scrolling"
+
+[keys."compare.WHEELUP"]
+ported = "app/src/ui/compare/mod.rs views in egui ScrollAreas (wheel scrolling)"
+note = "Compare view scrolling"
+
+[keys."CompareTab.RETURN"]
+ruled_out = "R5"
+note = "Import from Folder is out"
+
+[keys."config.f"]
+ported = "app/src/ui/config.rs Ctrl+F selects the options search"
+
+[keys."config.y"]
+ported = "app/src/ui/app.rs Ctrl+Y redo"
+
+[keys."config.z"]
+ported = "app/src/ui/app.rs Ctrl+Z undo"
+
+[keys."ConfigSetListControl.F2"]
+ported = "app/src/ui/config.rs order_window: F2 in Manage Config Sets opens the Rename box for its selected row, as PoB's list; off the window F2 does nothing"
+note = "wired at the Task 13 merge (M9); test f2_in_the_config_manager_renames_the_selected_set and the app's f2_renames_the_selected_row_in_the_set_managers"
+
+[keys."DraggerControl.LEFTBUTTON"]
+ported = "app/src/widgets/size_grip.rs on app/src/ui/config.rs custom-modifier boxes: dragging the grip sets the height within PoB's 40 to 600 (ConfigTab.lua:70, ResizableEditControl.lua:32-45)"
+note = "PoB's only dragger is ResizableEditControl's grip, not the sidebar"
+
+[keys."DraggerControl.RIGHTBUTTON"]
+ported = "app/src/widgets/size_grip.rs right-click puts the box at its least, or its most when it is at its least (ResizableEditControl.lua:16-25)"
+
+[keys."DropDownControl.DOWN"]
+ported = "app/src/widgets/scroll_step.rs dropdown_step, at every dropdown (search_combo and each ComboBox): Down steps a pointed-at or dropped dropdown (DropDownControl.lua:498-501)"
+
+[keys."DropDownControl.ESCAPE"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."DropDownControl.LEFTBUTTON"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."DropDownControl.RIGHTBUTTON"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."DropDownControl.UP"]
+ported = "app/src/widgets/scroll_step.rs dropdown_step, at every dropdown (search_combo and each ComboBox): Up steps a pointed-at or dropped dropdown (DropDownControl.lua:512-515)"
+
+[keys."DropDownControl.WHEELDOWN"]
+ported = "app/src/widgets/scroll_step.rs dropdown_step, at every dropdown (search_combo and each ComboBox): the wheel or PageDown steps a pointed-at closed dropdown, unless PoB's Disable control scroll interaction (DropDownControl.lua:488-497)"
+
+[keys."DropDownControl.WHEELUP"]
+ported = "app/src/widgets/scroll_step.rs dropdown_step, at every dropdown (search_combo and each ComboBox): the wheel or PageUp steps a pointed-at closed dropdown, unless PoB's Disable control scroll interaction (DropDownControl.lua:502-511)"
+
+[keys."EditControl.+"]
+ported = "app/src/ui/notes.rs Ctrl + zooms the notes text as PoB's ZoomText"
+
+[keys."EditControl.-"]
+ported = "app/src/ui/notes.rs Ctrl - zooms the notes text as PoB's ZoomText"
+
+[keys."EditControl.0"]
+ported = "app/src/ui/notes.rs Ctrl 0 zooms the notes text as PoB's ZoomText"
+
+[keys."EditControl.a"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.BACK"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.c"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.DELETE"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.DOWN"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.END"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.ESCAPE"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.HOME"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.LEFT"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.LEFTBUTTON"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.PAGEDOWN"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.PAGEUP"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.RETURN"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.RIGHT"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.RIGHTBUTTON"]
+ported = "app/src/ui/app.rs right_click_paste: a right-click into a text box selects it and pastes the clipboard, read on that click only (EditControl.lua:527)"
+
+[keys."EditControl.TAB"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.UP"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.v"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.WHEELDOWN"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.WHEELUP"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.x"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.y"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."EditControl.z"]
+ported = "app/src/ui"
+note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
+
+[keys."GemSelectControl.DOWN"]
+ported = "app/src/ui/skills/picker.rs"
+note = "picker keys"
+
+[keys."GemSelectControl.ESCAPE"]
+ported = "app/src/ui/skills/picker.rs"
+note = "picker keys"
+
+[keys."GemSelectControl.LEFTBUTTON"]
+ported = "app/src/ui/skills/picker.rs"
+note = "picker keys"
+
+[keys."GemSelectControl.RETURN"]
+ported = "app/src/ui/skills/picker.rs"
+note = "picker keys"
+
+[keys."GemSelectControl.RIGHTBUTTON"]
+ported = "app/src/ui/skills/group.rs right-click on a gem box or the empty slot opens the gem list"
+
+[keys."GemSelectControl.UP"]
+ported = "app/src/ui/skills/picker.rs"
+note = "picker keys"
+
+[keys."GemSelectControl.wiki"]
+ported = "app/src/ui/skills/keys.rs F1 over a gem list row or a gem of the group opens its poewiki page"
+
+[keys."ItemDBControl.wiki"]
+ported = "app/src/ui/items/db.rs F1 over a database row opens its poewiki page (unique name, rare base)"
+
+[keys."ItemListControl.wiki"]
+ported = "app/src/ui/items/slots.rs F1 over an item row opens its poewiki page (unique name, else base)"
+
+[keys."items.d"]
+ported = "app/src/ui/items/mod.rs Ctrl+D"
+
+[keys."items.e"]
+ported = "app/src/ui/items/slots.rs E over a slot holding an item sends EditItem"
+
+[keys."items.f"]
+ported = "app/src/ui/items/slots.rs Ctrl+F opens the item database on PoB's unique or rare search (items/db.rs focus_search)"
+
+[keys."items.v"]
+ported = "app/src/ui/items/mod.rs Ctrl+V paste"
+
+[keys."items.y"]
+ported = "app/src/ui/app.rs Ctrl+Y redo"
+
+[keys."items.z"]
+ported = "app/src/ui/app.rs Ctrl+Z undo"
+
+[keys."ItemSetListControl.F2"]
+ported = "app/src/ui/items/sets.rs F2 renames the selected set"
+
+[keys."ItemSlotControl.wiki"]
+ported = "app/src/ui/items/slots.rs F1 over a slot or its dropdown entry opens the item's poewiki page"
+
+[keys."list.MOUSE4"]
+ported = "app/src/ui/build_list.rs keys folder back"
+note = "folder back (R25)"
+
+[keys."list.MOUSE5"]
+ported = "app/src/ui/build_list.rs keys folder forward"
+note = "folder forward (R25)"
+
+[keys."list.n"]
+ported = "app/src/ui/build_list.rs keys Ctrl+N new build"
+note = "Ctrl+N (R25)"
+
+[keys."list.v"]
+ported = "app/src/ui/build_list.rs keys: Ctrl+V after Ctrl+X moves (MoveBuild), after Ctrl+C copies (CopyBuildTo), or opens the Copy box in the same folder; works on an empty clipboard"
+
+[keys."ListControl.BACK"]
+ported = "app/src/ui/shortcuts.rs list_delete: Backspace deletes in the build, item, shared item, socket group and set lists (the item, skill, shared, tree and config set managers)"
+
+[keys."ListControl.c"]
+ported = "app/src/ui/build_list.rs keys: Ctrl+C marks the row for CopyBuildTo"
+note = "also items/list.rs (CopyItem) and items/shared.rs (CopySharedItem), each as its list's OnSelCopy"
+
+[keys."ListControl.DELETE"]
+ported = "app/src/ui/shortcuts.rs list_delete: Delete in the build, item, shared item, socket group and set lists (the item, skill, shared, tree and config set managers)"
+
+[keys."ListControl.DOWN"]
+ported = "app/src/ui/shortcuts.rs list_key in the build, item, shared item, socket group and set lists (the item, skill, shared, tree and config set managers) (wraps round as PoB)"
+
+[keys."ListControl.END"]
+ported = "app/src/ui/shortcuts.rs list_key in the build, item, shared item, socket group and set lists (the item, skill, shared, tree and config set managers)"
+
+[keys."ListControl.HOME"]
+ported = "app/src/ui/shortcuts.rs list_key in the build, item, shared item, socket group and set lists (the item, skill, shared, tree and config set managers)"
+
+[keys."ListControl.LEFTBUTTON"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."ListControl.UP"]
+ported = "app/src/ui/shortcuts.rs list_key in the build, item, shared item, socket group and set lists (the item, skill, shared, tree and config set managers) (wraps round as PoB)"
+
+[keys."ListControl.x"]
+ported = "app/src/ui/build_list.rs keys Ctrl+X marks the row, Ctrl+V in another folder moves it"
+
+[keys."main.F1"]
+ported = "app/src/ui/shortcuts.rs F1 (on release) opens app/src/ui/help.rs at the tab's section, or the hovered thing's wiki page"
+
+[keys."notes.y"]
+ported = "app/src/ui/notes.rs egui text editor redo"
+note = "SP3 R3"
+
+[keys."notes.z"]
+ported = "app/src/ui/notes.rs egui text editor undo"
+note = "SP3 R3"
+
+[keys."party.y"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[keys."party.z"]
+ruled_out = "D-003"
+note = "Party tab dropped"
+
+[keys."PassiveSpecListControl.F2"]
+ported = "app/src/ui/tree/toolbar.rs manager_window: F2 in Manage Passive Trees opens Rename tree for its selected row, as PoB's list; off the window F2 does nothing"
+note = "wired at the Task 13 merge (M9); test f2_in_the_tree_manager_renames_the_selected_tree and the app's f2_renames_the_selected_row_in_the_set_managers"
+
+[keys."PassiveTreeView.wiki"]
+ported = "app/src/ui/tree/keys.rs F1 over a node opens its poewiki page"
+
+[keys."popup.ESCAPE"]
+ported = "app/src/widgets/escape.rs every popup closes on an Esc no control takes: the engine sessions (popup.rs) and the app's own windows; a selected box takes the first Esc, and the top window closes first"
+note = "PoB presses the popup's escape button, which closes it"
+
+[keys."popup.RETURN"]
+ported = "app/src/ui/popup.rs Enter presses PoB's enterControl (PopupView.enter) when no control has the keyboard"
+
+[keys."ScrollBarControl.LEFTBUTTON"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."SearchHost.BACK"]
+ported = "app/src/widgets/search_combo.rs a dropped dropdown's search box: Backspace takes the search's last letter (SearchHost.lua:112-114)"
+
+[keys."SearchHost.ESCAPE"]
+ported = "app/src/widgets/search_combo.rs Esc empties a search and keeps the list dropped; with no search Esc closes it (SearchHost.lua:109-111)"
+
+[keys."SharedItemSetListControl.F2"]
+ported = "app/src/ui/items/sets.rs F2 on the focused shared set renames it"
+
+[keys."SkillListControl.LEFTBUTTON"]
+ported = "app/src/ui/skills/groups.rs click selects; Ctrl+click sends SetGroupEnabled"
+
+[keys."SkillListControl.RIGHTBUTTON"]
+ported = "app/src/ui/skills/groups.rs right-click menu; Ctrl+right-click sends SetGroupFullDps"
+
+[keys."SkillListControl.wiki"]
+ported = "app/src/ui/skills/keys.rs F1 over a socket group opens its first gem's poewiki page"
+
+[keys."skills.v"]
+ported = "app/src/ui/skills/mod.rs Ctrl+V paste"
+
+[keys."skills.y"]
+ported = "app/src/ui/app.rs Ctrl+Y redo"
+
+[keys."skills.z"]
+ported = "app/src/ui/app.rs Ctrl+Z undo"
+
+[keys."SkillSetListControl.F2"]
+ported = "app/src/ui/skills/sets.rs F2 renames the selected set"
+
+[keys."SliderControl.DOWN"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."SliderControl.LEFT"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."SliderControl.LEFTBUTTON"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."SliderControl.RIGHT"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."SliderControl.UP"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."SliderControl.WHEELDOWN"]
+ported = "app/src/widgets/scroll_step.rs slider_step at every slider: 0.05 a notch, 0.25 with Shift, 0.01 with Ctrl, reversed by PoB's Invert slider scroll direction (SliderControl.lua:164-171)"
+
+[keys."SliderControl.WHEELUP"]
+ported = "app/src/widgets/scroll_step.rs slider_step at every slider: 0.05 a notch, 0.25 with Shift, 0.01 with Ctrl, reversed by PoB's Invert slider scroll direction (SliderControl.lua:172-179)"
+
+[keys."TextListControl.WHEELDOWN"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."TextListControl.WHEELUP"]
+ported = "app/src/ui"
+note = "egui's own widget behaviour"
+
+[keys."tree.c"]
+ported = "app/src/ui/tree/keys.rs Ctrl+C copies the hovered node's # name and stat lines (not on sockets)"
+
+[keys."tree.d"]
+ported = "app/src/ui/tree/keys.rs Ctrl+D sends SetTreeStatDifferences (glue/tree.lua)"
+
+[keys."tree.DOWN"]
+ported = "app/src/ui/tree/keys.rs Down selects the next tree unless the tree selector is hovered or open"
+
+[keys."tree.f"]
+ported = "app/src/ui/tree/keys.rs Ctrl+F selects the tree search (tree/toolbar.rs)"
+
+[keys."tree.LEFTBUTTON"]
+ported = "app/src/ui/tree/canvas.rs click allocates and drag pans; Ctrl+click zooms; Shift traces a path (tree/keys.rs trace_step) that a click on its end allocates (AllocTracePath) and the tooltip counts (PreviewTrace)"
+
+[keys."tree.m"]
+ported = "app/src/ui/tree/keys.rs Ctrl+M opens Manage Passive Trees (toolbar.rs manager_window), as TreeTab.lua:381-382"
+note = "wired at the Task 13 merge (M8); test ctrl_m_opens_spec_manager"
+
+[keys."tree.p"]
+ported = "app/src/ui/tree/keys.rs P sends ToggleHeatmap (glue/tree.lua)"
+
+[keys."tree.PAGEDOWN"]
+ported = "app/src/ui/shortcuts.rs reads PageDown, app/src/ui/tree/keys.rs holds the zoom step: PageDown zooms out one of PoB's 1.2 steps, three with Shift"
+
+[keys."tree.PAGEUP"]
+ported = "app/src/ui/shortcuts.rs reads PageUp, app/src/ui/tree/keys.rs holds the zoom step: PageUp zooms in one of PoB's 1.2 steps, three with Shift"
+
+[keys."tree.RIGHTBUTTON"]
+ported = "app/src/ui/tree/canvas.rs right-click (tattoos, jewel jump, mastery); Ctrl+right-click zooms out two steps"
+
+[keys."tree.UP"]
+ported = "app/src/ui/tree/keys.rs Up selects the previous tree unless the tree selector is hovered or open"
+
+[keys."tree.WHEELDOWN"]
+ported = "app/src/ui/tree/canvas.rs scroll zoom"
+
+[keys."tree.WHEELUP"]
+ported = "app/src/ui/tree/canvas.rs scroll zoom"
+note = "PoB zooms 3 steps with Shift held; see NF-17"
+
+[keys."tree.y"]
+ported = "app/src/ui/app.rs Ctrl+Y redo"
+
+[keys."tree.z"]
+ported = "app/src/ui/app.rs Ctrl+Z undo"

@@ -9,8 +9,8 @@ use auto_pob::engine::pob::PobBackend;
 use auto_pob::engine::upstream::golden_of;
 use auto_pob::engine::{
     Affected, Backend, BackgroundTask, CharacterEntry, CharacterPart, Command, ConfigValue, Engine,
-    Event, FinishedRequest, ImportMode, OAuthView, PublicStage, PublicView, Realm, RequestsView,
-    Snapshot, send_snapshots,
+    Event, FinishedRequest, ImportMode, OAuthView, PopupKind, PublicStage, PublicView, Realm,
+    RequestsView, Snapshot, send_snapshots,
 };
 use auto_pob::game::Game;
 use pob_runtime::net::Canned;
@@ -1069,6 +1069,23 @@ fn build_sites_match_pob() {
     );
     assert!(!our_view(&mut s).import.can_import_to_this_build);
     assert!(s.requests().pending.is_empty());
+    // PoB's mode drop-down is disabled for a build with no file: no comparison either
+    let err = s
+        .backend
+        .apply(
+            import_command(sites[0].link(), ImportMode::Comparison),
+            &|_| {},
+        )
+        .unwrap_err();
+    assert_eq!(format!("{err:#}"), "PoB doesn't offer that here");
+    up.eval::<()>(&format!(
+        "build.importTab.controls.importCodeIn:SetText('{}', true)",
+        sites[0].link()
+    ));
+    assert!(!up.eval::<bool>(
+        "local c = build.importTab.controls.importCodeMode return c:IsEnabled() and true or false"
+    ));
+    assert!(s.requests().pending.is_empty());
 
     // ---- Share to each site that takes uploads ----
     let our_code = s.backend.share_code().unwrap();
@@ -1257,6 +1274,114 @@ fn build_sites_match_pob() {
     // PoB stores no link here either (Step 0)
     assert_eq!(saved_import_link(&our_saved_xml(&s)), None);
     assert_eq!(up_dump(&up).import_link, None);
+
+    // ---- Import as comparison: the build stays, the Compare tab gains PoB's entry (R5) ----
+    let stats_before = s.backend.stats_view().unwrap().stats;
+    let unsaved_before = s.backend.build_view().unwrap().unsaved;
+    up.eval::<()>("act.code_import('https://pobb.in/gate', 'compare')");
+    up.pump(Duration::from_secs(15));
+    let affected = s
+        .backend
+        .apply(
+            import_command("https://pobb.in/gate", ImportMode::Comparison),
+            &|_| {},
+        )
+        .expect("import as comparison");
+    assert!(affected.requests && !affected.build, "{affected:?}");
+    let steps = s.settle_net(Duration::from_secs(15));
+    assert!(
+        steps.iter().any(|a| a
+            .as_ref()
+            .is_ok_and(|a| a.compare && a.tree && !a.build && !a.recalc)),
+        "no step answered for the comparison"
+    );
+    let entry = s.requests().finished.remove(0);
+    assert_eq!(entry.label, "Fetching build from pobb.in");
+    assert_eq!((entry.error.clone(), entry.new_build), (None, false));
+    let their_entries = |up: &UpstreamNet| -> Vec<String> {
+        up.eval::<Vec<String>>(
+            "local out = {} for i, e in ipairs(build.compareTab.compareEntries) do out[i] = e.label end return out",
+        )
+    };
+    let ours = s.backend.compare_view().unwrap().expect("a comparison");
+    // PoB switched to its Compare tab (ImportTab.lua:658); the view says so once
+    assert!(ours.switched);
+    assert_eq!(up.eval::<String>("return build.viewMode"), "COMPARE");
+    assert!(!s.backend.compare_view().unwrap().unwrap().switched);
+    assert_eq!(ours.entries, ["Imported comparison"]);
+    assert_eq!(ours.entries, their_entries(&up));
+    assert!(!ours.summary.is_empty());
+    assert_eq!(s.backend.stats_view().unwrap().stats, stats_before);
+    assert_eq!(s.backend.build_view().unwrap().unsaved, unsaved_before);
+    s.assert_clean("comparison");
+    assert_eq!(up.eval::<usize>("return #main.popups"), 0);
+    // a share code is added at once, with no request
+    up.eval::<()>(&format!("act.code_import('{attack_code}', 'compare')"));
+    let affected = s
+        .backend
+        .apply(
+            import_command(&attack_code, ImportMode::Comparison),
+            &|_| {},
+        )
+        .expect("code as comparison");
+    assert!(affected.compare && !affected.build, "{affected:?}");
+    assert!(s.requests().pending.is_empty());
+    let ours = s.backend.compare_view().unwrap().expect("a comparison");
+    assert!(ours.switched);
+    assert_eq!(ours.entries, their_entries(&up));
+    assert_eq!((ours.entries.len(), ours.active), (2, 1));
+    s.assert_clean("comparison code");
+    // a code PoB reads but can't build into a comparison: PoB's own message, no popup left
+    let not_a_build: String = s.eval("return common.base64.encode(Deflate('<NotABuild/>'))");
+    up.eval::<()>(&format!("act.code_import('{not_a_build}', 'compare')"));
+    let theirs = up.eval::<Option<String>>("return popupMessage()");
+    up.eval::<()>("main:ClosePopup()");
+    let err = s
+        .backend
+        .apply(
+            import_command(&not_a_build, ImportMode::Comparison),
+            &|_| {},
+        )
+        .unwrap_err();
+    assert_eq!(format!("{err:#}"), "Failed to import build for comparison.");
+    assert_eq!(
+        theirs.as_deref(),
+        Some("Failed to import build for comparison.")
+    );
+    s.assert_clean("failed comparison code");
+    // the same from a link: the request ends with it
+    web.route(
+        "GET",
+        &sites[0].download_url(),
+        Canned::ok(not_a_build.clone()),
+    );
+    up.eval::<()>(&format!(
+        "act.code_import('{}', 'compare')",
+        sites[0].link()
+    ));
+    up.pump(Duration::from_secs(15));
+    let theirs = up.eval::<Option<String>>("return popupMessage()");
+    up.eval::<()>("main:ClosePopup()");
+    let entry = import_link(&mut s, sites[0].link(), ImportMode::Comparison);
+    assert_eq!(
+        entry.error.as_deref(),
+        Some("Failed to import build for comparison.")
+    );
+    assert_eq!(
+        theirs.as_deref(),
+        Some("Failed to import build for comparison.")
+    );
+    assert!(!entry.new_build);
+    s.assert_clean("failed comparison link");
+    web.route(
+        "GET",
+        &sites[0].download_url(),
+        Canned::ok(attack_code.clone()),
+    );
+    assert_eq!(
+        s.backend.compare_view().unwrap().unwrap().entries,
+        their_entries(&up)
+    );
 
     // ---- A failure leaves nothing stuck, and the same request then works ----
     let pobbin = sites.iter().find(|site| site.id == "POBBin").unwrap();
@@ -1814,7 +1939,20 @@ fn public_import_matches_pob() {
         .expect("tree import");
     assert_eq!(s.requests().pending[0].label, "Importing passive tree");
     assert_eq!(our_public(&mut s).stage, PublicStage::Importing);
+    // an item's window open when the import lands ends with the edit (engine M-2)
+    s.backend
+        .apply(Command::OpenPopup(PopupKind::Craft), &|_| {})
+        .expect("Craft item");
+    assert!(s.backend.popup_view().unwrap().is_some());
     let steps = s.settle_net(Duration::from_secs(15));
+    assert!(
+        s.backend.popup_view().unwrap().is_none(),
+        "the window outlived the build it showed"
+    );
+    assert!(
+        steps.iter().any(|a| a.as_ref().is_ok_and(|a| a.popup)),
+        "the window wasn't told it ended"
+    );
     assert!(
         steps
             .iter()
@@ -3106,13 +3244,17 @@ fn no_silent_writes_network() {
         Canned::ok(net_fixture("oauth_characters.json")),
     );
 
+    // none of these is a token command: each leaves Settings.xml's bytes alone, <Accounts>
+    // included (tests M-3)
     let mut each = |command: Command| {
         let shown = format!("{command:?}");
+        let settings = s.settings_xml();
         run(&mut s, &rec, command).unwrap_or_else(|e| panic!("{shown}: {e}"));
         settle(&mut s, &rec);
         for entry in rec.take_finished() {
             assert_eq!(entry.error, None, "{shown}: {entry:?}");
         }
+        assert_eq!(s.settings_xml(), settings, "{shown} wrote Settings.xml");
     };
     each(Command::ExportShareCode);
     each(Command::SetImportCode { text: code });
@@ -3131,19 +3273,28 @@ fn no_silent_writes_network() {
     drop(each);
     let (entry, _) = sign_in(&mut s, &rec, None);
     assert_eq!(entry.error, None);
+    // none of these is a token command: each leaves Settings.xml's bytes alone, <Accounts>
+    // included (tests M-3)
     let mut each = |command: Command| {
         let shown = format!("{command:?}");
+        let settings = s.settings_xml();
         run(&mut s, &rec, command).unwrap_or_else(|e| panic!("{shown}: {e}"));
         settle(&mut s, &rec);
         for entry in rec.take_finished() {
             assert_eq!(entry.error, None, "{shown}: {entry:?}");
         }
+        assert_eq!(s.settings_xml(), settings, "{shown} wrote Settings.xml");
     };
     each(Command::ListCharacters { realm: Realm::Sony });
     each(import_oauth(Realm::Pc, None, "GateOne", tree_part()));
     each(import_oauth(Realm::Pc, None, "GateOne", items_part()));
-    each(Command::SignOut);
     drop(each);
+    // PoB's logout saves the cleared tokens (ImportTab.lua:87)
+    let signed_in = s.settings_xml();
+    run(&mut s, &rec, Command::SignOut).unwrap();
+    settle(&mut s, &rec);
+    assert!(rec.take_finished().iter().all(|e| e.error.is_none()));
+    assert_ne!(s.settings_xml(), signed_in, "SignOut saved nothing");
     run(&mut s, &rec, Command::SignIn).unwrap();
     wait_for_link(&mut s, &rec);
     let id = s.requests().pending[0].id;

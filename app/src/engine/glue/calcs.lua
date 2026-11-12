@@ -80,6 +80,12 @@ local function section_view(calcs, section, actor)
 		-- that sub-section is collapsed
 		if i == 1 and (not enabled or collapsed) then break end
 	end
+	-- the width UpdateSize gives each sub-section's cells (CalcSectionControl.lua:126), and
+	-- whether the section offers its "^" pop-out (:59-61: not a section with controls)
+	local col_widths = {}
+	for i, sub in ipairs(section.subSection) do
+		col_widths[i] = sub.data.colWidth or section.width - 136
+	end
 	return {
 		id = section.id,
 		group = section.group,
@@ -87,6 +93,8 @@ local function section_view(calcs, section, actor)
 		colour = section.colour,
 		enabled = enabled,
 		subs = subs,
+		col_widths = col_widths,
+		pop_out = not section.hasControls,
 	}
 end
 
@@ -168,6 +176,7 @@ function selector_view(calcs)
 		show_minion = show_minion,
 		minion = drop("mainSkillMinion"),
 		minion_skill = drop("mainSkillMinionSkill"),
+		spectre_library = shown_control(calcs, section, "mainSkillMinionLibrary") ~= nil,
 		mode = drop("mode", true),
 		mode_tooltip = section.controls.mode.tooltipText or "",
 	}
@@ -343,4 +352,11 @@ function glue.calcs_breakdown(section_id, sub, row, cell)
 		end
 	end
 	return view
+end
+
+-- The Calcs selector's "Manage Spectres..." button when PoB shows it (R18), after the sync
+function glue.calcs_spectre_library()
+	local calcs = pob.build.calcsTab
+	local section = refreshed_select(calcs)
+	return shown_control(calcs, section, "mainSkillMinionLibrary")
 end

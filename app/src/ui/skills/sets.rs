@@ -3,7 +3,11 @@
 use super::{SkillsOutput, SkillsUi};
 use crate::engine::Command;
 use crate::engine::views::{SkillSetEntry, SkillsView};
-use eframe::egui;
+use crate::ui::items::list::reorder_rows;
+use eframe::egui::{self, Color32};
+
+/// What a dragged set row carries: its position
+struct SetDrag(usize);
 
 /// What the name box of the manager is asking for.
 #[derive(Debug, Clone, PartialEq)]
@@ -51,11 +55,15 @@ impl SkillsUi {
                 .iter()
                 .find(|s| s.id == view.active_set)
                 .map_or("", title);
-            let combo = egui::ComboBox::from_id_salt("skills_set")
+            let combo = crate::widgets::dropdown::Dropdown::from_id_salt("skills_set")
                 .selected_text(current)
                 .show_ui(ui, |ui| {
                     for (i, set) in view.sets.iter().enumerate() {
-                        let item = ui.selectable_label(set.id == view.active_set, title(set));
+                        let item = crate::widgets::dropdown::item(
+                            ui,
+                            set.id == view.active_set,
+                            title(set),
+                        );
                         self.rects.note(&item, || format!("set_item_{i}"));
                         if item.clicked() && set.id != view.active_set {
                             out.commands.push(Command::SelectSkillSet { id: set.id });
@@ -63,6 +71,19 @@ impl SkillsUi {
                     }
                 });
             self.rects.note(&combo.response, || "set".into());
+            // the wheel and the arrows step it (DropDownControl.lua:476-516)
+            let at = view
+                .sets
+                .iter()
+                .position(|s| s.id == view.active_set)
+                .unwrap_or(0);
+            if let Some(i) =
+                crate::widgets::scroll_step::combo_step(ui, &combo.response, view.sets.len(), at)
+            {
+                out.commands.push(Command::SelectSkillSet {
+                    id: view.sets[i].id,
+                });
+            }
             let manage = ui.button("Manage\u{2026}");
             self.rects.note(&manage, || "manage".into());
             if manage.clicked() {
@@ -83,6 +104,17 @@ impl SkillsUi {
             return;
         }
         let mut open = true;
+        // Esc closes it as PoB's popup (PopupDialog.lua:72-77), once a box is left; a
+        // question it asked takes Esc first, as PoB's popup over it would
+        let window = egui::Id::unique("skills_sets");
+        if crate::widgets::escape::escape(ctx, window) {
+            if self.sets.naming.is_some() || self.sets.confirm_delete.is_some() {
+                self.sets.naming = None;
+                self.sets.confirm_delete = None;
+            } else {
+                open = false;
+            }
+        }
         egui::Window::new("Skill sets")
             .open(&mut open)
             .collapsible(false)
@@ -94,21 +126,64 @@ impl SkillsUi {
                     self.sets.selected = view.sets.first().map(|s| s.id);
                 }
                 let blocked = self.sets.naming.is_some() || self.sets.confirm_delete.is_some();
+                // the list's keys (ListControl.lua:375-392)
+                // a text field elsewhere keeps its keys
+                if !blocked && !ui.ctx().text_edit_focused() {
+                    let at = view
+                        .sets
+                        .iter()
+                        .position(|s| Some(s.id) == self.sets.selected);
+                    let len = view.sets.len();
+                    if let Some(i) =
+                        ui.input_mut(|inp| crate::ui::shortcuts::list_key(inp, len, at))
+                    {
+                        self.sets.selected = Some(view.sets[i].id);
+                    }
+                }
                 ui.add_enabled_ui(!blocked, |ui| {
-                    for (i, set) in view.sets.iter().enumerate() {
-                        let label = if set.id == view.active_set {
-                            format!("{} (active)", title(set))
-                        } else {
-                            title(set).to_owned()
-                        };
-                        let row = ui.selectable_label(self.sets.selected == Some(set.id), label);
-                        self.rects.note(&row, || format!("sets_row_{i}"));
+                    // PoB's list rows drag to a new place (R31)
+                    let selected = self.sets.selected;
+                    let rows = reorder_rows(
+                        ui,
+                        "skills_sets",
+                        view.sets.len(),
+                        true,
+                        false,
+                        SetDrag,
+                        |p: &SetDrag| p.0,
+                        |ui, i| {
+                            let set = &view.sets[i];
+                            let label = if set.id == view.active_set {
+                                format!("{} (active)", title(set))
+                            } else {
+                                title(set).to_owned()
+                            };
+                            let fill = if selected == Some(set.id) {
+                                ui.visuals().selection.bg_fill
+                            } else {
+                                Color32::TRANSPARENT
+                            };
+                            egui::Frame::NONE
+                                .fill(fill)
+                                .inner_margin(2.0)
+                                .show(ui, |ui| {
+                                    ui.set_min_width(240.0);
+                                    ui.add(egui::Label::new(label).selectable(false));
+                                });
+                        },
+                    );
+                    for (i, row) in rows.rows.iter().enumerate() {
+                        let set = &view.sets[i];
+                        self.rects.note(row, || format!("sets_row_{i}"));
                         if row.clicked() {
                             self.sets.selected = Some(set.id);
                         }
                         if row.double_clicked() && set.id != view.active_set {
                             out.commands.push(Command::SelectSkillSet { id: set.id });
                         }
+                    }
+                    if let Some((from, to)) = rows.moved {
+                        out.commands.push(Command::MoveSkillSet { from, to });
                     }
                     ui.separator();
                     let sel = self
@@ -126,8 +201,12 @@ impl SkillsUi {
                             self.rects.note(&rename, || "sets_rename".into());
                             let copy = ui.button("Copy");
                             self.rects.note(&copy, || "sets_copy".into());
+                            // F2 renames the selected set (SkillSetListControl.lua)
+                            let f2 = self.sets.naming.is_none()
+                                && !ui.ctx().text_edit_focused()
+                                && ui.input(|i| i.key_pressed(egui::Key::F2));
                             if let Some(set) = sel {
-                                if rename.clicked() {
+                                if rename.clicked() || f2 {
                                     let t = title_text(set);
                                     self.sets.naming = Some((Naming::Rename(set.id), t));
                                 }
@@ -141,7 +220,11 @@ impl SkillsUi {
                         let can_delete = sel.is_some() && view.sets.len() > 1;
                         let delete = ui.add_enabled(can_delete, egui::Button::new("Delete"));
                         self.rects.note(&delete, || "sets_delete".into());
-                        if delete.clicked()
+                        let key = can_delete
+                            && !blocked
+                            && !ui.ctx().text_edit_focused()
+                            && ui.input(crate::ui::shortcuts::list_delete);
+                        if (delete.clicked() || key)
                             && let Some(set) = sel
                         {
                             self.sets.confirm_delete = Some(set.id);
@@ -199,6 +282,7 @@ impl SkillsUi {
                     });
                 }
             });
+        crate::widgets::escape::note(ctx, window);
         if !open {
             self.sets.close();
         }

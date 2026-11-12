@@ -17,8 +17,14 @@ use std::{
     sync::Mutex,
 };
 
+#[path = "gate/build_list.rs"]
+mod build_list;
+#[path = "gate/build_open.rs"]
+mod build_open;
 #[path = "gate/calcs.rs"]
 mod calcs;
+#[path = "gate/compare.rs"]
+mod compare;
 #[path = "gate/crafting.rs"]
 mod crafting;
 #[path = "gate/item_db.rs"]
@@ -27,20 +33,57 @@ mod item_db;
 mod items;
 #[path = "gate/items_harness.rs"]
 mod items_harness;
+#[path = "gate/longtail_harness.rs"]
+mod longtail_harness;
 #[path = "gate/net_harness.rs"]
 mod net_harness;
 #[path = "gate/network.rs"]
 mod network;
+#[path = "gate/parity.rs"]
+mod parity;
+#[path = "gate/parity_gaps.rs"]
+mod parity_gaps;
+#[path = "gate/parity_gaps_items.rs"]
+mod parity_gaps_items;
+#[path = "gate/parity_gaps_tabs.rs"]
+mod parity_gaps_tabs;
+#[path = "gate/settings.rs"]
+mod settings;
 #[path = "gate/skills.rs"]
 mod skills;
 #[path = "gate/tattoos.rs"]
 mod tattoos;
+#[path = "gate/timeless.rs"]
+mod timeless;
+#[path = "gate/trade.rs"]
+mod trade;
 
 /// PoB loads files relative to the process working directory, so only one test may run it.
 static CWD: Mutex<()> = Mutex::new(());
 
-fn lock() -> std::sync::MutexGuard<'static, ()> {
-    CWD.lock().unwrap_or_else(|e| e.into_inner())
+/// Holds the process-wide lock and prints `gate-time <test> <secs>` to stderr when dropped,
+/// so `scripts/gate.sh` and a plain serial run both show which tests are slow.
+struct GateGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    began: std::time::Instant,
+}
+
+impl Drop for GateGuard {
+    fn drop(&mut self) {
+        let thread = std::thread::current();
+        eprintln!(
+            "gate-time {} {:.1}",
+            thread.name().unwrap_or("?"),
+            self.began.elapsed().as_secs_f64()
+        );
+    }
+}
+
+fn lock() -> GateGuard {
+    GateGuard {
+        _lock: CWD.lock().unwrap_or_else(|e| e.into_inner()),
+        began: std::time::Instant::now(),
+    }
 }
 
 fn pob_dir() -> PathBuf {
@@ -628,7 +671,7 @@ fn engine_starting_on_the_build_list_raises_no_errors() {
     )
     .unwrap();
     let engine = Engine::spawn(Game::Poe1, std::env::temp_dir(), user.clone(), || {});
-    let (mut ready, mut list) = (false, false);
+    let (mut ready, mut list, mut settings) = (false, false, false);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     while !(ready && list) && std::time::Instant::now() < deadline {
         match engine
@@ -640,6 +683,10 @@ fn engine_starting_on_the_build_list_raises_no_errors() {
                 snapshot: Snapshot::BuildList(_),
                 ..
             }) => list = true,
+            Ok(Event::Snapshot {
+                snapshot: Snapshot::Settings(_),
+                ..
+            }) => settings = true,
             Ok(Event::Error { message, .. }) => panic!("startup error: {message}"),
             Ok(Event::StartupFailed { message }) => panic!("startup failed: {message}"),
             Ok(_) => {}
@@ -653,9 +700,17 @@ fn engine_starting_on_the_build_list_raises_no_errors() {
         match engine.events.recv_timeout(left) {
             Ok(Event::Error { message, .. }) => panic!("error on the list: {message}"),
             Ok(Event::Snapshot { snapshot, .. }) => {
-                // the list and the requests need no build (R10)
+                // the list and the requests need no build (R10); neither do the settings
+                // and the popup (Task 3, R12, R19: a main-owned session)
+                settings |= matches!(snapshot, Snapshot::Settings(_));
                 assert!(
-                    matches!(snapshot, Snapshot::BuildList(_) | Snapshot::Requests(_)),
+                    matches!(
+                        snapshot,
+                        Snapshot::BuildList(_)
+                            | Snapshot::Requests(_)
+                            | Snapshot::Settings(_)
+                            | Snapshot::Popup(_)
+                    ),
                     "a build view went out with no build open"
                 )
             }
@@ -663,6 +718,7 @@ fn engine_starting_on_the_build_list_raises_no_errors() {
             Err(_) => break,
         }
     }
+    assert!(settings, "the settings are sent at startup with no build");
     // opening a build brings the build views, as before
     engine.send(Command::OpenBuild { path: build });
     let (mut build_view, mut stats, mut tree) = (false, false, false);

@@ -265,21 +265,53 @@ end
 -- The colours the tree view gives the nodes when comparing with another spec: TreeTab.lua:445
 -- picks the spec, PassiveTreeView.lua:808 and :936 colour each node. A node that keeps its
 -- default colour (nil) isn't listed.
-local function compare_state(build)
-	local tab = build.treeTab
-	local compareSpec = tab.isComparing and tab.specList[tab.activeCompareSpec] or nil
-	tab.viewer.compareSpec = compareSpec
+local function compare_colours(build, compareSpec)
+	local viewer = build.treeTab.viewer
 	local colours = {}
 	if compareSpec then
 		for id, node in pairs(build.spec.nodes) do
-			local r, g, b = tab.viewer:GetCompareNodeColor(node, compareSpec.nodes[id], build.spec, build, nil)
+			local r, g, b = viewer:GetCompareNodeColor(node, compareSpec.nodes[id], build.spec, build, nil)
 			if r then
 				colours[#colours + 1] = { node = id, rgb = { r, g, b } }
 			end
 		end
 		table.sort(colours, function(a, b) return a.node < b.node end)
 	end
-	return colours, compareSpec and tab.activeCompareSpec - 1 or nil
+	return colours
+end
+
+-- With the Compare tab's Tree view on and a comparison active, the overlay goes first (R7): PoB
+-- draws this build's viewer with `compareSpec` set to the comparison's spec, then clears it
+-- (CompareTab.lua:3383-3405). Side by side (overlay unchecked) nothing is coloured. Returns
+-- nil when the Compare tab doesn't draw the tree.
+local function overlay_state(build)
+	local tab = build.compareTab
+	local entry = tab and tab.compareViewMode == "TREE" and tab:GetActiveCompare()
+	if not entry then
+		return nil
+	end
+	if not tab.treeOverlayMode then
+		return {}
+	end
+	local viewer = build.treeTab.viewer
+	viewer.compareSpec = entry.spec
+	local ok, colours = pcall(compare_colours, build, entry.spec)
+	viewer.compareSpec = nil
+	if not ok then
+		error(colours, 0)
+	end
+	return colours
+end
+
+local function compare_state(build)
+	local overlay = overlay_state(build)
+	if overlay then
+		return overlay, nil
+	end
+	local tab = build.treeTab
+	local compareSpec = tab.isComparing and tab.specList[tab.activeCompareSpec] or nil
+	tab.viewer.compareSpec = compareSpec
+	return compare_colours(build, compareSpec), compareSpec and tab.activeCompareSpec - 1 or nil
 end
 
 -- The words PassiveTreeView:Draw splits the search text into (PassiveTreeView.lua:783-798).
@@ -357,6 +389,15 @@ local function spec_entries()
 	return entries
 end
 
+-- The Version dropdown's entries (TreeTab.lua:156-175), in PoB's order (NF-7)
+local function version_choices(tab)
+	local choices = {}
+	for i, entry in ipairs(tab.treeVersions) do
+		choices[i] = { label = entry.label, value = entry.value }
+	end
+	return choices
+end
+
 -- The build's state on the active tree.
 function glue.tree_state()
 	local build = pob.build
@@ -397,6 +438,9 @@ function glue.tree_state()
 		max_depth = build.calcsTab.nodePowerMaxDepth,
 		can_undo = spec.undo[2] ~= nil,
 		can_redo = spec.redo[1] ~= nil,
+		heatmap_shown = build.treeTab.viewer.showHeatMap and true or false,
+		show_stat_differences = build.treeTab.viewer.showStatDifferences and true or false,
+		versions = version_choices(build.treeTab),
 	}
 end
 
@@ -875,7 +919,10 @@ end
 -- What the tree draws when the mouse is over a node (PassiveTreeView.lua:1458), or nil when the
 -- node is gone. A plain hover has no trace path (PassiveTreeView.lua:286-289), which is what
 -- the tooltip reads besides the node; it doesn't read `hoverNode`.
-function glue.node_tooltip(id)
+--
+-- `trace` is the path traced with Shift held (ids from the tree to the end), or empty: PoB's
+-- trace mode then shows it (PassiveTreeView.lua:283-290, 1662, 1715-1716).
+function glue.node_tooltip(id, trace)
 	local build = pob.build
 	local node = build.spec.nodes[id]
 	if not node then
@@ -884,14 +931,162 @@ function glue.node_tooltip(id)
 	local tab = build.treeTab
 	local viewer = tab.viewer
 	local tooltip = glue.tooltip()
-	local tracePath, compareSpec = viewer.tracePath, viewer.compareSpec
+	local tracePath, compareSpec, traceMode = viewer.tracePath, viewer.compareSpec, viewer.traceMode
 	viewer.tracePath = nil
+	viewer.traceMode = false
+	if trace and #trace > 0 then
+		local nodes = {}
+		for i, nodeId in ipairs(trace) do
+			nodes[i] = build.spec.nodes[nodeId]
+			if not nodes[i] then
+				return nil
+			end
+		end
+		viewer.tracePath = nodes
+		viewer.traceMode = true
+	end
 	-- as TreeTab:Draw sets it (TreeTab.lua:445)
 	viewer.compareSpec = tab.isComparing and tab.specList[tab.activeCompareSpec] or nil
 	local ok, err = pcall(viewer.AddNodeTooltip, viewer, tooltip, node, build)
-	viewer.tracePath, viewer.compareSpec = tracePath, compareSpec
+	viewer.tracePath, viewer.compareSpec, viewer.traceMode = tracePath, compareSpec, traceMode
 	if not ok then
 		error(tostring(err):match("[^\n]+") or "couldn't build the tooltip", 0)
 	end
-	return { id = id, lines = tooltip:lines() }
+	return { id = id, lines = tooltip:lines(), trace = trace or {} }
+end
+
+-- ---- Keys ----
+
+-- P on the tree (PassiveTreeView.lua:204-205); TreeTab:Draw then syncs the checkbox and the
+-- stat dropdown to it (TreeTab.lua:459-460). Returns whether the heat map shows.
+function glue.toggle_heatmap()
+	local tab = pob.build.treeTab
+	tab.viewer.showHeatMap = not tab.viewer.showHeatMap
+	tab.controls.treeHeatMap.state = tab.viewer.showHeatMap
+	tab.controls.treeHeatMapStatSelect.shown = tab.viewer.showHeatMap
+	return tab.viewer.showHeatMap
+end
+
+-- Ctrl+D on the tree (PassiveTreeView.lua:206-207)
+function glue.set_tree_stat_differences(on)
+	pob.build.treeTab.viewer.showStatDifferences = on and true or false
+end
+
+-- A click with Shift held on the end of the traced path (PassiveTreeView.lua:500-506):
+-- spec:AllocNode with the traced path instead of the node's own. `trace` runs from the tree
+-- to `id`.
+function glue.alloc_trace(id, trace)
+	local spec = pob.build.spec
+	local node = node_by_id(id)
+	if node.alloc or not node.path then
+		error("that passive isn't connected to your tree", 0)
+	end
+	if node.type == "Mastery" and node.masteryEffects then
+		error("pick a mastery effect", 0)
+	end
+	local path = {}
+	for i, nodeId in ipairs(trace) do
+		path[i] = spec.nodes[nodeId]
+		if not path[i] then
+			error("that path isn't on your tree", 0)
+		end
+	end
+	if path[#path] ~= node then
+		error("that path doesn't end at the node", 0)
+	end
+	spec:AllocNode(node, path)
+	finish_edit(false)
+end
+
+-- ---- Tree copy and reorder (NF-3) ----
+
+-- The tree manager's Copy button and its "Copy Tree" name popup (PassiveSpecListControl.lua:
+-- 13-21, 37-58): the copy is added at the end, not selected
+function glue.copy_spec(index, title)
+	local spec = spec_at(index)
+	with_spec_list(function(list)
+		list.selIndex, list.selValue = index, spec
+		list.controls.copy.onClick()
+		save_name(title)
+	end)
+	-- Save sets only the tab's modFlag; a frame refreshes `unsaved` (Build.lua:1303)
+	glue.frame()
+end
+
+-- Dragging a row of the tree manager's list; its OnOrderChange (PassiveSpecListControl.lua:
+-- 75-80) finds the active tree again, refreshes the Items tab's tree list and syncs loadouts
+function glue.move_spec(from, to)
+	spec_at(from)
+	spec_at(to)
+	if from == to then
+		return
+	end
+	with_spec_list(function(list)
+		glue.drop_list_row(list, from, to)
+	end)
+	glue.frame()
+end
+
+-- ---- PoB's "Convert to <latest>" button (TreeTab:610) ----
+
+-- The button under an older tree (TreeTab.lua:330-337): the tree is copied into the latest
+-- version next to it (ConvertToVersion with `success`, :588-612), and PoB says so in its
+-- "Tree Converted" message. The message's title and lines are returned for the UI to show.
+function glue.convert_spec_latest()
+	local button = pob.build.treeTab.controls.specConvert
+	if not (button:IsShown() and button:IsEnabled()) then
+		error("PoB doesn't offer that here", 0)
+	end
+	local message
+	in_popups(function()
+		local depth = #main_module().popups
+		button.onClick()
+		local popups = main_module().popups
+		if #popups > depth then
+			local popup = popups[1]
+			local lines = {}
+			for _, control in ipairs(popup.controls) do
+				lines[#lines + 1] = control:GetProperty("label")
+			end
+			message = { title = popup:GetProperty("title"), text = table.concat(lines, "\n") }
+		end
+	end)
+	return message
+end
+
+-- ---- The canvas's Class Change question (PassiveTreeView.lua:474) ----
+
+-- A left click on an unallocated node of another class's ascendancy, with points that don't
+-- connect to that class: PoB asks "Class Change" and runs its Continue or Connect Path
+-- callback (PassiveTreeView.lua:464-492), which these steps are.
+function glue.alloc_changing_class(id, connect)
+	local spec = pob.build.spec
+	local node = node_by_id(id)
+	if node.alloc or not node.ascendancyName or node.isBloodline then
+		error("PoB doesn't offer that here", 0)
+	end
+	local targetClassId, targetAscendClassId
+	for classId, classData in pairs(spec.tree.classes) do
+		for ascendClassId, ascendClass in pairs(classData.classes) do
+			if ascendClass.id == node.ascendancyName then
+				targetClassId, targetAscendClassId = classId, ascendClassId
+			end
+		end
+	end
+	if not targetClassId or targetClassId == spec.curClassId then
+		error("PoB doesn't offer that here", 0)
+	end
+	if spec:CountAllocNodes() == 0 or spec:IsClassConnected(targetClassId) then
+		error("PoB doesn't ask here: the class changes with the click", 0)
+	end
+	if connect and not spec:ConnectToClass(targetClassId) then
+		error("couldn't connect your tree to that class", 0)
+	end
+	spec:SelectClass(targetClassId)
+	spec:SelectAscendClass(targetAscendClassId)
+	local target = spec.nodes[id]
+	if target and not target.alloc then
+		spec:AllocNode(target)
+	end
+	finish_edit(true)
 end

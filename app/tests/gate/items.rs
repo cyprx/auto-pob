@@ -28,7 +28,7 @@ pub(crate) fn gear_sessions(test: &str) -> (Session, mlua::Lua) {
 }
 
 /// Runs `code` on both sides; `BUILD` stands for the build, `pob.build` here and `build` there.
-fn on_both(s: &Session, lua: &mlua::Lua, code: &str) {
+pub(crate) fn on_both(s: &Session, lua: &mlua::Lua, code: &str) {
     s.backend
         .lua
         .load(code.replace("BUILD", "pob.build") + "\nglue.frame()")
@@ -300,7 +300,13 @@ fn compare_tooltips(s: &mut Session, lua: &mlua::Lua, what: &str) -> Seen {
             ));
         }
         for (slot, code) in queries {
-            let query = ItemTooltipQuery { id: item.id, slot };
+            let query = ItemTooltipQuery {
+                id: item.id,
+                slot,
+                theirs: false,
+                shift: false,
+                shared: None,
+            };
             let ours = s.backend.item_tooltip_view(&query).unwrap();
             let theirs = upstream_tooltip(lua, &format!("return {code}"));
             let label = format!("{what}: {} {:?}", item.name, query.slot);
@@ -534,6 +540,9 @@ fn item_tooltips_match_pob() {
             .item_tooltip_view(&ItemTooltipQuery {
                 id,
                 slot: slot.map(str::to_string),
+                theirs: false,
+                shift: false,
+                shared: None,
             })
             .unwrap()
     };
@@ -597,6 +606,9 @@ fn tooltip_of_the_unique_jewel() {
         let query = ItemTooltipQuery {
             id: jewel.id,
             slot: Some(slot.name.clone()),
+            theirs: false,
+            shift: false,
+            shared: None,
         };
         let start = std::time::Instant::now();
         let ours = s
@@ -1212,7 +1224,7 @@ fn item_set_errors() {
 
 const RING: &str = "Rarity: RARE\nDoom Loop\nIron Ring\nImplicits: 0\n+30 to maximum Life";
 
-fn display(s: &mut Session) -> Option<DisplayItemView> {
+pub(crate) fn display(s: &mut Session) -> Option<DisplayItemView> {
     s.backend.display_item_view().expect("display item view")
 }
 
@@ -1510,7 +1522,7 @@ const UNIQUE_JEWEL: &str = "Rarity: UNIQUE\nTester's Jewel\nCobalt Jewel\nQualit
 
 /// The first Foulborn unique (by name) with a mutable line that has no slider, with that line's
 /// 0-based index, and a line of the same item that has a slider but can't mutate.
-const FIND_NO_SLIDER: &str = r#"
+pub(crate) const FIND_NO_SLIDER: &str = r#"
 local titles = {}
 for title in pairs(data.foulbornMap) do titles[#titles + 1] = title end
 table.sort(titles)
@@ -1537,10 +1549,10 @@ error("no such unique")
 const GROUPED: &str = "Rarity: UNIQUE\nGrouped Charm\nPrismatic Ring\nVariant: A\nVariant: B\nVariant: C\nVersion: Old\nVersion: New\nImplicits: 0\n{version:1,2}{variant:1}{group:1}+10 to maximum Life\n{version:1,2}{variant:2}{group:2}+20 to maximum Mana\n{version:1,2}{variant:3}{group:2}+30 to maximum Mana";
 
 #[derive(serde::Deserialize)]
-struct NoSlider {
-    text: String,
-    bare: usize,
-    plain: usize,
+pub(crate) struct NoSlider {
+    pub(crate) text: String,
+    pub(crate) bare: usize,
+    pub(crate) plain: usize,
 }
 
 #[test]
@@ -1783,66 +1795,76 @@ fn a_conditional_cancel_only_cancels_the_item_it_names() {
     );
 }
 
-#[test]
-#[ignore = "needs the pinned PoB install"]
-fn items_round_trip() {
+/// One recipe saved, reloaded by upstream and compared with the recipe's result and ours.
+pub(crate) fn items_round_trip(name: &str) {
     let _guard = lock();
-    for name in [
-        "paste_equip",
-        "sets",
-        "display_edits",
-        "flasks_jewels",
-        "variants",
-        "delete_sort",
-    ] {
-        let (recipe, mut s) = run_items_recipe(name);
-        s.run(Command::Save).unwrap();
-        let saved = s.backend.build_view().unwrap().path.expect("a saved build");
-        // what upstream PoB makes of the file we wrote
-        let lua = upstream_with_items_lib(&saved, &recipe.base);
-        let reloaded = upstream_json(&lua);
-        // the undo history and what the list shows are not saved
-        // `flasks_jewels` leaves the live slots apart from the saved file's: PoB's undo
-        // restores only the sets' flask copies (R12), and a socket whose node went is
-        // labelled from the live tree. Its slots are not compared; the saved sets' flasks are,
-        // below, and the jewels and item texts as for every recipe.
-        let live_slots = name != "flasks_jewels";
-        let saved_part = |mut value: serde_json::Value| {
-            for key in ["can_undo", "can_redo", "list_filter"] {
-                value.as_object_mut().unwrap().remove(key);
-            }
-            if !live_slots {
-                value.as_object_mut().unwrap().remove("slots");
-            }
-            value
-        };
-        let ours = saved_part(json(&s.backend.items_view().unwrap()));
-        let expected = saved_part(recipe.result.clone());
-        let reloaded = saved_part(reloaded);
-        assert_same(&reloaded, &expected, &format!("{name}: reloaded vs recipe"));
-        assert_same(&ours, &reloaded, &format!("{name}: ours vs reloaded"));
-        let (raws, jewels) = raws_and_jewels(&lua, "build");
-        assert_eq!(raws, recipe.raws, "{name}: item text after reload");
-        assert_eq!(jewels, recipe.jewels, "{name}: jewels after reload");
-        let (ours_raws, ours_jewels) = raws_and_jewels(&s.backend.lua, "pob.build");
-        assert_eq!(ours_raws, raws, "{name}: our item text");
-        assert_eq!(ours_jewels, jewels, "{name}: our jewels");
-        assert!(!raws.is_empty(), "{name}: no items");
-        // the flasks that are on, by set (an untouched set holds no slot entries yet)
-        let flasks = |lua: &mlua::Lua, build: &str| -> BTreeMap<String, bool> {
-            lua_value(
-                lua,
-                &format!(
-                    "local out = {{}} for id, set in pairs({build}.itemsTab.itemSets) do for slot, entry in pairs(set) do if type(entry) == 'table' and entry.active then out[id .. '/' .. slot] = true end end end return out"
-                ),
-            )
-        };
-        assert_eq!(
-            flasks(&s.backend.lua, "pob.build"),
-            flasks(&lua, "build"),
-            "{name}: the saved sets' flasks"
-        );
-    }
+    let (recipe, mut s) = run_items_recipe(name);
+    s.run(Command::Save).unwrap();
+    let saved = s.backend.build_view().unwrap().path.expect("a saved build");
+    // what upstream PoB makes of the file we wrote
+    let lua = upstream_with_items_lib(&saved, &recipe.base);
+    let reloaded = upstream_json(&lua);
+    // the undo history and what the list shows are not saved
+    // `flasks_jewels` leaves the live slots apart from the saved file's: PoB's undo
+    // restores only the sets' flask copies (R12), and a socket whose node went is
+    // labelled from the live tree. Its slots are not compared; the saved sets' flasks are,
+    // below, and the jewels and item texts as for every recipe.
+    let live_slots = name != "flasks_jewels";
+    let saved_part = |mut value: serde_json::Value| {
+        for key in ["can_undo", "can_redo", "list_filter", "shared_shown"] {
+            value.as_object_mut().unwrap().remove(key);
+        }
+        if !live_slots {
+            value.as_object_mut().unwrap().remove("slots");
+        }
+        value
+    };
+    let ours = saved_part(json(&s.backend.items_view().unwrap()));
+    let expected = saved_part(recipe.result.clone());
+    let reloaded = saved_part(reloaded);
+    assert_same(&reloaded, &expected, &format!("{name}: reloaded vs recipe"));
+    assert_same(&ours, &reloaded, &format!("{name}: ours vs reloaded"));
+    let (raws, jewels) = raws_and_jewels(&lua, "build");
+    assert_eq!(raws, recipe.raws, "{name}: item text after reload");
+    assert_eq!(jewels, recipe.jewels, "{name}: jewels after reload");
+    let (ours_raws, ours_jewels) = raws_and_jewels(&s.backend.lua, "pob.build");
+    assert_eq!(ours_raws, raws, "{name}: our item text");
+    assert_eq!(ours_jewels, jewels, "{name}: our jewels");
+    assert!(!raws.is_empty(), "{name}: no items");
+    // the flasks that are on, by set (an untouched set holds no slot entries yet)
+    let flasks = |lua: &mlua::Lua, build: &str| -> BTreeMap<String, bool> {
+        lua_value(
+            lua,
+            &format!(
+                "local out = {{}} for id, set in pairs({build}.itemsTab.itemSets) do for slot, entry in pairs(set) do if type(entry) == 'table' and entry.active then out[id .. '/' .. slot] = true end end end return out"
+            ),
+        )
+    };
+    assert_eq!(
+        flasks(&s.backend.lua, "pob.build"),
+        flasks(&lua, "build"),
+        "{name}: the saved sets' flasks"
+    );
+}
+
+// One test per recipe, so the gate runner can spread the slowest one (72 s as a single test).
+macro_rules! round_trip_tests {
+    ($($test:ident: $recipe:literal,)*) => {$(
+        #[test]
+        #[ignore = "needs the pinned PoB install"]
+        fn $test() {
+            items_round_trip($recipe);
+        }
+    )*};
+}
+
+round_trip_tests! {
+    items_round_trip_paste_equip: "paste_equip",
+    items_round_trip_sets: "sets",
+    items_round_trip_display_edits: "display_edits",
+    items_round_trip_flasks_jewels: "flasks_jewels",
+    items_round_trip_variants: "variants",
+    items_round_trip_delete_sort: "delete_sort",
 }
 
 #[test]
@@ -1977,7 +1999,13 @@ fn no_silent_writes_items() {
     if let Some(id) = id {
         s.backend.item_text(id).unwrap();
         s.backend
-            .item_tooltip_view(&ItemTooltipQuery { id, slot: None })
+            .item_tooltip_view(&ItemTooltipQuery {
+                id,
+                slot: None,
+                theirs: false,
+                shift: false,
+                shared: None,
+            })
             .unwrap();
     }
     assert_eq!(

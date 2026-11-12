@@ -11,7 +11,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, TextureHandle, Tool
 use std::collections::HashSet;
 
 /// What the user did on the canvas this frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CanvasAction {
     Alloc(u32),
     Dealloc(u32),
@@ -23,6 +23,8 @@ pub enum CanvasAction {
     JumpToSocket(u32),
     /// The node under the pointer changed
     Hover(Option<u32>),
+    /// A click on the end of the path traced with Shift: allocate that path (`AllocTracePath`)
+    AllocTrace(u32, Vec<u32>),
 }
 
 /// An uploaded sprite sheet: its texture and size in pixels.
@@ -74,7 +76,11 @@ pub fn show(
         .hover_pos()
         .filter(|_| valid_zoom && !response.dragged())
         .and_then(|p| tab.grid.node_at(layout, camera.to_tree(rect, p), zoom));
-    let hovered_id = hovered.map(|i| layout.nodes[i].id);
+    // Shift traces a path through the hovered nodes (PassiveTreeView.lua:283-363); a node
+    // the trace can't take is not hovered
+    let shift = ui.input(|i| i.modifiers.shift);
+    let hovered_id = tab.trace_step(layout, hovered.map(|i| layout.nodes[i].id), shift);
+    let hovered = hovered_id.and_then(|id| tab.index.get(&id).copied());
     let mut actions = Vec::new();
     if hovered_id != tab.hover {
         actions.push(CanvasAction::Hover(hovered_id));
@@ -82,6 +88,9 @@ pub fn show(
 
     // the nodes a click on the hovered one would add or drop
     let (highlight, highlight_colour) = match hovered_id {
+        // with Shift held the trace is the path, and nothing is a dependent
+        // (PassiveTreeView.lua:328-363)
+        _ if shift => (Some(&tab.trace), PATH),
         Some(id) if tab.derived.allocated.contains(&id) => (tab.derived.depends.get(&id), DROP),
         Some(id) => (tab.derived.paths.get(&id), PATH),
         None => (None, PATH),
@@ -120,7 +129,8 @@ pub fn show(
     }
 
     // nodes
-    let heat_on = state.heatmap.is_some();
+    // P shows the map before any stat was chosen: damage against defence
+    let heat_on = state.heatmap.is_some() || state.heatmap_shown;
     for node in &layout.nodes {
         let pos = to_screen(node.pos);
         if !visible.contains(pos) {
@@ -229,8 +239,10 @@ pub fn show(
         .any(|m| m.node == node.id && !m.options.is_empty());
     let is_mastery = node.kind == "Mastery";
     let allocated = tab.derived.allocated.contains(&node.id);
+    // a click with Ctrl held only zooms (PassiveTreeView.lua:259-263)
+    let ctrl = ui.input(|i| i.modifiers.command);
     // as PoB's right click, in its order (PassiveTreeView.lua:510-533, R19)
-    if response.secondary_clicked() {
+    if response.secondary_clicked() && !ctrl {
         if allocated && node.kind == "Socket" {
             // only a slot PoB lets the user use
             if tab.sockets.contains(&node.id) {
@@ -246,7 +258,7 @@ pub fn show(
             });
         }
     }
-    if response.clicked() {
+    if response.clicked() && !ctrl {
         // a left click on an allocated node removes it, a mastery included
         // (PassiveTreeView.lua:383); an unallocated mastery asks for its effect
         if allocated {
@@ -263,12 +275,20 @@ pub fn show(
                 .as_ref()
                 .is_some_and(|a| tab.derived.current_ascendancy.as_ref() != Some(a))
         {
-            actions.push(CanvasAction::Alloc(node.id));
+            // the trace's end allocates the trace (PassiveTreeView.lua:504)
+            actions.push(match tab.trace.last() {
+                Some(&end) if end == node.id => {
+                    CanvasAction::AllocTrace(node.id, tab.trace.clone())
+                }
+                _ => CanvasAction::Alloc(node.id),
+            });
         }
     }
 
     let jewel = state.jewels.iter().find(|j| j.node == node.id);
-    let body = tooltip_body(node, tab.tooltip.as_deref());
+    // a reply is the tooltip for this trace (or for none)
+    let reply = tab.tooltip.as_deref().filter(|t| t.trace == tab.trace);
+    let body = tooltip_body(node, reply);
     Tooltip::for_widget(&response)
         .at_pointer()
         .show(|ui| match body {
@@ -310,6 +330,19 @@ pub fn tooltip_body<'a>(node: &TreeNode, reply: Option<&'a NodeTooltip>) -> Tool
 fn handle_input(ui: &egui::Ui, tab: &mut TreeTab, response: &egui::Response) {
     if response.dragged() && tab.camera.zoom > 0.0 {
         tab.camera.center -= response.drag_delta() / tab.camera.zoom;
+    }
+    // Ctrl+click zooms in two of PoB's 1.2 steps at the pointer, Ctrl+right-click out
+    // (PassiveTreeView.lua:259-263)
+    let ctrl = ui.input(|i| i.modifiers.command);
+    let clicked = response.clicked() || response.secondary_clicked();
+    if ctrl
+        && clicked
+        && tab.camera.zoom > 0.0
+        && let Some(pointer) = response.interact_pointer_pos()
+    {
+        let level = if response.secondary_clicked() { -2 } else { 2 };
+        tab.camera
+            .zoom_at(response.rect, pointer, 1.2f32.powi(level));
     }
     if let Some(pointer) = response.hover_pos() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
@@ -397,6 +430,7 @@ mod tests {
     fn reply(id: u32, lines: usize) -> NodeTooltip {
         NodeTooltip {
             id,
+            trace: vec![],
             lines: (0..lines)
                 .map(|_| TooltipLine::Line {
                     size: 14,

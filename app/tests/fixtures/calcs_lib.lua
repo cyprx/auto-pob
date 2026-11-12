@@ -290,3 +290,30 @@ function breakdownDump(ref)
 	end
 	return out
 end
+
+-- Each section's layout after upstream's own UpdateSize (CalcSectionControl.lua:103-150): the
+-- width given to each sub-section's cells (0 where no row is laid out), and whether its "^"
+-- pop-out button shows
+function calcsLayout()
+	local calcs = build.calcsTab
+	local out = {}
+	for _, section in ipairs(calcs.sectionList) do
+		section:UpdateSize()
+		local widths = {}
+		for i, subSec in ipairs(section.subSection) do
+			widths[i] = 0
+			for _, rowData in ipairs(subSec.data) do
+				if calcs:CheckFlag(rowData) and rowData[1] and rowData[1].width then
+					widths[i] = rowData[1].width
+					break
+				end
+			end
+		end
+		table.insert(out, {
+			id = section.id,
+			widths = widths,
+			pop_out = not not section.controls.popOut:IsShown(),
+		})
+	end
+	return out
+end

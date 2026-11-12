@@ -33,6 +33,13 @@ fn row_text(g: &SocketGroupView, default: Color32) -> egui::text::LayoutJob {
     job
 }
 
+/// PoB's usage tips under the group list (SkillsTab.lua:111-117)
+const GROUP_TIP: &str = "^7Usage Tips:
+- You can copy/paste socket groups using Ctrl+C and Ctrl+V.
+- Ctrl + Click to enable/disable socket groups.
+- Ctrl + Right click to include/exclude in FullDPS calculations.
+- Right click to set as the Main skill group.";
+
 impl SkillsUi {
     pub(super) fn group_list(
         &mut self,
@@ -56,6 +63,10 @@ impl SkillsUi {
             }
         });
         let default = ui.visuals().text_color();
+        // PoB's usage tips under its list (SkillsTab.lua:110-118)
+        egui::Panel::bottom("skills_group_tip").show(ui, |ui| {
+            ui.label(pob_text(GROUP_TIP, 13.0, default));
+        });
         let ctx = ui.ctx().clone();
         let dragging = egui::DragAndDrop::has_payload_of_type::<usize>(&ctx);
         let mut target: Option<(usize, bool)> = None;
@@ -96,9 +107,26 @@ impl SkillsUi {
                             egui::pos2(ui.min_rect().left(), top),
                             egui::pos2(ui.max_rect().right(), ui.cursor().min.y),
                         );
+                        // Ctrl+click enables or disables, Ctrl+right-click includes or
+                        // excludes from Full DPS (SkillListControl.lua:202-225)
+                        let ctrl = ui.input(|inp| inp.modifiers.command);
+                        // the click selects the row first (ListControl.lua:338-370)
                         if row.clicked() {
                             self.selected = i;
                             row.request_focus();
+                            if ctrl {
+                                out.commands.push(Command::SetGroupEnabled {
+                                    group: i,
+                                    on: !g.enabled,
+                                });
+                            }
+                        }
+                        let full_dps = row.secondary_clicked() && ctrl;
+                        if full_dps {
+                            out.commands.push(Command::SetGroupFullDps {
+                                group: i,
+                                on: !g.full_dps,
+                            });
                         }
                         if row.hovered() {
                             hovered_row = Some(i);
@@ -112,10 +140,16 @@ impl SkillsUi {
                             let y = if below { rect.bottom() } else { rect.top() };
                             indicator = Some((rect.left(), rect.right(), y));
                         }
-                        if row.has_focus() {
-                            self.row_keys(ui, i, g, out);
+                        if self.focus_group == Some(i) {
+                            self.focus_group = None;
+                            row.request_focus();
+                        } else if row.has_focus() {
+                            crate::ui::shortcuts::keep_arrows(ui.ctx(), row.id);
+                            self.row_keys(ui, i, view.groups.len(), g, out);
                         }
-                        self.row_menu(&row, i, g, out);
+                        if !full_dps {
+                            self.row_menu(&row, i, g, out);
+                        }
                         if !dragging
                             && let Some(t) = &self.tooltip
                             && t.group == i
@@ -155,14 +189,26 @@ impl SkillsUi {
         out.commands.push(Command::MoveSocketGroup { from, to });
     }
 
-    /// Ctrl+C and Delete on the focused row.
-    fn row_keys(&mut self, ui: &egui::Ui, i: usize, g: &SocketGroupView, out: &mut SkillsOutput) {
+    /// Ctrl+C, Delete or Backspace, and Up, Down, Home and End on the focused row
+    /// (ListControl.lua:375-392).
+    fn row_keys(
+        &mut self,
+        ui: &egui::Ui,
+        i: usize,
+        len: usize,
+        g: &SocketGroupView,
+        out: &mut SkillsOutput,
+    ) {
         let copy = ui.input(|inp| inp.events.iter().any(|e| matches!(e, egui::Event::Copy)));
         if copy && g.source.is_none() {
             self.ask_copy(i, out);
         }
-        if ui.input(|inp| inp.key_pressed(egui::Key::Delete)) && g.source.is_none() {
+        if ui.input(crate::ui::shortcuts::list_delete) && g.source.is_none() {
             self.ask_delete(i, g, out);
+        }
+        if let Some(to) = ui.input_mut(|inp| crate::ui::shortcuts::list_key(inp, len, Some(i))) {
+            self.selected = to;
+            self.focus_group = Some(to);
         }
     }
 
@@ -248,7 +294,9 @@ impl SkillsUi {
                 .groups
                 .get(group)
                 .map_or(String::new(), |g| g.label.clone());
-            let mut choice = None;
+            // Esc is PoB's Cancel (PopupDialog.lua:72-77)
+            let window = egui::Id::unique("skills_delete");
+            let mut choice = crate::widgets::escape::escape(ctx, window).then_some(false);
             egui::Window::new("Delete socket group")
                 .collapsible(false)
                 .resizable(false)
@@ -266,6 +314,7 @@ impl SkillsUi {
                         }
                     });
                 });
+            crate::widgets::escape::note(ctx, window);
             if choice == Some(true) {
                 self.delete_group(group, out);
             }
@@ -274,7 +323,9 @@ impl SkillsUi {
             }
         }
         if self.confirm_delete_all {
-            let mut choice = None;
+            // Esc is PoB's Cancel (PopupDialog.lua:72-77)
+            let window = egui::Id::unique("skills_delete_all");
+            let mut choice = crate::widgets::escape::escape(ctx, window).then_some(false);
             egui::Window::new("Delete all socket groups")
                 .collapsible(false)
                 .resizable(false)
@@ -292,6 +343,7 @@ impl SkillsUi {
                         }
                     });
                 });
+            crate::widgets::escape::note(ctx, window);
             if choice == Some(true) {
                 self.selected = 0;
                 out.commands.push(Command::DeleteAllSocketGroups);
@@ -375,12 +427,15 @@ impl SkillsUi {
         let current = list.labels.get(list.selected).map_or("", String::as_str);
         let mut chosen = None;
         let combo = ui.add_enabled_ui(list.enabled, |ui| {
-            egui::ComboBox::from_id_salt(("skills_option", key))
+            crate::widgets::dropdown::Dropdown::from_id_salt(("skills_option", key))
                 .selected_text(pob_text(current, 14.0, default))
                 .show_ui(ui, |ui| {
                     for (i, text) in list.labels.iter().enumerate() {
-                        let item =
-                            ui.selectable_label(i == list.selected, pob_text(text, 14.0, default));
+                        let item = crate::widgets::dropdown::item(
+                            ui,
+                            i == list.selected,
+                            pob_text(text, 14.0, default),
+                        );
                         self.rects.note(&item, || format!("{key}_item_{i}"));
                         if item.clicked() && i != list.selected {
                             chosen = Some(i);
@@ -389,6 +444,15 @@ impl SkillsUi {
                 })
         });
         self.rects.note(&combo.inner.response, || key.to_owned());
+        // the wheel and the arrows step it (DropDownControl.lua:476-516)
+        chosen = chosen.or_else(|| {
+            crate::widgets::scroll_step::combo_step(
+                ui,
+                &combo.inner.response,
+                list.labels.len(),
+                list.selected,
+            )
+        });
         if !help.is_empty() {
             combo.inner.response.on_hover_ui(|ui| {
                 for line in help {

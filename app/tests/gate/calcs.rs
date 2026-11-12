@@ -78,9 +78,10 @@ fn calcs_cells_match_pob() {
                 ours.sections.iter().any(|section| section.enabled),
                 "{name} {mode}: nothing is enabled"
             );
-            modes_seen.push(serde_json::to_value(&ours.sections).unwrap());
+            let plain = without_layout(&ours.sections, &lua);
+            modes_seen.push(serde_json::to_value(&plain).unwrap());
             assert_eq!(
-                serde_json::to_value(&ours.sections).unwrap(),
+                serde_json::to_value(&plain).unwrap(),
                 serde_json::to_value(&theirs).unwrap(),
                 "{name} {mode}"
             );
@@ -163,7 +164,7 @@ fn calcs_collapse_and_search_match_pob() {
             .any(|r| r.search_match)
     );
     assert_eq!(
-        serde_json::to_value(&ours.sections).unwrap(),
+        serde_json::to_value(without_layout(&ours.sections, &lua)).unwrap(),
         serde_json::to_value(&theirs).unwrap()
     );
 }
@@ -216,6 +217,51 @@ fn fixture_xml(name: &str) -> std::path::PathBuf {
         .1
 }
 
+/// PoB's layout of a section after its own `UpdateSize` (`calcsLayout`)
+#[derive(serde::Deserialize)]
+struct Layout {
+    id: String,
+    widths: Vec<f32>,
+    pop_out: bool,
+}
+
+/// Our sections with their layout fields checked against PoB's `UpdateSize` (every
+/// sub-section PoB laid cells out in, and the "^" button), then blanked, as `calcsDump`
+/// leaves them out
+fn without_layout(sections: &[CalcsSection], lua: &mlua::Lua) -> Vec<CalcsSection> {
+    let layout: Vec<Layout> = lua_value(lua, "return calcsLayout()");
+    assert_eq!(layout.len(), sections.len(), "layout: sections");
+    for (section, want) in sections.iter().zip(&layout) {
+        assert_eq!(section.id, want.id);
+        assert_eq!(
+            section.col_widths.len(),
+            want.widths.len(),
+            "{}",
+            section.id
+        );
+        for (si, (&ours, &theirs)) in section.col_widths.iter().zip(&want.widths).enumerate() {
+            if theirs > 0.0 {
+                assert_eq!(ours, theirs, "{} sub {si}: column width", section.id);
+            }
+        }
+        assert_eq!(
+            section.enabled && section.pop_out,
+            want.pop_out,
+            "{}: \"^\"",
+            section.id
+        );
+    }
+    sections
+        .iter()
+        .cloned()
+        .map(|mut s| {
+            s.col_widths.clear();
+            s.pop_out = false;
+            s
+        })
+        .collect()
+}
+
 /// A session and an upstream state on the same fixture.
 fn both(name: &str) -> (Session, mlua::Lua) {
     let xml = fixture_xml(name);
@@ -229,7 +275,7 @@ fn assert_matches_pob(s: &mut Session, lua: &mlua::Lua, step: &str) -> CalcsSele
     let ours = s.backend.calcs_view().unwrap();
     let sections: Vec<CalcsSection> = lua_value(lua, "return calcsDump()");
     assert_eq!(
-        serde_json::to_value(&ours.sections).unwrap(),
+        serde_json::to_value(without_layout(&ours.sections, lua)).unwrap(),
         serde_json::to_value(&sections).unwrap(),
         "{step}: sections"
     );

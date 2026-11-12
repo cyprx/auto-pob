@@ -134,3 +134,57 @@ function glue.power_report()
 	end
 	return { stat = report.stat.label, rows = rows }
 end
+
+-- ---- The power report's filter and masteries (NF-5) ----
+
+-- The report as PoB's list shows it: the completion callback hands the rows to the list
+-- (TreeTab.lua:310-313), whose ReList keeps the ones its filter and Show Masteries allow
+-- (PowerReportListControl.lua:99-123). Positions (0-based) of `report.rows`, in the list's order.
+local function listed_rows(rows)
+	local list = pob.build.treeTab.controls.powerReportList
+	local index = {}
+	for i, row in ipairs(rows) do
+		index[row] = i - 1
+	end
+	local listed = {}
+	for _, row in ipairs(list.list or {}) do
+		if index[row] then
+			listed[#listed + 1] = index[row]
+		end
+	end
+	return listed
+end
+
+local function report_list()
+	return pob.build.treeTab.controls.powerReportList
+end
+
+local power_report = glue.power_report
+function glue.power_report()
+	local view = power_report()
+	local list = report_list()
+	if list.originalList ~= report.rows then
+		list:SetReport(report.stat, report.rows)
+	end
+	view.listed = listed_rows(report.rows)
+	view.filter = list.controls.filterSelect.selIndex - 1
+	view.masteries = list.showMasteries and true or false
+	return view
+end
+
+-- The filter dropdown (0-based) and the Show Masteries box, as the user sets them
+function glue.set_power_report_filter(filter, masteries)
+	local list = report_list()
+	local select = list.controls.filterSelect
+	if filter < 0 or filter >= #select.list then
+		error("no such filter", 0)
+	end
+	if select.selIndex ~= filter + 1 then
+		select:SetSel(filter + 1)
+	end
+	local check = list.controls.masteryCheck
+	if (check.state and true or false) ~= masteries then
+		check.state = masteries
+		check.changeFunc(masteries)
+	end
+end

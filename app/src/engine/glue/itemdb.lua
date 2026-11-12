@@ -317,6 +317,9 @@ local function find_item(db, name)
 	return control, item, index
 end
 
+-- the shared items' drags pick a database row up (glue/shared_items.lua)
+glue.item_db_find = find_item
+
 -- The draw-only updates the tab's Draw makes before a click acts on its slots (SP5a R16)
 local function sync_tab()
 	items_tab().controls.itemList:UpdateList()
@@ -330,14 +333,14 @@ function glue.item_db_view_item(db, name)
 	control:OnSelClick(index, item, true)
 end
 
--- Ctrl+click: PoB adds the item and equips it. The key state is swapped for the call and
--- always put back (R15).
-function glue.item_db_add(db, name)
+-- Ctrl+click: PoB adds the item and equips it; Ctrl+Shift+click equips it into the second
+-- slot where it fits (R23). The key state is swapped for the call and always put back (R15).
+function glue.item_db_add(db, name, second_slot)
 	local control, item, index = find_item(db, name)
 	sync_tab()
 	local saved = IsKeyDown
 	IsKeyDown = function(key)
-		return key == "CTRL"
+		return key == "CTRL" or (second_slot and key == "SHIFT")
 	end
 	local ok, err = pcall(control.OnSelClick, control, index, item, false)
 	IsKeyDown = saved
@@ -346,8 +349,32 @@ function glue.item_db_add(db, name)
 	end
 end
 
+-- A row dropped on a slot (R23): the slot's `CanReceiveDrag` with the row's drag value, then
+-- its `ReceiveDrag` (ItemSlotControl.lua:118-133), as ListControl's drop does. A hidden slot
+-- can't be dropped on; one that refuses the item is PoB's no.
+function glue.item_db_drop(db, name, slot_name)
+	local control, item, index = find_item(db, name)
+	sync_tab()
+	local slot = items_tab().slots[slot_name]
+	if not slot then
+		error("no such slot", 0)
+	end
+	if not slot:IsShown() then
+		error("PoB doesn't offer that here", 0)
+	end
+	local kind, value = control:GetDragValue(index, item)
+	if not slot:CanReceiveDrag(kind, value) then
+		error("that item can't go in that slot", 0)
+	end
+	slot:ReceiveDrag(kind, value, control)
+end
+
 -- What hovering a row shows; nil for a vanished item or a database still loading
-function glue.item_db_tooltip(db, name)
+function glue.item_db_tooltip(db, name, shift)
+	if shift then
+		-- Shift held over the row: PoB's child tooltips (R34)
+		return glue.with_shift(true, glue.item_db_tooltip, db, name, false)
+	end
 	-- ItemDBControl:AddValueTooltip clears its tooltip while a popup is open
 	if glue.popup_live() then
 		return nil

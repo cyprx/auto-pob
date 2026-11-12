@@ -11,7 +11,7 @@ use super::commands::{
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct BuildView {
     pub name: String,
     #[serde(default)]
@@ -23,13 +23,107 @@ pub struct BuildView {
     pub unsaved: bool,
     pub can_undo: bool,
     pub can_redo: bool,
+    /// The top bar's Auto/Manual button: the level follows the points spent (R21)
+    #[serde(default)]
+    pub level_auto: bool,
+    /// The bloodline dropdown (`secondaryAscendDrop`) as PoB lists it: (id, label), "None"
+    /// (id 0) first. PoB enables it only with more than one entry.
+    #[serde(default)]
+    pub secondary: Vec<(u32, String)>,
+    /// The chosen bloodline's id; 0 is "None"
+    #[serde(default)]
+    pub secondary_selected: u32,
+    /// The loadouts dropdown (`buildLoadouts`) as PoB holds it, colour codes kept. Entries
+    /// starting with `^7^7` are PoB's headers and actions ("Loadouts:", "-----", "New
+    /// Loadout", "Sync", "Help >>"), see [`is_loadout_marker`].
+    #[serde(default)]
+    pub loadouts: Vec<String>,
+    /// The loadout PoB shows as selected (0-based into `loadouts`); `None` while it shows the
+    /// "Loadouts:" header
+    #[serde(default)]
+    pub loadout_selected: Option<usize>,
+    /// The point display's tooltip (`pointDisplay.req`): required level and estimated
+    /// progress, colour codes kept
+    #[serde(default)]
+    pub progress: String,
+    /// The level box's tooltip (`characterLevel.tooltipFunc`): the experience multiplier per
+    /// monster level
+    #[serde(default)]
+    pub level_tooltip: Option<ItemTooltip>,
+    /// How many builds PoB has initialised (`glue.build_generation`): a failed open or import
+    /// that still changed it replaced the build with a new one, which PoB never shows (it goes
+    /// to its build list)
+    #[serde(default)]
+    pub generation: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+/// Whether a `BuildView.loadouts` entry is one of PoB's headers or actions rather than a
+/// loadout: PoB marks them with a doubled `^7` so no set title can match them (Build.lua:851).
+pub fn is_loadout_marker(entry: &str) -> bool {
+    entry.starts_with("^7^7")
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct BuildListView {
     pub folder: String,
+    /// Every folder reachable from the Builds folder (links are not followed), for the
+    /// "Move to…" list and the Save As folder picker. Filled in by the engine, not by PoB.
+    #[serde(default)]
+    pub tree: Vec<FolderNode>,
+    /// The Builds folder, which `tree` and the entries' `folder` are below
+    #[serde(default)]
+    pub root: PathBuf,
     #[serde(default)]
     pub entries: Vec<BuildListEntry>,
+    /// PoB's `buildSortMode`, which orders `entries`
+    #[serde(default)]
+    pub sort: BuildSort,
+    /// PoB's `main.filterBuildList`: the search text the list is filtered by
+    #[serde(default)]
+    pub filter: String,
+    /// The engine has a build the UI should show: PoB reopened the build its last exit
+    /// recorded, so it starts on that build, not on its list. Filled in by the engine.
+    #[serde(default)]
+    pub build_open: bool,
+}
+
+/// A folder of the Builds tree
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct FolderNode {
+    /// Below the Builds folder, with a closing slash ("a/b/")
+    pub path: String,
+    /// Seconds since the epoch (the Save As picker's "Last Edited" sort)
+    #[serde(default)]
+    pub modified: u64,
+    /// Nothing in it: PoB deletes only such a folder from the picker
+    #[serde(default)]
+    pub empty: bool,
+}
+
+/// PoB's four build list sorts (`sortMode` ids NAME, CLASS, EDITED, LEVEL)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+pub enum BuildSort {
+    #[default]
+    #[serde(rename = "NAME")]
+    Name,
+    #[serde(rename = "CLASS")]
+    Class,
+    #[serde(rename = "EDITED")]
+    Edited,
+    #[serde(rename = "LEVEL")]
+    Level,
+}
+
+impl BuildSort {
+    /// PoB's id for the sort
+    pub fn id(self) -> &'static str {
+        match self {
+            BuildSort::Name => "NAME",
+            BuildSort::Class => "CLASS",
+            BuildSort::Edited => "EDITED",
+            BuildSort::Level => "LEVEL",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -37,12 +131,32 @@ pub struct BuildListEntry {
     pub name: String,
     pub is_folder: bool,
     pub path: PathBuf,
+    /// The folder the entry is in, below the Builds folder ("" or "a/b/"). A search lists
+    /// matches from every folder, so this is not always the folder shown.
+    #[serde(default)]
+    pub folder: String,
     #[serde(default)]
     pub class: Option<String>,
     #[serde(default)]
     pub ascendancy: Option<String>,
     #[serde(default)]
     pub level: Option<u32>,
+    /// PoB's confirm text for a delete of this entry, shown by the UI before it sends
+    /// `DeleteBuild`. Empty when PoB deletes without asking (an empty folder).
+    #[serde(default)]
+    pub delete_prompt: String,
+}
+
+impl BuildListEntry {
+    /// The question `delete_prompt` asks, as `DeleteBuild` takes it back
+    pub fn delete_kind(&self) -> super::commands::DeleteKind {
+        use super::commands::DeleteKind;
+        match (self.is_folder, self.delete_prompt.is_empty()) {
+            (false, _) => DeleteKind::Build,
+            (true, true) => DeleteKind::EmptyFolder,
+            (true, false) => DeleteKind::Folder,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -56,6 +170,10 @@ pub struct StatsView {
     /// The sidebar's main-skill dropdowns.
     #[serde(default)]
     pub main_skill: MainSkillSelector,
+    /// PoB's warning lines under the stats (`controls.warnings.lines`, NF-1), in PoB's order;
+    /// empty while Options' "Show warnings" is off
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -90,6 +208,9 @@ pub struct MainSkillSelector {
     pub minion: Option<DropList>,
     #[serde(default)]
     pub minion_skill: Option<DropList>,
+    /// PoB shows "Manage Spectres..." (`mainSkillMinionLibrary`) for the main skill (R18)
+    #[serde(default)]
+    pub spectre_library: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -203,6 +324,16 @@ pub struct NodePowerEntry {
 pub struct PowerReport {
     pub stat: String,
     pub rows: Vec<PowerReportRow>,
+    /// The rows PoB's list shows under its filter and Show Masteries (NF-5): positions in
+    /// `rows`, in the list's order
+    #[serde(default)]
+    pub listed: Vec<usize>,
+    /// The filter dropdown, 0-based: Show Unallocated, ... & Clusters, Show Allocated
+    #[serde(default)]
+    pub filter: usize,
+    /// The Show Masteries box
+    #[serde(default)]
+    pub masteries: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -222,12 +353,22 @@ pub struct PowerReportRow {
 pub struct NodeTooltip {
     pub id: u32,
     pub lines: Vec<TooltipLine>,
+    /// The Shift-traced path the tooltip was built with (empty: none)
+    #[serde(default)]
+    pub trace: Vec<u32>,
 }
 
 /// What PoB's group list shows when the mouse is over a socket group (`AddValueTooltip`).
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct GroupTooltipView {
     pub group: usize,
+    pub lines: Vec<TooltipLine>,
+}
+
+/// What hovering a control shows (R22): PoB's `tooltipFunc`, colour codes kept.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct HoverTooltipView {
+    pub target: crate::engine::HoverTarget,
     pub lines: Vec<TooltipLine>,
 }
 
@@ -357,6 +498,16 @@ pub struct TreeState {
     pub max_depth: Option<u32>,
     pub can_undo: bool,
     pub can_redo: bool,
+    /// PoB's `showHeatMap`: P can show the heat map before any stat was chosen, when
+    /// `heatmap` is `None` and the map shows damage against defence
+    #[serde(default)]
+    pub heatmap_shown: bool,
+    /// PoB's `showStatDifferences` of the tree (Ctrl+D)
+    #[serde(default)]
+    pub show_stat_differences: bool,
+    /// PoB's Version dropdown: every tree version, `value` the id `ConvertSpec` takes (NF-7)
+    #[serde(default)]
+    pub versions: Vec<Choice>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -696,6 +847,41 @@ pub struct ItemsView {
     pub can_undo: bool,
     #[serde(default)]
     pub can_redo: bool,
+    /// PoB's "Passive tree:" dropdown on the Items tab (`specSelect`): `GetSpecList`'s labels,
+    /// the active tree selected
+    #[serde(default)]
+    pub specs: Option<DropList>,
+    /// PoB's shared items (`main.sharedItemList`, NF-2), in PoB's order
+    #[serde(default)]
+    pub shared_items: Vec<SharedItemEntry>,
+    /// PoB's shared item sets (`main.sharedItemSetList`), in PoB's order
+    #[serde(default)]
+    pub shared_sets: Vec<SharedSetEntry>,
+    /// PoB shows the shared list (and takes drags onto it) only while no item is displayed
+    #[serde(default)]
+    pub shared_shown: bool,
+}
+
+/// One row of PoB's shared item list
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SharedItemEntry {
+    pub name: String,
+    pub rarity: String,
+    /// The row as PoB draws it (`GetRowValue`), colour codes included
+    pub label: String,
+}
+
+/// One row of PoB's shared item set list
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SharedSetEntry {
+    /// The row as PoB draws it: the title, or "Default"
+    pub title: String,
+    /// PoB's tooltip for the row: one "Slot: Item" line per slot
+    #[serde(default)]
+    pub lines: Vec<String>,
+    /// The set's own title, which Rename starts from; none for an untitled set
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_title: Option<String>,
 }
 
 /// One item of the build.
@@ -808,6 +994,9 @@ pub struct CalcsSelector {
     pub minion: Option<DropList>,
     #[serde(default)]
     pub minion_skill: Option<DropList>,
+    /// PoB shows "Manage Spectres..." (`mainSkillMinionLibrary`) in the selector (R18)
+    #[serde(default)]
+    pub spectre_library: bool,
     pub mode: DropList,
     #[serde(default)]
     pub mode_tooltip: String,
@@ -823,6 +1012,13 @@ pub struct CalcsSection {
     pub enabled: bool,
     #[serde(default)]
     pub subs: Vec<CalcsSub>,
+    /// The width PoB gives each cell column of a sub-section, by sub-section (R24):
+    /// `colWidth` or the section's width less the label column (CalcSectionControl.lua:126)
+    #[serde(default)]
+    pub col_widths: Vec<f32>,
+    /// PoB offers the section's "^" pop-out window: a section without controls (R24)
+    #[serde(default)]
+    pub pop_out: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -943,6 +1139,170 @@ mod tests {
         let lua = mlua::Lua::new();
         let value: mlua::Value = lua.load(code).eval().unwrap();
         lua.from_value(value).unwrap()
+    }
+
+    fn row(key: &str, value: &str, effect: SettingEffect) -> SettingRow {
+        SettingRow {
+            key: key.into(),
+            control: format!("{key}Control"),
+            label: format!("The {key}"),
+            shared: "shared".into(),
+            value: value.into(),
+            overridden: true,
+            effect,
+        }
+    }
+
+    #[test]
+    fn compare_view_round_trips() {
+        let row = |label: &str, diff: &str, better: Option<bool>| CompareRow {
+            label: format!("^7{label}"),
+            ours: "^7100".into(),
+            theirs: "^xFFD62A120".into(),
+            diff: diff.into(),
+            better,
+        };
+        let view = CompareView {
+            entries: vec!["dot".into(), "Imported build".into()],
+            active: 1,
+            headers: ["^x33FF77attack".into(), "^xFF9922Imported build".into()],
+            controls: vec![PopupControl {
+                name: "cmpMainSkill".into(),
+                kind: PopupControlKind::Dropdown,
+                label: String::new(),
+                pos: [0.0, 0.0],
+                size: [225.0, 20.0],
+                shown: true,
+                enabled: true,
+                choices: vec!["Vaal Double Strike".into(), "Double Strike".into()],
+                selected: 1,
+                value: 0.0,
+                divisions: None,
+                checked: false,
+                text: String::new(),
+                tooltip_text: None,
+                hover_tooltip: false,
+                rows: vec![],
+                row_selected: None,
+                row_highlight: None,
+                note: None,
+                reorder: false,
+            }],
+            summary: vec![
+                row("Life", "^x33FF77+20 (+20.0%)", Some(true)),
+                row("Mana", "^xDD0022-5", Some(false)),
+                row("Armour", "", None),
+            ],
+            items: vec![
+                CompareItemRow {
+                    slot: "Body Armour".into(),
+                    label: "Body Armour".into(),
+                    ours: Some(3),
+                    theirs: Some("Kaom's Heart".into()),
+                    differ: true,
+                    can_copy: true,
+                    can_equip: true,
+                    diff_label: "^xFFFF77(different)".into(),
+                    ours_unallocated: false,
+                    theirs_unallocated: true,
+                    ours_name: Some("Doom Loop".into()),
+                    ours_colour: "^xFFFF77".into(),
+                    theirs_colour: "^xAF6025".into(),
+                },
+                CompareItemRow {
+                    slot: "Ring 2".into(),
+                    label: "Ring 2".into(),
+                    ours: None,
+                    theirs: None,
+                    differ: false,
+                    can_copy: false,
+                    can_equip: false,
+                    diff_label: "^8(both empty)".into(),
+                    ours_unallocated: false,
+                    theirs_unallocated: false,
+                    ours_name: None,
+                    ours_colour: "^7".into(),
+                    theirs_colour: "^7".into(),
+                },
+            ],
+            skills: vec![CompareSkillRow {
+                label: "^7Boneshatter".into(),
+                theirs_label: None,
+                ours: vec!["^x08F2FFBoneshatter^7 20/0".into()],
+                theirs: vec![],
+                differ: true,
+            }],
+            config: vec![CompareConfigRow {
+                var: "usePowerCharges".into(),
+                label: "Do you use Power Charges?".into(),
+                ours: "^x33FF77Yes".into(),
+                theirs: "^8(not set)".into(),
+                common: true,
+            }],
+            switched: true,
+        };
+        let json = serde_json::to_string(&view).unwrap();
+        assert_eq!(serde_json::from_str::<CompareView>(&json).unwrap(), view);
+        // the Lua table the glue builds: a row with no diff leaves `diff` and `better` out
+        let from_lua: CompareView = lua_value(
+            r#"return { entries = { "dot", "Imported build" }, active = 1,
+              headers = { "^x33FF77attack", "^xFF9922Imported build" },
+              controls = { { name = "cmpMainSkill", kind = "Dropdown", label = "",
+                pos = { 0, 0 }, size = { 225, 20 }, shown = true, enabled = true,
+                choices = { "Vaal Double Strike", "Double Strike" }, selected = 1, value = 0,
+                checked = false, text = "", hover_tooltip = false, rows = {} } },
+              summary = {
+                { label = "^7Life", ours = "^7100", theirs = "^xFFD62A120",
+                  diff = "^x33FF77+20 (+20.0%)", better = true },
+                { label = "^7Mana", ours = "^7100", theirs = "^xFFD62A120",
+                  diff = "^xDD0022-5", better = false },
+                { label = "^7Armour", ours = "^7100", theirs = "^xFFD62A120" },
+              },
+              items = {
+                { slot = "Body Armour", label = "Body Armour", ours = 3, theirs = "Kaom's Heart",
+                  differ = true, can_copy = true, can_equip = true,
+                  diff_label = "^xFFFF77(different)", ours_unallocated = false,
+                  theirs_unallocated = true, ours_name = "Doom Loop", ours_colour = "^xFFFF77",
+                  theirs_colour = "^xAF6025" },
+                { slot = "Ring 2", label = "Ring 2", differ = false, can_copy = false,
+                  can_equip = false, diff_label = "^8(both empty)", ours_unallocated = false,
+                  theirs_unallocated = false, ours_colour = "^7", theirs_colour = "^7" },
+              },
+              skills = { { label = "^7Boneshatter", ours = { "^x08F2FFBoneshatter^7 20/0" },
+                theirs = {}, differ = true } },
+              config = { { var = "usePowerCharges", label = "Do you use Power Charges?",
+                ours = "^x33FF77Yes", theirs = "^8(not set)", common = true } },
+              switched = true }"#,
+        );
+        assert_eq!(from_lua, view);
+    }
+
+    #[test]
+    fn settings_view_round_trips() {
+        let view = SettingsView {
+            rows: vec![
+                row("colorPositive", "^x33FF77", SettingEffect::PobText),
+                row("showTitlebarName", "false", SettingEffect::Ui),
+                row("showAnimations", "true", SettingEffect::NoEffect),
+            ],
+            saved_overrides: BTreeMap::from([("defaultCharLevel".to_string(), "90".to_string())]),
+        };
+        let json = serde_json::to_string(&view).unwrap();
+        assert_eq!(serde_json::from_str::<SettingsView>(&json).unwrap(), view);
+        // an older writer without the overrides still reads
+        let old: SettingsView = serde_json::from_str(r#"{"rows":[]}"#).unwrap();
+        assert_eq!(old, SettingsView::default());
+        // and the Lua table the glue builds reads the same, with an empty override table
+        let from_lua: SettingsView = lua_value(
+            r#"return { rows = { { key = "showTitlebarName", control = "showTitlebarNameControl",
+              label = "The showTitlebarName", shared = "shared", value = "false",
+              overridden = true, effect = "Ui" } }, saved_overrides = {} }"#,
+        );
+        assert_eq!(
+            from_lua.rows,
+            vec![row("showTitlebarName", "false", SettingEffect::Ui)]
+        );
+        assert!(from_lua.saved_overrides.is_empty());
     }
 
     #[test]
@@ -1121,6 +1481,10 @@ pub struct ItemTooltip {
     pub colour: Option<String>,
     #[serde(default)]
     pub lines: Vec<ItemTooltipLine>,
+    /// PoB's child tooltips beside it: the granted skills' gem tooltips, filled only while
+    /// Shift is held (R34)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<ItemTooltip>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1175,6 +1539,131 @@ pub struct ControlTooltipView {
     pub tooltip: ItemTooltip,
 }
 
+/// One row of the Compare tab's Summary, as PoB's `DrawStatList` draws it (R4). The texts keep
+/// PoB's colour codes; `diff` is empty when the values are equal or the row has no number.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompareRow {
+    pub label: String,
+    pub ours: String,
+    pub theirs: String,
+    #[serde(default)]
+    pub diff: String,
+    /// The diff's colour: PoB's positive colour is better, its negative one worse
+    #[serde(default)]
+    pub better: Option<bool>,
+}
+
+/// The Compare tab with at least one comparison build (R4-R6).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompareView {
+    /// The comparisons' labels, in PoB's order
+    pub entries: Vec<String>,
+    /// 0-based in `entries`
+    pub active: usize,
+    /// The Summary's column headers for this build and the active comparison, colour codes kept
+    pub headers: [String; 2],
+    /// R6's controls, in that list's order
+    pub controls: Vec<PopupControl>,
+    #[serde(default)]
+    pub summary: Vec<CompareRow>,
+    #[serde(default)]
+    pub items: Vec<CompareItemRow>,
+    #[serde(default)]
+    pub skills: Vec<CompareSkillRow>,
+    #[serde(default)]
+    pub config: Vec<CompareConfigRow>,
+    /// PoB switched to its Compare tab: an Import-tab comparison just landed (R5). True in the
+    /// first view after it only.
+    #[serde(default)]
+    pub switched: bool,
+}
+
+/// One slot of the Compare tab's Items view, in PoB's order: the base slots (Ring 3 when either
+/// build has it), the abyssal sockets, then the jewel sockets by node (R9)
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CompareItemRow {
+    /// PoB's slot name (`Jewel <node>` for a tree socket), as `CopyCompareItem` takes it
+    pub slot: String,
+    pub label: String,
+    /// This build's item in the slot
+    #[serde(default)]
+    pub ours: Option<u32>,
+    /// The comparison's item in the slot: its name line
+    #[serde(default)]
+    pub theirs: Option<String>,
+    /// The two items' texts differ
+    pub differ: bool,
+    /// PoB offers Copy for the comparison's item
+    pub can_copy: bool,
+    /// PoB offers Equip too: false where it draws "Missing slot" (Ring 3 on a build without
+    /// the slot) or there is nothing to copy
+    #[serde(default)]
+    pub can_equip: bool,
+    /// PoB's marker between the two items, colour code kept: "(match)" when the names are the
+    /// same, "(different)", "(missing)", "(extra)" or "(both empty)" (`getSlotDiffLabel`)
+    #[serde(default)]
+    pub diff_label: String,
+    /// This build's jewel sits in a socket its tree doesn't allocate: PoB's "(tree missing
+    /// allocated node)" after the name
+    #[serde(default)]
+    pub ours_unallocated: bool,
+    /// The same for the comparison's jewel
+    #[serde(default)]
+    pub theirs_unallocated: bool,
+    /// This build's item name, as PoB draws it in the row
+    #[serde(default)]
+    pub ours_name: Option<String>,
+    /// PoB's rarity colour code for each side's name (`getRarityColor`; "^7" for none)
+    #[serde(default)]
+    pub ours_colour: String,
+    #[serde(default)]
+    pub theirs_colour: String,
+}
+
+/// One pair of socket groups of the Compare tab's Skills view, matched as PoB's view matches
+/// them; the lines are PoB's, colour codes kept ("+ " an extra gem, "- " a missing one)
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CompareSkillRow {
+    /// This build's group header, or the comparison's when this build has no group in the pair
+    pub label: String,
+    /// The comparison's group header, when it has a group in the pair
+    #[serde(default)]
+    pub theirs_label: Option<String>,
+    #[serde(default)]
+    pub ours: Vec<String>,
+    #[serde(default)]
+    pub theirs: Vec<String>,
+    pub differ: bool,
+}
+
+/// A config option the two builds set differently, in `ConfigOptions` order
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompareConfigRow {
+    pub var: String,
+    pub label: String,
+    pub ours: String,
+    pub theirs: String,
+    /// The builds set it alike: PoB lists it after its section's differing options when it
+    /// is relevant to either build, or with "Show All Configurations" on
+    #[serde(default)]
+    pub common: bool,
+}
+
+/// The builds in one folder of the Builds folder (`BrowseBuilds`), by name
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BuildBrowseView {
+    /// Below the Builds folder, with a closing slash ("" for the Builds folder itself)
+    pub folder: String,
+    /// The build files, `name` without ".xml"
+    pub entries: Vec<BuildBrowseEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BuildBrowseEntry {
+    pub name: String,
+    pub path: PathBuf,
+}
+
 /// The open popup, whatever it is: PoB's controls as data (R5).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PopupView {
@@ -1182,6 +1671,10 @@ pub struct PopupView {
     pub title: String,
     /// Ordered by position (top to bottom, then left to right)
     pub controls: Vec<PopupControl>,
+    /// The button Enter presses when no control has the keyboard (the popup's
+    /// `enterControl`, PopupDialog.lua:79-83)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enter: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1225,8 +1718,15 @@ pub struct PopupControl {
     #[serde(default)]
     pub rows: Vec<PopupRow>,
     pub row_selected: Option<String>,
+    /// The other end of a Shift+click range from `row_selected` (the timeless results)
+    #[serde(default)]
+    pub row_highlight: Option<String>,
     /// A list's `defaultText`
     pub note: Option<String>,
+    /// A list whose rows PoB lets the user drag into another order (`isMutable`); left out
+    /// of the serialised view when false
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reorder: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1238,8 +1738,12 @@ pub struct PopupRow {
 /// The answer to a `CopyItem` query: the text PoB copies, with its `\r\n` line ends.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemText {
+    /// The item's id, or the shared item's index when `shared`
     pub id: u32,
     pub text: String,
+    /// A shared item's text (`CopySharedItem`)
+    #[serde(default)]
+    pub shared: bool,
 }
 
 /// The item on the display panel (PoB's `displayItem`) with the controls PoB shows for it.
@@ -1286,6 +1790,10 @@ pub struct DisplayItemView {
     #[serde(default)]
     pub custom_mods: Vec<CustomModView>,
     pub tooltip: ItemTooltip,
+    /// PoB shows one slider and Foulborn box per range line (`showAllItemAffixes` on a
+    /// unique) instead of the line dropdown
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stacked: bool,
 }
 
 /// One line of the display item's custom-mod list
@@ -1347,6 +1855,43 @@ pub struct RangeLineView {
     pub mutated: bool,
 }
 
+/// Who acts on a setting's change (R13).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SettingEffect {
+    /// PoB formats its own text from it; nothing to do here
+    PobText,
+    /// The UI acts on it (zoom, window title, the tree canvas)
+    Ui,
+    /// PoB's option has no counterpart here
+    NoEffect,
+}
+
+/// One of PoB's settings, as `Settings.xml` holds it: every value is a string (`true`/`false`,
+/// numbers as `tostring` writes them, colours as `^x...`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SettingRow {
+    /// The `Settings.xml` attribute
+    pub key: String,
+    /// The Options control that edits it; empty for none
+    pub control: String,
+    pub label: String,
+    /// What `Settings.xml` holds (what an override hides)
+    pub shared: String,
+    /// What PoB runs with now
+    pub value: String,
+    pub overridden: bool,
+    pub effect: SettingEffect,
+}
+
+/// PoB's settings and the app's overrides (R12). Needs no build.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SettingsView {
+    pub rows: Vec<SettingRow>,
+    /// The overrides an Options Save changed since the last view, for the UI to write (R12)
+    #[serde(default)]
+    pub saved_overrides: BTreeMap<String, String>,
+}
+
 /// The network requests: the pending ones in the order they began, and the ones finished since
 /// the last view, each sent once (R10).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -1376,6 +1921,13 @@ pub struct FinishedRequest {
     /// A callback of the request initialised a new build (R14)
     #[serde(default)]
     pub new_build: bool,
+}
+
+/// A trade search link PoB opened during the user's own press (R20). The UI opens it in the
+/// browser and copies it; the engine never does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalUrl {
+    pub url: String,
 }
 
 /// The Import/Export tab's build sharing: the sites Share offers, the last link it made, and
@@ -1510,6 +2062,30 @@ pub struct PublicView {
     /// PoB's "Character import status" line, with colour codes stripped
     #[serde(default)]
     pub status: String,
+    /// PoB's label under a name without a discriminator (`siteAccountNameMissingDiscriminator`)
+    #[serde(default)]
+    pub missing_discriminator: String,
+    /// PoB's tip under the character import (`siteCharBanditNote`)
+    #[serde(default)]
+    pub bandit_note: String,
+    /// The account PoB's history dropdown has selected, if any
+    #[serde(default)]
+    pub history_selected: Option<String>,
+}
+
+/// What PoB's account name box allows (ImportTab.lua:367-404): whether its "Missing
+/// discriminator" label shows (a name not ending in `#1234` or `-1234`), and whether Start is
+/// enabled (a visible character before that ending). `text` is the box as typed.
+pub fn account_name_state(text: &str) -> (bool, bool) {
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    let tagged = n >= 5
+        && matches!(chars[n - 5], '#' | '-')
+        && chars[n - 4..].iter().all(|c| c.is_ascii_digit());
+    // Lua's %S: not one of the C locale's space characters
+    let start =
+        tagged && n >= 6 && !matches!(chars[n - 6], ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c');
+    (!tagged && !text.is_empty(), start)
 }
 
 impl Default for PublicView {
@@ -1522,6 +2098,9 @@ impl Default for PublicView {
             leagues: Vec::new(),
             characters: Vec::new(),
             status: String::new(),
+            missing_discriminator: String::new(),
+            bandit_note: String::new(),
+            history_selected: None,
         }
     }
 }
@@ -1543,4 +2122,33 @@ pub struct CharacterEntry {
     pub class: String,
     pub level: u32,
     pub league: String,
+}
+
+/// PoB's help (`help.txt`) as its About window shows it (`main:OpenAboutPopup`,
+/// Main.lua:1336-1440), answering `Help`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct HelpView {
+    /// In the file's order; the first is opened by default
+    pub sections: Vec<HelpSection>,
+    /// The window's labels above the list: PoB's version, "Based on Openarl's Path of
+    /// Building" and the GitHub page, with PoB's colour codes
+    #[serde(default)]
+    pub header: Vec<String>,
+    /// The window's "Version history" (`changelog.txt`), one section per version, newest
+    /// first; its title is "Version <n> (<date>)". Empty when the file isn't installed.
+    #[serde(default)]
+    pub changelog: Vec<HelpSection>,
+    /// PoB's files the window reads that aren't installed ("help.txt", "changelog.txt"); with
+    /// help.txt missing there are no sections or labels either
+    #[serde(default)]
+    pub missing: Vec<String>,
+}
+
+/// One `---[Title]` section of `help.txt`, or one version of `changelog.txt`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct HelpSection {
+    pub title: String,
+    /// The rows under the title, with PoB's colour codes. A row of two columns (a key and
+    /// what it does) holds a tab between them.
+    pub lines: Vec<String>,
 }

@@ -66,16 +66,53 @@ end
 -- lets PoB refresh `unsaved` (Build.lua:1303).
 glue.frame = frame
 
--- Switches mode and runs a frame so PoB initialises the build and calculates it.
--- A build file PoB can't load sends it back to the list; fall back to a new build then.
-local function enter_build(...)
-	main_module():SetMode("BUILD", ...)
-	frame()
-	if main_module().mode ~= "BUILD" then
-		main_module():SetMode("BUILD", false, "Unnamed build")
-		frame()
-		error("couldn't open that build", 0)
+-- The text of a message popup PoB opened (OpenMessagePopup, OpenCloudErrorPopup): its title,
+-- then its numbered label lines, without colour codes or the version line
+local function popup_text(popup)
+	local lines = {}
+	for _, control in ipairs(popup.controls) do
+		if type(control.label) == "string" then
+			lines[#lines + 1] = control.label
+		end
 	end
+	local title = tostring(popup.title or ""):gsub("%^x%x%x%x%x%x%x", ""):gsub("%^%d", "")
+	title = title:gsub("^%s+", ""):gsub("%s+$", "")
+	if #lines == 0 then
+		return title ~= "" and title or nil
+	end
+	local reason = error_reason(table.concat(lines, "\n"))
+	return title ~= "" and (title .. ": " .. reason) or reason
+end
+glue.popup_text = popup_text
+
+-- Switches mode and runs a frame so PoB initialises the build and calculates it. A build PoB
+-- can't open leaves a new build in its place and fails with PoB's reason (`Build:Init`'s
+-- wrapper in net.lua sees to both); one made for another game version leaves PoB's "Game
+-- Version" window open as a session, with a new build behind it.
+local function enter_build(...)
+	local m = main_module()
+	local popups = m.popups
+	local depth = #popups
+	m:SetMode("BUILD", ...)
+	local ok, err = pcall(frame)
+	local failure = glue.take_init_failure()
+	while #popups > depth do
+		m:ClosePopup()
+	end
+	pob.main.promptMsg = nil
+	if ok and not failure and m.mode == "BUILD" then
+		return
+	end
+	-- a load that raised, or anything else that left no build: a new build stands in
+	if not failure or m.mode ~= "BUILD" then
+		pob.build.treeTab = nil
+		m:SetMode("BUILD", false, "Unnamed build")
+		frame()
+	end
+	if not ok then
+		error(err, 0)
+	end
+	error(failure or "couldn't open that build", 0)
 end
 
 -- Whether PoB has a build initialised. It starts on the build list when Settings.xml says so
@@ -90,11 +127,62 @@ function glue.recalculate()
 	frame()
 end
 
+-- ---- The top bar (R21) ----
+
+-- The top bar's dropdowns as PoB's frame leaves them before it draws (Build.lua:1232-1236):
+-- the class and ascendancy selections and the bloodline list. The loadouts list is not
+-- rebuilt in a frame; PoB rebuilds it only in `SyncLoadouts`, which every set change calls.
+local function top_bar_sync()
+	local build = pob.build
+	local controls = build.controls
+	controls.classDrop:SelByValue(build.spec.curClassId, "classId")
+	controls.ascendDrop.list = controls.classDrop:GetSelValueByKey("ascendancies")
+	controls.ascendDrop:SelByValue(build.spec.curAscendClassId, "ascendClassId")
+	build:UpdateSecondaryAscendancyDropdown()
+	return controls
+end
+
+-- PoB marks the loadouts dropdown's headers and actions with a doubled colour code
+-- (Build.lua:851), so no set title can match them
+local function loadout_marker(entry)
+	return type(entry) ~= "string" or entry:sub(1, 4) == "^7^7"
+end
+
+local function require_usable(control)
+	if not (control:IsShown() and control:IsEnabled()) then
+		error("PoB doesn't offer that here", 0)
+	end
+end
+
+-- What hovering the level box shows (Build.lua:227-253)
+local function level_tooltip(control)
+	if not control.tooltipFunc then
+		return nil
+	end
+	local tooltip = new("Tooltip")
+	control.tooltipFunc(tooltip)
+	return glue.read_tooltip(tooltip)
+end
+
 function glue.build_view()
 	local build = pob.build
 	local spec = build.spec
 	local ascendancy = spec.curAscendClassName
 	if ascendancy == "None" or ascendancy == "" then ascendancy = nil end
+	local controls = top_bar_sync()
+	local secondary = {}
+	for i, entry in ipairs(controls.secondaryAscendDrop.list) do
+		secondary[i] = { entry.ascendClassId, entry.label }
+	end
+	local loadouts = {}
+	for i, entry in ipairs(controls.buildLoadouts.list) do
+		loadouts[i] = tostring(entry)
+	end
+	local sel = controls.buildLoadouts.selIndex
+	local loadout_selected
+	if sel and loadouts[sel] and not loadout_marker(loadouts[sel]) then
+		loadout_selected = sel - 1
+	end
 	return {
 		name = build.buildName or "",
 		path = build.dbFileName or nil,
@@ -104,7 +192,89 @@ function glue.build_view()
 		unsaved = build.unsaved and true or false,
 		can_undo = build.configTab.undo[2] ~= nil,
 		can_redo = build.configTab.redo[1] ~= nil,
+		level_auto = build.characterLevelAutoMode and true or false,
+		secondary = secondary,
+		secondary_selected = spec.curSecondaryAscendClassId or 0,
+		loadouts = loadouts,
+		loadout_selected = loadout_selected,
+		progress = controls.pointDisplay.req or "",
+		level_tooltip = level_tooltip(controls.characterLevel),
+		generation = glue.build_generation(),
 	}
+end
+
+-- Typed into the level box (Build.lua:218): PoB's `%D` filter and 3-character limit, then
+-- its callback, which clamps the level and switches to Manual
+function glue.set_character_level(level)
+	local control = pob.build.controls.characterLevel
+	require_usable(control)
+	if not glue.type_into(control, tostring(level)) then
+		error("that isn't a level", 0)
+	end
+end
+
+-- The Auto/Manual button (Build.lua:211), pressed when the mode differs
+function glue.set_level_mode(auto)
+	local build = pob.build
+	local button = build.controls.levelScalingButton
+	require_usable(button)
+	if (build.characterLevelAutoMode and true or false) ~= auto then
+		button.onClick()
+	end
+end
+
+-- A pick in the bloodline dropdown (Build.lua:285), from the list PoB's frame builds
+function glue.select_secondary_ascendancy(id)
+	local drop = top_bar_sync().secondaryAscendDrop
+	require_usable(drop)
+	for index, entry in ipairs(drop.list) do
+		if entry.ascendClassId == id then
+			drop:SetSel(index)
+			return
+		end
+	end
+	error("PoB doesn't offer that bloodline here", 0)
+end
+
+-- The loadouts dropdown's entry with this text, by its 1-based index
+local function loadout_index(label)
+	local drop = pob.build.controls.buildLoadouts
+	require_usable(drop)
+	for index, entry in ipairs(drop.list) do
+		if entry == label then
+			return drop, index
+		end
+	end
+	error("no such loadout", 0)
+end
+
+-- A pick of a loadout (Build.lua:301-415); PoB's headers and actions are not loadouts
+function glue.select_loadout(label)
+	local drop, index = loadout_index(label)
+	if loadout_marker(label) then
+		error("PoB doesn't offer that here", 0)
+	end
+	drop:SetSel(index)
+end
+
+-- "New Loadout", its name popup and Save (Build.lua:316-352)
+function glue.new_loadout(name)
+	local drop, index = loadout_index("^7^7New Loadout")
+	glue.in_popups(function()
+		local main = main_module()
+		local depth = #main.popups
+		drop:SetSel(index)
+		if #main.popups <= depth then
+			error("PoB didn't open that window", 0)
+		end
+		glue.save_name("loadout", name)
+	end)
+end
+
+-- "Sync" (Build.lua:306-309)
+function glue.sync_loadouts()
+	local drop, index = loadout_index("^7^7Sync")
+	drop:SetSel(index)
 end
 
 -- A folder is "" or ends with "/", so it can be joined to a file name.
@@ -112,37 +282,7 @@ local function normalise_folder(folder)
 	if folder ~= "" and folder:sub(-1) ~= "/" then folder = folder .. "/" end
 	return folder
 end
-
-function glue.list_builds(subPath)
-	subPath = normalise_folder(subPath)
-	local helpers = LoadModule("Modules/BuildListHelpers")
-	local index = helpers.ScanFolder(subPath)
-	local list = helpers.FilterList(index, subPath, "")
-	helpers.SortList(list, "NAME")
-	local entries = {}
-	for _, item in ipairs(list) do
-		if item.folderName then
-			entries[#entries + 1] = {
-				name = item.folderName,
-				is_folder = true,
-				path = item.fullFileName,
-			}
-		else
-			entries[#entries + 1] = {
-				name = item.buildName,
-				is_folder = false,
-				path = item.fullFileName,
-				class = item.className,
-				ascendancy = item.ascendClassName,
-				level = item.level,
-			}
-		end
-	end
-	local result = { folder = subPath }
-	-- an empty Lua table is ambiguous to serde, so leave it out
-	if #entries > 0 then result.entries = entries end
-	return result
-end
+glue.normalise_folder = normalise_folder
 
 -- For the import glue: switches mode and runs a frame, as opening a build does.
 glue.enter_build = enter_build
@@ -213,4 +353,64 @@ function glue.save_as(subPath, name, overwrite)
 		if createdFolder then RemoveDir(folder) end
 		error(err, 0)
 	end
+end
+
+-- ---- Help ----
+
+-- The title rows' height in OpenAboutPopup (Main.lua:1337, `titleSize`)
+local HELP_TITLE_SIZE = 24
+
+-- The rows of an About window list as sections: a title row ("^7<title>" at titleSize) starts
+-- one; the rows under it are kept with a tab between two cells; spacer rows have no cells.
+local function about_sections(list, strip)
+	local sections = {}
+	for _, row in ipairs(list) do
+		if row.height == HELP_TITLE_SIZE and row[1] then
+			sections[#sections + 1] = { title = strip(row[1]), lines = {} }
+		elseif row[1] and #sections > 0 then
+			local lines = sections[#sections].lines
+			lines[#lines + 1] = row[2] and (row[1] .. "\t" .. row[2]) or row[1]
+		end
+	end
+	return sections
+end
+
+-- PoB's help as its About window lists it: main:OpenAboutPopup(1) reads help.txt and builds
+-- the list (Main.lua:1360-1407); the rows are read off its TextListControl, then its "Version
+-- history:" button swaps in the changelog's (Main.lua:1425-1428), and the window is closed.
+function glue.help_view()
+	local missing = {}
+	for _, name in ipairs({ "help.txt", "changelog.txt" }) do
+		local file = io.open(name, "r")
+		if file then
+			file:close()
+		else
+			missing[#missing + 1] = name
+		end
+	end
+	-- without help.txt OpenAboutPopup(1) indexes a missing section (Main.lua:1407-1416)
+	if missing[1] == "help.txt" then
+		return { sections = {}, header = {}, changelog = {}, missing = missing }
+	end
+	local main = main_module()
+	local view
+	glue.in_popups(function()
+		main:OpenAboutPopup(1)
+		local controls = main.popups[1].controls
+		local sections = about_sections(controls.changelog.list, function(title)
+			-- "^7<title> (<n>)" (Main.lua:1371)
+			return (title:gsub("^%^7", ""):gsub(" %(%d+%)$", ""))
+		end)
+		controls.verLabel.onClick()
+		local changelog = about_sections(controls.changelog.list, function(title)
+			return (title:gsub("^%^7", ""))
+		end)
+		view = {
+			sections = sections,
+			header = { controls.version.label, controls.forum.label, controls.github.label },
+			changelog = changelog,
+			missing = missing,
+		}
+	end)
+	return view
 end

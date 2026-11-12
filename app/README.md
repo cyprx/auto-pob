@@ -6,10 +6,26 @@ numbers are PoB's numbers.
 
 ## What it does
 
-- **Build list**: browse the `Builds/` folder (folders first), open a build, import a PoB
-  share code, start a new build.
+- **Build list**: PoB's own build list for the `Builds/` folder, with its folder tree.
+  - Open a build, import a PoB share code or link, start a new build.
+  - Rename, copy, move (to another folder, or Ctrl+X then Ctrl+V) and delete builds and
+    folders, and create folders. These press PoB's own list controls, so names PoB refuses are
+    refused here with PoB's text. Delete is permanent, as in PoB, and asks first with PoB's
+    question. A build that is open, or a folder holding it, can't be renamed, moved or deleted.
+  - Sort by name, class, level or last edited (PoB's four modes; the choice is saved in
+    `Settings.xml`, shared with the classic app), and search with PoB's filter (a name, or
+    `class:witch`). The search isn't saved.
+  - Mouse4 and Mouse5 go back and forward between folders; Ctrl+N starts a new build.
 - **Build screen**: tabs for the open build, with save, save as, undo/redo and an
   unsaved-changes prompt.
+- **Top bar**: the build name, PoB's points display (hover for required level and progress),
+  and on every tab:
+  - the character level, typed or stepped, with PoB's Auto/Manual button (Auto follows the
+    points spent) and its experience tooltip;
+  - the bloodline dropdown (PoB's secondary ascendancy), enabled when the tree version offers
+    bloodlines;
+  - PoB's loadouts dropdown: switch the tree, item, skill and config sets together, make a
+    New Loadout, Sync, or open the loadout help.
 - **Stats sidebar**: PoB's sidebar stats, recalculated after every change. At the top, pick
   the main skill (socket group), the active skill, its part, the minion and minion skill, and
   type the stage and mine counts (sent on Enter or when you leave the box, Esc puts the old
@@ -17,6 +33,10 @@ numbers are PoB's numbers.
   gets its own line with PoB's notes underneath.
 - **Config tab**: PoB's configuration options (checkboxes, numbers, lists, custom modifiers),
   with config sets, PoB's tooltips and validation. Changes recalculate the stats.
+  - Config sets can be copied and reordered in the manager. Hovering an option shows PoB's
+    "what if" tooltip with the change to your stats.
+  - "Add Mod" on a custom modifier group opens PoB's Mod Browser and adds the picked modifier
+    to the group.
 - **Tree tab**: the passive tree, drawn with PoB's own art and rules. Drag to pan, scroll to
   zoom, hover for PoB's tooltip.
   - Click a node to allocate it (with the path to it) or to deallocate it. Click a mastery
@@ -27,8 +47,14 @@ numbers are PoB's numbers.
     best nodes to take.
   - Show jewel radii, convert a tree to another tree version, import a tree link and copy
     the link of the current tree.
+  - The tree manager (Ctrl+M) reorders trees by dragging and copies them; Up and Down switch
+    to the previous or next tree, P shows or hides the heat map and Ctrl+D turns the stat
+    differences in node tooltips on and off. Shift traces a path through the nodes you hover,
+    and a click allocates that path.
+  - "Find Timeless Jewel" opens PoB's timeless jewel search (see **Timeless search** below).
 - **Skills tab**: PoB's socket groups and gems.
-  - Keep several skill sets, switch between them, and create, rename, copy or delete them.
+  - Keep several skill sets, switch between them, create, rename, copy, delete or reorder
+    them (drag in the manager).
   - Add, copy, paste and delete socket groups, move them in the list, and right-click one to
     make it the main skill. Edit a group's label, slot, enabled and Full DPS flags and count.
     Groups that come from an item are shown read-only.
@@ -38,6 +64,9 @@ numbers are PoB's numbers.
     send when you press Enter or leave them, and Esc reverts.
   - Gem options (sort, default level and quality, support types, legacy gems) are saved with
     the build, and hovering a group shows PoB's tooltip.
+  - Hovering a gem's quality, enable box or count shows PoB's "what if" tooltip: the change to
+    your stats from 20 quality, or from turning the gem off or on. Ctrl+click on a group turns
+    it on or off, Ctrl+right-click toggles its Full DPS.
 - **Items tab**: PoB's items, equipment slots and item sets.
   - The slots are in PoB's order: weapons, armour, rings, amulet and belt, flasks, abyssal
     sockets (shown while the item has them) and the jewel sockets of your tree. Pick an item
@@ -59,14 +88,19 @@ numbers are PoB's numbers.
   - Ctrl+Z and Ctrl+Y undo and redo item and slot changes on this tab. Changes to the item
     being displayed are not part of the build until you save it, so they aren't counted as
     unsaved changes and can't be undone.
+  - The third ring slot and the graft slots appear when the build enables them (a build
+    with the extra ring slot, or a 3.27 tree for grafts), as PoB shows them.
+  - Shared items: PoB's shared item list and shared item sets, kept in `Settings.xml` across
+    builds. Drag a build item or a database row onto the list to share it, drag a shared item
+    onto a slot or the item list to copy it into the build, and drag a shared set onto the set
+    list. Adding, deleting, renaming and reordering shared entries saves `Settings.xml` at
+    once, as PoB does. Hold Shift over an item that grants a skill to see the skill's gem
+    tooltip.
+  - "Buy similar…" on the display panel, or in a slot's right-click menu, opens PoB's Buy
+    Similar window (see **Trade links** below). E over a slot edits its item.
   - Limits:
     - There is no "Paste item" button, because the app can only read the clipboard on
       Ctrl+V. Use Ctrl+V or "Create custom...".
-    - Hovering an item that grants a skill doesn't show the skill's gem tooltip (PoB shows it
-      only while Shift is held).
-    - The third ring slot and the graft slots only appear when the build enables them (a
-      build with the extra ring slot, or a 3.27 tree for grafts). They are not yet checked
-      against PoB.
     - PoB's first Undo on this tab after you load a build also removes the jewels socketed in
       the tree; equip them again. This is how PoB itself behaves.
 - **Crafting, databases and tattoos** (on the Items and Tree tabs): PoB's own windows and
@@ -83,14 +117,13 @@ numbers are PoB's numbers.
     league, requirements and source, search by name or modifier, and sort by name or by a
     stat. A stat sort runs in the background and the UI stays usable while it counts down.
     Hover a row for its tooltip, double-click to look at the item, and Ctrl+click to add
-    it to the build and equip it, as in PoB.
+    it to the build and equip it, as in PoB. Ctrl+Shift+click equips it into the second slot
+    it fits (the second ring, say), and a row can be dragged onto a slot or the item list.
   - Tattoos: right-click an eligible allocated node on the Tree tab to replace it with a
     tattoo, and "Remove all tattoos" clears them. Right-clicking an unallocated mastery also
     opens node replacement, as it does in PoB; an allocated mastery still opens the effect
     picker.
   - Limits:
-    - There is no Ctrl+Shift add into a second slot, and no dragging from a database. Equip
-      into the second ring through its slot dropdown.
     - Stat sorts inside the crafting and Add modifier windows run synchronously, as in PoB.
       The bench and essence sorts in Add modifier pause the app for 0.6 to 0.9 s.
     - PoB 2.67.2 itself raises an error when you pick "Prefix" or "Suffix" as the Add
@@ -104,6 +137,8 @@ numbers are PoB's numbers.
     saved with the build. Search highlights matching rows.
   - Hover a number to see how it is made up, or click it to pin the breakdown. Tables sort by
     column, and a node in a breakdown links to that node on the Tree tab.
+  - Columns take PoB's widths, and a section can pop out as PoB's overlay. For spectre skills
+    "Manage Spectres..." opens PoB's Spectre Library (as in the sidebar).
 - **Notes tab**: free text saved with the build. Buttons insert PoB's colour codes (normal,
   magic, rare, unique, the elements, strength, dexterity, intelligence) at the cursor or
   around the selection. Preview shows the text with the colours applied. Edits are sent to the
@@ -126,9 +161,11 @@ numbers are PoB's numbers.
     that doesn't work, copy the link shown and open it yourself.
   - Nothing is sent unless you ask. Opening a build, switching tabs and typing in the import
     box send nothing; a request starts only when you press a button (or pass a link).
-  - The release notice is opt-in: start the app with `AUTO_POB_UPDATE_CHECK=1` and it looks at
-    this repository's latest release once and tells you if there is a newer one. It never
-    updates anything.
+  - The release notice is opt-in: turn on "Look for new auto-pob releases" in Options (it is
+    `update_check = true` in `auto-pob.toml`), or start the app with `AUTO_POB_UPDATE_CHECK=1`.
+    It looks at this repository's latest release once and tells you if there is a newer one. It
+    never updates anything. The variable only forces the notice on; the setting decides
+    otherwise, and the default is off.
   - Limits:
     - A request that gets "unauthorised" refreshes your sign-in token at most twice. Past that
       it stops with an error and does not retry, where PoB itself would keep trying.
@@ -137,9 +174,89 @@ numbers are PoB's numbers.
     - PoEURL may be offline. If it is, the PoEURL features show PoB's failure text.
     - The sign-in redirect listens on local ports 49082 to 49084, so it can't run while
       another PoB or auto-pob holds all of them.
-    - Trade queries and PoB's Archives are not included, and PoB's own self-update stays off.
-- **Shortcuts**: Ctrl+S saves. Ctrl+Z undoes and Ctrl+Y (or Ctrl+Shift+Z) redoes, on the
-  Tree, Skills, Items, Config and Calcs tabs. Each tab has its own history. They wait while a dialog is open.
+    - Trade price queries and PoB's Archives are not included, and PoB's own self-update stays
+      off. Trade links (Buy similar, timeless search) are built offline and opened in your
+      browser.
+- **Spectre Library**: for a Raise Spectre build, "Manage Spectres..." in the sidebar (or the
+  Calcs selector) opens PoB's Spectre Library. Search, add, remove and reorder spectres;
+  nothing changes until Save.
+- **Compare tab**: PoB's comparison of the open build against one or more others.
+  - Add a comparison from a saved build (the build picker), a share code, or a link (also
+    "Import as comparison" on the Import tab). Pick between several with "Compare with:" and
+    remove them with Remove. Comparisons are dropped when you open another build.
+  - Summary: PoB's side-by-side stats with the differences coloured.
+  - Tree: this build's tree coloured against the comparison's, PoB's tree and version
+    selectors for each side, "Copy tree" and "Copy and use", and converting either tree to
+    another version.
+  - Items: the slots side by side with PoB's match/differ labels and tooltips for both items;
+    Copy adds their item to your build, Equip also equips it, Buy opens Buy similar for it.
+  - Skills and Config: PoB's socket group pairs, and the config options that differ, with
+    "Copy Config from Compare Build". Item, set and skill selectors are PoB's.
+  - Item and config copies can be undone on the Items and Config tabs.
+  - Limits (R9): PoB's Calcs sub-view and power report on the Compare tab are not included;
+    Calcs differences show through Summary.
+- **Trade links** (Buy similar): PoB's Buy Similar window, from the display panel, a slot's
+  menu or the Compare tab's Items view. Tick the mods and ranges to search, and "Open URL"
+  opens the trade site search in your browser.
+  - Limits (R10): the realm and league are auto-pob's (`[trade]` in `auto-pob.toml`, or
+    Options) instead of PoB's league fetch, which needs a sign-in; type a fresh league name
+    into Options. There is no search for an empty slot, as in PoB.
+- **Timeless search**: the Tree tab's "Find Timeless Jewel" is PoB's window: pick the jewel,
+  conqueror, socket and devotion, list the nodes you want with weights, and Search. The
+  search runs in the background with a progress line and can be cancelled; the old results
+  stay until a new search finishes. Hover a result for its nodes, double-click to add that
+  jewel to the build, and "Open Trade URL" (a range with Shift+click) opens the trade search.
+  - Limits (R17): PoB's search reads its lookup tables and caches them as `.bin` files next to
+    its data, in the PoB folder (`Data/TimelessJewelData`), as PoB itself does: 3.4 to 3.6 MB
+    for each of Lethal Pride, Brutal Restraint, Militant Faith and Elegant Hubris, 52 MB for
+    Glorious Vanity, about 66 MB if all five are used; the Abyss jewels write none. Nodes are
+    picked by PoB's dropdown and search list, not on the tree canvas.
+- **Options**: the build list's and the build screen's Options button opens PoB's own Options
+  window (Save writes PoB's `Settings.xml`). Under it, auto-pob's own settings: the trade
+  realm and league, the release notice, and per-setting overrides, kept in `auto-pob.toml`
+  so the classic app keeps its own value (see below).
+  - Limits (R13): PoB's beta channel, public builds and dev autosave options are left out.
+    "Invert slider scroll direction", "Disable control scroll interaction" and "Show
+    Animations" have no effect here, and say so.
+- **Help**: F1 (or About) opens PoB's help, its sections and the changelog, at the section for
+  the tab you're on. F1 over a node, item, database row or gem opens its wiki page instead.
+  "Download PoB's help files" fetches PoB's `help.txt` and `changelog.txt` when the PoB
+  folder lacks them; only that button uses the network.
+- **Shortcuts**:
+  - Ctrl+S saves. Ctrl+Z undoes and Ctrl+Y (or Ctrl+Shift+Z) redoes, on the Tree, Skills,
+    Items, Config and Calcs tabs; each tab has its own history.
+  - Ctrl+1 to Ctrl+6 switch tabs (Tree, Skills, Items, Calcs, Config, Notes), Ctrl+I opens
+    Import/Export, Ctrl+W closes the build, Ctrl+F focuses the tab's search.
+  - Tree: Ctrl+M, Up/Down, P, Ctrl+D, Ctrl+C on a hovered node (its text), PageUp and PageDown
+    zoom. Items: E on a slot. F2 renames the selected set in the set managers; arrow keys,
+    Home, End and Delete work in the lists, as in PoB.
+  - Mouse4 goes back (to the list, or up a folder). F1 opens Help, or the wiki page of the
+    hovered node, item, database row or gem.
+  - While a dialog is open no shortcut fires, except F1 over a row of the gem list's window.
+  - While a text box has the keyboard, the keys PoB reads before its controls still fire, as
+    in PoB: Ctrl+S, Ctrl+1 to Ctrl+6, Ctrl+I, Ctrl+W, Mouse4 and Ctrl+F, and Ctrl+M and Up/Down
+    on the Tree tab, E on the Items tab. The others wait: Ctrl+Z and Ctrl+Y (the box keeps its
+    own undo), the tree view's P, Ctrl+D, Ctrl+C, PageUp and PageDown, the set lists' F2, the
+    build list's Ctrl+N and F1's Help (a hovered row's, slot's or gem's wiki page still opens).
+    A box of the top bar or the sidebar keeps every key but Ctrl+S, Ctrl+1 to Ctrl+6, Ctrl+I,
+    Ctrl+W and Mouse4, and so does a dropped top-bar or sidebar list. Ctrl+W never edits the
+    box it is pressed in.
+  - Dropdowns and sliders step with the wheel and the arrow keys while pointed at, through a
+    dropped list's search matches only. Under a dialog, the ones behind it don't step.
+  - Esc closes a dialog or window, as PoB's popups do: the top one first, and only once no
+    control takes the key. A text box with the keyboard takes the first Esc, which only
+    leaves the box. A dropped list takes it to empty its search or close. A click outside a
+    dialog never closes it.
+- **Nothing written behind your back**: views, tooltips, Compare, trade links, the Spectre
+  Library before Save and Help write nothing in your folders. Two things write into the PoB
+  folder auto-pob downloaded, as PoB does: the timeless jewel search caches PoB's lookup tables
+  there (`Data/TimelessJewelData/*.bin`), and Help's "Download PoB's help files" button, only
+  when you click it, adds `help.txt` and `changelog.txt`. `Settings.xml` is written only by
+  Options' Save, the build list's sort, the shared item edits, signing in or out, PoB refreshing
+  an expired sign-in token, and quitting, where auto-pob saves what PoB saves at exit (the
+  import history, the last account, the open build). A write you ask for is refused with a
+  notice, and quitting leaves the file alone, when another program (classic PoB) changed
+  `Settings.xml` since auto-pob last read or wrote it, or PoB couldn't read it at start.
 
 ## Running
 
@@ -156,8 +273,34 @@ the Network section).
 | Variable | Effect |
 |---|---|
 | `AUTO_POB_POB_DIR` | Use this PoB folder instead of the pinned download (no download). |
-| `AUTO_POB_UPDATE_CHECK` | Set to `1` to look for a newer auto-pob release when the app starts. Off by default. |
-| `AUTO_POB_USER_DIR` | Keep `Builds/` and `Settings.xml` here instead of `<data dir>/RustyPathOfBuilding1/userdata/`. |
+| `AUTO_POB_CONFIG` | Read and write auto-pob's settings file here instead of `<config dir>/auto-pob/auto-pob.toml`. |
+| `AUTO_POB_UPDATE_CHECK` | Set to `1` to look for a newer auto-pob release when the app starts, whatever `update_check` says. Off by default. |
+| `AUTO_POB_USER_DIR` | Keep `Builds/` and `Settings.xml` here instead of `<data dir>/RustyPathOfBuilding1/userdata/`. Wins over `user_dir` in `auto-pob.toml`. |
+
+### auto-pob.toml
+
+auto-pob's own settings live in `auto-pob.toml` (PoB's stay in `Settings.xml`). Options writes it;
+you can also edit it by hand, and comments and keys it doesn't know are kept.
+
+```toml
+user_dir = "/home/me/pob"   # the folder for Builds/ and Settings.xml; the default if absent
+update_check = false        # the opt-in release notice
+
+[trade]
+realm = "PC"                # PC, PS4 or Xbox
+league = "Standard"
+
+[overrides]                 # Settings.xml keys auto-pob keeps its own value for
+colorPositive = "^x33FF77"
+```
+
+Precedence for the user folder: `AUTO_POB_USER_DIR`, then `user_dir`, then the default. For the
+release notice: `AUTO_POB_UPDATE_CHECK=1` forces it on, otherwise `update_check`.
+
+On the first start with no `auto-pob.toml`, no `AUTO_POB_USER_DIR` and an existing classic app
+folder, auto-pob asks whether to use that folder or another one, and writes the answer. Without
+the classic folder it uses the default and writes nothing until you save Options. A file that
+cannot be parsed is renamed to `auto-pob.toml.bad` and the app says so.
 
 auto-pob shares `Builds/` and `Settings.xml` with the classic app
 (`rusty-path-of-building`), so builds saved by one open in the other.
@@ -170,9 +313,10 @@ auto-pob shares `Builds/` and `Settings.xml` with the classic app
   so frames keep drawing during a slow calculation.
 - **Boundary rule**: only `src/engine/` touches PoB internals or Lua. `src/ui/` and
   `src/widgets/` use only `engine::views`, `engine::commands` and `Engine`/events.
-- **Glue files** (`src/engine/glue/*.lua`) are the code that calls into PoB, one per area:
-  `builds.lua`, `stats.lua`, `config.lua`, `tooltip.lua`, `tree.lua`, `power.lua`, `calcs.lua`, `skills.lua`, `gems.lua` and `notes.lua`. If PoB
-  renames or restructures something we call, this is where it breaks.
+- **Glue files** (`src/engine/glue/*.lua`) are the code that calls into PoB, one per area
+  (builds, build list, stats, config, tree, power, calcs, skills, gems, items, item databases,
+  crafting, notes, import and network, compare, timeless, settings, shared items, PoB's popup
+  windows). If PoB renames or restructures something we call, this is where it breaks.
   `src/engine/bootstrap.lua` sets up the headless environment and `src/engine/pob.rs` is the
   backend that runs the glue.
 - `src/game.rs` pins the PoB version and game-specific paths; `src/pob_files.rs` downloads
@@ -193,6 +337,10 @@ save round trip, share codes, and so on). It needs a PoB folder and is `#[ignore
 AUTO_POB_POB_DIR=$HOME/.local/share/auto-pob/poe1/pob-2.67.2 \
   cargo test -p auto-pob --test gate -- --ignored --test-threads=1
 ```
+
+`scripts/gate.sh [-j N] [-f FILTER]` runs each gate test in its own process, N at a time,
+then the tests listed in `tests/gate-serial.txt` one by one, and writes the times to
+`target/gate-times.tsv`. `scripts/ci-local.sh` runs the same checks as CI.
 
 Run it with `CI` unset: upstream's headless wrapper skips ModCache when `CI` is set, which can
 change values. CI runs it in the `pob-gate` job, fetching PoB with

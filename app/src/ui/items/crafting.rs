@@ -21,7 +21,15 @@ pub fn opener_label(kind: &PopupKind) -> Option<String> {
         PopupKind::AddModifier => "Add modifier...".into(),
         PopupKind::AddImplicit => "Add Implicit...".into(),
         PopupKind::AddCrucible => "Add Crucible mod...".into(),
-        PopupKind::Craft | PopupKind::EditText | PopupKind::NodeReplacement { .. } => return None,
+        PopupKind::Craft
+        | PopupKind::EditText
+        | PopupKind::NodeReplacement { .. }
+        | PopupKind::Options
+        | PopupKind::BuySimilar { .. }
+        | PopupKind::TimelessJewel
+        | PopupKind::SpectreLibrary
+        | PopupKind::ModBrowser { .. }
+        | PopupKind::GameVersion => return None,
     })
 }
 
@@ -188,6 +196,11 @@ fn affix_row(
             let mut value = state.affix_sliders.get(&slot).copied().unwrap_or(range);
             let slider = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).show_value(false));
             state.rects.note(&slider, || format!("affix_range_{slot}"));
+            // the wheel and the arrows move it (SliderControl.lua:164-180)
+            if let Some(to) = crate::widgets::scroll_step::slider_step(ui, &slider, value) {
+                state.affix_sliders.insert(slot, to);
+                out.push(Command::SetAffixRange { slot, value: to });
+            }
             if let Some(tiers) = affix.tiers {
                 ui.weak(format!("{tiers} tiers"));
             }
@@ -233,6 +246,16 @@ fn cluster_rows(
                 .step_by(if span > 0 { 1.0 / f64::from(span) } else { 0.0 }),
         );
         state.rects.note(&slider, || "cluster_count".into());
+        // the wheel and the arrows move it, to its steps (SliderControl.lua:164-180)
+        if span > 0
+            && let Some(to) = crate::widgets::scroll_step::slider_step(ui, &slider, value)
+        {
+            let to = (to * f64::from(span)).round() / f64::from(span);
+            state.cluster_slider = Some(to);
+            out.push(Command::SetClusterNodeCount {
+                count: count_of(to),
+            });
+        }
         if slider.dragged() || slider.changed() {
             state.cluster_slider = Some(value);
         }

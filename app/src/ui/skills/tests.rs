@@ -294,6 +294,18 @@ fn paste_event_sends_paste_outside_text_fields() {
 }
 
 #[test]
+fn esc_closes_the_skill_sets_window() {
+    // every PoB popup closes on Esc (PopupDialog.lua:72-77)
+    let mut h = Harness::new(sample());
+    h.click("manage");
+    h.frame(vec![]);
+    assert!(h.ui.has_dialog());
+    h.press(Key::Escape);
+    h.frame(vec![]);
+    assert!(!h.ui.has_dialog(), "Esc left it open");
+}
+
+#[test]
 fn last_set_cannot_be_deleted() {
     let mut v = sample();
     v.sets.truncate(1);
@@ -613,4 +625,228 @@ fn a_pending_default_quality_is_not_unsaved_but_still_flushes() {
     h.type_text("1");
     h.frame(vec![]);
     assert!(h.ui.has_pending());
+}
+
+/// A click on `key` with Ctrl held, primary or secondary (PoB's NF-11 clicks)
+fn ctrl_click(h: &mut Harness, key: &str, button: PointerButton) -> SkillsOutput {
+    let pos = h.ui.rect(key).center();
+    let mut all = SkillsOutput::default();
+    for events in [
+        vec![
+            Event::ModifiersChanged(Modifiers::COMMAND),
+            Event::PointerMoved(pos),
+        ],
+        vec![Event::PointerButton {
+            pos,
+            button,
+            pressed: true,
+            modifiers: Modifiers::COMMAND,
+        }],
+        vec![Event::PointerButton {
+            pos,
+            button,
+            pressed: false,
+            modifiers: Modifiers::COMMAND,
+        }],
+        vec![Event::ModifiersChanged(Modifiers::NONE)],
+    ] {
+        h.time += 0.2;
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 700.0))),
+            time: Some(h.time),
+            events,
+            ..Default::default()
+        };
+        let time = h.time;
+        let ui = &mut h.ui;
+        h.ctx
+            .run_ui(input, |eui| {
+                let pass = ui.show(eui, time, false);
+                all.commands.extend(pass.commands);
+            })
+            .drop_without_applying_deltas();
+    }
+    all
+}
+
+// ---- Task 13: set reorder (R31) and "what if" tooltips (R22) ----
+
+use crate::engine::HoverTarget;
+
+fn drag(h: &mut Harness, from: Pos2, to: Pos2) -> Vec<Command> {
+    let button = |pos, pressed| Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    let mid = Pos2::new(from.x + 30.0, from.y + 6.0);
+    let mut all = Vec::new();
+    for events in [
+        vec![Event::PointerMoved(from)],
+        vec![button(from, true)],
+        vec![Event::PointerMoved(mid)],
+        vec![Event::PointerMoved(to)],
+        vec![Event::PointerMoved(to)],
+        vec![button(to, false)],
+        vec![],
+    ] {
+        all.extend(h.frame(events).commands);
+    }
+    all
+}
+
+#[test]
+fn ctrl_clicks_on_a_group_toggle_it_and_its_full_dps() {
+    let mut h = Harness::new(sample());
+    let o = ctrl_click(&mut h, "row_1", PointerButton::Primary);
+    // PoB's list selects the row and toggles it (ListControl.lua:338-370)
+    assert_eq!(h.ui.selected, 1);
+    let o2 = ctrl_click(&mut h, "row_0", PointerButton::Primary);
+    assert_eq!(h.ui.selected, 0);
+    assert_eq!(
+        debug(&o2.commands),
+        ["SetGroupEnabled { group: 0, on: false }"]
+    );
+    assert_eq!(debug(&o.commands).len(), 1);
+    let o = ctrl_click(&mut h, "row_0", PointerButton::Secondary);
+    assert_eq!(
+        debug(&o.commands),
+        ["SetGroupFullDps { group: 0, on: false }"]
+    );
+    // the right click's menu stays shut under Ctrl
+    h.frame(vec![]);
+    assert!(!egui::Popup::is_any_open(&h.ctx));
+}
+
+#[test]
+fn f2_renames_the_selected_set() {
+    let mut h = Harness::new(sample());
+    h.click("manage");
+    h.frame(vec![]);
+    h.click("sets_row_1");
+    h.press(Key::F2);
+    h.frame(vec![]);
+    let o = h.click("sets_save");
+    assert_eq!(
+        debug(&o.commands),
+        ["RenameSkillSet { id: 2, title: \"Alt\" }"]
+    );
+}
+
+#[test]
+fn right_clicking_a_gem_name_opens_the_picker_too() {
+    let mut h = Harness::new(sample());
+    let pos = h.ui.rect("gem_0_name").center();
+    for events in [
+        vec![Event::PointerMoved(pos)],
+        vec![Event::PointerButton {
+            pos,
+            button: PointerButton::Secondary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        }],
+        vec![Event::PointerButton {
+            pos,
+            button: PointerButton::Secondary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        }],
+        vec![],
+    ] {
+        h.frame(events);
+    }
+    let p = h.ui.picker.as_ref().expect("picker open");
+    assert_eq!((p.group(), p.target()), (0, GemTarget::Slot(0)));
+}
+
+#[test]
+fn group_list_keys_move_the_selection_and_backspace_deletes() {
+    let mut h = Harness::new(sample());
+    h.click("row_0");
+    h.press(Key::ArrowDown);
+    h.frame(vec![]);
+    // the second group has no gems: it goes at once
+    let o = h.press(Key::Backspace);
+    assert_eq!(debug(&o.commands), ["DeleteSocketGroup { group: 1 }"]);
+}
+
+#[test]
+fn set_drag_sends_move_skill_set() {
+    let mut h = Harness::new(sample());
+    h.click("manage");
+    h.frame(vec![]);
+    let from = h.ui.rect("sets_row_0").center();
+    let r = h.ui.rect("sets_row_1");
+    let below = Pos2::new(r.center().x, r.bottom() - 2.0);
+    assert_eq!(
+        debug(&drag(&mut h, from, below)),
+        ["MoveSkillSet { from: 0, to: 1 }"]
+    );
+    // a click on a row still only selects it
+    let o = h.click("sets_row_1");
+    assert!(o.commands.is_empty(), "{:?}", o.commands);
+}
+
+#[test]
+fn gem_quality_hover_queries_once() {
+    let mut h = Harness::new(sample());
+    let pos = h.ui.rect("g0_s1_quality").center();
+    let o = h.frame(vec![Event::PointerMoved(pos)]);
+    assert!(o.queries.is_empty(), "too early: {:?}", o.queries);
+    let o = h.frame(vec![]);
+    let target = HoverTarget::GemQuality { group: 0, slot: 1 };
+    assert_eq!(
+        debug(&o.queries),
+        debug(&[Command::HoverTooltip(target.clone())])
+    );
+    for _ in 0..3 {
+        assert!(h.frame(vec![]).queries.is_empty(), "asked once");
+    }
+    // the answer is kept for the open question only
+    let answer = |target: HoverTarget| {
+        Snapshot::HoverTooltip(Arc::new(crate::engine::views::HoverTooltipView {
+            target,
+            lines: vec![TooltipLine::Line {
+                size: 16,
+                text: "^7Setting to 20 quality will give you:".into(),
+            }],
+        }))
+    };
+    h.ui.on_snapshot(&answer(HoverTarget::GemQuality { group: 0, slot: 0 }));
+    assert!(h.frame(vec![]).queries.is_empty());
+    h.ui.on_snapshot(&answer(target.clone()));
+    assert!(h.frame(vec![]).queries.is_empty());
+    // a new skills view asks again while still hovered
+    let mut changed = sample();
+    changed.groups[0].gems[1].quality = 20;
+    h.ui.on_snapshot(&Snapshot::Skills(Arc::new(changed)));
+    let o = h.frame(vec![Event::PointerMoved(pos)]);
+    assert_eq!(debug(&o.queries), debug(&[Command::HoverTooltip(target)]));
+    // leaving forgets it
+    h.frame(vec![Event::PointerMoved(Pos2::new(1100.0, 650.0))]);
+    assert!(h.ui.hover_tip.asked().is_none());
+}
+
+#[test]
+fn gem_enabled_and_count_hovers_name_their_box() {
+    let mut view = sample();
+    view.groups[0].gems[0].count = Some(1);
+    let mut h = Harness::new(view);
+    for (key, target) in [
+        (
+            "gem_0_enabled",
+            HoverTarget::GemEnabled { group: 0, slot: 0 },
+        ),
+        ("g0_s0_count", HoverTarget::GemCount { group: 0, slot: 0 }),
+    ] {
+        let pos = h.ui.rect(key).center();
+        h.frame(vec![Event::PointerMoved(pos)]);
+        let o = h.frame(vec![Event::PointerMoved(pos)]);
+        assert_eq!(
+            debug(&o.queries),
+            debug(&[Command::HoverTooltip(target)]),
+            "{key}"
+        );
+    }
 }

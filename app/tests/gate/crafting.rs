@@ -544,7 +544,13 @@ fn popup_session_lifecycle() {
     let id = items.items[0].id;
     let tooltip = s
         .backend
-        .item_tooltip_view(&auto_pob::engine::ItemTooltipQuery { id, slot: None })
+        .item_tooltip_view(&auto_pob::engine::ItemTooltipQuery {
+            id,
+            slot: None,
+            theirs: false,
+            shift: false,
+            shared: None,
+        })
         .unwrap()
         .expect("the item is listed");
     assert!(
@@ -743,7 +749,7 @@ pub(crate) fn crafting_round_trip(name: &str, recipe: &ItemsRecipe, s: &mut Sess
     let saved = s.backend.build_view().unwrap().path.expect("a saved build");
     let lua = upstream_with_items_lib(&saved, &recipe.base);
     let saved_part = |mut value: serde_json::Value| {
-        for key in ["can_undo", "can_redo", "list_filter"] {
+        for key in ["can_undo", "can_redo", "list_filter", "shared_shown"] {
             value.as_object_mut().unwrap().remove(key);
         }
         value

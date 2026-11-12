@@ -1,10 +1,13 @@
 //! The opt-in release notice (R22).
 //!
-//! Off unless `AUTO_POB_UPDATE_CHECK=1`. When on, it makes one GET to the GitHub releases API
+//! Off by default. It is on when the settings file says `update_check = true` (the Options
+//! window's "release notice" box) or `AUTO_POB_UPDATE_CHECK=1` is set. The variable only ever
+//! forces it on: any other value leaves the setting in charge. When on, it makes one GET to the GitHub releases API
 //! on a background thread and says "auto-pob vX is available" with a link. It sends only a
 //! User-Agent of `auto-pob/<version>`, downloads nothing and never touches PoB or its folder.
 //! A failed or offline check is silent.
 
+use crate::settings::AppSettings;
 use anyhow::{Context as _, bail};
 use eframe::egui;
 use serde::Deserialize;
@@ -59,13 +62,17 @@ pub fn newer_release(current: &str, json: &str) -> anyhow::Result<Option<Release
     }))
 }
 
-/// Whether the user opted in (R22).
-pub fn enabled() -> bool {
-    enabled_for(std::env::var("AUTO_POB_UPDATE_CHECK").ok().as_deref())
+/// Whether the user opted in (R22, R14): `AUTO_POB_UPDATE_CHECK=1` or `update_check` in the
+/// settings file.
+pub fn enabled(settings: Option<&AppSettings>) -> bool {
+    enabled_for(
+        std::env::var("AUTO_POB_UPDATE_CHECK").ok().as_deref(),
+        settings,
+    )
 }
 
-fn enabled_for(value: Option<&str>) -> bool {
-    value == Some("1")
+fn enabled_for(env: Option<&str>, settings: Option<&AppSettings>) -> bool {
+    env == Some("1") || settings.is_some_and(|s| s.update_check)
 }
 
 fn fetch(current: &str) -> anyhow::Result<Option<Release>> {
@@ -145,10 +152,28 @@ mod tests {
 
     #[test]
     fn check_disabled_by_default() {
-        assert!(!enabled_for(None));
-        assert!(!enabled_for(Some("")));
-        assert!(!enabled_for(Some("0")));
-        assert!(!enabled_for(Some("true")));
-        assert!(enabled_for(Some("1")));
+        assert!(!enabled_for(None, None));
+        assert!(!enabled_for(Some(""), None));
+        assert!(!enabled_for(Some("0"), None));
+        assert!(!enabled_for(Some("true"), None));
+        assert!(enabled_for(Some("1"), None));
+    }
+
+    #[test]
+    fn update_check_env_or_setting() {
+        let off = AppSettings::default();
+        let on = AppSettings {
+            update_check: true,
+            ..AppSettings::default()
+        };
+        // the default is off, with or without a file
+        assert!(!enabled_for(None, Some(&off)));
+        // the setting turns it on
+        assert!(enabled_for(None, Some(&on)));
+        // the variable forces it on over an off setting ...
+        assert!(enabled_for(Some("1"), Some(&off)));
+        // ... but only "1" does, and it never forces it off
+        assert!(!enabled_for(Some("0"), Some(&off)));
+        assert!(enabled_for(Some("0"), Some(&on)));
     }
 }

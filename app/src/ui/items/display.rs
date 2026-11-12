@@ -3,7 +3,7 @@
 use super::crafting::{self, CraftingState};
 use super::text_window::{self, Outcome, TextWindow};
 use crate::engine::views::{DisplayItemView, DropList};
-use crate::engine::{Command, SocketColour};
+use crate::engine::{BuySource, Command, PopupKind, SocketColour};
 use crate::ui::tree::Rects;
 use crate::widgets::{EditBox, EditBoxOptions, item_tooltip_ui_with, pob_text};
 use eframe::egui;
@@ -95,12 +95,15 @@ fn dropdown(ui: &mut egui::Ui, rects: &mut Rects, key: &str, list: &DropList) ->
     let current = list.labels.get(list.selected).map_or("", String::as_str);
     let mut picked = None;
     let combo = ui.add_enabled_ui(list.enabled, |ui| {
-        egui::ComboBox::from_id_salt(("items_display", key))
+        crate::widgets::dropdown::Dropdown::from_id_salt(("items_display", key))
             .selected_text(pob_text(current, 14.0, default))
             .show_ui(ui, |ui| {
                 for (i, label) in list.labels.iter().enumerate() {
-                    let item =
-                        ui.selectable_label(i == list.selected, pob_text(label, 14.0, default));
+                    let item = crate::widgets::dropdown::item(
+                        ui,
+                        i == list.selected,
+                        pob_text(label, 14.0, default),
+                    );
                     rects.note(&item, || format!("{key}_{i}"));
                     if item.clicked() && i != list.selected {
                         picked = Some(i);
@@ -109,7 +112,15 @@ fn dropdown(ui: &mut egui::Ui, rects: &mut Rects, key: &str, list: &DropList) ->
             })
     });
     rects.note(&combo.inner.response, || key.to_owned());
-    picked
+    // the wheel and the arrows step it (DropDownControl.lua:476-516)
+    picked.or_else(|| {
+        crate::widgets::scroll_step::combo_step(
+            ui,
+            &combo.inner.response,
+            list.labels.len(),
+            list.selected,
+        )
+    })
 }
 
 fn colour(name: &str) -> Option<SocketColour> {
@@ -199,6 +210,15 @@ fn panel(
             state.discard_pending();
             out.push(Command::CancelDisplayItem { if_id: None });
         }
+        // PoB's trade search window for the item (R10); the app sends a box still being typed
+        // in before any window opens
+        let buy = ui.button("Buy similar");
+        state.rects.note(&buy, || "buy_similar".into());
+        if buy.clicked() {
+            out.push(Command::OpenPopup(PopupKind::BuySimilar {
+                source: BuySource::DisplayItem,
+            }));
+        }
     });
 
     // variants
@@ -238,7 +258,7 @@ fn panel(
             for &i in &shown {
                 let socket = &view.sockets[i];
                 let current = colour(&socket.colour);
-                let combo = egui::ComboBox::from_id_salt(("items_socket", i))
+                let combo = crate::widgets::dropdown::Dropdown::from_id_salt(("items_socket", i))
                     .width(40.0)
                     .selected_text(&socket.colour)
                     .show_ui(ui, |ui| {
@@ -248,7 +268,7 @@ fn panel(
                             ("B", SocketColour::B),
                             ("W", SocketColour::W),
                         ] {
-                            let item = ui.selectable_label(current == Some(c), name);
+                            let item = crate::widgets::dropdown::item(ui, current == Some(c), name);
                             state.rects.note(&item, || format!("socket_{i}_{name}"));
                             if item.clicked() && current != Some(c) {
                                 out.push(Command::SetItemSocket {
@@ -259,6 +279,25 @@ fn panel(
                         }
                     });
                 state.rects.note(&combo.response, || format!("socket_{i}"));
+                // the wheel and the arrows step it (DropDownControl.lua:476-516)
+                let colours = [
+                    SocketColour::R,
+                    SocketColour::G,
+                    SocketColour::B,
+                    SocketColour::W,
+                ];
+                let at = colours
+                    .iter()
+                    .position(|c| current == Some(*c))
+                    .unwrap_or(0);
+                if let Some(to) =
+                    crate::widgets::scroll_step::combo_step(ui, &combo.response, colours.len(), at)
+                {
+                    out.push(Command::SetItemSocket {
+                        index: i,
+                        colour: colours[to],
+                    });
+                }
                 if let Some(linked) = socket.linked {
                     let mut on = linked;
                     let link = ui.checkbox(&mut on, "");
@@ -338,21 +377,27 @@ fn panel(
         state.discard_pending();
     }
 
-    // range lines
-    if !view.range_lines.is_empty() {
+    // range lines: PoB's stacked rows, one Foulborn box, slider and line each (the default
+    // `showAllItemAffixes` on a unique, ItemsTab.lua:1089-1173)
+    if view.stacked {
+        stacked_range_lines(ui, view, state, &mut out);
+    } else if !view.range_lines.is_empty() {
         let default = ui.visuals().text_color();
         state.range_line = state.range_line.min(view.range_lines.len() - 1);
         let line = state.range_line;
         ui.horizontal_wrapped(|ui| {
             ui.label("Range:");
             let current = &view.range_lines[line];
-            let combo = egui::ComboBox::from_id_salt("items_range_line")
+            let combo = crate::widgets::dropdown::Dropdown::from_id_salt("items_range_line")
                 .width(260.0)
                 .selected_text(pob_text(&current.label, 14.0, default))
                 .show_ui(ui, |ui| {
                     for (i, l) in view.range_lines.iter().enumerate() {
-                        let item =
-                            ui.selectable_label(i == line, pob_text(&l.label, 14.0, default));
+                        let item = crate::widgets::dropdown::item(
+                            ui,
+                            i == line,
+                            pob_text(&l.label, 14.0, default),
+                        );
                         state.rects.note(&item, || format!("range_line_{i}"));
                         if item.clicked() {
                             state.range_line = i;
@@ -361,6 +406,15 @@ fn panel(
                     }
                 });
             state.rects.note(&combo.response, || "range_lines".into());
+            if let Some(i) = crate::widgets::scroll_step::combo_step(
+                ui,
+                &combo.response,
+                view.range_lines.len(),
+                line,
+            ) {
+                state.range_line = i;
+                state.slider = None;
+            }
         });
         let current = &view.range_lines[state.range_line];
         let line = state.range_line;
@@ -374,6 +428,11 @@ fn panel(
                 };
                 let slider = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).show_value(false));
                 state.rects.note(&slider, || "range_slider".into());
+                // the wheel and the arrows move it (SliderControl.lua:164-180)
+                if let Some(to) = crate::widgets::scroll_step::slider_step(ui, &slider, value) {
+                    state.slider = Some((line, to));
+                    out.push(Command::SetRangeLine { line, value: to });
+                }
                 if slider.dragged() || slider.changed() {
                     state.slider = Some((line, value));
                 }
@@ -408,4 +467,63 @@ fn panel(
             }
         });
     out
+}
+
+/// PoB's colour for a mutated (Foulborn) line (`colorCodes.MUTATED`, Global.lua:46)
+const MUTATED: &str = "^xCD2285";
+
+/// One row per range line: the Foulborn box where the line can mutate, the slider where it has
+/// a range, then the line in PoB's colour.
+fn stacked_range_lines(
+    ui: &mut egui::Ui,
+    view: &DisplayItemView,
+    state: &mut DisplayState,
+    out: &mut Vec<Command>,
+) {
+    let default = ui.visuals().text_color();
+    for (line, current) in view.range_lines.iter().enumerate() {
+        // PoB hides the row's line when neither its slider nor its box shows
+        if !(current.mutable || (current.slider && current.range.is_some())) {
+            continue;
+        }
+        ui.horizontal(|ui| {
+            if current.mutable {
+                let mut on = current.mutated;
+                let mutated = ui.checkbox(&mut on, "");
+                state
+                    .rects
+                    .note(&mutated, || format!("stacked_mutated_{line}"));
+                if mutated.changed() {
+                    out.push(Command::SetRangeLineMutated { line, on });
+                }
+            }
+            if current.slider
+                && let Some(range) = current.range
+            {
+                let mut value = match state.slider {
+                    Some((l, v)) if l == line => v,
+                    _ => range,
+                };
+                let slider = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).show_value(false));
+                state
+                    .rects
+                    .note(&slider, || format!("stacked_slider_{line}"));
+                if slider.dragged() || slider.changed() {
+                    state.slider = Some((line, value));
+                }
+                if slider.drag_stopped()
+                    || (slider.changed() && !slider.is_pointer_button_down_on())
+                {
+                    out.push(Command::SetRangeLine { line, value });
+                }
+            }
+            let colour = if current.mutated { MUTATED } else { "^7" };
+            let label = ui.label(pob_text(
+                &format!("{colour}{}", current.label),
+                14.0,
+                default,
+            ));
+            state.rects.note(&label, || format!("stacked_line_{line}"));
+        });
+    }
 }

@@ -2,7 +2,7 @@
 
 use super::{SkillsOutput, SkillsUi};
 use crate::engine::views::{GemView, SkillsView, SocketGroupView};
-use crate::engine::{Command, GemTarget, GemToggle, GemTooltipQuery};
+use crate::engine::{Command, GemTarget, GemToggle, GemTooltipQuery, HoverTarget};
 use crate::widgets::{pob_colour, pob_text, tooltip_ui};
 use eframe::egui::{self, Color32, Stroke};
 
@@ -63,11 +63,15 @@ impl SkillsUi {
                     .map(|c| c.label.clone())
                     .or_else(|| g.slot.clone())
                     .unwrap_or_else(|| "None".into());
-                let combo = egui::ComboBox::from_id_salt(("skills_slot", gi))
+                let combo = crate::widgets::dropdown::Dropdown::from_id_salt(("skills_slot", gi))
                     .selected_text(current)
                     .show_ui(ui, |ui| {
                         for (i, choice) in view.slot_choices.iter().enumerate() {
-                            let item = ui.selectable_label(choice.slot == g.slot, &choice.label);
+                            let item = crate::widgets::dropdown::item(
+                                ui,
+                                choice.slot == g.slot,
+                                &choice.label,
+                            );
                             self.rects.note(&item, || format!("slot_item_{i}"));
                             if item.clicked() && choice.slot != g.slot {
                                 out.commands.push(Command::SetGroupSlot {
@@ -78,6 +82,23 @@ impl SkillsUi {
                         }
                     });
                 self.rects.note(&combo.response, || "slot".into());
+                // the wheel and the arrows step it (DropDownControl.lua:476-516)
+                let at = view
+                    .slot_choices
+                    .iter()
+                    .position(|c| c.slot == g.slot)
+                    .unwrap_or(0);
+                if let Some(i) = crate::widgets::scroll_step::combo_step(
+                    ui,
+                    &combo.response,
+                    view.slot_choices.len(),
+                    at,
+                ) {
+                    out.commands.push(Command::SetGroupSlot {
+                        group: gi,
+                        slot: view.slot_choices[i].slot.clone(),
+                    });
+                }
                 if !g.slot_enabled {
                     ui.colored_label(ERROR, "slot disabled");
                 }
@@ -182,7 +203,7 @@ impl SkillsUi {
                 let add = ui.button("Add gem\u{2026}");
                 self.rects
                     .note(&add, || format!("gem_{}_name", g.gems.len()));
-                if add.clicked() {
+                if add.clicked() || add.secondary_clicked() {
                     self.open_picker(gi, GemTarget::Slot(g.gems.len()));
                 }
                 ui.end_row();
@@ -253,6 +274,15 @@ impl SkillsUi {
         let mut on = gem.enabled;
         let check = ui.checkbox(&mut on, "");
         self.rects.note(&check, || format!("gem_{si}_enabled"));
+        self.hover_tip.track(
+            &check,
+            HoverTarget::GemEnabled {
+                group: gi,
+                slot: si,
+            },
+            self.now,
+            &mut out.queries,
+        );
         if check.changed() {
             out.commands.push(Command::SetGemEnabled {
                 group: gi,
@@ -278,7 +308,8 @@ impl SkillsUi {
         }
         let name = ui.add(button);
         self.rects.note(&name, || format!("gem_{si}_name"));
-        if name.clicked() {
+        // PoB's gem box drops its list on a right click too (GemSelectControl.lua:800-804)
+        if name.clicked() || name.secondary_clicked() {
             self.open_picker(gi, GemTarget::Slot(si));
         }
         self.gem_tooltip_hover(&name, gi, si, gem, out);
@@ -298,7 +329,7 @@ impl SkillsUi {
             },
             &mut out.commands,
         );
-        self.field(
+        let quality = self.field(
             ui,
             &format!("g{gi}_s{si}_quality"),
             &gem.quality.to_string(),
@@ -311,10 +342,19 @@ impl SkillsUi {
             },
             &mut out.commands,
         );
+        self.hover_tip.track(
+            &quality,
+            HoverTarget::GemQuality {
+                group: gi,
+                slot: si,
+            },
+            self.now,
+            &mut out.queries,
+        );
         if has_count {
             match gem.count {
                 Some(count) => {
-                    self.field(
+                    let response = self.field(
                         ui,
                         &format!("g{gi}_s{si}_count"),
                         &count.to_string(),
@@ -326,6 +366,15 @@ impl SkillsUi {
                             text,
                         },
                         &mut out.commands,
+                    );
+                    self.hover_tip.track(
+                        &response,
+                        HoverTarget::GemCount {
+                            group: gi,
+                            slot: si,
+                        },
+                        self.now,
+                        &mut out.queries,
                     );
                 }
                 None => {

@@ -1,5 +1,7 @@
 //! The item list: rows, drag to equip or reorder, the "…" menu, keys and the confirms.
 
+use super::db::DbDrag;
+use super::shared::{SharedDrag, drop_row, released_over};
 use super::{ItemDrag, ItemsOutput, ItemsUi};
 use crate::engine::views::{ItemEntry, ItemsView};
 use crate::engine::{Command, ItemTooltipQuery};
@@ -35,7 +37,7 @@ pub fn delete_prompt(entry: &ItemEntry) -> Option<String> {
 }
 
 /// What a reorderable column of rows reports.
-pub(super) struct Reordered {
+pub(crate) struct Reordered {
     /// One click response per row
     pub rows: Vec<egui::Response>,
     /// `from`, and where it ends up (as `drop_index`)
@@ -45,7 +47,7 @@ pub(super) struct Reordered {
 /// Draws `n` rows that can be dragged (carrying `payload(i)`) and, when `reorder` is on,
 /// dropped on each other. `draw` fills a row.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn reorder_rows<P: Send + Sync + 'static>(
+pub(crate) fn reorder_rows<P: Send + Sync + 'static>(
     ui: &mut egui::Ui,
     salt: &str,
     n: usize,
@@ -116,12 +118,15 @@ impl ItemsUi {
             let f = &view.list_filter;
             let current = f.labels.get(f.selected).map_or("", String::as_str);
             let combo = ui.add_enabled_ui(f.enabled, |ui| {
-                egui::ComboBox::from_id_salt("items_filter")
+                crate::widgets::dropdown::Dropdown::from_id_salt("items_filter")
                     .selected_text(pob_text(current, 14.0, default))
                     .show_ui(ui, |ui| {
                         for (i, text) in f.labels.iter().enumerate() {
-                            let item =
-                                ui.selectable_label(i == f.selected, pob_text(text, 14.0, default));
+                            let item = crate::widgets::dropdown::item(
+                                ui,
+                                i == f.selected,
+                                pob_text(text, 14.0, default),
+                            );
                             self.rects.note(&item, || format!("filter_item_{i}"));
                             if item.clicked() && i != f.selected {
                                 out.commands.push(Command::SetItemListFilter { index: i });
@@ -130,6 +135,15 @@ impl ItemsUi {
                     })
             });
             self.rects.note(&combo.inner.response, || "filter".into());
+            // the wheel and the arrows step it (DropDownControl.lua:476-516)
+            if let Some(index) = crate::widgets::scroll_step::combo_step(
+                ui,
+                &combo.inner.response,
+                f.labels.len(),
+                f.selected,
+            ) {
+                out.commands.push(Command::SetItemListFilter { index });
+            }
             let sort = ui.button("Sort");
             self.rects.note(&sort, || "sort".into());
             if sort.clicked() {
@@ -167,6 +181,11 @@ impl ItemsUi {
             .filter_map(|id| view.items.iter().find(|e| e.id == *id))
             .collect();
         let selected = self.selected;
+        // a shared item or a database row dropped on the list is added to the build (NF-2,
+        // ItemsTab.lua:1184-1191); peeked before the rows' own drop zone takes it
+        let shared = egui::DragAndDrop::payload::<SharedDrag>(ui.ctx());
+        let db = egui::DragAndDrop::payload::<DbDrag>(ui.ctx());
+        let top = ui.cursor().min;
         let reordered = reorder_rows(
             ui,
             "items_row",
@@ -196,15 +215,52 @@ impl ItemsUi {
                     });
             },
         );
+        let area = Rect::from_min_max(top, ui.max_rect().max);
+        // at the row under the cursor, as PoB's list marks it; a filtered list doesn't take a
+        // position (ListControl.lua:157-164), so the item is appended
+        let at = view.can_reorder.then(|| {
+            drop_row(
+                &reordered.rows,
+                ui.input(|i| i.pointer.interact_pos()).map(|p| p.y),
+            )
+        });
+        if let Some(drag) = released_over(ui, shared, area) {
+            out.commands.push(Command::DropSharedItem {
+                index: drag.index,
+                slot: None,
+                at,
+            });
+        }
+        if let Some(drag) = released_over(ui, db, area) {
+            out.commands.push(Command::DropDbItemOnList {
+                db: drag.db,
+                name: drag.name.clone(),
+                at,
+            });
+        }
         let mut list_focus = false;
         for (i, row) in reordered.rows.iter().enumerate() {
             let entry = rows[i];
             self.rects.note(row, || format!("row_{}", entry.id));
+            let (ctrl, shift) = ui.input(|inp| {
+                (
+                    inp.modifiers.ctrl || inp.modifiers.command,
+                    inp.modifiers.shift,
+                )
+            });
             if row.clicked() {
                 self.selected = Some(entry.id);
                 row.request_focus();
+                // PoB's Ctrl+click equips the item into its slot or takes it out, Ctrl+Shift
+                // into the second slot (ItemListControl.lua:290-314); once per double click
+                if ctrl && !row.double_clicked() {
+                    out.commands.push(Command::QuickEquipItem {
+                        id: entry.id,
+                        second_slot: shift,
+                    });
+                }
             }
-            if row.double_clicked() {
+            if row.double_clicked() && !ctrl {
                 out.commands.push(Command::EditItem { id: entry.id });
             }
             self.note_hover(
@@ -212,9 +268,26 @@ impl ItemsUi {
                 ItemTooltipQuery {
                     id: entry.id,
                     slot: None,
+                    theirs: false,
+                    shift: false,
+                    shared: None,
                 },
             );
+            if row.has_focus() {
+                crate::ui::shortcuts::keep_arrows(ui.ctx(), row.id);
+            }
             list_focus |= row.has_focus();
+        }
+        // Up, Down, Home and End move the selection (ListControl.lua:375-382)
+        if list_focus && !self.has_dialog() && !self.modal && !ui.ctx().text_edit_focused() {
+            let at = self
+                .selected
+                .and_then(|id| rows.iter().position(|e| e.id == id));
+            if let Some(i) = ui.input_mut(|inp| crate::ui::shortcuts::list_key(inp, rows.len(), at))
+            {
+                self.selected = Some(rows[i].id);
+                reordered.rows[i].request_focus();
+            }
         }
         // keys act on the selected item (by id), whichever index-keyed row holds the focus
         if list_focus
@@ -241,7 +314,7 @@ impl ItemsUi {
             self.copy_asked = Some(entry.id);
             out.queries.push(Command::CopyItem { id: entry.id });
         }
-        if ui.input(|inp| inp.key_pressed(egui::Key::Delete)) {
+        if ui.input(crate::ui::shortcuts::list_delete) {
             match delete_prompt(entry) {
                 Some(text) => self.confirm_delete = Some((entry.id, text)),
                 None => out.commands.push(Command::DeleteItem {
@@ -255,7 +328,9 @@ impl ItemsUi {
     /// The confirms for Delete and Delete all.
     pub(super) fn dialogs(&mut self, ctx: &egui::Context, out: &mut ItemsOutput) {
         if let Some((id, text)) = self.confirm_delete.clone() {
-            let mut choice = None;
+            // Esc is PoB's Cancel (PopupDialog.lua:72-77)
+            let window = egui::Id::unique("items_delete");
+            let mut choice = crate::widgets::escape::escape(ctx, window).then_some(false);
             egui::Window::new("Delete Item")
                 .collapsible(false)
                 .resizable(false)
@@ -273,6 +348,7 @@ impl ItemsUi {
                         }
                     });
                 });
+            crate::widgets::escape::note(ctx, window);
             if choice == Some(true) {
                 out.commands.push(Command::DeleteItem {
                     id,
@@ -284,7 +360,9 @@ impl ItemsUi {
             }
         }
         if self.confirm_delete_all {
-            let mut choice = None;
+            // Esc is PoB's Cancel (PopupDialog.lua:72-77)
+            let window = egui::Id::unique("items_delete_all");
+            let mut choice = crate::widgets::escape::escape(ctx, window).then_some(false);
             egui::Window::new("Delete All")
                 .collapsible(false)
                 .resizable(false)
@@ -302,6 +380,7 @@ impl ItemsUi {
                         }
                     });
                 });
+            crate::widgets::escape::note(ctx, window);
             if choice == Some(true) {
                 out.commands.push(Command::DeleteAllItems);
             }

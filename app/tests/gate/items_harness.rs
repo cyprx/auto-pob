@@ -287,6 +287,8 @@ pub(crate) enum ItemsAction {
     AddDbItem {
         db: ItemDb,
         name: String,
+        #[serde(default)]
+        second_slot: bool,
     },
     Undo,
     Redo,
@@ -307,6 +309,17 @@ pub(crate) enum ItemsAction {
     #[serde(skip_deserializing)]
     Check {
         check: Box<ItemsCheckpoint>,
+    },
+    /// Recorded by items_lib's `act.db_drop` (R23)
+    DropDbItem {
+        db: ItemDb,
+        name: String,
+        slot: String,
+    },
+    /// Recorded by items_lib's `act.quick_equip`
+    QuickEquipItem {
+        id: u32,
+        second_slot: bool,
     },
 }
 
@@ -399,7 +412,15 @@ impl ItemsAction {
                 search_mode,
             }),
             ItemsAction::ViewDbItem { db, name } => Command::ViewDbItem { db, name },
-            ItemsAction::AddDbItem { db, name } => Command::AddDbItem { db, name },
+            ItemsAction::AddDbItem {
+                db,
+                name,
+                second_slot,
+            } => Command::AddDbItem {
+                db,
+                name,
+                second_slot,
+            },
             ItemsAction::OpenPopup { kind } => Command::OpenPopup(kind),
             ItemsAction::SetPopupControl { name, value } => {
                 Command::SetPopupControl { name, value }
@@ -408,6 +429,10 @@ impl ItemsAction {
             ItemsAction::ClosePopup => Command::ClosePopup,
             ItemsAction::Undo => Command::Undo(Tab::Items),
             ItemsAction::Redo => Command::Redo(Tab::Items),
+            ItemsAction::DropDbItem { db, name, slot } => Command::DropDbItem { db, name, slot },
+            ItemsAction::QuickEquipItem { id, second_slot } => {
+                Command::QuickEquipItem { id, second_slot }
+            }
             ItemsAction::Check { .. } => return None,
         })
     }
@@ -632,7 +657,9 @@ pub(crate) fn run_items_recipe(name: &str) -> (ItemsRecipe, Session) {
                 // the panel's rows can't be clicked while PoB still loads or sorts them
                 if matches!(
                     action,
-                    ItemsAction::ViewDbItem { .. } | ItemsAction::AddDbItem { .. }
+                    ItemsAction::ViewDbItem { .. }
+                        | ItemsAction::AddDbItem { .. }
+                        | ItemsAction::DropDbItem { .. }
                 ) {
                     settle(&mut s);
                 }
@@ -711,7 +738,9 @@ pub(crate) fn run_items_recipe(name: &str) -> (ItemsRecipe, Session) {
                     ItemsAction::SetItemDb { .. } => {
                         assert!(affected.item_db, "{name}: {action:?} doesn't flag the DB")
                     }
-                    ItemsAction::AddDbItem { .. } => assert!(
+                    ItemsAction::AddDbItem { .. }
+                    | ItemsAction::DropDbItem { .. }
+                    | ItemsAction::QuickEquipItem { .. } => assert!(
                         affected.items && affected.build && affected.recalc,
                         "{name}: {action:?} isn't an item edit"
                     ),

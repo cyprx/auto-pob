@@ -6,6 +6,7 @@ pub mod db;
 pub mod display;
 pub mod list;
 pub mod sets;
+pub mod shared;
 pub mod slots;
 pub mod text_window;
 
@@ -25,6 +26,9 @@ pub struct ItemsOutput {
     pub commands: Vec<Command>,
     /// Questions (tooltips, copy); the app sends them without waiting for the answer.
     pub queries: Vec<Command>,
+    /// The tree dropdown's "Manage..." (PoB's spec manager): the app shows the Tree tab, where
+    /// ours lives
+    pub manage_trees: bool,
 }
 
 /// The payload of a list row being dragged: onto a slot to equip, onto a row to reorder.
@@ -44,6 +48,8 @@ pub struct ItemsUi {
     confirm_delete_all: bool,
     /// The item whose copy text we asked for
     copy_asked: Option<u32>,
+    /// The shared item whose copy text we asked for (Ctrl+C on a shared row)
+    shared_copy_asked: Option<usize>,
     /// Text to hand to the system clipboard next frame
     clipboard: Option<String>,
     tooltip: Option<Arc<ItemTooltipView>>,
@@ -72,6 +78,12 @@ pub struct ItemsUi {
     /// An app-level dialog is open, so shortcuts are left alone
     modal: bool,
     pub(crate) rects: Rects,
+    /// The slot under the pointer last frame holds this item: E edits it (ItemsTab.lua:1460)
+    hovered_slot: Option<u32>,
+    /// The shared item row the Delete button acts on
+    shared_selected: Option<usize>,
+    /// A shared item the user asked to delete, until PoB's question is answered
+    confirm_shared_delete: Option<usize>,
 }
 
 impl ItemsUi {
@@ -97,6 +109,7 @@ impl ItemsUi {
             || self.confirm_delete_all
             || self.sets.is_open()
             || self.display.text_window.is_some()
+            || self.confirm_shared_delete.is_some()
     }
 
     /// Closes the dialogs, as when the user leaves the tab.
@@ -104,10 +117,12 @@ impl ItemsUi {
         self.confirm_delete = None;
         self.confirm_delete_all = false;
         self.copy_asked = None;
+        self.shared_copy_asked = None;
         self.clipboard = None;
         self.sets.close();
         self.display.text_window = None;
         self.display.submitted = None;
+        self.confirm_shared_delete = None;
     }
 
     /// What must go out before Save or a tab change, even while the tab isn't drawn: a quality
@@ -173,6 +188,11 @@ impl ItemsUi {
     }
 
     #[cfg(test)]
+    #[cfg(test)]
+    pub(crate) fn open_text_window_for_test(&mut self) {
+        self.display.text_window = Some(text_window::TextWindow::create());
+    }
+
     pub fn text_window_open(&self) -> bool {
         self.display.text_window.is_some()
     }
@@ -249,8 +269,12 @@ impl ItemsUi {
                     self.tooltip = Some(t.clone());
                 }
             }
-            Snapshot::ItemText(t) if self.copy_asked == Some(t.id) => {
+            Snapshot::ItemText(t) if !t.shared && self.copy_asked == Some(t.id) => {
                 self.copy_asked = None;
+                self.clipboard = Some(t.text.clone());
+            }
+            Snapshot::ItemText(t) if t.shared && self.shared_copy_asked == Some(t.id as usize) => {
+                self.shared_copy_asked = None;
                 self.clipboard = Some(t.text.clone());
             }
             _ => {}
@@ -270,11 +294,15 @@ impl ItemsUi {
     }
 
     /// Notes what the pointer is over, and draws the tooltip once its reply is here.
-    pub(crate) fn note_hover(&mut self, response: &egui::Response, query: ItemTooltipQuery) {
-        let dragging = egui::DragAndDrop::has_payload_of_type::<ItemDrag>(&response.ctx);
+    pub(crate) fn note_hover(&mut self, response: &egui::Response, mut query: ItemTooltipQuery) {
+        let dragging = egui::DragAndDrop::has_payload_of_type::<ItemDrag>(&response.ctx)
+            || egui::DragAndDrop::has_payload_of_type::<db::DbDrag>(&response.ctx)
+            || egui::DragAndDrop::has_payload_of_type::<shared::SharedDrag>(&response.ctx);
         if dragging {
             return;
         }
+        // Shift held asks for PoB's child tooltips (R34); a change of key is a new question
+        query.shift = response.ctx.input(|i| i.modifiers.shift);
         if response.hovered() {
             self.hovered_now = Some(query.clone());
         }
@@ -302,6 +330,7 @@ impl ItemsUi {
                 .push(Command::CancelDisplayItem { if_id: Some(id) });
         }
         self.hovered_now = None;
+        self.hovered_slot = None;
         self.shortcuts(ui, &view, &mut out);
 
         self.set_bar(ui, &view, &mut out);
@@ -317,9 +346,12 @@ impl ItemsUi {
                 Some(d) => out
                     .commands
                     .extend(display::show(ui, &d, &mut self.display, busy)),
-                None => out
-                    .commands
-                    .extend(display::show_empty(ui, &mut self.display)),
+                None => {
+                    out.commands
+                        .extend(display::show_empty(ui, &mut self.display));
+                    // PoB's shared list hangs below "Craft item..."
+                    self.shared_panel(ui, &view, &mut out);
+                }
             });
         out.queries.extend(self.display.crafting.take_queries());
         egui::CentralPanel::default().show(ui, |ui| {
@@ -337,6 +369,7 @@ impl ItemsUi {
 
         let ctx = ui.ctx().clone();
         self.dialogs(&ctx, &mut out);
+        self.shared_dialog(&ctx, &view, &mut out);
         out.commands.extend(self.display.text_window(&ctx));
         self.sets_window(&ctx, &view, &mut out);
 
@@ -399,6 +432,11 @@ impl ItemsUi {
             .or_else(|| self.display.crafting.rects.map.get(key))
             .or_else(|| self.db.rects.map.get(key))
             .unwrap_or_else(|| panic!("no rect {key}; have {:?}", self.rects.map.keys()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_rect(&self, key: &str) -> bool {
+        self.rects.map.contains_key(key) || self.display.rects.map.contains_key(key)
     }
 }
 

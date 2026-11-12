@@ -6,6 +6,7 @@
 
 use crate::engine::views::{
     AccountView, CharacterEntry, PendingRequest, PublicStage, ShareView, SiteRef,
+    account_name_state,
 };
 use crate::engine::{CharacterPart, Command, ImportMode, Realm, Snapshot};
 use crate::theme;
@@ -108,6 +109,10 @@ pub struct ImportUi {
     /// An `ExportShareCode` is out; its answer is copied
     await_code: bool,
     copy_ready: Option<String>,
+    /// Ctrl+I: the code box takes the keyboard when next drawn (Build.lua:1162-1163)
+    focus_code: bool,
+    /// The account picked in PoB's history dropdown (NF-8)
+    history_pick: Option<String>,
 }
 
 impl Default for ImportUi {
@@ -144,7 +149,16 @@ impl Default for ImportUi {
             site: None,
             await_code: false,
             copy_ready: None,
+            focus_code: false,
+            history_pick: None,
         }
+    }
+}
+
+impl ImportUi {
+    /// Ctrl+I selects the code box (`importCodeIn`)
+    pub fn focus_code(&mut self) {
+        self.focus_code = true;
     }
 }
 
@@ -417,15 +431,28 @@ impl ImportUi {
         };
         ui.horizontal(|ui| {
             let before = self.realm;
-            let combo = egui::ComboBox::from_id_salt("import_realm")
+            let combo = crate::widgets::dropdown::Dropdown::from_id_salt("import_realm")
                 .selected_text(realm_label(self.realm))
                 .show_ui(ui, |ui| {
                     for realm in [Realm::Pc, Realm::Xbox, Realm::Sony] {
-                        let r = ui.selectable_value(&mut self.realm, realm, realm_label(realm));
+                        let r = crate::widgets::dropdown::value(
+                            ui,
+                            &mut self.realm,
+                            realm,
+                            realm_label(realm),
+                        );
                         mark(ui, &format!("realm:{}", realm.pob_id()), &r);
                     }
                 });
             mark(ui, "realm_combo", &combo.response);
+            // the wheel and the arrows step it (DropDownControl.lua:476-516)
+            let realms = [Realm::Pc, Realm::Xbox, Realm::Sony];
+            let at = realms.iter().position(|r| *r == self.realm).unwrap_or(0);
+            if let Some(i) =
+                crate::widgets::scroll_step::combo_step(ui, &combo.response, realms.len(), at)
+            {
+                self.realm = realms[i];
+            }
             if before != self.realm {
                 self.league = None;
                 self.selected = None;
@@ -570,19 +597,82 @@ impl ImportUi {
                         self.account_box
                             .show(ui, self.account_id, &public.account, false, &opts);
                     mark(ui, "account_name", &r);
+                    // PoB enables Start only for a name with its discriminator (NF-8)
+                    let (_, can_start) = account_name_state(&self.account_box.text);
                     let name = self.account_box.text.trim().to_owned();
-                    let start = ui.add_enabled(!name.is_empty(), theme::primary_button("Start"));
+                    let start = ui.add_enabled(can_start, theme::primary_button("Start"));
                     mark(ui, "start", &start);
                     // Only Start, or Enter in the box, asks for the list. Leaving the box with
                     // the text (`entered`) is no request: nothing goes out the user didn't ask for.
                     let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if start.clicked() || (enter && !name.is_empty()) {
+                    if start.clicked() || (enter && can_start) {
                         out.commands.push(Command::ListPublicCharacters {
                             account: name,
                             realm: self.realm,
                         });
                     }
+                    // PoB's recent accounts: a pick fills the box, X forgets the picked one
+                    if !public.history.is_empty() {
+                        // a pick of ours, else PoB's own selection (its last account used)
+                        let current = self
+                            .history_pick
+                            .clone()
+                            .or_else(|| public.history_selected.clone())
+                            .filter(|a| public.history.contains(a));
+                        let combo =
+                            crate::widgets::dropdown::Dropdown::from_id_salt("import_history")
+                                .selected_text(current.as_deref().unwrap_or("Recent"))
+                                .show_ui(ui, |ui| {
+                                    for account in &public.history {
+                                        let item = crate::widgets::dropdown::item(
+                                            ui,
+                                            current.as_ref() == Some(account),
+                                            account,
+                                        );
+                                        mark(ui, &format!("history:{account}"), &item);
+                                        if item.clicked() {
+                                            // PoB's pick puts the name in the box; it stays there
+                                            // while the box has focus, until Start or Enter
+                                            self.history_pick = Some(account.clone());
+                                            self.account_box.text = account.clone();
+                                            ui.memory_mut(|m| m.request_focus(self.account_id));
+                                        }
+                                    }
+                                });
+                        mark(ui, "history", &combo.response);
+                        // the wheel and the arrows step it as a pick (DropDownControl.lua)
+                        let at = current
+                            .as_ref()
+                            .and_then(|c| public.history.iter().position(|a| a == c))
+                            .unwrap_or(0);
+                        if let Some(i) = crate::widgets::scroll_step::combo_step(
+                            ui,
+                            &combo.response,
+                            public.history.len(),
+                            at,
+                        ) {
+                            // as the click: the name goes in the box, which takes the keyboard
+                            let account = public.history[i].clone();
+                            self.history_pick = Some(account.clone());
+                            self.account_box.text = account;
+                            ui.memory_mut(|m| m.request_focus(self.account_id));
+                        }
+                        let picked = current;
+                        let remove = ui
+                            .add_enabled(picked.is_some(), egui::Button::new("X"))
+                            .on_hover_text("Removes account from the dropdown list");
+                        mark(ui, "history_remove", &remove);
+                        if remove.clicked()
+                            && let Some(account) = picked
+                        {
+                            self.history_pick = None;
+                            out.commands.push(Command::RemoveAccountHistory { account });
+                        }
+                    }
                 });
+                if account_name_state(&self.account_box.text).0 {
+                    ui.colored_label(ui.visuals().error_fg_color, &public.missing_discriminator);
+                }
                 Self::status_lines(ui, &public.status, None);
             }
             PublicStage::Fetching | PublicStage::Importing => {
@@ -601,6 +691,9 @@ impl ImportUi {
                     out,
                     |league, name, part| Command::ImportPublicCharacter { league, name, part },
                 );
+                if !public.bandit_note.is_empty() {
+                    ui.label(&public.bandit_note);
+                }
                 let r = ui.button("Close");
                 mark(ui, "close_public", &r);
                 if r.clicked() {
@@ -631,16 +724,29 @@ impl ImportUi {
     ) {
         ui.horizontal(|ui| {
             ui.label("League:");
-            let combo = egui::ComboBox::from_id_salt("import_league")
+            let combo = crate::widgets::dropdown::Dropdown::from_id_salt("import_league")
                 .selected_text(self.league.as_deref().unwrap_or("Any"))
                 .show_ui(ui, |ui| {
                     for index in 0..leagues.len() {
                         let value = league_value(leagues, index);
-                        let r = ui.selectable_value(&mut self.league, value, &leagues[index]);
+                        let r = crate::widgets::dropdown::value(
+                            ui,
+                            &mut self.league,
+                            value,
+                            &leagues[index],
+                        );
                         mark(ui, &format!("league:{}", leagues[index]), &r);
                     }
                 });
             mark(ui, "league_combo", &combo.response);
+            let at = (0..leagues.len())
+                .position(|i| league_value(leagues, i) == self.league)
+                .unwrap_or(0);
+            if let Some(i) =
+                crate::widgets::scroll_step::combo_step(ui, &combo.response, leagues.len(), at)
+            {
+                self.league = league_value(leagues, i);
+            }
         });
         let visible: Vec<&CharacterEntry> = characters
             .iter()
@@ -736,6 +842,9 @@ impl ImportUi {
                 .desired_width(f32::INFINITY),
         );
         mark(ui, "code_box", &r);
+        if std::mem::take(&mut self.focus_code) {
+            r.request_focus();
+        }
         if r.changed() {
             self.code_dirty = Some(now);
         }
@@ -759,7 +868,8 @@ impl ImportUi {
         if !stale && !self.code.trim().is_empty() && !view.detail.is_empty() {
             ui.colored_label(detail_colour(view.valid, ui.visuals()), &view.detail);
         }
-        if !view.can_import_to_this_build && self.mode == ImportMode::ThisBuild {
+        // PoB offers both only for a build with a file
+        if !view.can_import_to_this_build && self.mode != ImportMode::NewBuild {
             self.mode = ImportMode::NewBuild;
         }
         ui.horizontal(|ui| {
@@ -772,6 +882,12 @@ impl ImportUi {
             if view.can_import_to_this_build {
                 let r = ui.radio_value(&mut self.mode, ImportMode::ThisBuild, "Replace this build");
                 mark(ui, "mode:this", &r);
+                let r = ui.radio_value(
+                    &mut self.mode,
+                    ImportMode::Comparison,
+                    "Import as comparison",
+                );
+                mark(ui, "mode:compare", &r);
             }
         });
         ui.horizontal(|ui| {
@@ -797,6 +913,11 @@ impl ImportUi {
                         });
                     }
                     ImportMode::NewBuild => out.confirm = Some(Confirm::NewBuild { url }),
+                    // the build stays as it is; PoB then shows its Compare tab
+                    ImportMode::Comparison => out.commands.push(Command::ImportFromUrl {
+                        url,
+                        mode: ImportMode::Comparison,
+                    }),
                 }
             }
         });
@@ -829,12 +950,17 @@ impl ImportUi {
                     .map_or("", |s: &SiteRef| s.label.as_str())
                     .to_owned()
             };
-            let combo = egui::ComboBox::from_id_salt("import_site")
+            let combo = crate::widgets::dropdown::Dropdown::from_id_salt("import_site")
                 .selected_text(label(&chosen))
                 .show_ui(ui, |ui| {
                     for site in &view.sites {
                         let mut value = chosen.clone();
-                        let r = ui.selectable_value(&mut value, Some(site.id.clone()), &site.label);
+                        let r = crate::widgets::dropdown::value(
+                            ui,
+                            &mut value,
+                            Some(site.id.clone()),
+                            &site.label,
+                        );
                         mark(ui, &format!("site:{}", site.id), &r);
                         if r.clicked() {
                             self.site = Some(site.id.clone());
@@ -842,6 +968,16 @@ impl ImportUi {
                     }
                 });
             mark(ui, "site_combo", &combo.response);
+            let at = view
+                .sites
+                .iter()
+                .position(|s| Some(&s.id) == chosen.as_ref())
+                .unwrap_or(0);
+            if let Some(i) =
+                crate::widgets::scroll_step::combo_step(ui, &combo.response, view.sites.len(), at)
+            {
+                self.site = Some(view.sites[i].id.clone());
+            }
             let r = ui.add_enabled(
                 chosen.is_some() && !view.sharing,
                 theme::primary_button("Share"),
@@ -1540,6 +1676,31 @@ pub(crate) mod tests {
         assert_eq!(h.ui.mode, ImportMode::NewBuild);
     }
 
+    #[test]
+    fn import_as_comparison_mode_offered() {
+        // PoB's third mode, only for a build with a file
+        let mut h = Harness::new();
+        h.share(valid_share());
+        h.frame(vec![]);
+        assert!(marked("mode:compare").is_some());
+        h.click("mode:compare");
+        assert_eq!(h.ui.mode, ImportMode::Comparison);
+        // the build stays: no question, the import goes at once
+        h.click("import_code");
+        assert!(h.confirms.is_empty());
+        assert_eq!(
+            h.log,
+            ["ImportFromUrl { url: \"https://pobb.in/abc\", mode: Comparison }"]
+        );
+        // a build without a file: not offered, and a chosen mode falls back
+        let mut view = valid_share();
+        view.import.can_import_to_this_build = false;
+        h.share(view);
+        h.frame(vec![]);
+        assert!(marked("mode:compare").is_none());
+        assert_eq!(h.ui.mode, ImportMode::NewBuild);
+    }
+
     fn valid_share() -> ShareView {
         let mut view = share();
         view.import.text = "https://pobb.in/abc".into();
@@ -1834,5 +1995,151 @@ pub(crate) mod tests {
         view.public.stage = PublicStage::Importing;
         h.account(view);
         assert!(h.ui.cancel_signs_out("Importing passive tree"));
+    }
+
+    // ---- Task 13: PoB's account history and its labels (NF-8, controller rulings) ----
+
+    #[test]
+    fn missing_discriminator_shows_pobs_label_and_disables_start() {
+        let mut h = Harness::new();
+        let mut view = signed_in();
+        view.public.missing_discriminator = "Missing discriminator e.g. #1234".into();
+        h.account(view);
+        h.frame(vec![]);
+        h.click("mode:name");
+        h.click("account_name");
+        h.frame(vec![egui::Event::Text("Someone".into())]);
+        h.frame(vec![]);
+        assert!(h.has_text("Missing discriminator e.g. #1234"));
+        h.click("start");
+        assert!(h.log.is_empty(), "{:?}", h.log);
+        h.click("account_name");
+        h.frame(vec![egui::Event::Text("Someone#1234".into())]);
+        h.frame(vec![]);
+        assert!(!h.has_text("Missing discriminator"));
+        h.click("start");
+        assert_eq!(
+            h.log,
+            ["ListPublicCharacters { account: \"Someone#1234\", realm: Pc }"]
+        );
+    }
+
+    #[test]
+    fn history_pick_fills_the_box_and_x_removes_it() {
+        let mut h = Harness::new();
+        let mut view = signed_in();
+        view.public.history = vec!["alice#1234".into(), "Bob#0001".into()];
+        h.account(view);
+        h.frame(vec![]);
+        h.click("mode:name");
+        h.click("history");
+        h.frame(vec![]);
+        h.click("history:Bob#0001");
+        h.click("start");
+        assert_eq!(
+            h.log,
+            ["ListPublicCharacters { account: \"Bob#0001\", realm: Pc }"]
+        );
+        h.click("history_remove");
+        assert_eq!(
+            h.log[1..],
+            ["RemoveAccountHistory { account: \"Bob#0001\" }"]
+        );
+    }
+
+    /// 13a's account history steps with the wheel, as a pick into the account box
+    #[test]
+    fn the_wheel_steps_the_account_history() {
+        let mut h = Harness::new();
+        let mut view = signed_in();
+        view.public.history = vec!["alice#1234".into(), "Bob#0001".into()];
+        h.account(view);
+        h.frame(vec![]);
+        h.click("mode:name");
+        let history = marked("history").expect("no history").center();
+        h.frame(vec![egui::Event::PointerMoved(history)]);
+        h.frame(vec![egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::Vec2::new(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        h.frame(vec![]);
+        h.click("start");
+        assert_eq!(
+            h.log,
+            ["ListPublicCharacters { account: \"Bob#0001\", realm: Pc }"]
+        );
+    }
+
+    /// The realm is one of PoB's searchable dropdowns (SearchHost)
+    #[test]
+    fn the_realm_dropdown_filters_as_typed() {
+        let mut h = Harness::new();
+        h.account(signed_in());
+        h.frame(vec![]);
+        h.click("realm_combo");
+        h.frame(vec![]);
+        h.frame(vec![egui::Event::Text("xb".into())]);
+        h.frame(vec![]);
+        assert_eq!(
+            marked("realm:PC").unwrap().height(),
+            0.0,
+            "PC wasn't filtered out"
+        );
+        h.click("realm:XBOX");
+        assert_eq!(h.ui.realm, Realm::Xbox);
+    }
+
+    #[test]
+    fn the_character_list_shows_pobs_bandit_tip() {
+        let mut h = Harness::new();
+        let mut view = signed_in();
+        view.public = PublicView {
+            account: "Someone#1234".into(),
+            stage: PublicStage::SelectCharacter,
+            leagues: vec!["Standard".into(), "All".into()],
+            characters: vec![ch("Dora", "Standard")],
+            bandit_note: "Tip: After you finish importing a character, make sure you update the bandit choice,".into(),
+            ..PublicView::default()
+        };
+        h.account(view);
+        h.frame(vec![]);
+        h.click("mode:name");
+        h.frame(vec![]);
+        assert!(h.has_text("update the bandit choice"));
+    }
+
+    #[test]
+    fn account_name_state_follows_pobs_patterns() {
+        // (label shown, Start enabled) as ImportTab.lua:367-404 decide them
+        for (text, want) in [
+            ("", (false, false)),
+            ("Name", (true, false)),
+            ("Name#123", (true, false)),
+            ("Name#1234", (false, true)),
+            ("Name-1234", (false, true)),
+            ("#1234", (false, false)),
+            (" #1234", (false, false)),
+            ("Name#1234 ", (true, false)),
+            ("Näme#1234", (false, true)),
+            ("Name#12345", (true, false)),
+        ] {
+            assert_eq!(account_name_state(text), want, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn x_removes_pobs_selected_account_without_a_pick() {
+        let mut h = Harness::new();
+        let mut view = signed_in();
+        view.public.history = vec!["alice#1234".into(), "Bob#0001".into()];
+        view.public.history_selected = Some("alice#1234".into());
+        h.account(view);
+        h.frame(vec![]);
+        h.click("mode:name");
+        h.click("history_remove");
+        assert_eq!(h.log, ["RemoveAccountHistory { account: \"alice#1234\" }"]);
     }
 }

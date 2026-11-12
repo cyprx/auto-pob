@@ -66,7 +66,7 @@ end
 function act.code_import(text, mode)
 	local controls = build.importTab.controls
 	controls.importCodeIn:SetText(text, true)
-	controls.importCodeMode:SetSel(mode == "this" and 1 or 2)
+	controls.importCodeMode:SetSel(mode == "this" and 1 or mode == "compare" and 3 or 2)
 	controls.importCodeGo.onClick()
 	frame()
 end

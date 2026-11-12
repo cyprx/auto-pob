@@ -1,33 +1,104 @@
 name: Release
 
+# A pushed vX.Y.Z tag: gate, package, publish a GitHub release.
+# A pushed vX.Y.Z-test* tag, or a manual run on any ref (a tag included): gate, package,
+# upload a workflow artifact. Only a pushed vX.Y.Z tag publishes.
 on:
   push:
     tags:
       - v[0-9]+.[0-9]+.[0-9]+
+      - v[0-9]+.[0-9]+.[0-9]+-test*
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  create-release:
-    runs-on: ubuntu-latest
+  gate:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extract version from tag
-        id: version
-        run: echo "RELEASE_VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y luajit libluajit-5.1-dev
 
-      - name: Extract changelog
-        id: changelog
-        run: |
-          VERSION=${{ steps.version.outputs.RELEASE_VERSION }}
-          # Extract content between this version and the next section
-          NOTES=$(sed -n "/## \[$VERSION\]/,/## \[/p" CHANGELOG.md | sed '1d;$d')
-          echo "NOTES<<EOF" >> $GITHUB_OUTPUT
-          echo "$NOTES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+      - uses: dtolnay/rust-toolchain@1.99.1
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+      - uses: Swatinem/rust-cache@v2
+
+      # The key changes when the pinned PoB version in game.rs changes.
+      - name: Cache upstream PoB
+        id: pob-cache
+        uses: actions/cache@v4
         with:
-          body: ${{ steps.changelog.outputs.NOTES }}
+          path: ~/pob
+          key: pob-${{ hashFiles('app/src/game.rs') }}
+
+      - name: Fetch upstream PoB
+        if: steps.pob-cache.outputs.cache-hit != 'true'
+        run: cargo run -p auto-pob --example fetch_pob -- ~/pob
+
+      - name: Gate tests
+        run: AUTO_POB_POB_DIR=$HOME/pob scripts/gate.sh -j2
+
+  package:
+    needs: gate
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@1.99.1
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Work out the version
+        id: version
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [[ $REF_TYPE == tag ]]; then
+            printf 'version=%s\n' "$REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-test" >> "$GITHUB_OUTPUT"
+          fi
+
+      # package.sh refuses a vX.Y.Z tag that differs from app/Cargo.toml's version. The tag
+      # reaches the shell only as an environment variable, never as script text.
+      - name: Package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: scripts/package.sh --version "$VERSION" --out dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: auto-pob-linux-x86_64
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  publish:
+    # only a plain vX.Y.Z tag publishes; -test tags and manual runs stop at the artifact
+    if: github.event_name == 'push' && github.ref_type == 'tag' && !contains(github.ref_name, '-test')
+    needs: package
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: auto-pob-linux-x86_64
+          path: dist
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+          generate_release_notes: true

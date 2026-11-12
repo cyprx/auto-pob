@@ -37,6 +37,28 @@ function itemsDump()
 		can_redo = t.redo[1] ~= nil,
 	}
 	for i, label in ipairs(filter.list) do out.list_filter.labels[i] = label end
+	-- the "Passive tree:" dropdown, its list set as the tab's Draw sets it
+	local specSelect = t.controls.specSelect
+	specSelect:SetList(build.treeTab:GetSpecList())
+	out.specs = { labels = {}, selected = specSelect.selIndex - 1, enabled = specSelect:IsEnabled() and true or false }
+	for i, label in ipairs(specSelect.list) do out.specs.labels[i] = label end
+	-- the shared lists (NF-2): the rows as PoB's list draws them; the set rows and tooltips
+	-- through a set list control of the kind the Manage Item Sets window shows
+	out.shared_items, out.shared_sets = {}, {}
+	out.shared_shown = t.controls.sharedItemList:IsShown() and true or false
+	for i, item in ipairs(main.sharedItemList) do
+		out.shared_items[i] = { name = item.name, rarity = item.rarity, label = t.controls.sharedItemList:GetRowValue(1, i, item) }
+	end
+	local setList = new("SharedItemSetListControl", nil, { 0, 0, 300, 200 }, t)
+	for i, set in ipairs(main.sharedItemSetList) do
+		local tt = new("Tooltip")
+		setList:AddValueTooltip(tt, i, set)
+		local lines = {}
+		for _, line in ipairs(tt.lines) do
+			if line.text then lines[#lines + 1] = line.text end
+		end
+		out.shared_sets[i] = { title = setList:GetRowValue(1, i, set), lines = lines, raw_title = set.title }
+	end
 	for i, id in ipairs(list.list) do out.listed[i] = id end
 
 	for i, id in ipairs(t.itemOrderList) do
@@ -105,6 +127,13 @@ function tooltipDump(tt)
 			if type(line.background) == "string" then out.lines[i].background = line.background end
 		end
 	end
+	-- the child tooltips PoB draws beside it (the granted skills under Shift), the empty ones
+	-- drawing nothing
+	local children = {}
+	for _, child in ipairs(tt.childTooltips or {}) do
+		if #child.lines > 0 then children[#children + 1] = tooltipDump(child) end
+	end
+	if #children > 0 then out.children = children end
 	return out
 end
 
@@ -243,6 +272,8 @@ function displayDump()
 			max = item.clusterJewel.maxNodes,
 		}
 	end
+	-- one slider and box per line instead of the line dropdown (showAllItemAffixes)
+	if item.rangeLineList[1] and not c.displayItemRangeLine:IsShown() then out.stacked = true end
 	out.tooltip = tooltipDump(t.displayItemTooltip)
 	for i, line in ipairs(t.displayItemTooltip.lines) do
 		if line.modLine then out.tooltip.lines[i].mod_line = modLineRef(item, line.modLine) end
@@ -1064,13 +1095,222 @@ function act.db_view(db, name)
 	record({ cmd = "ViewDbItem", db = db, name = name })
 end
 
--- Ctrl+click: the key state is swapped for the call, as the Ctrl+V and Copy hooks are
-function act.db_add(db, name)
+-- Ctrl+click (Ctrl+Shift+click with `second`): the key state is swapped for the call, as the
+-- Ctrl+V and Copy hooks are
+function act.db_add(db, name, second)
 	local c, item, index = dbRow(db, name)
 	local saved = IsKeyDown
-	IsKeyDown = function(key) return key == "CTRL" end
+	IsKeyDown = function(key) return key == "CTRL" or (second and key == "SHIFT") end
 	local ok, err = pcall(c.OnSelClick, c, index, item, false)
 	IsKeyDown = saved
 	assert(ok, err)
-	record({ cmd = "AddDbItem", db = db, name = name })
+	record({ cmd = "AddDbItem", db = db, name = name, second_slot = second or false })
+end
+
+-- A row dragged onto a slot and released there: the row is picked up, the drag starts as the
+-- list's Draw starts it (ListControl.lua:146-156), the slot under the cursor becomes the target
+-- (ListControl.lua:166-176) and the button's release is PoB's own (ListControl.lua:423-452)
+function act.db_drop(db, name, slotName)
+	local c, item, index = dbRow(db, name)
+	local slot = tab().slots[slotName]
+	tab().controls.itemList:UpdateList()
+	tab():UpdateSockets()
+	c:SelectIndex(index)
+	c.selDragging = true
+	c.selDragActive = true
+	c.dragType, c.dragValue = c:GetDragValue(c.selIndex, c.selValue)
+	for _, target in ipairs(c.dragTargetList) do
+		if not target.CanReceiveDrag or target:CanReceiveDrag(c.dragType, c.dragValue) then
+			target.otherDragSource = c
+		end
+	end
+	assert(slot:IsShown() and slot.otherDragSource == c, slotName .. " doesn't take " .. name)
+	c.dragTarget = slot
+	c:OnKeyUp("LEFTBUTTON")
+	record({ cmd = "DropDbItem", db = db, name = name, slot = slotName })
+end
+
+-- Ctrl+click on an item list row (Ctrl+Shift+click with `second`), keys swapped for the call
+function act.quick_equip(id, second)
+	local list = itemList()
+	local index
+	for i, listed in ipairs(list.list) do
+		if listed == id then index = i end
+	end
+	assert(index, "item " .. id .. " is not listed")
+	local saved = IsKeyDown
+	IsKeyDown = function(key) return key == "CTRL" or (second and key == "SHIFT") end
+	local ok, err = pcall(list.OnSelClick, list, index, id, false)
+	IsKeyDown = saved
+	assert(ok, err)
+	record({ cmd = "QuickEquipItem", id = id, second_slot = second or false })
+end
+
+-- ---- Shared items (NF-2) ----
+
+-- A row of `source` dragged onto `target` and released there, as act.db_drop does: `at` is the
+-- row the target's Draw marks under the cursor
+local function sharedDrop(source, index, target, at)
+	-- each Draw starts with no drop row of its own (ListControl.lua:157)
+	source.selDragIndex = nil
+	source:SelectIndex(index)
+	source.selDragging = true
+	source.selDragActive = true
+	source.dragType, source.dragValue = source:GetDragValue(source.selIndex, source.selValue)
+	for _, t in ipairs(source.dragTargetList) do
+		if not t.CanReceiveDrag or t:CanReceiveDrag(source.dragType, source.dragValue) then
+			t.otherDragSource = source
+		end
+	end
+	assert(target.otherDragSource == source, "the target doesn't take it")
+	-- Draw marks a drop row only on a list that can be reordered (ListControl.lua:157-164)
+	target.selDragIndex = target.isMutable and at or nil
+	source.dragTarget = target
+	source:OnKeyUp("LEFTBUTTON")
+	target.selDragIndex = nil
+	assert(source.selValue == nil, "the drop didn't happen")
+	frame()
+end
+
+local function sharedList()
+	return tab().controls.sharedItemList
+end
+
+-- a build item dragged onto the shared list at 0-based row `at`
+function act.shared_add_item(id, at)
+	local list = itemList()
+	for i, listed in ipairs(list.list) do
+		if listed == id then sharedDrop(list, i, sharedList(), at + 1) return end
+	end
+	error("item " .. id .. " is not listed")
+end
+
+function act.shared_add_db(db, name, at)
+	local c, _, index = dbRow(db, name)
+	sharedDrop(c, index, sharedList(), at + 1)
+end
+
+-- shared item `index` (0-based) dragged onto a slot, or onto the item list at 0-based row `at`
+function act.shared_drop(index, slotName, at)
+	tab():UpdateSockets()
+	itemList():UpdateList()
+	local target = slotName and tab().slots[slotName] or itemList()
+	sharedDrop(sharedList(), index + 1, target, at and at + 1)
+end
+
+-- a database row dragged onto the item list at 0-based row `at` (ItemsTab.lua:1184-1187)
+function act.db_drop_on_list(db, name, at)
+	local c, _, index = dbRow(db, name)
+	itemList():UpdateList()
+	sharedDrop(c, index, itemList(), at and at + 1)
+end
+
+-- Ctrl+C on shared item `index` (0-based), PoB's ListControl key path with `Copy` caught
+function act.shared_copy(index)
+	local list = sharedList()
+	list:SelectIndex(index + 1)
+	local saved, text = Copy, nil
+	Copy = function(copied) text = copied end
+	local savedKey = IsKeyDown
+	IsKeyDown = function(key) return key == "CTRL" end
+	local ok, err = pcall(list.OnKeyDown, list, "c")
+	IsKeyDown, Copy = savedKey, saved
+	assert(ok, err)
+	return text
+end
+
+-- an item dragged onto the sidebar's minion dropdown: a build item (`kind` "item", `a` its id),
+-- a database row ("db", `a` the database, `b` the name) or a shared item ("shared", 0-based `a`)
+function act.minion_drop(kind, a, b)
+	build:RefreshSkillSelectControls(build.controls, build.mainSocketGroup, "")
+	local target = build.controls.mainSkillMinion
+	if kind == "item" then
+		local list = itemList()
+		list:UpdateList()
+		for i, listed in ipairs(list.list) do
+			if listed == a then sharedDrop(list, i, target, nil) return end
+		end
+		error("item " .. a .. " is not listed")
+	elseif kind == "db" then
+		local c, _, index = dbRow(a, b)
+		sharedDrop(c, index, target, nil)
+	else
+		sharedDrop(sharedList(), a + 1, target, nil)
+	end
+end
+
+-- the Delete button and its confirmation
+function act.shared_delete(index)
+	local list = sharedList()
+	list:SelectIndex(index + 1)
+	list.controls.delete.onClick()
+	confirm()
+end
+
+-- a drag within the list: `to` is the final 0-based position
+function act.shared_move(from, to)
+	local list = sharedList()
+	list:SelectIndex(from + 1)
+	list.selDragging = true
+	list.selDragActive = true
+	list.selDragIndex = to > from and to + 2 or to + 1
+	list:OnKeyUp("LEFTBUTTON")
+end
+
+function act.shared_view(index)
+	local list = sharedList()
+	list:OnSelClick(index + 1, main.sharedItemList[index + 1], true)
+end
+
+-- The Items tab's "Manage..." (ItemsTab.lua:113-116): PoB's Manage Item Sets window
+local function withSetManager(fn)
+	local depth = #main.popups
+	tab().controls.setManage.onClick()
+	assert(#main.popups == depth + 1, "Manage... opened no window")
+	local c = main.popups[1].controls
+	fn(c.setList, c.sharedList)
+	while #main.popups > depth do main:ClosePopup() end
+end
+
+function act.shared_set_add(id)
+	withSetManager(function(setList, shared)
+		for i, value in ipairs(setList.list) do
+			if value == id then sharedDrop(setList, i, shared, nil) return end
+		end
+		error("no set " .. id)
+	end)
+end
+
+function act.shared_set_import(index)
+	withSetManager(function(setList, shared)
+		sharedDrop(shared, index + 1, setList, nil)
+	end)
+end
+
+function act.shared_set_delete(index)
+	withSetManager(function(_, shared)
+		shared:SelectIndex(index + 1)
+		shared.controls.delete.onClick()
+		confirm()
+	end)
+end
+
+function act.shared_set_rename(index, title)
+	withSetManager(function(_, shared)
+		shared:SelectIndex(index + 1)
+		shared.controls.rename.onClick()
+		local popup = main.popups[1]
+		popup.controls.edit:SetText(title, true)
+		popup.controls.save.onClick()
+	end)
+end
+
+function act.shared_set_move(from, to)
+	withSetManager(function(_, shared)
+		shared:SelectIndex(from + 1)
+		shared.selDragging = true
+		shared.selDragActive = true
+		shared.selDragIndex = to > from and to + 2 or to + 1
+		shared:OnKeyUp("LEFTBUTTON")
+	end)
 end

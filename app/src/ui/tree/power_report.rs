@@ -1,7 +1,7 @@
 //! The power report: PoB's table of the nodes worth taking, sortable by column.
 
 use super::Rects;
-use crate::engine::{PowerReport, PowerReportRow};
+use crate::engine::{Command, PowerReport, PowerReportRow};
 use crate::theme;
 use crate::widgets::{ListColumn, list, list_sort};
 use eframe::egui;
@@ -47,6 +47,7 @@ impl ReportPanel {
         ui: &mut egui::Ui,
         report: Option<&PowerReport>,
         rects: &mut Rects,
+        commands: &mut Vec<Command>,
     ) -> Option<u32> {
         theme::heading(ui, "Power report");
         let Some(report) = report else {
@@ -54,8 +55,47 @@ impl ReportPanel {
             return None;
         };
         ui.label(format!("Per point of {}", report.stat));
+        // PoB's filter dropdown and Show Masteries box above the list (NF-5)
+        ui.horizontal(|ui| {
+            let mut masteries = report.masteries;
+            let check = ui.checkbox(&mut masteries, "Show Masteries");
+            rects.note(&check, || "report_masteries".into());
+            if check.changed() {
+                commands.push(Command::SetPowerReportFilter {
+                    filter: report.filter,
+                    masteries,
+                });
+            }
+            let combo = crate::widgets::dropdown::Dropdown::from_id_salt("report_filter")
+                .selected_text(FILTERS.get(report.filter).copied().unwrap_or(""))
+                .show_ui(ui, |ui| {
+                    for (i, label) in FILTERS.iter().enumerate() {
+                        let item = crate::widgets::dropdown::item(ui, i == report.filter, *label);
+                        rects.note(&item, || format!("report_filter:{i}"));
+                        if item.clicked() && i != report.filter {
+                            commands.push(Command::SetPowerReportFilter {
+                                filter: i,
+                                masteries: report.masteries,
+                            });
+                        }
+                    }
+                });
+            rects.note(&combo.response, || "report_filter".into());
+            // the wheel and the arrows step it (DropDownControl.lua:476-516)
+            if let Some(filter) = crate::widgets::scroll_step::combo_step(
+                ui,
+                &combo.response,
+                FILTERS.len(),
+                report.filter,
+            ) {
+                commands.push(Command::SetPowerReportFilter {
+                    filter,
+                    masteries: report.masteries,
+                });
+            }
+        });
         let id = self.id;
-        let order = sorted(&report.rows, list_sort(ui.ctx(), id));
+        let order = sorted(&report.rows, &report.listed, list_sort(ui.ctx(), id));
         let before = self.selected;
         let action = list(
             ui,
@@ -97,9 +137,21 @@ impl ReportPanel {
     }
 }
 
-/// The row indices in the order the user's sort chose; unsorted rows keep PoB's order.
-fn sorted(rows: &[PowerReportRow], sort: Option<crate::widgets::ListSort>) -> Vec<usize> {
-    let mut order: Vec<usize> = (0..rows.len()).collect();
+/// PoB's filter dropdown entries (PowerReportListControl.lua:30-31)
+const FILTERS: [&str; 3] = [
+    "Show Unallocated",
+    "Show Unallocated & Clusters",
+    "Show Allocated",
+];
+
+/// The listed rows' indices in the order the user's sort chose; unsorted rows keep the order
+/// of PoB's list.
+fn sorted(
+    rows: &[PowerReportRow],
+    listed: &[usize],
+    sort: Option<crate::widgets::ListSort>,
+) -> Vec<usize> {
+    let mut order: Vec<usize> = listed.iter().copied().filter(|&i| i < rows.len()).collect();
     if let Some(sort) = sort {
         let key = |a: &PowerReportRow, b: &PowerReportRow| match sort.column {
             0 => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
@@ -148,11 +200,36 @@ mod tests {
             row("A", 3.0, 2.0, 1),
             row("c", 2.0, 5.0, 2),
         ];
-        let by = |column, ascending| sorted(&rows, Some(ListSort { column, ascending }));
-        assert_eq!(sorted(&rows, None), [0, 1, 2]);
+        let all = [0, 1, 2];
+        let by = |column, ascending| sorted(&rows, &all, Some(ListSort { column, ascending }));
+        assert_eq!(sorted(&rows, &all, None), [0, 1, 2]);
         assert_eq!(by(0, true), [1, 0, 2]);
         assert_eq!(by(1, false), [1, 2, 0]);
         assert_eq!(by(2, true), [1, 2, 0]);
         assert_eq!(by(3, false), [0, 2, 1]);
+    }
+
+    #[test]
+    fn only_the_rows_pob_lists_show_in_its_order() {
+        let rows = [
+            row("b", 1.0, 9.0, 3),
+            row("A", 3.0, 2.0, 1),
+            row("c", 2.0, 5.0, 2),
+        ];
+        // PoB's filter dropped the first row and sorted the others by power
+        assert_eq!(sorted(&rows, &[1, 2], None), [1, 2]);
+        assert_eq!(
+            sorted(
+                &rows,
+                &[1, 2],
+                Some(ListSort {
+                    column: 2,
+                    ascending: false
+                })
+            ),
+            [2, 1]
+        );
+        // a stale position is ignored
+        assert_eq!(sorted(&rows, &[2, 7], None), [2]);
     }
 }

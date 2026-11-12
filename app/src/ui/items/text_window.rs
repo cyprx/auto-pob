@@ -37,26 +37,48 @@ pub enum Outcome {
 pub fn show(ctx: &egui::Context, window: &mut TextWindow, rects: &mut Rects) -> Outcome {
     let mut outcome = Outcome::Open;
     let mut open = true;
-    egui::Window::new(if window.creating {
-        "Create custom item"
-    } else {
-        "Edit item text"
-    })
-    .open(&mut open)
-    .collapsible(false)
-    .default_width(520.0)
-    .show(ctx, |ui| {
+    // PoB's popup closes on Escape (it has no escape control, PopupDialog.lua:72-77), but a
+    // selected box takes the first Esc, and an outside click does nothing
+    let escape_id = egui::Id::unique("items_text_window");
+    if crate::widgets::escape::escape(ctx, escape_id) {
+        open = false;
+    }
+    // modal, as PoB's popup: nothing behind it takes the mouse while it is open (R34)
+    egui::Modal::new(egui::Id::unique("items_text_window")).show(ctx, |ui| {
+        ui.set_width(520.0);
+        ui.horizontal(|ui| {
+            ui.heading(if window.creating {
+                "Create custom item"
+            } else {
+                "Edit item text"
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let x = ui.button("\u{d7}");
+                rects.note(&x, || "text_close".into());
+                if x.clicked() {
+                    open = false;
+                }
+            });
+        });
         ui.horizontal(|ui| {
             ui.label("Rarity:");
-            let combo = egui::ComboBox::from_id_salt("items_text_rarity")
+            let combo = crate::widgets::dropdown::Dropdown::from_id_salt("items_text_rarity")
                 .selected_text(RARITIES[window.rarity.min(4)])
                 .show_ui(ui, |ui| {
                     for (i, name) in RARITIES.iter().enumerate() {
-                        let item = ui.selectable_value(&mut window.rarity, i, *name);
+                        let item =
+                            crate::widgets::dropdown::value(ui, &mut window.rarity, i, *name);
                         rects.note(&item, || format!("text_rarity_{i}"));
                     }
                 });
             rects.note(&combo.response, || "text_rarity".into());
+            // the wheel and the arrows step it (DropDownControl.lua:476-516)
+            let at = window.rarity.min(RARITIES.len() - 1);
+            if let Some(i) =
+                crate::widgets::scroll_step::combo_step(ui, &combo.response, RARITIES.len(), at)
+            {
+                window.rarity = i;
+            }
         });
         let edit = ui.add(
             egui::TextEdit::multiline(&mut window.text)
@@ -82,6 +104,7 @@ pub fn show(ctx: &egui::Context, window: &mut TextWindow, rects: &mut Rects) -> 
             }
         });
     });
+    crate::widgets::escape::note(ctx, escape_id);
     if !open {
         outcome = Outcome::Close;
     }

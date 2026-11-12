@@ -644,6 +644,7 @@ fn no_silent_writes_crafting() {
                 .control_tooltip_view(&ControlTooltipQuery::DbItem {
                     db,
                     name: name.clone(),
+                    shift: false,
                 })
                 .unwrap()
                 .is_some(),
@@ -653,7 +654,14 @@ fn no_silent_writes_crafting() {
             run(&mut s, Command::ViewDbItem { db, name });
             run(&mut s, Command::SaveDisplayItem);
         } else {
-            run(&mut s, Command::AddDbItem { db, name });
+            run(
+                &mut s,
+                Command::AddDbItem {
+                    db,
+                    name,
+                    second_slot: false,
+                },
+            );
         }
     }
     run(&mut s, Command::CloseItemDb);

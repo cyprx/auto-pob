@@ -150,6 +150,7 @@ impl Harness {
             let pass = self.ui.show(ui, time, busy);
             out.commands.extend(pass.commands);
             out.queries.extend(pass.queries);
+            out.manage_trees |= pass.manage_trees;
         });
         self.copied.extend(
             output
@@ -183,6 +184,7 @@ impl Harness {
             let o = self.frame(events);
             all.commands.extend(o.commands);
             all.queries.extend(o.queries);
+            all.manage_trees |= o.manage_trees;
         }
         all
     }
@@ -459,6 +461,7 @@ fn copy_reply_reaches_clipboard_only_when_asked() {
         Snapshot::ItemText(Arc::new(ItemText {
             id,
             text: text.into(),
+            shared: false,
         }))
     };
     h.ui.on_snapshot(&reply(1, "unasked"));
@@ -480,7 +483,13 @@ fn copy_reply_reaches_clipboard_only_when_asked() {
 
 fn tip(id: u32, text: &str) -> Snapshot {
     Snapshot::ItemTooltip(Arc::new(ItemTooltipView {
-        query: ItemTooltipQuery { id, slot: None },
+        query: ItemTooltipQuery {
+            id,
+            slot: None,
+            theirs: false,
+            shift: false,
+            shared: None,
+        },
         tooltip: ItemTooltip {
             lines: vec![ItemTooltipLine::Line {
                 size: 14,
@@ -504,7 +513,9 @@ fn hovering_a_row_asks_for_its_tooltip_after_the_delay() {
     let o = h.frame(vec![]);
     assert_eq!(
         debug(&o.queries),
-        ["ItemTooltip(ItemTooltipQuery { id: 1, slot: None })"]
+        [
+            "ItemTooltip(ItemTooltipQuery { id: 1, slot: None, theirs: false, shift: false, shared: None })"
+        ]
     );
     let o = h.frame(vec![]);
     assert!(o.queries.is_empty(), "asked once");
@@ -521,7 +532,9 @@ fn hovering_a_dropdown_entry_asks_with_the_slot() {
     let all: Vec<_> = o.queries.iter().chain(&o2.queries).collect();
     assert_eq!(
         all.iter().map(|c| format!("{c:?}")).collect::<Vec<_>>(),
-        ["ItemTooltip(ItemTooltipQuery { id: 1, slot: Some(\"Ring 1\") })"]
+        [
+            "ItemTooltip(ItemTooltipQuery { id: 1, slot: Some(\"Ring 1\"), theirs: false, shift: false, shared: None })"
+        ]
     );
 }
 
@@ -538,7 +551,9 @@ fn stale_item_tooltip_reply_ignored() {
     let o = h.frame(vec![]);
     assert_eq!(
         debug(&o.queries),
-        ["ItemTooltip(ItemTooltipQuery { id: 2, slot: None })"]
+        [
+            "ItemTooltip(ItemTooltipQuery { id: 2, slot: None, theirs: false, shift: false, shared: None })"
+        ]
     );
     h.ui.on_snapshot(&tip(1, "old"));
     assert!(
@@ -563,6 +578,29 @@ fn last_item_set_cannot_be_deleted() {
         !h.ui.rects.map.contains_key("sets_confirm_delete"),
         "no confirm for the last set"
     );
+}
+
+#[test]
+fn esc_answers_the_sets_question_first_then_closes_the_window() {
+    // PoB's question is a popup over the manager's: Esc closes the top one
+    // (PopupDialog.lua:72-77)
+    let mut h = Harness::new(sample());
+    h.click("manage");
+    h.frame(vec![]);
+    h.click("sets_row_1");
+    h.click("sets_delete");
+    assert!(h.ui.rects.map.contains_key("sets_confirm_delete"));
+    h.ui.rects.map.clear();
+    let o = h.key(Key::Escape, Modifiers::NONE);
+    assert!(o.commands.is_empty(), "{:?}", o.commands);
+    h.frame(vec![]);
+    assert!(
+        h.ui.has_dialog(),
+        "Esc closed the window under the question"
+    );
+    assert!(!h.ui.rects.map.contains_key("sets_confirm_delete"));
+    h.key(Key::Escape, Modifiers::NONE);
+    assert!(!h.ui.has_dialog(), "Esc left the window open");
 }
 
 #[test]
@@ -2160,14 +2198,14 @@ fn db_double_click_views_and_ctrl_click_adds() {
     let sent = h.click("db_row_2").commands;
     assert_eq!(
         debug(&sent),
-        ["AddDbItem { db: Uniques, name: \"Kaom's Heart\" }"]
+        ["AddDbItem { db: Uniques, name: \"Kaom's Heart\", second_slot: false }"]
     );
     h.modifiers = Modifiers::NONE;
     // so does the button, for the selected row
     let sent = h.click("db_add").commands;
     assert_eq!(
         debug(&sent),
-        ["AddDbItem { db: Uniques, name: \"Kaom's Heart\" }"]
+        ["AddDbItem { db: Uniques, name: \"Kaom's Heart\", second_slot: false }"]
     );
 }
 
@@ -2197,7 +2235,7 @@ fn ctrl_double_click_on_a_db_row_adds_once() {
     }
     assert_eq!(
         debug(&sent),
-        ["AddDbItem { db: Uniques, name: \"Tabula Rasa\" }"],
+        ["AddDbItem { db: Uniques, name: \"Tabula Rasa\", second_slot: false }"],
         "one add for the gesture"
     );
 }
@@ -2220,6 +2258,7 @@ fn db_row_tooltip_replies_are_kept_only_for_the_latest_question() {
             query: ControlTooltipQuery::DbItem {
                 db: ItemDb::Uniques,
                 name: name.into(),
+                shift: false,
             },
             tooltip: crate::engine::views::ItemTooltip::default(),
         }))
@@ -2232,7 +2271,8 @@ fn db_row_tooltip_replies_are_kept_only_for_the_latest_question() {
         h.ui.db.tip_query(),
         Some(&ControlTooltipQuery::DbItem {
             db: ItemDb::Uniques,
-            name: "Tabula Rasa".into()
+            name: "Tabula Rasa".into(),
+            shift: false,
         })
     );
     // moving off the row drops it
@@ -2253,7 +2293,7 @@ fn db_rows_ask_for_their_tooltip_after_100ms() {
     }
     assert_eq!(
         debug(&queries),
-        ["ControlTooltip(DbItem { db: Uniques, name: \"Tabula Rasa\" })"]
+        ["ControlTooltip(DbItem { db: Uniques, name: \"Tabula Rasa\", shift: false })"]
     );
 }
 
@@ -2322,3 +2362,64 @@ fn focus_slot_of_a_hidden_slot_does_not_linger() {
 pub(crate) fn db_view_for_app() -> ItemDbView {
     db_view(ItemDb::Uniques)
 }
+
+#[test]
+fn f2_renames_the_selected_set() {
+    let mut h = Harness::new(sample());
+    h.click("manage");
+    h.frame(vec![]);
+    h.click("sets_row_1");
+    h.key(Key::F2, Modifiers::NONE);
+    h.frame(vec![]);
+    let o = h.click("sets_save");
+    assert_eq!(
+        debug(&o.commands),
+        ["RenameItemSet { id: 2, title: \"Alt\" }"]
+    );
+}
+
+#[test]
+fn list_keys_move_the_selection_and_backspace_deletes() {
+    // rows 1, 2, 3, 4; row 1 is unused and goes at once
+    let mut h = Harness::new(sample());
+    h.click("row_2");
+    h.key(Key::ArrowUp, Modifiers::NONE);
+    h.frame(vec![]);
+    let o = h.key(Key::Backspace, Modifiers::NONE);
+    assert_eq!(
+        debug(&o.commands),
+        ["DeleteItem { id: 1, confirmed: false }"]
+    );
+    // Up from the first row wraps to the last, Home and End go to the ends
+    let mut h = Harness::new(sample());
+    h.click("row_1");
+    h.key(Key::End, Modifiers::NONE);
+    h.key(Key::Home, Modifiers::NONE);
+    h.key(Key::ArrowUp, Modifiers::NONE);
+    h.frame(vec![]);
+    assert_eq!(h.ui.selected, Some(4));
+    h.key(Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(h.ui.selected, Some(1));
+}
+
+#[test]
+fn set_list_keys_move_the_selection_and_delete_asks() {
+    let mut h = Harness::new(sample());
+    h.click("manage");
+    h.frame(vec![]);
+    h.click("sets_row_0");
+    h.key(Key::ArrowDown, Modifiers::NONE);
+    h.key(Key::F2, Modifiers::NONE);
+    h.frame(vec![]);
+    let o = h.click("sets_save");
+    assert_eq!(
+        debug(&o.commands),
+        ["RenameItemSet { id: 2, title: \"Alt\" }"]
+    );
+    h.key(Key::Delete, Modifiers::NONE);
+    h.frame(vec![]);
+    let o = h.click("sets_confirm_delete");
+    assert_eq!(debug(&o.commands), ["DeleteItemSet { id: 2 }"]);
+}
+#[path = "parity_tests.rs"]
+mod parity_tests;

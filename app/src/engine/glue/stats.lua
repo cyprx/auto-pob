@@ -122,7 +122,16 @@ function glue.main_skill_view()
 		mines = text("mainSkillMineCount"),
 		minion = drop("mainSkillMinion"),
 		minion_skill = drop("mainSkillMinionSkill"),
+		-- `IsShown`, not `shown`: a main skill with no groups leaves the flag stale, and the
+		-- button hangs off the minion dropdown, which is hidden then (Build.lua:552, 1557-1583)
+		spectre_library = controls.mainSkillMinionLibrary:IsShown() and true or false,
 	}
+end
+
+-- The sidebar's "Manage Spectres..." button when PoB shows it (R18), after the refresh
+function glue.sidebar_spectre_library()
+	local control = refreshed_controls().mainSkillMinionLibrary
+	return control:IsShown() and control or nil
 end
 
 local SIDEBAR_NAMES = {
@@ -170,6 +179,15 @@ function glue.stats_view()
 	if minionOutput and env.minion then
 		local minion = rows_for(build, build.minionDisplayStats, env.minion, minionOutput)
 		if #minion > 0 then result.minion = minion end
+	end
+	-- the "N Warnings" line under the stats, which PoB draws only with Options' "Show
+	-- warnings" on (Build.lua:566-590); the lines are refilled in every `RefreshStatList`
+	if pob.main.main.showWarnings then
+		local warnings = {}
+		for _, line in ipairs(build.controls.warnings.lines) do
+			warnings[#warnings + 1] = tostring(line)
+		end
+		if #warnings > 0 then result.warnings = warnings end
 	end
 	return result
 end

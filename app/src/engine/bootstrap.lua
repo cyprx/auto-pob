@@ -57,8 +57,10 @@ end
 function GetVirtualScreenSize()
 	return GetScreenSize()
 end
+-- PoB's "Use system default" (Main.lua:928-937): PoB takes this as the setting's default when
+-- Settings.xml has none (Main.lua:112), and the UI sizes itself (R13)
 function GetDPIScaleOverridePercent()
-	return 1
+	return 0
 end
 function SetDPIScaleOverridePercent(scale) end
 function SetClearColor(r, g, b, a) end
@@ -203,6 +205,9 @@ end
 mainObject.continuousIntegrationMode = nil
 
 runCallback("OnInit")
+-- Options' Save would rewrite manifest.xml in the pinned PoB folder to switch branches; the
+-- folder is read-only for us and the beta branch is ruled out (R13)
+mainObject.main.SetManifestBranch = function() end
 runCallback("OnFrame") -- Need at least one frame for everything to initialise
 
 if mainObject.promptMsg then

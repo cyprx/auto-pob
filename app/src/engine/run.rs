@@ -8,13 +8,16 @@ use std::time::Duration;
 
 use crate::pob_files::DownloadProgress;
 
-use super::commands::{Command, ControlTooltipQuery, GemTooltipQuery, ItemTooltipQuery};
+use super::commands::{
+    Command, ControlTooltipQuery, GemTooltipQuery, HoverTarget, ItemTooltipQuery,
+};
+use super::views::HelpView;
 use super::views::{
-    AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, ConfigView,
-    ControlTooltipView, DisplayItemView, GemSearchView, GemTooltipView, GroupTooltipView,
-    ItemDbView, ItemText, ItemTooltipView, ItemsView, NodePower, NodeTooltip, NotesView, PopupView,
-    PowerReport, RequestsView, ShareView, SkillsView, SocketGroupText, StatsView, TreeLayout,
-    TreeState,
+    AccountView, BreakdownView, BuildBrowseView, BuildListView, BuildView, CalcsView, CellRef,
+    CompareView, ConfigView, ControlTooltipView, DisplayItemView, ExternalUrl, GemSearchView,
+    GemTooltipView, GroupTooltipView, HoverTooltipView, ItemDbView, ItemText, ItemTooltipView,
+    ItemsView, NodePower, NodeTooltip, NotesView, PopupView, PowerReport, RequestsView,
+    SettingsView, ShareView, SkillsView, SocketGroupText, StatsView, TreeLayout, TreeState,
 };
 use pob_runtime::net::Waker;
 
@@ -50,12 +53,25 @@ pub enum Snapshot {
     Notes(Arc<NotesView>),
     /// The pending and newly finished network requests; sent with or without a build (R10)
     Requests(Arc<RequestsView>),
+    /// PoB's settings and the app's overrides; sent with or without a build (R12)
+    Settings(Arc<SettingsView>),
     /// The build sharing and import box of the Import/Export tab (R16, R17)
     Share(Arc<ShareView>),
     /// The build's share code, answering `ExportShareCode` (R17)
     ShareCode(Arc<String>),
     /// The Import/Export tab's account import (R18, R19)
     Account(Arc<AccountView>),
+    /// The Compare tab; `None` with no comparison loaded (R4, R5)
+    Compare(Option<Arc<CompareView>>),
+    /// The builds of one folder, answering `BrowseBuilds`; sent with or without a build
+    BuildBrowse(Arc<BuildBrowseView>),
+    /// A trade link a popup press made (R20), tagged with that press's own seq: the UI opens
+    /// and copies it for its own click only
+    ExternalUrl(Arc<ExternalUrl>),
+    /// PoB's help, answering `Help`; sent with or without a build
+    Help(Arc<HelpView>),
+    /// What hovering a control shows (R22), answering `HoverTooltip`
+    HoverTooltip(Arc<HoverTooltipView>),
 }
 
 /// Long-running work the engine does between commands.
@@ -68,6 +84,8 @@ pub enum BackgroundTask {
     GemDps,
     /// The Anoint window's stat sort; it goes after the gem picker's, before node power (R20)
     AnointSort,
+    /// The timeless jewel search (R17); after the Anoint sort, before the item databases (R32)
+    Timeless,
     /// The item databases' load and stat sort; after the Anoint sort, before node power (R20)
     ItemDb,
     NodePower,
@@ -96,6 +114,11 @@ pub enum Event {
     BackgroundFailed {
         task: BackgroundTask,
         message: String,
+    },
+    /// A message PoB showed after a command, as its message popup: a title and its lines
+    Message {
+        title: String,
+        text: String,
     },
 }
 
@@ -147,18 +170,35 @@ pub struct Affected {
     pub control_tooltip: Option<ControlTooltipQuery>,
     /// The text PoB copies for this item was requested; the latest request wins
     pub item_text: Option<u32>,
+    /// The text PoB copies for this shared item was requested; the latest request wins
+    pub shared_text: Option<usize>,
     /// The tree link was requested
     pub link: bool,
     /// A PoEURL shrink finished: `short_tree_link_view` has the short link (R20)
     pub short_link: bool,
     /// The network requests changed: one began, finished or was cancelled (R10)
     pub requests: bool,
+    /// The settings or the overrides changed (R12); list-safe
+    pub settings: bool,
     /// The import box or the sharing state changed (R16, R17); build-only
     pub share: bool,
     /// The share code was requested (R17); build-only
     pub share_code: bool,
     /// The account import changed (R18, R19); build-only
     pub account: bool,
+    /// The Compare tab changed: its comparisons, or this build's stats it is diffed against
+    /// (R4); build-only
+    pub compare: bool,
+    /// The builds of this folder were asked for (`BrowseBuilds`); the latest request wins.
+    /// List-safe
+    pub browse: Option<String>,
+    /// The trade link this command's press made (R20). The loop sends it at once, with the
+    /// command's own seq, so it is never a view of the batch
+    pub external_url: Option<ExternalUrl>,
+    /// PoB's help was asked for (`Help`); list-safe
+    pub help: bool,
+    /// This control's hover tooltip was requested; the latest request wins (R22)
+    pub hover: Option<HoverTarget>,
 }
 
 impl Affected {
@@ -188,15 +228,23 @@ impl Affected {
         item_tooltip: None,
         control_tooltip: None,
         item_text: None,
+        shared_text: None,
         link: false,
         short_link: false,
         requests: true,
+        settings: true,
         share: true,
         share_code: false,
         account: true,
+        compare: true,
+        browse: None,
+        external_url: None,
+        help: false,
+        hover: None,
     };
 
-    /// Only views that need no build are asked for: the build list and the requests (R10).
+    /// Only views that need no build are asked for: the build list, the requests, the settings
+    /// and the popup (a main-owned session needs no build, R19).
     fn list_safe_only(&self) -> bool {
         *self == self.list_safe()
     }
@@ -206,6 +254,10 @@ impl Affected {
         Affected {
             list: self.list,
             requests: self.requests,
+            settings: self.settings,
+            popup: self.popup,
+            browse: self.browse.clone(),
+            help: self.help,
             ..Affected::default()
         }
     }
@@ -244,12 +296,25 @@ impl Affected {
             self.control_tooltip = other.control_tooltip;
         }
         self.item_text = other.item_text.or(self.item_text);
+        self.shared_text = other.shared_text.or(self.shared_text);
         self.link |= other.link;
         self.short_link |= other.short_link;
         self.requests |= other.requests;
+        self.settings |= other.settings;
         self.share |= other.share;
         self.share_code |= other.share_code;
         self.account |= other.account;
+        self.compare |= other.compare;
+        if other.browse.is_some() {
+            self.browse = other.browse;
+        }
+        if other.external_url.is_some() {
+            self.external_url = other.external_url;
+        }
+        self.help |= other.help;
+        if other.hover.is_some() {
+            self.hover = other.hover;
+        }
     }
 }
 
@@ -273,6 +338,9 @@ pub trait Backend {
     /// Whether a build is open. PoB can start on its build list with none initialised, and
     /// every view but the list reads the build.
     fn build_loaded(&mut self) -> anyhow::Result<bool>;
+    /// The engine is stopping (`Shutdown`): what PoB does at exit (`main:Shutdown`). Runs once,
+    /// after the last snapshots; `Engine`'s drop waits for it.
+    fn shutdown(&mut self) {}
     fn stats_view(&mut self) -> anyhow::Result<StatsView>;
     fn config_view(&mut self) -> anyhow::Result<ConfigView>;
     fn tree_layout_view(&mut self) -> anyhow::Result<TreeLayout>;
@@ -308,6 +376,10 @@ pub trait Backend {
         query: &ItemTooltipQuery,
     ) -> anyhow::Result<Option<ItemTooltipView>>;
     fn item_text(&mut self, id: u32) -> anyhow::Result<ItemText>;
+    /// What Ctrl+C on shared item `index` copies; `ItemText::shared` is set
+    fn shared_item_text(&mut self, index: usize) -> anyhow::Result<ItemText> {
+        anyhow::bail!("no shared item {index}")
+    }
     /// The popup session's window; `None` when no session is open
     fn popup_view(&mut self) -> anyhow::Result<Option<PopupView>>;
     /// `None`: the control or entry is gone
@@ -330,14 +402,27 @@ pub trait Backend {
     fn share_code(&mut self) -> anyhow::Result<String>;
     /// The Import/Export tab's account import (R18, R19)
     fn account_view(&mut self) -> anyhow::Result<AccountView>;
+    /// The Compare tab; `None` with no comparison loaded (R4)
+    fn compare_view(&mut self) -> anyhow::Result<Option<CompareView>>;
+    /// The builds in `folder` below the Builds folder; reads the disk only, changes nothing
+    fn browse_view(&mut self, folder: &str) -> anyhow::Result<BuildBrowseView>;
     /// Hands back the memory the last busy stretch left behind. The loop calls it once it has
     /// been idle for a while after work, never between a background job's steps.
     fn release_memory(&mut self);
     /// The pending network requests and the ones finished since the last call (R10)
     fn requests_view(&mut self) -> anyhow::Result<RequestsView>;
+    /// PoB's settings and the overrides over them; needs no build (R12)
+    fn settings_view(&mut self) -> anyhow::Result<SettingsView>;
     /// Gives the backend a way to wake the loop from other threads (R9). Called once, after
     /// `start`.
     fn set_waker(&mut self, _wake: Waker) {}
+    /// PoB's help as its About window lists it; needs no build, changes nothing
+    fn help_view(&mut self) -> anyhow::Result<HelpView>;
+    /// What hovering the control shows (R22); `None` when the gem, option or group is gone
+    fn hover_tooltip_view(
+        &mut self,
+        target: &HoverTarget,
+    ) -> anyhow::Result<Option<HoverTooltipView>>;
 }
 
 /// Sends the snapshots `flags` asks for, as the loop does after a command or a background
@@ -360,7 +445,8 @@ pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send
             },
         });
     }
-    // With no build open only the list and the requests can be answered; the rest would raise
+    // With no build open only the list, the requests, the settings and the popup can be
+    // answered; the rest would raise
     // on a missing build, so they are dropped here, for every caller at once.
     let flags = if flags.list_safe_only() {
         flags
@@ -387,6 +473,20 @@ pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send
     }
     if flags.list {
         emit(seq, send, backend.build_list_view(), Snapshot::BuildList);
+    }
+    if flags.settings {
+        emit(seq, send, backend.settings_view(), Snapshot::Settings);
+    }
+    if let Some(folder) = &flags.browse {
+        emit(
+            seq,
+            send,
+            backend.browse_view(folder),
+            Snapshot::BuildBrowse,
+        );
+    }
+    if flags.help {
+        emit(seq, send, backend.help_view(), Snapshot::Help);
     }
     if flags.stats {
         emit(seq, send, backend.stats_view(), Snapshot::Stats);
@@ -571,6 +671,14 @@ pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send
     if let Some(id) = flags.item_text {
         emit(seq, send, backend.item_text(id), Snapshot::ItemText);
     }
+    if let Some(index) = flags.shared_text {
+        emit(
+            seq,
+            send,
+            backend.shared_item_text(index),
+            Snapshot::ItemText,
+        );
+    }
     if flags.link {
         emit(seq, send, backend.tree_link_view(), Snapshot::TreeLink);
     }
@@ -593,6 +701,40 @@ pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send
     }
     if flags.account {
         emit(seq, send, backend.account_view(), Snapshot::Account);
+    }
+    // the loop sends a command's link itself; a caller that hands one over gets it sent here
+    if let Some(url) = &flags.external_url {
+        send(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::ExternalUrl(Arc::new(url.clone())),
+        });
+    }
+    if let Some(target) = &flags.hover {
+        match backend.hover_tooltip_view(target) {
+            Ok(Some(view)) => send(Event::Snapshot {
+                seq,
+                snapshot: Snapshot::HoverTooltip(Arc::new(view)),
+            }),
+            // a vanished control sends nothing
+            Ok(None) => {}
+            Err(e) => send(Event::Error {
+                seq,
+                message: format!("{e:#}"),
+            }),
+        }
+    }
+    // "no comparison" is an answer too: a build change drops them
+    if flags.compare {
+        match backend.compare_view() {
+            Ok(view) => send(Event::Snapshot {
+                seq,
+                snapshot: Snapshot::Compare(view.map(Arc::new)),
+            }),
+            Err(e) => send(Event::Error {
+                seq,
+                message: format!("{e:#}"),
+            }),
+        }
     }
 }
 
@@ -623,6 +765,8 @@ fn recalculate_if_asked(
     affected.display_item = true;
     // Draw restarts an open list on a new output revision (R14)
     affected.item_db = true;
+    // the Summary diffs the comparison against this build's stats (R4)
+    affected.compare = true;
 }
 
 /// Processes commands until `Shutdown` or until every sender is gone.
@@ -641,7 +785,7 @@ pub fn run_loop(
     commands: &Receiver<(u64, Command)>,
     send: &dyn Fn(Event),
 ) {
-    run_loop_with_delay(backend, commands, send, RELEASE_DELAY);
+    run_loop_with_delay(backend, commands, send, RELEASE_DELAY, None);
 }
 
 /// How long the loop waits, idle after work, before it releases memory. A release takes a
@@ -649,11 +793,14 @@ pub fn run_loop(
 /// rather than landing on the command that follows a job or a burst of edits.
 pub const RELEASE_DELAY: Duration = Duration::from_secs(2);
 
+/// `abandoned`: set once the [`Engine`]'s drop stopped waiting; the exit save then never starts,
+/// so no `Settings.xml` write begins after the app has given up on it.
 fn run_loop_with_delay(
     backend: &mut dyn Backend,
     commands: &Receiver<(u64, Command)>,
     send: &dyn Fn(Event),
     release_delay: Duration,
+    abandoned: Option<&AtomicBool>,
 ) {
     let mut last_seq = 0;
     // work has run since the last release; starting the backend counts
@@ -715,7 +862,16 @@ fn run_loop_with_delay(
                 break;
             }
             match backend.apply(command, send) {
-                Ok(a) => affected.merge(a),
+                Ok(mut a) => {
+                    // the link answers this press, not the batch (R20)
+                    if let Some(url) = a.external_url.take() {
+                        send(Event::Snapshot {
+                            seq,
+                            snapshot: Snapshot::ExternalUrl(Arc::new(url)),
+                        });
+                    }
+                    affected.merge(a)
+                }
                 Err(e) => {
                     send(Event::Error {
                         seq,
@@ -728,6 +884,9 @@ fn run_loop_with_delay(
         recalculate_if_asked(backend, &mut affected, last_seq, send);
         send_snapshots(backend, last_seq, affected, send);
         if shutdown {
+            if !abandoned.is_some_and(|a| a.load(Ordering::SeqCst)) {
+                backend.shutdown();
+            }
             return;
         }
     }
@@ -758,8 +917,16 @@ pub struct Engine {
     commands: Sender<(u64, Command)>,
     next_seq: Cell<u64>,
     alive: Arc<AtomicBool>,
+    /// The drop gave up waiting: the thread must not start the exit save any more
+    abandoned: Arc<AtomicBool>,
+    /// How long the drop waits ([`SHUTDOWN_WAIT`]; shorter in tests)
+    shutdown_wait: Duration,
     pub events: Receiver<Event>,
 }
+
+/// How long dropping an [`Engine`] waits for its thread to finish what PoB does at exit (a
+/// `Settings.xml` write, which must not be cut off by the process ending)
+pub const SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
 
 impl Engine {
     /// Starts the engine thread. `start` runs on that thread and builds the backend (it may
@@ -774,6 +941,8 @@ impl Engine {
         let wake_tx = command_tx.clone();
         let alive = Arc::new(AtomicBool::new(true));
         let thread_alive = alive.clone();
+        let abandoned = Arc::new(AtomicBool::new(false));
+        let thread_abandoned = abandoned.clone();
         std::thread::spawn(move || {
             // Declared inside the body so it drops before the captured `event_tx`: by the time
             // the UI sees the events channel disconnect, `is_alive` already reads false.
@@ -801,12 +970,20 @@ impl Engine {
                 ..Affected::ALL_VIEWS
             };
             send_snapshots(backend.as_mut(), 0, initial, &send);
-            run_loop(backend.as_mut(), &command_rx, &send);
+            run_loop_with_delay(
+                backend.as_mut(),
+                &command_rx,
+                &send,
+                RELEASE_DELAY,
+                Some(&thread_abandoned),
+            );
         });
         Engine {
             commands: command_tx,
             next_seq: Cell::new(1),
             alive,
+            abandoned,
+            shutdown_wait: SHUTDOWN_WAIT,
             events: event_rx,
         }
     }
@@ -833,9 +1010,17 @@ impl Engine {
 
 impl Drop for Engine {
     /// The waker keeps a sender of the command channel, so the loop would never see it
-    /// disconnect: the thread is told to stop instead (R9).
+    /// disconnect: the thread is told to stop instead (R9). The drop then waits, up to
+    /// [`SHUTDOWN_WAIT`], for the thread to end: at exit PoB writes `Settings.xml`, and the
+    /// process ending mid-write would leave the shared file cut short.
     fn drop(&mut self) {
         self.send(Command::Shutdown);
+        let deadline = std::time::Instant::now() + self.shutdown_wait;
+        while self.alive.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // gave up: a thread still busy must not begin the exit save after the app is gone
+        self.abandoned.store(true, Ordering::SeqCst);
     }
 }
 
@@ -876,6 +1061,35 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn external_url_carries_the_press_seq() {
+        // the link answers its own press, even with a later command in the same batch (R20)
+        let (mut fake, _log) = Fake::new();
+        let events = run_queued(
+            &mut fake,
+            vec![
+                Command::PressPopupButton {
+                    name: "search".into(),
+                },
+                set_config(),
+            ],
+        );
+        let links: Vec<_> = snapshots(&events)
+            .into_iter()
+            .filter_map(|(seq, s)| match s {
+                Snapshot::ExternalUrl(link) => Some((seq, link.url.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(links, [(1, crate::engine::fake::FAKE_TRADE_URL.to_owned())]);
+        // the batch's views carry its last seq
+        assert!(
+            snapshots(&events)
+                .iter()
+                .any(|(seq, s)| *seq == 2 && matches!(s, Snapshot::Calcs(_)))
+        );
     }
 
     #[test]
@@ -980,6 +1194,7 @@ mod tests {
                 match s {
                     Snapshot::Build(_) => "build",
                     Snapshot::BuildList(_) => "list",
+                    Snapshot::Settings(_) => "settings",
                     Snapshot::Stats(_) => "stats",
                     Snapshot::Config(_) => "config",
                     Snapshot::TreeLayout(_) => "tree_layout",
@@ -993,6 +1208,7 @@ mod tests {
                     Snapshot::Requests(_) => "requests",
                     Snapshot::Share(_) => "share",
                     Snapshot::Account(_) => "account",
+                    Snapshot::Compare(_) => "compare",
                     other => panic!("unexpected {other:?}"),
                 }
             })
@@ -1004,6 +1220,7 @@ mod tests {
                 "requests",
                 "build",
                 "list",
+                "settings",
                 "stats",
                 "config",
                 "tree",
@@ -1014,7 +1231,8 @@ mod tests {
                 "popup",
                 "notes",
                 "share",
-                "account"
+                "account",
+                "compare"
             ]
         );
     }
@@ -1046,7 +1264,7 @@ mod tests {
         assert_eq!(log.lock().unwrap().set_configs, 1);
         // The command before Shutdown still produced its snapshots, tagged with Shutdown's seq.
         let snaps = snapshots(&events);
-        assert_eq!(snaps.len(), 7);
+        assert_eq!(snaps.len(), 8);
         assert!(matches!(snaps[0], (2, Snapshot::Stats(_))));
         assert!(matches!(snaps[1], (2, Snapshot::Config(_))));
         assert!(matches!(snaps[2], (2, Snapshot::Tree(_))));
@@ -1054,6 +1272,7 @@ mod tests {
         assert!(matches!(snaps[4], (2, Snapshot::Skills(_))));
         assert!(matches!(snaps[5], (2, Snapshot::Items(_))));
         assert!(matches!(snaps[6], (2, Snapshot::DisplayItem(_))));
+        assert!(matches!(snaps[7], (2, Snapshot::Compare(None))));
     }
 
     #[test]
@@ -1099,9 +1318,10 @@ mod tests {
         assert_eq!(stats_seq, Some(3));
         assert_eq!(config_seq, Some(3));
         assert_eq!(log.lock().unwrap().set_configs, 2);
-        // Ready + 15 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items + DisplayItem; the channel disconnect means the
-        // thread (and so every wake) is finished.
-        assert_eq!(wakes.load(Ordering::SeqCst), 23);
+        // Ready + 17 initial snapshots + Stats + Config + Tree + Calcs + Skills + Items +
+        // DisplayItem + Compare; the channel disconnect means the thread (and so every wake) is
+        // finished.
+        assert_eq!(wakes.load(Ordering::SeqCst), 26);
     }
 
     #[test]
@@ -1116,16 +1336,19 @@ mod tests {
                 Event::Snapshot { snapshot, .. } => kinds.push(match snapshot {
                     Snapshot::BuildList(_) => "list",
                     Snapshot::Requests(_) => "requests",
+                    Snapshot::Settings(_) => "settings",
+                    Snapshot::Popup(_) => "popup",
                     _ => "other",
                 }),
                 Event::Error { message, .. } => panic!("unexpected error: {message}"),
                 _ => {}
             }
         }
-        // the requests need no build either (R10)
+        // the requests need no build either (R10), nor do the settings (R12) and the popup
+        // (a main-owned session, R19)
         assert_eq!(
             kinds,
-            ["requests", "list"],
+            ["requests", "list", "settings", "popup"],
             "only the list-safe views go out"
         );
     }
@@ -1134,7 +1357,13 @@ mod tests {
     fn item_queries_without_a_build_send_nothing() {
         let queries = || {
             vec![
-                Command::ItemTooltip(ItemTooltipQuery { id: 1, slot: None }),
+                Command::ItemTooltip(ItemTooltipQuery {
+                    id: 1,
+                    slot: None,
+                    theirs: false,
+                    shift: false,
+                    shared: None,
+                }),
                 Command::CopyItem { id: 1 },
             ]
         };
@@ -1378,10 +1607,39 @@ mod tests {
         assert_eq!(log.lock().unwrap().tooltips, [3]);
     }
 
+    #[test]
+    fn only_latest_hover_tooltip_runs() {
+        use crate::engine::HoverTarget;
+        let (mut fake, log) = Fake::new();
+        let targets = [
+            HoverTarget::GemQuality { group: 0, slot: 1 },
+            HoverTarget::ConfigOption {
+                var: "buffOnslaught".into(),
+            },
+            HoverTarget::GemCount { group: 2, slot: 0 },
+        ];
+        let events = run_queued(
+            &mut fake,
+            targets.iter().cloned().map(Command::HoverTooltip).collect(),
+        );
+        let hovers: Vec<_> = snapshots(&events)
+            .into_iter()
+            .filter_map(|(_, s)| match s {
+                Snapshot::HoverTooltip(t) => Some(t.target.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hovers, [targets[2].clone()]);
+        assert_eq!(log.lock().unwrap().hovers, [targets[2].clone()]);
+    }
+
     fn item_query(id: u32) -> crate::engine::ItemTooltipQuery {
         crate::engine::ItemTooltipQuery {
             id,
             slot: Some("Ring 1".into()),
+            theirs: false,
+            shift: false,
+            shared: None,
         }
     }
 
@@ -1522,7 +1780,9 @@ mod tests {
         let kinds = |events: &[Event]| {
             snapshots(events)
                 .into_iter()
-                .filter(|(_, s)| matches!(s, Snapshot::Popup(_) | Snapshot::ControlTooltip(_)))
+                .filter(|(_, s)| {
+                    matches!(s, Snapshot::Popup(Some(_)) | Snapshot::ControlTooltip(_))
+                })
                 .count()
         };
         // with a build both are answered
@@ -1703,8 +1963,13 @@ mod tests {
 
     #[test]
     fn jobs_run_in_order_gem_anoint_item_db_power() {
-        // R20: the gem picker's sort, the Anoint sort, the item database, then node power
+        // R20, R32: the gem picker's sort, the Anoint sort, the timeless search, the item
+        // database, then node power
         let (mut fake, log) = Fake::new();
+        fake.timeless_background
+            .lock()
+            .unwrap()
+            .extend((0..2).map(|_| step_affecting_gems()));
         fake.background
             .lock()
             .unwrap()
@@ -1727,13 +1992,14 @@ mod tests {
                 Command::SearchGems(gem_query("")),
                 Command::SetItemDb(db_query()),
             ],
-            8,
+            10,
         );
-        use BackgroundTask::{AnointSort, GemDps, ItemDb, NodePower};
+        use BackgroundTask::{AnointSort, GemDps, ItemDb, NodePower, Timeless};
         assert_eq!(
             log.lock().unwrap().step_tasks,
             [
-                GemDps, GemDps, AnointSort, AnointSort, ItemDb, ItemDb, NodePower, NodePower
+                GemDps, GemDps, AnointSort, AnointSort, Timeless, Timeless, ItemDb, ItemDb,
+                NodePower, NodePower
             ]
         );
     }
@@ -2045,6 +2311,70 @@ mod tests {
     }
 
     #[test]
+    fn settings_snapshot_is_list_safe() {
+        let flags = Affected {
+            settings: true,
+            stats: true,
+            ..Affected::default()
+        };
+        let kinds = |build_loaded: bool| {
+            let (mut fake, _log) = Fake::new();
+            fake.build_loaded = build_loaded;
+            let events = RefCell::new(Vec::new());
+            send_snapshots(&mut fake, 1, flags.clone(), &|e| {
+                events.borrow_mut().push(e)
+            });
+            let events = events.into_inner();
+            assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
+            snapshots(&events)
+                .iter()
+                .map(|(_, s)| match s {
+                    Snapshot::Stats(_) => "stats",
+                    Snapshot::Settings(_) => "settings",
+                    _ => "other",
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(kinds(true), ["settings", "stats"]);
+        // the settings are answered with no build open; the stats are not
+        assert_eq!(kinds(false), ["settings"]);
+        // a settings-only batch is list-safe by itself, so no build check is made
+        assert!(
+            Affected {
+                settings: true,
+                ..Affected::default()
+            }
+            .list_safe_only()
+        );
+    }
+
+    #[test]
+    fn options_popup_is_answered_without_a_build() {
+        // a main-owned session outlives the build (R19); an item session does not
+        let kinds = |popup: crate::engine::PopupKind| {
+            let (mut fake, _log) = Fake::new();
+            fake.build_loaded = false;
+            fake.popup = Some(popup);
+            let events = RefCell::new(Vec::new());
+            send_snapshots(
+                &mut fake,
+                1,
+                Affected {
+                    popup: true,
+                    ..Affected::default()
+                },
+                &|e| events.borrow_mut().push(e),
+            );
+            snapshots(&events.into_inner())
+                .iter()
+                .map(|(_, s)| matches!(s, Snapshot::Popup(Some(_))))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(kinds(crate::engine::PopupKind::Options), [true]);
+        assert_eq!(kinds(crate::engine::PopupKind::Corrupt), [false]);
+    }
+
+    #[test]
     fn requests_come_before_the_views_of_a_new_build() {
         // a request that finished with a new build tells the UI to start over, so the build's
         // views follow it
@@ -2122,6 +2452,110 @@ mod tests {
     }
 
     #[test]
+    fn compare_is_build_only() {
+        use crate::engine::CompareSource;
+        let queries = || {
+            vec![Command::LoadCompare {
+                source: CompareSource::Code("x".into()),
+            }]
+        };
+        let compares = |events: &[Event]| count_of(events, |s| matches!(s, Snapshot::Compare(_)));
+        // with a build the view is answered, "no comparison" included
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(&mut fake, queries());
+        assert_eq!(compares(&events), 1);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::Snapshot {
+                    snapshot: Snapshot::Compare(None),
+                    ..
+                }
+            )),
+            "{events:?}"
+        );
+        assert_eq!(log.lock().unwrap().compare_views, 1);
+        // a recalculation of this build refreshes the diff
+        let (mut fake, log) = Fake::new();
+        let events = run_queued(&mut fake, vec![set_config()]);
+        assert_eq!(compares(&events), 1);
+        assert_eq!(log.lock().unwrap().compare_views, 1);
+        // with none it never reaches the backend, nor does a whole-build refresh
+        for commands in [queries(), vec![Command::NewBuild]] {
+            let (mut fake, log) = Fake::new();
+            fake.build_loaded = false;
+            let events = run_queued(&mut fake, commands);
+            assert_eq!(compares(&events), 0);
+            assert_eq!(log.lock().unwrap().compare_views, 0);
+            assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
+        }
+        const { assert!(Affected::ALL_VIEWS.compare) };
+    }
+
+    #[test]
+    fn browsing_builds_answers_only_its_view_with_or_without_a_build() {
+        for loaded in [true, false] {
+            let (mut fake, log) = Fake::new();
+            fake.build_loaded = loaded;
+            let events = run_queued(
+                &mut fake,
+                vec![Command::BrowseBuilds {
+                    folder: "sub/".into(),
+                }],
+            );
+            let snapshots: Vec<&Snapshot> = events
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Snapshot { snapshot, .. } => Some(snapshot),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                matches!(snapshots.as_slice(), [Snapshot::BuildBrowse(view)] if view.folder == "sub/"),
+                "{events:?}"
+            );
+            assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
+            // no request cancelled, nothing else applied
+            assert_eq!(
+                log.lock().unwrap().requests,
+                ["apply BrowseBuilds { folder: \"sub/\" }"]
+            );
+        }
+        let browse = Command::BrowseBuilds { folder: "".into() };
+        assert_eq!(crate::engine::pob::cancels_requests(&browse), None);
+        assert!(!crate::engine::pob::ends_popup_session(&browse));
+        assert!(!crate::engine::pob::ends_item_db(&browse));
+        // unlike `ListBuilds`, which leaves the build
+        assert!(!crate::engine::pob::leaves_build(&browse));
+    }
+
+    #[test]
+    fn help_answers_only_its_view_with_or_without_a_build() {
+        for loaded in [true, false] {
+            let (mut fake, log) = Fake::new();
+            fake.build_loaded = loaded;
+            let events = run_queued(&mut fake, vec![Command::Help]);
+            let snapshots: Vec<&Snapshot> = events
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Snapshot { snapshot, .. } => Some(snapshot),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                matches!(snapshots.as_slice(), [Snapshot::Help(view)] if view.sections.len() == 1),
+                "{events:?}"
+            );
+            assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
+            assert_eq!(log.lock().unwrap().requests, ["apply Help"]);
+        }
+        assert_eq!(crate::engine::pob::cancels_requests(&Command::Help), None);
+        assert!(!crate::engine::pob::ends_popup_session(&Command::Help));
+        assert!(!crate::engine::pob::ends_item_db(&Command::Help));
+        assert!(!crate::engine::pob::leaves_build(&Command::Help));
+    }
+
+    #[test]
     fn short_link_is_sent_once_as_a_tree_link() {
         let (mut fake, _log) = Fake::new();
         fake.short_link = Some("http://poeurl.com/gAtE".into());
@@ -2169,6 +2603,64 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(!alive.is_alive(), "the engine thread outlived its Engine");
+    }
+
+    #[test]
+    fn dropping_the_engine_waits_for_its_exit_save() {
+        let (mut fake, log) = Fake::new();
+        fake.shutdown_delay = Duration::from_millis(300);
+        let engine = Engine::spawn_with(move |_send| Ok(Box::new(fake) as Box<dyn Backend>), || {});
+        loop {
+            match engine.events.recv_timeout(Duration::from_secs(5)) {
+                Ok(Event::Ready) => break,
+                Ok(_) => {}
+                Err(e) => panic!("no Ready: {e}"),
+            }
+        }
+        let alive = engine.liveness();
+        drop(engine);
+        // PoB's exit save ran once, and finished before the drop returned
+        assert_eq!(log.lock().unwrap().shutdowns, 1);
+        assert!(!alive.is_alive());
+    }
+
+    #[test]
+    fn an_engine_given_up_on_never_starts_its_exit_save() {
+        let (fake, log) = Fake::new();
+        // the thread is still starting when the drop gives up
+        let mut engine = Engine::spawn_with(
+            move |_send| {
+                std::thread::sleep(Duration::from_millis(300));
+                Ok(Box::new(fake) as Box<dyn Backend>)
+            },
+            || {},
+        );
+        engine.shutdown_wait = Duration::from_millis(20);
+        let alive = engine.liveness();
+        drop(engine);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while alive.is_alive() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!alive.is_alive(), "the thread didn't end");
+        assert_eq!(log.lock().unwrap().shutdowns, 0, "the exit save ran");
+    }
+
+    #[test]
+    fn only_shutdown_runs_the_exit_save() {
+        let (mut fake, log) = Fake::new();
+        run_queued(&mut fake, vec![Command::NewBuild]);
+        assert_eq!(
+            log.lock().unwrap().shutdowns,
+            0,
+            "a closed channel isn't an exit"
+        );
+        let events = run_queued(&mut fake, vec![Command::NewBuild, Command::Shutdown]);
+        assert_eq!(log.lock().unwrap().shutdowns, 1);
+        assert!(
+            events.iter().any(|e| matches!(e, Event::Snapshot { .. })),
+            "the batch before the Shutdown was answered"
+        );
     }
 
     #[test]
@@ -2235,7 +2727,7 @@ mod tests {
         }));
         tx.send((1, set_config())).unwrap();
         drop(tx);
-        run_loop_with_delay(&mut fake, &rx, &|_| {}, Duration::from_millis(20));
+        run_loop_with_delay(&mut fake, &rx, &|_| {}, Duration::from_millis(20), None);
         let during = during.load(Ordering::SeqCst);
         (log, during)
     }

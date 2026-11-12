@@ -406,6 +406,17 @@ fn compare_summary_matches_pob() {
         ),
         "Couldn't open 'missing.xml'."
     );
+    let empty = scratch.0.join("empty.xml");
+    fs::write(&empty, "").unwrap();
+    assert_eq!(
+        err(
+            &mut s,
+            Command::LoadCompare {
+                source: CompareSource::File(empty),
+            }
+        ),
+        "Build file is empty or unreadable."
+    );
     assert_eq!(view(&mut s).entries.len(), 2);
 
     // ---- Selecting and removing follow PoB's activeCompareIndex ----
@@ -542,13 +553,20 @@ fn compare_tree_colours_match_pob() {
     let mut s = net_session("compare-tree", canned(&web), None);
     s.open_fixture("attack");
     let up = Upstream::new("attack");
+    // on the Compare tab's tree before anything is loaded: nothing to colour against yet
+    let affected = run(&mut s, Command::SetCompareOverlay { on: true }).unwrap();
+    assert!(affected.tree && !affected.build && !affected.recalc);
+    assert!(s.backend.tree_state_view().unwrap().compare.is_empty());
     let dot = fixture_xml("dot");
     load_file(&mut s, &dot);
     up.call::<()>(
         "loadCompare",
         (fs::read_to_string(&dot).unwrap(), "dot".to_string()),
     );
-    // not on the Compare tab's tree: the Tree tab's own state (not comparing)
+    let theirs = up.tree_colours();
+    assert_eq!(s.backend.tree_state_view().unwrap().compare, theirs);
+    // off the Compare tab's tree: the Tree tab's own state (not comparing)
+    run(&mut s, Command::SetCompareOverlay { on: false }).unwrap();
     let tree = s.backend.tree_state_view().unwrap();
     assert!(tree.compare.is_empty() && tree.compare_spec.is_none());
 
@@ -556,7 +574,6 @@ fn compare_tree_colours_match_pob() {
     let affected = run(&mut s, Command::SetCompareOverlay { on: true }).unwrap();
     assert!(affected.tree && !affected.build && !affected.recalc);
     let tree = s.backend.tree_state_view().unwrap();
-    let theirs = up.tree_colours();
     assert!(
         theirs.iter().any(|c| c.rgb == [0.0, 1.0, 0.0])
             && theirs.iter().any(|c| c.rgb == [1.0, 0.0, 0.0]),
@@ -638,6 +655,7 @@ fn compare_tree_colours_match_pob() {
     assert_ne!(tree.compare, theirs);
 
     assert!(web.requests().is_empty());
+    assert!(web.unrouted().is_empty());
     let secs = started.elapsed().as_secs_f64();
     assert!(secs < 20.0, "took {secs:.1}s");
 }

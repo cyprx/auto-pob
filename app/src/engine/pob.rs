@@ -922,11 +922,13 @@ impl PobBackend {
                 overwrite,
             } => {
                 self.call::<_, ()>("save_as", (folder, name, overwrite))?;
-                // PoB's save rewrites the notes' `^_` escapes
+                // PoB's save rewrites the notes' `^_` escapes; the Summary's header names the
+                // build (R4)
                 Ok(Affected {
                     build: true,
                     list: true,
                     notes: true,
+                    compare: true,
                     ..Affected::default()
                 })
             }

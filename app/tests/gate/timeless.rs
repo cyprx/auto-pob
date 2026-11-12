@@ -30,7 +30,7 @@ const LUTS: [&str; 2] = ["LethalPride.zip", "MilitantFaith.zip"];
 /// (DataJewelFileLoader.lua:83-91) and its repair path rewrites `NodeIndexMapping.lua`, so
 /// nothing there may lead back to the pinned folder: its `.lua` files and the LUTs this test
 /// reads are copied, any `.bin` the pinned folder holds is left out.
-fn farm(test: &str) -> PathBuf {
+pub(crate) fn farm(test: &str) -> PathBuf {
     let farm = std::env::temp_dir().join(format!("auto-pob-tl-pob-{test}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&farm);
     let pinned = pob_dir();

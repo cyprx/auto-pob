@@ -1107,3 +1107,791 @@ fn trace_path_matches_pob() {
     after.sort();
     assert_eq!(after, alloc);
 }
+
+// ---- No silent writes, SP2 to SP7 (Task 16, R29, R34) ----
+
+/// The pinned PoB folder by file, size and modification time, links not followed, without the
+/// timeless LUT caches PoB itself may write there (R17)
+fn pinned_files() -> BTreeMap<PathBuf, (u64, std::time::SystemTime)> {
+    fn walk(dir: &std::path::Path, out: &mut BTreeMap<PathBuf, (u64, std::time::SystemTime)>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let meta = fs::symlink_metadata(&path).unwrap();
+            if meta.is_dir() {
+                walk(&path, out);
+            } else if !(path.extension().is_some_and(|e| e == "bin")
+                && path
+                    .parent()
+                    .is_some_and(|p| p.ends_with("TimelessJewelData")))
+            {
+                out.insert(path, (meta.len(), meta.modified().unwrap()));
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    walk(&pob_dir(), &mut out);
+    out
+}
+
+/// The test's PoB folder: its own files (not the links into the pinned one) with their bytes,
+/// and the LUT caches PoB wrote, by name
+fn farm_files(farm: &std::path::Path) -> (BTreeMap<PathBuf, Vec<u8>>, Vec<String>) {
+    fn walk(dir: &std::path::Path, files: &mut BTreeMap<PathBuf, Vec<u8>>, bins: &mut Vec<String>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let meta = fs::symlink_metadata(&path).unwrap();
+            if meta.is_dir() {
+                walk(&path, files, bins);
+            } else if meta.is_file() {
+                if path.extension().is_some_and(|e| e == "bin") {
+                    bins.push(path.file_name().unwrap().to_string_lossy().into_owned());
+                } else {
+                    files.insert(path.clone(), fs::read(&path).unwrap());
+                }
+            }
+        }
+    }
+    let (mut files, mut bins) = (BTreeMap::new(), Vec::new());
+    walk(farm, &mut files, &mut bins);
+    bins.sort();
+    (files, bins)
+}
+
+/// A hand-written `Settings.xml`, laid out unlike PoB's writer, so any `main:SaveSettings`
+/// shows in its bytes: two shared items and a shared set, and a last mode of this build list
+fn quiet_seed() -> String {
+    let ring = "Rarity: RARE\nQuiet Loop\nIron Ring\nImplicits: 0\n+20 to maximum Life";
+    let body = "Rarity: UNIQUE\nKaom's Heart\nGlorious Plate\nImplicits: 0\n+500 to maximum Life";
+    format!(
+        "<PathOfBuilding>\n<Mode mode=\"LIST\"><Arg boolean=\"false\"/><Arg string=\"\"/></Mode>\n\
+         <SharedItems><Item>{ring}</Item><Item>{body}</Item>\
+         <ItemSet title=\"Quiet Set\"><Item slotName=\"Ring 1\">{ring}</Item></ItemSet></SharedItems>\n\
+         <Misc buildSortMode=\"NAME\" showThousandsSeparators=\"false\"/>\n</PathOfBuilding>\n"
+    )
+}
+
+/// One PoB session and what the user folder held after the last command allowed to write
+struct Quiet {
+    backend: auto_pob::engine::pob::PobBackend,
+    user: PathBuf,
+    pob: PathBuf,
+    files: BTreeMap<PathBuf, Vec<u8>>,
+}
+
+impl Drop for Quiet {
+    fn drop(&mut self) {
+        // `remove_dir_all` unlinks the farm's links without following them
+        let _ = fs::remove_dir_all(&self.pob);
+        let _ = fs::remove_dir_all(&self.user);
+    }
+}
+
+impl Quiet {
+    fn eval<T: mlua::FromLuaMulti>(&self, code: &str) -> T {
+        self.backend
+            .lua
+            .load(code)
+            .set_name("=quiet test")
+            .eval()
+            .unwrap_or_else(|e| panic!("{code}: {e}"))
+    }
+
+    fn settings(&self) -> PathBuf {
+        self.user.join("Path of Building/Settings.xml")
+    }
+
+    fn builds(&self) -> PathBuf {
+        self.user.join("Path of Building/Builds")
+    }
+
+    /// Applies a command as the loop does; no popup may stay in `main.popups`
+    fn apply(&mut self, command: Command) -> anyhow::Result<auto_pob::engine::Affected> {
+        let what = format!("{command:?}");
+        let out = self.backend.apply(command, &|_| {});
+        if out.as_ref().is_ok_and(|a| a.recalc) {
+            self.backend.recalculate().unwrap();
+        }
+        let popups: usize = self.eval("return #pob.main.main.popups");
+        assert_eq!(popups, 0, "{what} left a popup open");
+        out
+    }
+
+    /// The user folder against the last allowed write: no file added, removed or changed
+    fn check(&self, what: &str) {
+        let now = super::snapshot_dir(&self.user);
+        if now != self.files {
+            let changed: std::collections::BTreeSet<&PathBuf> = now
+                .keys()
+                .chain(self.files.keys())
+                .filter(|k| now.get(*k) != self.files.get(*k))
+                .collect();
+            panic!("{what} wrote {changed:?}");
+        }
+    }
+
+    /// A command that must write nothing; it may change the build in memory
+    fn quiet(&mut self, command: Command) -> auto_pob::engine::Affected {
+        let what = format!("{command:?}");
+        let affected = self
+            .apply(command)
+            .unwrap_or_else(|e| panic!("{what}: {e:#}"));
+        self.check(&what);
+        affected
+    }
+
+    /// A command the user invoked to write a build file (SP2's saves, R16's list commands):
+    /// `Settings.xml` stays byte-identical (R34)
+    fn replay(&mut self, command: Command) {
+        let what = format!("{command:?}");
+        let before = fs::read(self.settings()).unwrap();
+        self.apply(command)
+            .unwrap_or_else(|e| panic!("{what}: {e:#}"));
+        assert!(
+            fs::read(self.settings()).unwrap() == before,
+            "{what} wrote Settings.xml"
+        );
+        self.files = super::snapshot_dir(&self.user);
+    }
+
+    /// One of R29's writers: `Settings.xml` is written, nothing else
+    fn writer(&mut self, command: Command) -> auto_pob::engine::Affected {
+        let what = format!("{command:?}");
+        let affected = self
+            .apply(command)
+            .unwrap_or_else(|e| panic!("{what}: {e:#}"));
+        let now = super::snapshot_dir(&self.user);
+        let settings = self.settings();
+        assert_ne!(
+            now.get(&settings),
+            self.files.get(&settings),
+            "{what} saved nothing"
+        );
+        let mut others = now.clone();
+        let mut before = self.files.clone();
+        others.remove(&settings);
+        before.remove(&settings);
+        assert!(others == before, "{what} wrote more than Settings.xml");
+        self.files = now;
+        affected
+    }
+
+    /// Every view the UI asks for, each checked for writes
+    fn views(&mut self, what: &str) {
+        let b = &mut self.backend;
+        if b.build_loaded().unwrap() {
+            b.build_view().unwrap();
+            b.stats_view().unwrap();
+            b.config_view().unwrap();
+            b.tree_state_view().unwrap();
+            b.calcs_view().unwrap();
+            b.skills_view().unwrap();
+            b.items_view().unwrap();
+            b.notes_view().unwrap();
+            b.display_item_view().unwrap();
+            b.compare_view().unwrap();
+            b.tree_link_view().unwrap();
+            b.share_view().unwrap();
+            b.item_db_view().unwrap();
+            b.account_view().unwrap();
+        }
+        b.build_list_view().unwrap();
+        b.popup_view().unwrap();
+        b.settings_view().unwrap();
+        b.help_view().unwrap();
+        b.requests_view().unwrap();
+        b.browse_view("").unwrap();
+        self.check(&format!("the views at {what}"));
+    }
+
+    fn popup(&mut self) -> PopupView {
+        self.backend
+            .popup_view()
+            .unwrap()
+            .expect("no popup is open")
+    }
+
+    /// Picks a popup dropdown entry by its label
+    fn choose(&mut self, name: &str, label: &str) {
+        let view = self.popup();
+        let control = view.controls.iter().find(|c| c.name == name).unwrap();
+        let index = control
+            .choices
+            .iter()
+            .position(|c| c == label)
+            .unwrap_or_else(|| panic!("{name} has no {label}: {:?}", control.choices));
+        self.quiet(Command::SetPopupControl {
+            name: name.into(),
+            value: PopupInput::Choice {
+                index,
+                label: label.into(),
+            },
+        });
+    }
+
+    fn press(&mut self, name: &str) -> auto_pob::engine::Affected {
+        self.quiet(Command::PressPopupButton { name: name.into() })
+    }
+
+    /// Runs the background job `task` until it is no longer next
+    fn drain(&mut self, task: auto_pob::engine::BackgroundTask) {
+        while self.backend.next_background() == Some(task) {
+            self.backend
+                .background_step(task, &|_| {})
+                .unwrap_or_else(|e| panic!("{task:?} step: {e:#}"));
+        }
+        self.check(&format!("{task:?}"));
+    }
+
+    fn open(&mut self, name: &str) {
+        let path = self.builds().join(format!("{name}.xml"));
+        self.quiet(Command::OpenBuild { path });
+    }
+}
+
+/// Every SP7 read, view and query, Compare's loads and copies, trade, timeless, Help and
+/// hovers write nothing; one command of each kind from SP2-SP6 leaves `Settings.xml`
+/// byte-identical; only R29's writers write it (R29, R34). The pinned folder, apart from the
+/// LUT caches, and `auto-pob.toml` are left as they were.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn no_silent_writes_longtail() {
+    use super::net_harness::{canned, canned_web, net_user};
+    use auto_pob::engine::pob::PobBackend;
+    use auto_pob::engine::{
+        BackgroundTask, BuildSort, BuySource, CalcsControl, CellRef, CompareSource, ConfigValue,
+        ControlTooltipQuery, DeleteKind, GemFilter, GemSearchQuery, GemTarget, GemTooltipQuery,
+        HoverTarget, ItemDb, ItemDbQuery, ItemTooltipQuery, SharedItemSource, SkillOption, Tab,
+    };
+    let _guard = lock();
+    let started = std::time::Instant::now();
+    let pinned = pinned_files();
+    // the engine has no path to auto-pob.toml: this guards against one appearing
+    let config = auto_pob::settings::config_path();
+    let config_before = fs::read(&config).ok();
+
+    let pob = super::timeless::farm("quiet");
+    let (farm_before, bins_before) = farm_files(&pob);
+    assert!(bins_before.is_empty());
+    let user = net_user("quiet", Some(&quiet_seed()));
+    let builds = user.join("Path of Building/Builds");
+    for name in ["attack", "dot"] {
+        fs::copy(fixture_xml(name), builds.join(format!("{name}.xml"))).unwrap();
+    }
+    // the minion fixture's Raise Zombie made Raise Spectre, for the Spectre Library
+    let spectre = fs::read_to_string(fixture_xml("minion"))
+        .unwrap()
+        .replace(
+            "skillMinionCalcs=\"RaisedZombie\" skillMinionSkillCalcs=\"1\" ",
+            "",
+        )
+        .replace(" skillMinion=\"RaisedZombie\"", "")
+        .replace("SkillGemRaiseZombie", "SkillGemRaiseSpectre")
+        .replace("skillId=\"RaiseZombie\"", "skillId=\"RaiseSpectre\"")
+        .replace("variantId=\"RaiseZombie\"", "variantId=\"RaiseSpectre\"")
+        .replace("nameSpec=\"Raise Zombie\"", "nameSpec=\"Raise Spectre\"");
+    fs::write(builds.join("spectre.xml"), spectre).unwrap();
+    // attack with a better maul, for Compare's item copy
+    let attack = fs::read_to_string(fixture_xml("attack")).unwrap();
+    assert!(attack.contains("Driftwood Maul\nQuality: 0\n"));
+    fs::write(
+        builds.join("gear.xml"),
+        attack.replace(
+            "Driftwood Maul\nQuality: 0\n",
+            "Driftwood Maul\nQuality: 20\n",
+        ),
+    )
+    .unwrap();
+    let seeded = super::snapshot_dir(&user);
+    let backend = PobBackend::start_with(Game::Poe1, &pob, &user, canned(&canned_web()))
+        .expect("starting PoB");
+    let mut s = Quiet {
+        backend,
+        user,
+        pob,
+        files: seeded,
+    };
+    s.check("starting PoB");
+    let refused = s.backend.net_handle().refused();
+    s.views("start");
+
+    // ---- SP7: the app's values, Help, the build list's reads ----
+    s.quiet(Command::SetTradeDefaults {
+        realm: "PC".into(),
+        league: "Standard".into(),
+    });
+    s.quiet(Command::SetOverrides {
+        values: BTreeMap::from([("showThousandsSeparators".to_string(), "true".to_string())]),
+    });
+    s.quiet(Command::Help);
+    s.quiet(Command::ListBuilds { folder: "".into() });
+    s.quiet(Command::SetBuildFilter { text: "dot".into() });
+    s.quiet(Command::SetBuildFilter { text: "".into() });
+    s.quiet(Command::BrowseBuilds { folder: "".into() });
+    s.views("the build list");
+    s.open("attack");
+    s.views("attack opened");
+
+    // ---- SP7: hovers, Shift tooltips, the top bar ----
+    for target in [
+        HoverTarget::GemQuality { group: 0, slot: 0 },
+        HoverTarget::GemEnabled { group: 0, slot: 0 },
+        HoverTarget::GemCount { group: 0, slot: 0 },
+        HoverTarget::ConfigOption {
+            var: "usePowerCharges".into(),
+        },
+    ] {
+        s.quiet(Command::HoverTooltip(target.clone()));
+        s.backend.hover_tooltip_view(&target).unwrap();
+    }
+    let items = s.backend.items_view().unwrap();
+    let equipped: Vec<(String, u32)> = items
+        .items
+        .iter()
+        .filter_map(|i| i.equipped.as_ref().map(|e| (e.slot.clone(), i.id)))
+        .collect();
+    let (slot, id) = equipped.first().cloned().expect("attack equips nothing");
+    for shift in [false, true] {
+        let query = ItemTooltipQuery {
+            id,
+            slot: Some(slot.clone()),
+            theirs: false,
+            shift,
+            shared: None,
+        };
+        s.quiet(Command::ItemTooltip(query.clone()));
+        s.backend.item_tooltip_view(&query).unwrap();
+        let shared = ItemTooltipQuery {
+            shared: Some(0),
+            ..query
+        };
+        s.backend.item_tooltip_view(&shared).unwrap();
+    }
+    s.quiet(Command::CopySharedItem { index: 0 });
+    s.check("tooltips");
+    s.quiet(Command::SetCharacterLevel { level: 90 });
+    s.quiet(Command::SetLevelMode { auto: true });
+    s.quiet(Command::NewLoadout {
+        name: "Quiet".into(),
+    });
+    s.quiet(Command::SyncLoadouts);
+    s.views("hovers and the top bar");
+
+    // ---- SP7: Compare, its loads, views, copies and Buy similar ----
+    let code = s.backend.share_code().unwrap();
+    s.quiet(Command::LoadCompare {
+        source: CompareSource::File(s.builds().join("dot.xml")),
+    });
+    s.views("dot compared");
+    s.quiet(Command::LoadCompare {
+        source: CompareSource::Code(code),
+    });
+    s.quiet(Command::LoadCompare {
+        source: CompareSource::File(s.builds().join("gear.xml")),
+    });
+    s.quiet(Command::SelectCompare { index: 0 });
+    let view = s.backend.compare_view().unwrap().expect("a comparison");
+    s.check("the compare view");
+    if let Some(control) = view.controls.iter().find(|c| c.choices.len() > 1) {
+        s.quiet(Command::SetCompareControl {
+            name: control.name.clone(),
+            value: PopupInput::Choice {
+                index: 1,
+                label: control.choices[1].clone(),
+            },
+        });
+    }
+    s.quiet(Command::SelectCompare { index: 2 });
+    let view = s.backend.compare_view().unwrap().expect("a comparison");
+    s.quiet(Command::SetCompareOverlay { on: true });
+    s.backend.tree_state_view().unwrap();
+    s.quiet(Command::SetCompareOverlay { on: false });
+    let row = view
+        .items
+        .iter()
+        .find(|r| r.can_copy && r.theirs.is_some())
+        .expect("no item of gear's to copy")
+        .slot
+        .clone();
+    s.backend
+        .item_tooltip_view(&ItemTooltipQuery {
+            id: 0,
+            slot: Some(row.clone()),
+            theirs: true,
+            shift: true,
+            shared: None,
+        })
+        .unwrap();
+    s.quiet(Command::OpenPopup(PopupKind::BuySimilar {
+        source: BuySource::CompareSlot(row.clone()),
+    }));
+    s.popup();
+    let url = s.press("search").external_url.expect("no trade link");
+    assert!(
+        url.url
+            .starts_with("https://www.pathofexile.com/trade/search/")
+    );
+    s.press("close");
+    s.quiet(Command::CopyCompareItem {
+        slot: row,
+        and_use: true,
+    });
+    s.quiet(Command::CopyCompareTree { and_use: false });
+    s.quiet(Command::CopyCompareConfig);
+    s.views("the copies");
+    s.quiet(Command::RemoveCompare { index: 1 });
+    s.quiet(Command::SelectCompare { index: 0 });
+
+    // ---- SP7: Buy similar on our own items ----
+    s.quiet(Command::OpenPopup(PopupKind::BuySimilar {
+        source: BuySource::Slot(slot.clone()),
+    }));
+    s.press("search").external_url.expect("no trade link");
+    s.quiet(Command::ClosePopup);
+    s.quiet(Command::EditItem { id });
+    s.quiet(Command::OpenPopup(PopupKind::BuySimilar {
+        source: BuySource::DisplayItem,
+    }));
+    s.press("search").external_url.expect("no trade link");
+    s.quiet(Command::ClosePopup);
+    s.quiet(Command::CancelDisplayItem { if_id: None });
+
+    // ---- SP7: the timeless search, its trade link and a cancelled second search ----
+    s.quiet(Command::OpenPopup(PopupKind::TimelessJewel));
+    let socket = s
+        .popup()
+        .controls
+        .iter()
+        .find(|c| c.name == "socketSelect")
+        .unwrap()
+        .choices[1]
+        .clone();
+    s.choose("jewelSelect", "Lethal Pride");
+    s.choose("conquerorSelect", "Kaom (Strength of Blood)");
+    s.choose("socketSelect", &socket);
+    s.quiet(Command::SetPopupControl {
+        name: "searchList".into(),
+        value: PopupInput::Text("karui_notable_add_armour, 2, 0, 0".into()),
+    });
+    s.press("searchButton");
+    s.drain(BackgroundTask::Timeless);
+    s.views("the timeless results");
+    s.quiet(Command::ControlTooltip(ControlTooltipQuery::Popup {
+        control: "searchResults".into(),
+        index: Some(0),
+    }));
+    s.quiet(Command::SetPopupControl {
+        name: "searchResults".into(),
+        value: PopupInput::Row("1".into()),
+    });
+    s.press("searchTradeButton")
+        .external_url
+        .expect("no timeless trade link");
+    s.press("searchButton");
+    s.quiet(Command::CancelTimelessSearch);
+    s.quiet(Command::ClosePopup);
+
+    // ---- SP7: Options and the Mod Browser, closed unsaved ----
+    s.quiet(Command::OpenPopup(PopupKind::Options));
+    s.quiet(Command::SetPopupControl {
+        name: "showThousandsSeparators".into(),
+        value: PopupInput::Check(false),
+    });
+    s.views("Options open");
+    s.quiet(Command::ClosePopup);
+    s.quiet(Command::AddCustomModGroup);
+    let group = s.backend.config_view().unwrap().custom_mods.len() - 1;
+    s.quiet(Command::OpenPopup(PopupKind::ModBrowser { group }));
+    s.popup();
+    s.quiet(Command::ClosePopup);
+
+    // ---- SP7 tab parity: shared items read, databases, set and tree managers ----
+    s.quiet(Command::ViewSharedItem { index: 0 });
+    s.quiet(Command::CancelDisplayItem { if_id: None });
+    s.quiet(Command::DropSharedItem {
+        index: 1,
+        slot: Some("Body Armour".into()),
+        at: None,
+    });
+    s.quiet(Command::DropSharedItem {
+        index: 0,
+        slot: None,
+        at: Some(0),
+    });
+    s.quiet(Command::ImportSharedItemSet { index: 0 });
+    let db_query = ItemDbQuery {
+        db: ItemDb::Uniques,
+        slot: 0,
+        kind: 0,
+        league: 0,
+        requirement: 0,
+        obtainable: 0,
+        sort: 0,
+        search: "Kaom's Binding".into(),
+        search_mode: 0,
+    };
+    s.quiet(Command::SetItemDb(db_query));
+    s.drain(BackgroundTask::ItemDb);
+    let rows = match s.backend.item_db_view().unwrap() {
+        auto_pob::engine::DbSnapshot::View(view) => view.rows,
+        _ => panic!("no database view"),
+    };
+    let name = rows.first().expect("no unique found").name.clone();
+    assert!(name.starts_with("Kaom's Binding"), "{name}");
+    s.quiet(Command::ControlTooltip(ControlTooltipQuery::DbItem {
+        db: ItemDb::Uniques,
+        name: name.clone(),
+        shift: true,
+    }));
+    s.quiet(Command::ViewDbItem {
+        db: ItemDb::Uniques,
+        name: name.clone(),
+    });
+    s.quiet(Command::AddDbItem {
+        db: ItemDb::Uniques,
+        name: name.clone(),
+        second_slot: false,
+    });
+    s.quiet(Command::DropDbItemOnList {
+        db: ItemDb::Uniques,
+        name: name.clone(),
+        at: None,
+    });
+    s.quiet(Command::DropDbItem {
+        db: ItemDb::Uniques,
+        name,
+        slot: "Belt".into(),
+    });
+    s.quiet(Command::CloseItemDb);
+    s.quiet(Command::QuickEquipItem {
+        id,
+        second_slot: false,
+    });
+    s.quiet(Command::NewSkillSet {
+        title: "Quiet".into(),
+    });
+    s.quiet(Command::MoveSkillSet { from: 0, to: 1 });
+    let config_set = s.backend.config_view().unwrap().active_set;
+    s.quiet(Command::CopyConfigSet {
+        id: config_set,
+        title: "Quiet".into(),
+    });
+    s.quiet(Command::MoveConfigSet { from: 0, to: 1 });
+    s.quiet(Command::CopySpec {
+        index: 0,
+        title: "Quiet".into(),
+    });
+    s.quiet(Command::MoveSpec { from: 0, to: 1 });
+    s.quiet(Command::ToggleHeatmap);
+    s.quiet(Command::SetTreeStatDifferences { on: true });
+    s.quiet(Command::SetPowerReportFilter {
+        filter: 1,
+        masteries: true,
+    });
+    s.views("tab parity");
+
+    // ---- SP7: the Spectre Library before its Save ----
+    s.open("spectre");
+    s.quiet(Command::OpenPopup(PopupKind::SpectreLibrary));
+    s.quiet(Command::SetPopupControl {
+        name: "source.searchText".into(),
+        value: PopupInput::Text("Archer".into()),
+    });
+    s.views("the Spectre Library");
+    s.quiet(Command::ClosePopup);
+
+    // ---- SP2-SP6, one command of each kind: none writes Settings.xml ----
+    s.open("attack");
+    let node: u32 = s.eval(
+        "local best for id, node in pairs(pob.build.spec.nodes) do \
+         if not node.alloc and node.pathDist == 1 and node.type == 'Normal' and (not best or id < best) then best = id end \
+         end return best",
+    );
+    for command in [
+        Command::SetConfig {
+            var: "usePowerCharges".into(),
+            value: ConfigValue::Bool(true),
+        },
+        Command::NewConfigSet {
+            title: "Quiet".into(),
+        },
+        Command::SetCustomModText {
+            group: 0,
+            text: "+10 to maximum Life".into(),
+        },
+        Command::Undo(Tab::Config),
+        Command::Redo(Tab::Config),
+        Command::PreviewNode { id: node },
+        Command::AllocNode { id: node },
+        Command::DeallocNode { id: node },
+        Command::SetTreeSearch {
+            text: "life".into(),
+        },
+        Command::ExportTreeLink,
+        Command::NewSpec {
+            title: "Quiet".into(),
+        },
+        Command::SelectSpec { index: 0 },
+        Command::SetCompareSpec { index: Some(1) },
+        Command::SetCompareSpec { index: None },
+        Command::Undo(Tab::Tree),
+        Command::SetCalcsSearch {
+            text: "life".into(),
+        },
+        Command::SetCalcsSelect {
+            control: CalcsControl::Mode,
+            index: 1,
+        },
+        Command::SetNotes {
+            text: "quiet".into(),
+        },
+        Command::SetGemLevel {
+            group: 0,
+            slot: 0,
+            text: "19".into(),
+        },
+        Command::SetGemQuality {
+            group: 0,
+            slot: 0,
+            text: "20".into(),
+        },
+        Command::GroupTooltip { group: 0 },
+        Command::CopySocketGroup { group: 0 },
+        Command::AddSocketGroup,
+        Command::SetSkillOption(SkillOption::SortByDps(false)),
+        Command::SearchGems(GemSearchQuery {
+            group: 0,
+            target: GemTarget::Slot(0),
+            text: "fire".into(),
+            filter: GemFilter::All,
+        }),
+        Command::GemTooltip(GemTooltipQuery {
+            group: 0,
+            target: GemTarget::Slot(0),
+            gem_id: None,
+        }),
+        Command::CloseGemSearch,
+        Command::Undo(Tab::Skills),
+        Command::EditItem { id },
+        Command::SetItemQuality { text: "10".into() },
+        Command::SaveDisplayItem,
+        Command::OpenPopup(PopupKind::Craft),
+        Command::ClosePopup,
+        Command::SetShowStatDifferences { on: false },
+        Command::NewItemSet {
+            title: "Quiet".into(),
+        },
+        Command::CopyItem { id },
+        Command::SortItems,
+        Command::Undo(Tab::Items),
+        Command::ExportShareCode,
+        Command::SetImportCode {
+            text: s.backend.share_code().unwrap(),
+        },
+    ] {
+        s.quiet(command);
+    }
+    let calcs = s.backend.calcs_view().unwrap();
+    let cell = calcs
+        .sections
+        .iter()
+        .find_map(|section| {
+            section.subs.iter().enumerate().find_map(|(sub, part)| {
+                part.rows.iter().find_map(|row| {
+                    row.cells.iter().find(|c| c.breakdown).map(|c| CellRef {
+                        section: section.id.clone(),
+                        sub,
+                        row: row.index,
+                        cell: c.index,
+                    })
+                })
+            })
+        })
+        .expect("no breakdown cell");
+    s.quiet(Command::Breakdown(cell.clone()));
+    s.backend.breakdown_view(&cell).unwrap();
+    s.views("SP2-SP6 commands");
+    // the user's own writes: build files change, Settings.xml doesn't
+    s.replay(Command::Save);
+    s.replay(Command::SaveAs {
+        folder: "".into(),
+        name: "quiet-copy".into(),
+        overwrite: false,
+    });
+    s.quiet(Command::NewBuild);
+    s.quiet(Command::ListBuilds { folder: "".into() });
+    s.replay(Command::NewFolder {
+        name: "quiet".into(),
+    });
+    s.replay(Command::CopyBuild {
+        path: s.builds().join("dot.xml"),
+        name: "dot2".into(),
+    });
+    s.replay(Command::RenameBuild {
+        path: s.builds().join("dot2.xml"),
+        name: "dot3".into(),
+    });
+    s.replay(Command::MoveBuild {
+        path: s.builds().join("dot3.xml"),
+        folder: "quiet/".into(),
+    });
+    s.replay(Command::DeleteBuild {
+        path: s.builds().join("quiet/dot3.xml"),
+        kind: DeleteKind::Build,
+    });
+    s.check("the build list's own writes");
+
+    // ---- R29's writers: Settings.xml only ----
+    s.writer(Command::SetBuildSort {
+        sort: BuildSort::Level,
+    });
+    s.open("attack");
+    s.quiet(Command::OpenPopup(PopupKind::Options));
+    s.quiet(Command::SetPopupControl {
+        name: "defaultGemQuality".into(),
+        value: PopupInput::Text("7".into()),
+    });
+    s.writer(Command::PressPopupButton {
+        name: "save".into(),
+    });
+    let set = s.backend.items_view().unwrap().active_set;
+    for command in [
+        Command::AddSharedItem {
+            source: SharedItemSource::Item { id },
+            index: 2,
+        },
+        Command::MoveSharedItem { from: 2, to: 0 },
+        Command::DeleteSharedItem { index: 0 },
+        Command::AddSharedItemSet { id: set },
+        Command::RenameSharedItemSet {
+            index: 1,
+            title: "Quiet Two".into(),
+        },
+        Command::MoveSharedItemSet { from: 1, to: 0 },
+        Command::DeleteSharedItemSet { index: 0 },
+    ] {
+        s.writer(command);
+    }
+
+    // ---- nothing reached the network, the pinned folder or auto-pob.toml ----
+    // Buy similar's league fetch, refused at each of its three opens (R10); nothing else
+    assert_eq!(
+        s.backend.net_handle().refused() - refused,
+        3,
+        "a request other than Buy similar's league fetch was attempted"
+    );
+    let requests = s.backend.requests_view().unwrap();
+    assert!(requests.pending.is_empty() && requests.finished.is_empty());
+    let (farm_after, bins) = farm_files(&s.pob);
+    assert!(
+        farm_after == farm_before,
+        "PoB's own files in the farm changed"
+    );
+    assert!(!bins.is_empty(), "the search read no LUT");
+    assert!(pinned_files() == pinned, "the pinned PoB folder changed");
+    assert_eq!(
+        fs::read(&config).ok(),
+        config_before,
+        "auto-pob.toml changed"
+    );
+    eprintln!("no_silent_writes_longtail: {:?}", started.elapsed());
+}

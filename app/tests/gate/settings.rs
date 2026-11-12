@@ -253,6 +253,21 @@ fn settings_shared_and_overridden() {
 
     // ---- Escape on the window is PoB's Cancel; the DPI dropdown reopens the window ----
     let popup = open_options(&mut s);
+    // each row names the window's own control that edits it, and has a label; the sort mode
+    // is set from the build list, not here (Task 16's non-default check)
+    for r in &view.rows {
+        assert!(!r.label.is_empty(), "{}: no label", r.key);
+        if r.key == "buildSortMode" {
+            assert_eq!(r.control, "");
+        } else {
+            assert!(
+                popup.controls.iter().any(|c| c.name == r.control),
+                "{}: the window has no control {:?}",
+                r.key,
+                r.control
+            );
+        }
+    }
     for key in HIDDEN {
         assert!(
             popup.controls.iter().all(|c| c.name != key),

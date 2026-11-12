@@ -1018,6 +1018,10 @@ fn build_list_no_silent_writes() {
     for folder in ["", "sub/", "empty/", "none/", ""] {
         list(&mut s, folder);
     }
+    // the folder listed and PoB's build folder, as the view gives them (Task 16)
+    let sub = list(&mut s, "sub/");
+    assert_eq!(sub.folder, "sub/");
+    assert_eq!(sub.root, builds);
     let view = list(&mut s, "");
     assert_eq!(
         names(&rows(&view, &builds)),

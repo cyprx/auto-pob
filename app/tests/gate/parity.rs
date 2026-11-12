@@ -437,4 +437,14 @@ fn parity_inventory_is_complete() {
         Path::new("app/tests/fixtures/parity.toml").display(),
         problems.join("\n")
     );
+    // SP7's Definition of Done: every gap was closed or ruled out by Task 16
+    let gaps: Vec<String> = table
+        .iter()
+        .flat_map(|(section, rows)| {
+            rows.iter()
+                .filter(|(_, row)| row.fields.contains_key("gap"))
+                .map(move |(key, _)| format!("[{section}.{key:?}]"))
+        })
+        .collect();
+    assert!(gaps.is_empty(), "parity gaps left: {gaps:?}");
 }

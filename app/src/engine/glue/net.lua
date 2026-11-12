@@ -86,6 +86,35 @@ local function settle_init(self, depth, newMode_before)
 	return true, conversion, { self.dbFileName or false, self.buildName, false, true }
 end
 
+-- PoB opens the last build Settings.xml names at start (Main.lua:510-523), in bootstrap's first
+-- frame, before the wrapper below exists. What that open left is settled the same way once the
+-- glue is loaded: a build that failed (PoB went to its list) loses its half-loaded tabs, and
+-- one that needs PoB's Game Version window gets it as a session, with a new build behind it.
+-- No popup PoB opened at start stays in its stack: there is no window to show it in.
+function glue.settle_startup()
+	local m = main()
+	local popups = m.popups
+	local conversion
+	for i = #popups, 1, -1 do
+		if popups[i].title == "Game Version" and popups[i].controls.convert then
+			conversion = popups[i]
+		end
+	end
+	while #popups > 0 do
+		m:ClosePopup()
+	end
+	local build = pob.build
+	if m.mode == "BUILD" and conversion and build.targetVersion == nil then
+		local convert = { build.dbFileName or false, build.buildName, false, true }
+		build.treeTab = nil
+		build:Init(false, "Unnamed build")
+		glue.frame()
+		glue.popup_adopt_game_version(conversion, convert)
+	elseif m.mode ~= "BUILD" then
+		build.treeTab = nil
+	end
+end
+
 -- Why the last Init couldn't open its build; nil when it did (taken once)
 function glue.take_init_failure()
 	local failure = init_failure

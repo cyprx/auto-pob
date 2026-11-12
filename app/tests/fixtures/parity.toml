@@ -2908,8 +2908,8 @@ ported = "app/src/ui/folder_picker.rs ask_delete: PoB's text The folder is not e
 ported = "app/src/ui/app.rs on_picker sends DeleteBuild; a failure shows the engine's PoB text as a notice"
 
 [popups."Game Version"]
-ported = "app/src/engine/glue/net.lua Build:Init wrapper adopts PoB's own window as a GameVersion popup session (glue popup_adopt_game_version), drawn by app/src/ui/popup.rs; Convert reopens the build converted (Build.lua:1340-1343), gate build_open::game_version_matches_pob and game_version_on_the_first_open"
-note = "behind the window is a new Unnamed build, never the previous build's tabs under the new name; an import's Convert makes an empty build, as upstream's. Deviation: PoB's Cancel goes back to the build list (Build.lua:1344-1347); ours leaves the Unnamed build open, and the app returning to the list on Cancel is a UI follow-up"
+gap = "Task 16 final fix wave: the engine side is ported (app/src/engine/glue/net.lua Build:Init wrapper adopts PoB's window as a GameVersion popup session over a new Unnamed build; Convert reopens the build converted; gate build_open::game_version_matches_pob, game_version_on_the_first_open, starting_on_the_build_the_exit_save_recorded). Left: PoB's Cancel goes back to the build list (Build.lua:1344-1347); the app stays on the Unnamed build. Needs a UI hook in app/src/ui/app.rs: a GameVersion window ended without Convert goes to Screen::List"
+note = "never the previous build's tabs under the new name; an import's Convert makes an empty build, as upstream's"
 
 [popups."Import Comparison Build"]
 ported = "app/src/ui/compare/mod.rs 'Load build…' menu: from a saved build, a code or a link (R5)"

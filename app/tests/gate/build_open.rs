@@ -236,6 +236,45 @@ fn game_version_matches_pob() {
         "upstream's is an empty build"
     );
 
+    // the Import tab's own press (ImportTab.lua:665) and a link's callback run Init outside
+    // an open: the same window, over the same new build
+    let code = share_code(&s, &xml);
+    s.run(Command::ImportFromUrl {
+        url: code.clone(),
+        mode: ImportMode::NewBuild,
+    })
+    .unwrap();
+    assert_window_matches(&mut s, &shown, "import tab code");
+    assert_new_build_behind(&mut s, &blank, "import tab code");
+    s.run(Command::ClosePopup).unwrap();
+    let web = canned_web();
+    web.route("GET", "https://pobb.in/pob/gate", Canned::ok(code));
+    let mut n = net_session("game-version-link", canned(&web), None);
+    n.backend
+        .apply(
+            Command::ImportFromUrl {
+                url: "https://pobb.in/gate".into(),
+                mode: ImportMode::NewBuild,
+            },
+            &|_| {},
+        )
+        .expect("the request starts");
+    let steps = n.settle_net(Duration::from_secs(15));
+    assert!(steps.iter().all(Result::is_ok), "a step failed");
+    let entry = n.requests().finished.remove(0);
+    assert_eq!(entry.error, None, "link");
+    let view = n.backend.popup_view().unwrap().expect("link: the window");
+    assert_eq!(view.kind, PopupKind::GameVersion);
+    assert_eq!(view.title, shown["title"]);
+    assert_eq!(n.backend.build_view().unwrap().name, "Unnamed build");
+    let popups: usize = n
+        .backend
+        .lua
+        .load("return #pob.main.main.popups")
+        .eval()
+        .unwrap();
+    assert_eq!(popups, 0, "link");
+
     // the engine goes on: the good build opens as before
     s.open_fixture("attack", &fixture_xml("attack"));
     super::assert_view_matches("attack", "stat", &s.stats().stats, &golden("attack").stats);
@@ -437,4 +476,88 @@ fn an_empty_build_file_leaves_no_popup() {
     );
     s.open_fixture("attack", &fixture_xml("attack"));
     super::assert_view_matches("attack", "stat", &s.stats().stats, &golden("attack").stats);
+}
+
+/// The exit save records the open build as PoB's last mode, which PoB opens at its next start
+/// (Main.lua:510-523), before any command: auto-pob must start on it, and on a build that
+/// still needs its Game Version window
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn starting_on_the_build_the_exit_save_recorded() {
+    use auto_pob::engine::pob::PobBackend;
+    use auto_pob::game::Game;
+    let _guard = lock();
+    let mut s = LongtailSession::start("restart", &|_| {
+        "<PathOfBuilding>\n\t<Mode mode=\"LIST\"><Arg boolean=\"false\"/><Arg string=\"\"/></Mode>\n</PathOfBuilding>\n".into()
+    });
+    let builds = settings_folder(&s.user).join("Builds");
+    let attack = builds.join("attack.xml");
+    fs::copy(fixture_xml("attack"), &attack).unwrap();
+    let old = builds.join("old.xml");
+    fs::write(&old, old_xml()).unwrap();
+    let restart = |s: &LongtailSession| {
+        PobBackend::start_with(Game::Poe1, &s.pob, &s.user, canned(&canned_web()))
+            .expect("starting on the recorded build")
+    };
+
+    s.run(Command::OpenBuild {
+        path: attack.clone(),
+    })
+    .unwrap();
+    s.backend.shutdown();
+    let mut next = restart(&s);
+    assert!(next.build_loaded().unwrap());
+    assert_eq!(next.build_view().unwrap().name, "attack");
+    let popups: usize = next
+        .lua
+        .load("return #pob.main.main.popups")
+        .eval()
+        .unwrap();
+    assert_eq!(popups, 0);
+    drop(next);
+
+    // an old build converted but not saved: the file still needs the window
+    s.run(Command::OpenBuild { path: old.clone() }).unwrap();
+    s.run(Command::PressPopupButton {
+        name: "convert".into(),
+    })
+    .unwrap();
+    s.backend.shutdown();
+    let mut next = restart(&s);
+    let popups: usize = next
+        .lua
+        .load("return #pob.main.main.popups")
+        .eval()
+        .unwrap();
+    assert_eq!(popups, 0, "a startup popup was left in PoB's stack");
+    assert!(next.build_loaded().unwrap());
+    let view = next.popup_view().unwrap().expect("the Game Version window");
+    assert_eq!(view.kind, PopupKind::GameVersion);
+    assert_eq!(next.build_view().unwrap().name, "Unnamed build");
+    drop(next);
+
+    // a recorded build PoB can't open: it starts on its list, and the next open works
+    let bad = builds.join("bad.xml");
+    fs::write(&bad, unknown_tree_xml()).unwrap();
+    fs::write(
+        s.settings_path(),
+        format!(
+            "<PathOfBuilding>\n\t<Mode mode=\"BUILD\"><Arg string=\"{}\"/><Arg string=\"bad\"/></Mode>\n</PathOfBuilding>\n",
+            bad.display()
+        ),
+    )
+    .unwrap();
+    let mut next = restart(&s);
+    let popups: usize = next
+        .lua
+        .load("return #pob.main.main.popups")
+        .eval()
+        .unwrap();
+    assert_eq!(popups, 0, "the failed start's message stayed");
+    assert!(!next.build_loaded().unwrap(), "PoB went to its list");
+    next.apply(Command::NewBuild, &|_| {})
+        .expect("a new build after the failed start");
+    next.apply(Command::OpenBuild { path: attack }, &|_| {})
+        .expect("the good build after the failed start");
+    assert_eq!(next.build_view().unwrap().name, "attack");
 }

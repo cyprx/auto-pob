@@ -172,6 +172,9 @@ impl PobBackend {
         let glue: mlua::Table = lua.globals().get("glue").map_err(lua_error)?;
         let init: mlua::Function = glue.get("settings_init").map_err(lua_error)?;
         init.call::<()>(()).map_err(lua_error)?;
+        // the build PoB opened at start, before the glue was there to see it
+        let settle: mlua::Function = glue.get("settle_startup").map_err(lua_error)?;
+        settle.call::<()>(()).map_err(lua_error)?;
         Ok(PobBackend {
             lua,
             game,

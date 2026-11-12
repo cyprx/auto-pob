@@ -153,7 +153,7 @@ impl Toolbar {
         }
         let commands = &mut out.commands;
         ui.horizontal_wrapped(|ui| {
-            self.specs(ui, state, rects, commands);
+            self.specs(ui, state, rects, commands, true);
             ui.separator();
             let reset = ui.button("Reset").on_hover_text("Reset the passive tree");
             rects.note(&reset, || "reset".into());
@@ -224,12 +224,15 @@ impl Toolbar {
         self.dialogs(ui.ctx(), state, rects, commands);
     }
 
+    /// The tree set row. `manage`: the Tree tab's own, with its New, Rename, Delete, Copy and
+    /// Manage buttons; the Compare tab's tree view has none of them (CompareTab.lua:840-900)
     pub(super) fn specs(
         &mut self,
         ui: &mut egui::Ui,
         state: &TreeState,
         rects: &mut Rects,
         commands: &mut Vec<Command>,
+        manage: bool,
     ) {
         let active = state.specs.get(state.active_spec);
         let combo = crate::widgets::dropdown::Dropdown::from_id_salt("tree_spec")
@@ -259,25 +262,27 @@ impl Toolbar {
         }
         self.spec_busy = combo.response.hovered()
             || egui::Popup::is_id_open(ui.ctx(), combo.response.id.with("popup"));
-        let add = ui.button("+").on_hover_text("Add a tree");
-        rects.note(&add, || "spec_new".into());
-        if add.clicked() {
-            self.dialog = Some(Dialog::NewSpec(String::new()));
-        }
-        let rename = ui.add_enabled(active.is_some(), egui::Button::new("Rename"));
-        rects.note(&rename, || "spec_rename".into());
-        if rename.clicked()
-            && let Some(spec) = active
-        {
-            self.dialog = Some(Dialog::RenameSpec {
-                index: state.active_spec,
-                title: spec.title.clone(),
-            });
-        }
-        let delete = ui.add_enabled(state.specs.len() > 1, egui::Button::new("Delete"));
-        rects.note(&delete, || "spec_delete".into());
-        if delete.clicked() {
-            self.dialog = Some(Dialog::DeleteSpec(state.active_spec));
+        if manage {
+            let add = ui.button("+").on_hover_text("Add a tree");
+            rects.note(&add, || "spec_new".into());
+            if add.clicked() {
+                self.dialog = Some(Dialog::NewSpec(String::new()));
+            }
+            let rename = ui.add_enabled(active.is_some(), egui::Button::new("Rename"));
+            rects.note(&rename, || "spec_rename".into());
+            if rename.clicked()
+                && let Some(spec) = active
+            {
+                self.dialog = Some(Dialog::RenameSpec {
+                    index: state.active_spec,
+                    title: spec.title.clone(),
+                });
+            }
+            let delete = ui.add_enabled(state.specs.len() > 1, egui::Button::new("Delete"));
+            rects.note(&delete, || "spec_delete".into());
+            if delete.clicked() {
+                self.dialog = Some(Dialog::DeleteSpec(state.active_spec));
+            }
         }
         // PoB's note and button under an older tree (TreeTab.lua:321-337, TreeTab:610)
         if let Some(latest) = &state.convertible_to {
@@ -295,21 +300,23 @@ impl Toolbar {
                 commands.push(Command::ConvertSpecLatest);
             }
         }
-        let copy = ui.add_enabled(active.is_some(), egui::Button::new("Copy"));
-        rects.note(&copy, || "spec_copy".into());
-        if copy.clicked()
-            && let Some(spec) = active
-        {
-            self.dialog = Some(Dialog::CopySpec {
-                index: state.active_spec,
-                title: spec.title.clone(),
-                edited: false,
-            });
-        }
-        let order = ui.button("Manage\u{2026}");
-        rects.note(&order, || "spec_order".into());
-        if order.clicked() {
-            self.open_manager(state);
+        if manage {
+            let copy = ui.add_enabled(active.is_some(), egui::Button::new("Copy"));
+            rects.note(&copy, || "spec_copy".into());
+            if copy.clicked()
+                && let Some(spec) = active
+            {
+                self.dialog = Some(Dialog::CopySpec {
+                    index: state.active_spec,
+                    title: spec.title.clone(),
+                    edited: false,
+                });
+            }
+            let order = ui.button("Manage\u{2026}");
+            rects.note(&order, || "spec_order".into());
+            if order.clicked() {
+                self.open_manager(state);
+            }
         }
         ui.label("Compare");
         let compare = crate::widgets::dropdown::Dropdown::from_id_salt("tree_compare")

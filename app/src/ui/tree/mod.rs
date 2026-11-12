@@ -380,7 +380,7 @@ impl TreeTab {
                 self.focus_node(id, now);
             }
         }
-        self.canvas(ui, &layout, &state, &mut out);
+        self.canvas(ui, &layout, &state, true, &mut out);
         out
     }
 
@@ -397,21 +397,25 @@ impl TreeTab {
         ui.horizontal_wrapped(|ui| {
             ui.label("Tree set:");
             self.toolbar
-                .specs(ui, &state, &mut self.rects, &mut out.commands);
+                .specs(ui, &state, &mut self.rects, &mut out.commands, false);
             ui.separator();
             self.toolbar
                 .search(ui, &state, &mut self.rects, &mut out.commands);
         });
-        self.canvas(ui, &layout, &state, &mut out);
+        // the compare view has none of the Tree tab's windows (CompareTab.lua:840-900): a
+        // click that needs a Class Change does nothing
+        self.canvas(ui, &layout, &state, false, &mut out);
         out
     }
 
-    /// The canvas, its hover tooltips and the mastery picker.
+    /// The canvas, its hover tooltips and the mastery picker. `class_change`: a click on
+    /// another class's node asks PoB's Class Change question; otherwise it does nothing.
     fn canvas(
         &mut self,
         ui: &mut egui::Ui,
         layout: &Arc<TreeLayout>,
         state: &Arc<TreeState>,
+        class_change: bool,
         out: &mut TreeOutput,
     ) {
         let (layout, state) = (layout.clone(), state.clone());
@@ -423,7 +427,8 @@ impl TreeTab {
                 CanvasAction::Alloc(id) => match class_change_for(&layout, &state, &self.index, id)
                 {
                     // the class's tree doesn't connect: PoB asks first (PassiveTreeView.lua:474)
-                    Some(class) => self.toolbar.ask_class_change(id, class),
+                    Some(class) if class_change => self.toolbar.ask_class_change(id, class),
+                    Some(_) => {}
                     None => out.commands.push(Command::AllocNode { id }),
                 },
                 CanvasAction::AllocTrace(id, path) => {
@@ -581,6 +586,8 @@ mod tests {
         tab: TreeTab,
         ctx: egui::Context,
         time: f64,
+        /// Draw the Compare tab's tree view instead of the Tree tab
+        compare: bool,
     }
 
     impl Harness {
@@ -592,6 +599,7 @@ mod tests {
                 tab,
                 ctx: egui::Context::default(),
                 time: 1.0,
+                compare: false,
             };
             h.frame(vec![]);
             h
@@ -607,7 +615,11 @@ mod tests {
             let mut out = TreeOutput::default();
             self.ctx
                 .run_ui(input, |ui| {
-                    let o = self.tab.show(ui, false);
+                    let o = if self.compare {
+                        self.tab.show_compare(ui, false)
+                    } else {
+                        self.tab.show(ui, false)
+                    };
                     out.commands.extend(o.commands);
                     out.queries.extend(o.queries);
                     out.jump_to_socket = out.jump_to_socket.or(o.jump_to_socket);
@@ -1459,6 +1471,29 @@ mod tests {
     }
 
     #[test]
+    fn the_compare_view_has_no_tree_buttons() {
+        // CompareTab.lua:840-900: the tree set dropdown, but no New, Rename, Delete, Copy or
+        // Manage
+        let (l, s) = sample();
+        let mut h = Harness::new(l, s);
+        assert!(h.tab.rects.map.contains_key("spec_new"));
+        h.tab.rects.map.clear();
+        h.compare = true;
+        h.frame(vec![]);
+        h.frame(vec![]);
+        assert!(h.tab.rects.map.contains_key("spec_combo"));
+        for key in [
+            "spec_new",
+            "spec_rename",
+            "spec_delete",
+            "spec_copy",
+            "spec_order",
+        ] {
+            assert!(!h.tab.rects.map.contains_key(key), "{key} drawn");
+        }
+    }
+
+    #[test]
     fn another_class_ascendancy_click_asks_pobs_class_change() {
         let mut necro = node(4, [600.0, 600.0], "Normal");
         necro.ascendancy = Some("Necromancer".into());
@@ -1479,6 +1514,14 @@ mod tests {
                 { "id": 3, "name": "Necromancer", "ascend_id": "Necromancer" } ] },
         ]))
         .unwrap();
+        // the Compare tab's tree view asks nothing, and sends nothing
+        let mut h = Harness::new(Arc::new(layout.clone()), Arc::new(state.clone()));
+        h.compare = true;
+        h.frame(vec![]);
+        h.frame(vec![]);
+        let out = h.click_at(h.screen_of(4));
+        assert!(out.commands.is_empty(), "{:?}", out.commands);
+        assert!(!h.tab.has_dialog(), "the compare view asked a question");
         let mut h = Harness::new(Arc::new(layout.clone()), Arc::new(state.clone()));
         let out = h.click_at(h.screen_of(4));
         assert!(out.commands.is_empty(), "{:?}", out.commands);

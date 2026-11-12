@@ -239,7 +239,14 @@ numbers are PoB's numbers.
     own undo), the tree view's P, Ctrl+D, Ctrl+C, PageUp and PageDown, the set lists' F2, the
     build list's Ctrl+N and F1's Help (a hovered row's, slot's or gem's wiki page still opens).
     A box of the top bar or the sidebar keeps every key but Ctrl+S, Ctrl+1 to Ctrl+6, Ctrl+I,
-    Ctrl+W and Mouse4.
+    Ctrl+W and Mouse4, and so does a dropped top-bar or sidebar list. Ctrl+W never edits the
+    box it is pressed in.
+  - Dropdowns and sliders step with the wheel and the arrow keys while pointed at, through a
+    dropped list's search matches only. Under a dialog, the ones behind it don't step.
+  - Esc closes a dialog or window, as PoB's popups do: the top one first, and only once no
+    control takes the key. A text box with the keyboard takes the first Esc, which only
+    leaves the box. A dropped list takes it to empty its search or close. A click outside a
+    dialog never closes it.
 - **Nothing written behind your back**: views, tooltips, Compare, trade links, the Spectre
   Library before Save and Help write nothing in your folders. Two things write into the PoB
   folder auto-pob downloaded, as PoB does: the timeless jewel search caches PoB's lookup tables

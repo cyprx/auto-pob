@@ -3276,6 +3276,7 @@ ported = "app/src/ui/app.rs Ctrl+Z undo"
 
 [keys."ConfigSetListControl.F2"]
 ported = "app/src/ui/shortcuts.rs F2 on the Config tab opens the active set's Rename box (config.rs)"
+note = "until 13a's Manage Config Sets window merges, F2 renames the active set; at merge it renames that window's selected row (M9)"
 
 [keys."DraggerControl.LEFTBUTTON"]
 ported = "app/src/widgets/size_grip.rs on app/src/ui/config.rs custom-modifier boxes: dragging the grip sets the height within PoB's 40 to 600 (ConfigTab.lua:70, ResizableEditControl.lua:32-45)"
@@ -3531,6 +3532,7 @@ note = "Party tab dropped"
 
 [keys."PassiveSpecListControl.F2"]
 ported = "app/src/ui/tree/keys.rs F2 on the Tree tab opens the active tree's Rename box (tree/toolbar.rs)"
+note = "until 13a's Manage Passive Trees window merges, F2 renames the active tree; at merge it renames that window's selected row (M9)"
 
 [keys."PassiveTreeView.wiki"]
 ported = "app/src/ui/tree/keys.rs F1 over a node opens its poewiki page"

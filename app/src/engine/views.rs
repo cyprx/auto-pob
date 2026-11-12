@@ -1075,6 +1075,10 @@ mod tests {
                     theirs: Some("Kaom's Heart".into()),
                     differ: true,
                     can_copy: true,
+                    can_equip: true,
+                    diff_label: "^xFFFF77(different)".into(),
+                    ours_unallocated: false,
+                    theirs_unallocated: true,
                 },
                 CompareItemRow {
                     slot: "Ring 2".into(),
@@ -1083,10 +1087,15 @@ mod tests {
                     theirs: None,
                     differ: false,
                     can_copy: false,
+                    can_equip: false,
+                    diff_label: "^8(both empty)".into(),
+                    ours_unallocated: false,
+                    theirs_unallocated: false,
                 },
             ],
             skills: vec![CompareSkillRow {
                 label: "^7Boneshatter".into(),
+                theirs_label: None,
                 ours: vec!["^x08F2FFBoneshatter^7 20/0".into()],
                 theirs: vec![],
                 differ: true,
@@ -1118,8 +1127,12 @@ mod tests {
               },
               items = {
                 { slot = "Body Armour", label = "Body Armour", ours = 3, theirs = "Kaom's Heart",
-                  differ = true, can_copy = true },
-                { slot = "Ring 2", label = "Ring 2", differ = false, can_copy = false },
+                  differ = true, can_copy = true, can_equip = true,
+                  diff_label = "^xFFFF77(different)", ours_unallocated = false,
+                  theirs_unallocated = true },
+                { slot = "Ring 2", label = "Ring 2", differ = false, can_copy = false,
+                  can_equip = false, diff_label = "^8(both empty)", ours_unallocated = false,
+                  theirs_unallocated = false },
               },
               skills = { { label = "^7Boneshatter", ours = { "^x08F2FFBoneshatter^7 20/0" },
                 theirs = {}, differ = true } },
@@ -1428,7 +1441,7 @@ pub struct CompareView {
 
 /// One slot of the Compare tab's Items view, in PoB's order: the base slots (Ring 3 when either
 /// build has it), the abyssal sockets, then the jewel sockets by node (R9)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CompareItemRow {
     /// PoB's slot name (`Jewel <node>` for a tree socket), as `CopyCompareItem` takes it
     pub slot: String,
@@ -1441,15 +1454,34 @@ pub struct CompareItemRow {
     pub theirs: Option<String>,
     /// The two items' texts differ
     pub differ: bool,
-    /// PoB offers Copy for the comparison's item (Equip too, unless this build lacks the slot)
+    /// PoB offers Copy for the comparison's item
     pub can_copy: bool,
+    /// PoB offers Equip too: false where it draws "Missing slot" (Ring 3 on a build without
+    /// the slot) or there is nothing to copy
+    #[serde(default)]
+    pub can_equip: bool,
+    /// PoB's marker between the two items, colour code kept: "(match)" when the names are the
+    /// same, "(different)", "(missing)", "(extra)" or "(both empty)" (`getSlotDiffLabel`)
+    #[serde(default)]
+    pub diff_label: String,
+    /// This build's jewel sits in a socket its tree doesn't allocate: PoB's "(tree missing
+    /// allocated node)" after the name
+    #[serde(default)]
+    pub ours_unallocated: bool,
+    /// The same for the comparison's jewel
+    #[serde(default)]
+    pub theirs_unallocated: bool,
 }
 
 /// One pair of socket groups of the Compare tab's Skills view, matched as PoB's view matches
 /// them; the lines are PoB's, colour codes kept ("+ " an extra gem, "- " a missing one)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CompareSkillRow {
+    /// This build's group header, or the comparison's when this build has no group in the pair
     pub label: String,
+    /// The comparison's group header, when it has a group in the pair
+    #[serde(default)]
+    pub theirs_label: Option<String>,
     #[serde(default)]
     pub ours: Vec<String>,
     #[serde(default)]

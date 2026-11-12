@@ -12,7 +12,7 @@ local function compareFrame(mode, hook)
 	local strings = {}
 	local drawString = DrawString
 	DrawString = function(x, y, align, height, font, text)
-		strings[#strings + 1] = { y = y, text = text }
+		strings[#strings + 1] = { y = y, height = height, text = text }
 	end
 	if hook then hook(true) end
 	local ok, err = pcall(runCallback, "OnFrame")
@@ -230,12 +230,12 @@ function itemsFrame()
 	end)
 	local entry = tab:GetActiveCompare()
 	local pTab, cTab = build.itemsTab, entry.itemsTab
+	-- what the frame's state says; the rest of each row is read from what it drew
 	local rows = {}
 	local function add(slot, label, pItem, cItem)
 		rows[#rows + 1] = {
 			slot = slot, label = label, ours = pItem and pItem.id or nil,
-			theirs = cItem and cItem.name or nil,
-			differ = (pItem and pItem.raw) ~= (cItem and cItem.raw), can_copy = cItem ~= nil,
+			differ = (pItem and pItem.raw) ~= (cItem and cItem.raw),
 		}
 	end
 	for _, name in ipairs(base) do
@@ -245,9 +245,7 @@ function itemsFrame()
 	for _, jewel in ipairs(jewels) do
 		add(jewel.cSlotName, jewel.label, jewel.pItem, jewel.cItem)
 	end
-	local drawn = {}
-	for i, s in ipairs(strings) do drawn[i] = s.text end
-	return { rows = rows, drawn = drawn }
+	return { rows = rows, drawn = strings, warning = colorCodes.WARNING .. "  (tree missing allocated node)" }
 end
 
 -- What DrawSkills draws in a whole SKILLS frame: { x, y, height, text }, the build names first
@@ -320,7 +318,8 @@ function theirTooltip(slot)
 	local cTab = entry.itemsTab
 	local item = cTab.items[cTab.slots[slot].selItemId]
 	local tt = new("Tooltip")
-	cTab:AddItemTooltip(tt, item, nil, nil, 600)
+	local width = GetScreenSize() - 312
+	cTab:AddItemTooltip(tt, item, nil, nil, math.min(600, math.max(260, width - 24)))
 	return dumpTooltip(tt)
 end
 
@@ -369,4 +368,61 @@ function pressCopyConfig()
 		assert(controls.copyConfigBtn:IsShown(), "copy config is not offered")
 		controls.copyConfigBtn.onClick()
 	end)
+end
+
+-- The loaded build with an amulet granting "+1 Ring Slot", a ring in Ring 3, and a jewel in a
+-- socket its tree doesn't allocate. Returns the build's XML.
+function makeRing3Variant()
+	local tab = build.itemsTab
+	local function add(text, slot)
+		local item = new("Item", text)
+		tab:AddItem(item, true)
+		if slot then
+			tab.slots[slot]:SetSelItemId(item.id)
+		end
+		return item
+	end
+	add([[Rarity: RARE
+Gate Clasp
+Onyx Amulet
+Implicits: 0
++1 Ring Slot
++20 to maximum Life]], "Amulet")
+	add([[Rarity: RARE
+Gate Band
+Coral Ring
+Implicits: 0
++33 to maximum Life]], "Ring 3")
+	-- named as the gear setup's Ring 1, with another roll: PoB's "(match)", different texts
+	add([[Rarity: RARE
+Doom Loop
+Iron Ring
+Implicits: 0
++31 to maximum Life]], "Ring 1")
+	local socket
+	for id, node in pairs(build.spec.nodes) do
+		if node.type == "Socket" and not node.alloc and (not socket or id < socket) then socket = id end
+	end
+	add([[Rarity: MAGIC
+Crimson Jewel
+Implicits: 0
++12 to Strength]], "Jewel " .. socket)
+	tab:PopulateSlots()
+	build.buildFlag = true
+	runCallback("OnFrame")
+	assert(build.calcsTab.mainEnv.modDB:Flag(nil, "AdditionalRingSlot"), "no third ring slot")
+	return build:SaveDB("ring3")
+end
+
+-- Items undo, as the tab's Undo
+function itemsUndo()
+	build.itemsTab:Undo()
+	runCallback("OnFrame")
+end
+
+-- The Skills tab's Delete All button and its confirmation (SkillListControl.lua:27-41)
+function deleteAllGroups()
+	build.skillsTab.controls.groupList.controls.deleteAll.onClick()
+	main.popups[1].controls.confirm.onClick()
+	runCallback("OnFrame")
 end

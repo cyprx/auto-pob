@@ -265,6 +265,32 @@ impl Fake {
                 tree: true,
                 ..Affected::default()
             }),
+            // the copies edit the build, as the real engine answers them (R8)
+            Command::CopyCompareTree { .. } => Ok(Affected {
+                build: true,
+                tree: true,
+                recalc: true,
+                compare: true,
+                ..Affected::default()
+            }),
+            Command::CopyCompareItem { .. } => Ok(Affected {
+                build: true,
+                items: true,
+                recalc: true,
+                compare: true,
+                ..Affected::default()
+            }),
+            Command::CopyCompareConfig => Ok(Affected {
+                build: true,
+                config: true,
+                recalc: true,
+                compare: true,
+                ..Affected::default()
+            }),
+            Command::SetCompareOverlay { .. } => Ok(Affected {
+                tree: true,
+                ..Affected::default()
+            }),
             _ => Ok(Affected::default()),
         }
     }

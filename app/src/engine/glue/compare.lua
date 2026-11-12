@@ -8,6 +8,8 @@
 glue = glue or {}
 
 local NOT_OFFERED = "PoB doesn't offer that here"
+-- PoB's Items view helpers: CompareTab keeps its own instance (CompareTab.lua:12)
+local trade_helpers = LoadModule("Classes/TradeHelpers")
 local FAILED = "Failed to import build for comparison."
 
 -- R6's controls, in order, with the sub-view PoB shows each in (nil: the top bar, shown in
@@ -37,17 +39,21 @@ end
 
 -- An Import-tab comparison landed: the tree's overlay may have changed (taken by the engine's
 -- network step), and PoB switched to the Compare tab (taken by the next view), R5
-local landed, switched = false, false
+-- Both belong to the Compare tab they were set for, so a build change drops them.
+local landed, switched = nil, nil
 
 -- `at_once`: a code, answered by its own command (which flags the tree itself)
 function glue.compare_landed(at_once)
-	switched = true
-	landed = landed or not at_once
+	local tab = pob.build.compareTab
+	switched = tab
+	if not at_once then
+		landed = tab
+	end
 end
 
 function glue.compare_take_landed()
-	local was = landed
-	landed = false
+	local was = landed ~= nil and landed == (glue.build_loaded() and pob.build.compareTab)
+	landed = nil
 	return was
 end
 
@@ -327,11 +333,13 @@ local function item_slots(tab, entry)
 	local env = primary.calcsTab and primary.calcsTab.mainEnv
 	local hasRing3 = env and env.modDB:Flag(nil, "AdditionalRingSlot")
 	local rows = {}
-	local function add(slot, label, pItem, cItem, missing)
+	local function add(slot, label, pItem, cItem, missing, pWarn, cWarn)
 		rows[#rows + 1] = {
 			slot = slot, label = label, pItem = pItem, cItem = cItem,
 			-- the Equip button is "Missing slot" (TradeHelpers.lua:418)
 			missing = missing and true or false,
+			-- "(tree missing allocated node)" (CompareTab.lua:3935-3936)
+			pWarn = pWarn and true or false, cWarn = cWarn and true or false,
 		}
 	end
 	local pTab, cTab = primary.itemsTab, entry.itemsTab
@@ -341,7 +349,8 @@ local function item_slots(tab, entry)
 			name == "Ring 3" and not hasRing3)
 	end
 	for _, jewel in ipairs(jewels) do
-		add(jewel.cSlotName, jewel.label, jewel.pItem, jewel.cItem, false)
+		add(jewel.cSlotName, jewel.label, jewel.pItem, jewel.cItem, false,
+			jewel.pItem and not jewel.pNodeAllocated, jewel.cItem and not jewel.cNodeAllocated)
 	end
 	return rows
 end
@@ -356,6 +365,10 @@ local function item_rows(tab, entry)
 			theirs = row.cItem and row.cItem.name or nil,
 			differ = (row.pItem and row.pItem.raw) ~= (row.cItem and row.cItem.raw),
 			can_copy = row.cItem ~= nil,
+			can_equip = row.cItem ~= nil and not row.missing,
+			diff_label = trade_helpers.getSlotDiffLabel(row.pItem, row.cItem),
+			ours_unallocated = row.pWarn,
+			theirs_unallocated = row.cWarn,
 		}
 	end
 	return out
@@ -376,15 +389,14 @@ local function skill_rows(tab, entry)
 	if not ok then
 		error(err, 0)
 	end
-	-- the first two are the builds' names
-	local left
-	for i = 3, #strings do
-		left = left and math.min(left, strings[i].x) or strings[i].x
-	end
+	-- the first two are the builds' names, drawn `colWidth` apart in the tab's own coordinates
+	-- (CompareTab.lua:4370-4371); the rows are drawn in the list's viewport, the comparison's
+	-- column from `colWidth` on (CompareTab.lua:4446-4454)
+	local right = strings[2] and (strings[2].x - strings[1].x) or 0
 	local rows, row = {}, nil
 	for i = 3, #strings do
 		local s = strings[i]
-		local side = s.x == left and "ours" or "theirs"
+		local side = s.x < right and "ours" or "theirs"
 		if s.height == 18 then
 			if not row or row.y ~= s.y then
 				row = { y = s.y, ours = {}, theirs = {} }
@@ -406,7 +418,10 @@ local function skill_rows(tab, entry)
 				end
 			end
 		end
-		out[i] = { label = r.ours_header or r.theirs_header, ours = r.ours, theirs = r.theirs, differ = differ }
+		out[i] = {
+			label = r.ours_header or r.theirs_header, theirs_label = r.theirs_header,
+			ours = r.ours, theirs = r.theirs, differ = differ,
+		}
 	end
 	return out
 end
@@ -454,7 +469,8 @@ function glue.compare_item_tooltip(slot)
 	end
 	for _, row in ipairs(item_slots(tab, entry)) do
 		if row.slot == slot and row.cItem then
-			local width = GetScreenSize()
+			-- the tab's viewport is the screen less the sidebar (Build.lua:1268-1273)
+			local width = GetScreenSize() - 312
 			local tooltip = new("Tooltip")
 			entry.itemsTab:AddItemTooltip(tooltip, row.cItem, nil, nil, math.min(600, math.max(260, width - 24)))
 			return glue.read_tooltip(tooltip)
@@ -500,8 +516,8 @@ function glue.compare_view()
 	if not tab or #tab.compareEntries == 0 then
 		return nil
 	end
-	local switch = switched
-	switched = false
+	local switch = switched == tab
+	switched = nil
 	local entry = active_entry(tab)
 	local entries = {}
 	for i, compareEntry in ipairs(tab.compareEntries) do

@@ -722,15 +722,82 @@ struct ItemState {
 }
 
 impl Upstream {
-    fn items(&self) -> (Vec<CompareItemRow>, Vec<String>) {
+    /// The Items view's rows: slots and items from the frame's state, the rest from what the
+    /// frame drew for each row (TradeHelpers.lua:461-530): its label, this build's name, PoB's
+    /// marker and the comparison's name, then Buy, Copy and Equip (or "Missing slot") when
+    /// the comparison has an item there
+    fn items(&self) -> Vec<CompareItemRow> {
+        #[derive(serde::Deserialize)]
+        struct State {
+            slot: String,
+            label: String,
+            #[serde(default)]
+            ours: Option<u32>,
+            differ: bool,
+        }
+        #[derive(serde::Deserialize)]
+        struct Drawn {
+            height: f64,
+            text: String,
+        }
         #[derive(serde::Deserialize)]
         struct Raw {
-            rows: Vec<CompareItemRow>,
-            #[serde(default)]
-            drawn: Vec<String>,
+            rows: Vec<State>,
+            drawn: Vec<Drawn>,
+            warning: String,
         }
         let raw: Raw = self.json("return itemsFrame()");
-        (raw.rows, raw.drawn)
+        // a name as drawn: its rarity colour, the name or "(empty)", maybe the warning
+        let name = |text: &str| -> (Option<String>, bool) {
+            let (text, warned) = match text.strip_suffix(&raw.warning) {
+                Some(rest) => (rest, true),
+                None => (text, false),
+            };
+            let bare = if let Some(rest) = text.strip_prefix("^x") {
+                &rest[6..]
+            } else if text.starts_with('^') {
+                &text[2..]
+            } else {
+                text
+            };
+            ((bare != "(empty)").then(|| bare.to_string()), warned)
+        };
+        let mut at = 0;
+        raw.rows
+            .into_iter()
+            .map(|row| {
+                let label = format!("^7{}:", row.label);
+                at += raw.drawn[at..]
+                    .iter()
+                    .position(|d| d.text == label && d.height == 16.0)
+                    .unwrap_or_else(|| panic!("{label} isn't drawn in order"));
+                let texts: Vec<&str> = raw.drawn[at + 1..(at + 7).min(raw.drawn.len())]
+                    .iter()
+                    .map(|d| d.text.as_str())
+                    .collect();
+                assert_eq!(raw.drawn[at + 2].height, 14.0, "{label}: no marker");
+                let (_, ours_unallocated) = name(texts[0]);
+                let (theirs, theirs_unallocated) = name(texts[2]);
+                let can_copy = texts.get(3) == Some(&"^7Buy") && texts.get(4) == Some(&"^7Copy");
+                let can_equip = can_copy && texts.get(5) == Some(&"^7Equip");
+                if can_copy && !can_equip {
+                    assert_eq!(texts.get(5), Some(&"^xBBBBBBMissing slot"), "{label}");
+                }
+                at += 1;
+                CompareItemRow {
+                    slot: row.slot,
+                    label: row.label,
+                    ours: row.ours,
+                    theirs,
+                    differ: row.differ,
+                    can_copy,
+                    can_equip,
+                    diff_label: texts[1].to_string(),
+                    ours_unallocated,
+                    theirs_unallocated,
+                }
+            })
+            .collect()
     }
 
     /// The Skills view's pairs, parsed from what DrawSkills drew in a whole frame: a header
@@ -751,8 +818,10 @@ impl Upstream {
             missing: String,
         }
         let raw: Raw = self.json("return skillsFrame()");
+        // the names are drawn `colWidth` apart in the tab's coordinates; in the list's own the
+        // comparison's column starts at `colWidth` (CompareTab.lua:4370-4371, 4446-4454)
+        let column = raw.strings[1].x - raw.strings[0].x;
         let body = &raw.strings[2..];
-        let left = body.iter().map(|d| d.x).fold(f64::INFINITY, f64::min);
         struct Pair {
             y: f64,
             ours_header: Option<String>,
@@ -762,7 +831,7 @@ impl Upstream {
         }
         let mut pairs: Vec<Pair> = Vec::new();
         for d in body {
-            let ours = d.x == left;
+            let ours = d.x < column;
             if d.height == 18.0 {
                 if pairs.last().is_none_or(|p| p.y != d.y) {
                     pairs.push(Pair {
@@ -798,7 +867,8 @@ impl Upstream {
                     .any(|l| l.starts_with(&raw.added) || l.starts_with(&raw.missing));
                 CompareSkillRow {
                     differ: marked || p.ours_header.is_none() || p.theirs_header.is_none(),
-                    label: p.ours_header.or(p.theirs_header).unwrap(),
+                    label: p.ours_header.or(p.theirs_header.clone()).unwrap(),
+                    theirs_label: p.theirs_header,
                     ours: p.ours,
                     theirs: p.theirs,
                 }
@@ -850,17 +920,9 @@ fn our_config_input(s: &NetSession) -> BTreeMap<String, String> {
 /// Rows of all three views agree with upstream's, and the items are drawn in that order
 fn same_views(s: &mut NetSession, up: &Upstream, what: &str) -> CompareView {
     let ours = view(s);
-    let (items, drawn) = up.items();
+    let items = up.items();
     assert!(!items.is_empty(), "{what}: no item rows");
     assert_eq!(ours.items, items, "{what}: items");
-    let mut at = 0;
-    for row in &items {
-        let label = format!("^7{}:", row.label);
-        at += drawn[at..]
-            .iter()
-            .position(|t| *t == label)
-            .unwrap_or_else(|| panic!("{what}: {label} isn't drawn in order"));
-    }
     let skills = up.skills();
     assert!(!skills.is_empty(), "{what}: no skill rows");
     assert_eq!(ours.skills, skills, "{what}: skills");
@@ -875,6 +937,66 @@ fn open_xml(s: &mut NetSession, name: &str, xml: &str) {
     run(s, Command::OpenBuild { path: dest }).expect("open");
 }
 
+/// Their item's tooltip in `slot`: ours, and upstream's `AddItemTooltip` on the entry's tab
+fn same_their_tooltip(s: &mut NetSession, up: &Upstream, slot: &str) {
+    let ours = s
+        .backend
+        .item_tooltip_view(&auto_pob::engine::ItemTooltipQuery {
+            id: 0,
+            slot: Some(slot.into()),
+            theirs: true,
+        })
+        .unwrap()
+        .unwrap_or_else(|| panic!("their item in {slot}"));
+    let theirs: auto_pob::engine::ItemTooltip = {
+        let f: mlua::Function = up.lua.globals().get("theirTooltip").unwrap();
+        up.lua.from_value(f.call(slot).unwrap()).unwrap()
+    };
+    assert!(!ours.tooltip.lines.is_empty(), "{slot}");
+    assert_eq!(ours.tooltip, theirs, "{slot}");
+}
+
+/// Copies their item on both sides; the items, the slot and the views agree, the build is
+/// unsaved and recalculated
+fn copy_both(s: &mut NetSession, up: &Upstream, slot: &str, and_use: bool) -> ItemState {
+    let start = our_item_state(s, slot);
+    assert_eq!(start, up.item_state(slot), "{slot}: before");
+    let affected = run(
+        s,
+        Command::CopyCompareItem {
+            slot: slot.into(),
+            and_use,
+        },
+    )
+    .unwrap();
+    assert!(affected.items && affected.build && affected.recalc && affected.compare);
+    up.call::<()>("copyItem", (slot, and_use));
+    let copied = our_item_state(s, slot);
+    assert_ne!(copied, start, "{slot}: nothing copied");
+    assert_eq!(copied, up.item_state(slot), "{slot}: after");
+    assert_eq!(
+        copied.slot != start.slot,
+        and_use,
+        "{slot}: equipped or not"
+    );
+    assert!(
+        s.backend.build_view().unwrap().unsaved,
+        "{slot}: not unsaved"
+    );
+    assert!(up.eval::<bool>("return build.unsaved and true or false"));
+    same_summary(s, up, &format!("{slot} copied"));
+    same_views(s, up, &format!("{slot} copied"));
+    start
+}
+
+/// Items undo on both sides, back to `start`
+fn undo_items(s: &mut NetSession, up: &Upstream, slot: &str, start: &ItemState) {
+    run(s, Command::Undo(auto_pob::engine::Tab::Items)).unwrap();
+    up.call::<()>("itemsUndo", ());
+    assert_eq!(&our_item_state(s, slot), start, "{slot}: undo");
+    same_views(s, up, &format!("{slot} undone"));
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn compare_views_and_copies_match_pob() {
@@ -886,37 +1008,60 @@ fn compare_views_and_copies_match_pob() {
     let gear_xml = super::items_harness::setup_xml("gear");
     let gear = scratch.0.join("gear.xml");
     fs::write(&gear, &gear_xml).unwrap();
+    let ring3_xml: String = Upstream::new("attack").eval("return makeRing3Variant()");
+    let ring3 = scratch.0.join("ring3.xml");
+    fs::write(&ring3, &ring3_xml).unwrap();
     s.open_fixture("attack");
     let up = Upstream::new("attack");
     let refused = s.backend.net_handle().refused();
+    let load_xml_up = |name: &str, xml: &str| {
+        let f: mlua::Function = up.lua.globals().get("loadBuildFromXML").unwrap();
+        f.call::<()>((xml.to_string(), name.to_string())).unwrap();
+        up.eval::<()>("build.modFlag = false runCallback('OnFrame')");
+    };
 
     // ---- (attack, gear): the items differ, the skills match ----
     let before = files(&s.user);
     load_file(&mut s, &gear);
     up.call::<()>("loadCompare", (gear_xml.clone(), "gear".to_string()));
     let ours = same_views(&mut s, &up, "attack, gear");
-    assert!(ours.items.iter().any(|r| r.differ && r.can_copy));
+    assert!(
+        ours.items
+            .iter()
+            .any(|r| r.differ && r.can_copy && r.can_equip)
+    );
     assert!(ours.items.iter().any(|r| !r.differ && !r.can_copy));
-    assert!(ours.items.iter().any(|r| r.slot.starts_with("Jewel ")));
-    assert!(ours.items.iter().any(|r| r.slot.contains("Abyssal Socket")));
-    assert!(ours.skills.iter().any(|r| !r.differ));
+    assert!(
+        ours.items
+            .iter()
+            .any(|r| r.diff_label.ends_with("(extra)") || r.diff_label.ends_with("(missing)"))
+    );
+    assert!(
+        ours.items
+            .iter()
+            .any(|r| r.diff_label.ends_with("(both empty)"))
+    );
+    assert!(
+        ours.items
+            .iter()
+            .any(|r| r.slot.contains("Abyssal Socket") && r.can_copy)
+    );
+    let jewel = ours
+        .items
+        .iter()
+        .find(|r| r.slot.starts_with("Jewel ") && r.can_copy)
+        .expect("a jewel row to copy")
+        .slot
+        .clone();
+    assert!(
+        ours.skills
+            .iter()
+            .any(|r| !r.differ && r.theirs_label.is_some())
+    );
 
-    // ---- Their item's tooltip ----
-    let tooltip = s
-        .backend
-        .item_tooltip_view(&auto_pob::engine::ItemTooltipQuery {
-            id: 0,
-            slot: Some("Body Armour".into()),
-            theirs: true,
-        })
-        .unwrap()
-        .expect("their body armour");
-    let theirs: auto_pob::engine::ItemTooltip = {
-        let f: mlua::Function = up.lua.globals().get("theirTooltip").unwrap();
-        up.lua.from_value(f.call("Body Armour").unwrap()).unwrap()
-    };
-    assert!(!tooltip.tooltip.lines.is_empty());
-    assert_eq!(tooltip.tooltip, theirs);
+    // ---- Their items' tooltips: a base slot and a jewel socket ----
+    same_their_tooltip(&mut s, &up, "Body Armour");
+    same_their_tooltip(&mut s, &up, &jewel);
     // no item there, or no such slot: nothing
     for slot in ["Ring 2", "Nowhere"] {
         let none = s
@@ -930,23 +1075,17 @@ fn compare_views_and_copies_match_pob() {
         assert!(none.is_none(), "{slot}");
     }
 
-    // ---- Copy and equip their body armour; Items undo takes it back ----
-    let start = our_item_state(&s, "Body Armour");
-    assert_eq!(start, up.item_state("Body Armour"));
-    let affected = run(
-        &mut s,
-        Command::CopyCompareItem {
-            slot: "Body Armour".into(),
-            and_use: true,
-        },
-    )
-    .unwrap();
-    assert!(affected.items && affected.build && affected.compare);
-    up.call::<()>("copyItem", ("Body Armour", true));
-    let copied = our_item_state(&s, "Body Armour");
-    assert_ne!(copied, start);
-    assert_eq!(copied, up.item_state("Body Armour"));
-    same_views(&mut s, &up, "after the copy");
+    // ---- Copy and equip their body armour, then their jewel; Items undo takes each back ----
+    let start = copy_both(&mut s, &up, "Body Armour", true);
+    let row = view(&mut s)
+        .items
+        .into_iter()
+        .find(|r| r.slot == "Body Armour")
+        .unwrap();
+    assert!(
+        row.ours.is_some() && row.diff_label.ends_with("(match)"),
+        "{row:?}"
+    );
     assert_eq!(
         err(
             &mut s,
@@ -967,8 +1106,22 @@ fn compare_views_and_copies_match_pob() {
         ),
         "no such slot"
     );
-    run(&mut s, Command::Undo(auto_pob::engine::Tab::Items)).unwrap();
-    assert_eq!(our_item_state(&s, "Body Armour"), start);
+    undo_items(&mut s, &up, "Body Armour", &start);
+    let start = copy_both(&mut s, &up, &jewel, true);
+    undo_items(&mut s, &up, &jewel, &start);
+
+    // ---- This build with no socket groups: every pair is the comparison's alone ----
+    run(&mut s, Command::DeleteAllSocketGroups).unwrap();
+    up.call::<()>("deleteAllGroups", ());
+    let ours = same_views(&mut s, &up, "no groups here");
+    assert!(
+        ours.skills.iter().all(|r| r.ours.is_empty()
+            && !r.theirs.is_empty()
+            && r.differ
+            && r.theirs_label.as_ref() == Some(&r.label)),
+        "{:?}",
+        ours.skills
+    );
     assert_eq!(files(&s.user), before, "a file was written");
 
     // ---- (dot, attack): other skills, other config; copy the config, Config undo ----
@@ -995,6 +1148,7 @@ fn compare_views_and_copies_match_pob() {
         controls.enemyIsBoss:SetSel(4)
         runCallback("OnFrame")"#,
     );
+    let before = files(&s.user);
     let attack = fixture_xml("attack");
     load_file(&mut s, &attack);
     up.call::<()>(
@@ -1012,26 +1166,63 @@ fn compare_views_and_copies_match_pob() {
     let copied = our_config_input(&s);
     assert_ne!(copied, start);
     assert_eq!(copied, up.config_input());
+    assert!(s.backend.build_view().unwrap().unsaved);
+    same_summary(&mut s, &up, "config copied");
     // PoB copies the options the comparison sets; one it leaves unset stays as it was here
     let after = same_views(&mut s, &up, "after the config copy");
     assert!(after.config.len() < ours.config.len(), "{:?}", after.config);
     assert!(after.config.iter().all(|r| r.var != "enemyIsBoss"));
     run(&mut s, Command::Undo(auto_pob::engine::Tab::Config)).unwrap();
     assert_eq!(our_config_input(&s), start);
-
-    // ---- (gear, attack): this build's item set, from the Items view ----
-    open_xml(&mut s, "gear", &gear_xml);
-    {
-        let f: mlua::Function = up.lua.globals().get("loadBuildFromXML").unwrap();
-        f.call::<()>((gear_xml.clone(), "gear")).unwrap();
-        up.eval::<()>("build.modFlag = false runCallback('OnFrame')");
-    }
-    load_file(&mut s, &attack);
-    up.call::<()>(
-        "loadCompare",
-        (fs::read_to_string(&attack).unwrap(), "attack".to_string()),
+    assert_eq!(
+        view(&mut s).config,
+        ours.config,
+        "the config rows after undo"
     );
-    let first = same_views(&mut s, &up, "gear, attack");
+    assert_eq!(files(&s.user), before, "a file was written");
+
+    // ---- (gear, ring3): PoB's "(match)" on other texts, "Missing slot", an unallocated
+    // socket on their side, and this build's item set ----
+    open_xml(&mut s, "gear", &gear_xml);
+    load_xml_up("gear", &gear_xml);
+    let before = files(&s.user);
+    load_file(&mut s, &ring3);
+    up.call::<()>("loadCompare", (ring3_xml.clone(), "ring3".to_string()));
+    let first = same_views(&mut s, &up, "gear, ring3");
+    let ring1 = first.items.iter().find(|r| r.slot == "Ring 1").unwrap();
+    assert!(
+        ring1.differ && ring1.diff_label.ends_with("(match)"),
+        "{ring1:?}"
+    );
+    let ring3_row = first
+        .items
+        .iter()
+        .find(|r| r.slot == "Ring 3")
+        .expect("a Ring 3 row");
+    assert!(ring3_row.can_copy && !ring3_row.can_equip, "{ring3_row:?}");
+    let unallocated = first
+        .items
+        .iter()
+        .find(|r| r.theirs_unallocated)
+        .expect("their jewel in an unallocated socket")
+        .slot
+        .clone();
+    assert_eq!(
+        err(
+            &mut s,
+            Command::CopyCompareItem {
+                slot: "Ring 3".into(),
+                and_use: true,
+            }
+        ),
+        "PoB doesn't offer that here"
+    );
+    // Copy without Equip is offered
+    let start = copy_both(&mut s, &up, "Ring 3", false);
+    undo_items(&mut s, &up, "Ring 3", &start);
+    same_their_tooltip(&mut s, &up, &unallocated);
+
+    let first = view(&mut s);
     let pick = choice(&first, "primaryItemSetSelect", 1);
     let affected = run(&mut s, pick).unwrap();
     assert!(affected.items && affected.build && affected.recalc && affected.compare);
@@ -1041,6 +1232,15 @@ fn compare_views_and_copies_match_pob() {
     let state = our_item_state(&s, "Ring 2");
     assert_eq!(state, up.item_state("Ring 2"));
     assert_ne!(state.set, 1);
+    assert_eq!(files(&s.user), before, "a file was written");
+
+    // ---- (ring3, gear): this build's jewel in an unallocated socket ----
+    open_xml(&mut s, "ring3", &ring3_xml);
+    load_xml_up("ring3", &ring3_xml);
+    load_file(&mut s, &gear);
+    up.call::<()>("loadCompare", (gear_xml.clone(), "gear".to_string()));
+    let ours = same_views(&mut s, &up, "ring3, gear");
+    assert!(ours.items.iter().any(|r| r.ours_unallocated));
 
     // ---- Review Focus 5: a build change leaves nothing of the comparison ----
     s.open_fixture("attack");

@@ -1991,7 +1991,7 @@ ported = "app/src/ui/items/slots.rs"
 ported = "app/src/ui/items/slots.rs Manage... shows the Tree tab, where our spec manager is (tree/toolbar.rs)"
 
 [controls."items.specLabel"]
-ported = "app/src/ui/items/slots.rs \"Passive tree:\" label"
+ported = "app/src/ui/items/slots.rs Passive tree: label"
 
 [controls."items.specSelect"]
 ported = "app/src/ui/items/slots.rs Passive tree dropdown under the slots (ItemsView.specs, PoB's GetSpecList labels; SelectSpec)"

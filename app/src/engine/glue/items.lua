@@ -193,19 +193,28 @@ end
 
 -- What hovering an item shows: in the item list when `slot_name` is nil, else over the slot or
 -- one of its dropdown entries. Nil when the item, the slot or the entry is gone.
+-- Runs `fn(...)` with Shift held when `shift` is set: the key state is swapped for the call and
+-- always restored (R34)
+function glue.with_shift(shift, fn, ...)
+	if not shift then
+		return fn(...)
+	end
+	local saved = IsKeyDown
+	IsKeyDown = function(key)
+		return key == "SHIFT"
+	end
+	local ok, result = pcall(fn, ...)
+	IsKeyDown = saved
+	if not ok then
+		error(result, 0)
+	end
+	return result
+end
+
 function glue.item_tooltip(id, slot_name, shift)
 	if shift then
-		-- Shift held over the item: the key state is swapped for the call (R34)
-		local saved = IsKeyDown
-		IsKeyDown = function(key)
-			return key == "SHIFT"
-		end
-		local ok, result = pcall(glue.item_tooltip, id, slot_name, false)
-		IsKeyDown = saved
-		if not ok then
-			error(result, 0)
-		end
-		return result
+		-- Shift held over the item (R34)
+		return glue.with_shift(true, glue.item_tooltip, id, slot_name, false)
 	end
 	local tab = items_tab()
 	local list = tab.controls.itemList

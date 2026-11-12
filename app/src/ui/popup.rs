@@ -129,6 +129,14 @@ fn drop_line(rects: &[egui::Rect], from: usize, to: usize) -> Option<(egui::Rang
     Some((first.x_range(), y))
 }
 
+/// The height of a popup list row: a selectable button around one line of 14 px text, at
+/// least the interact height (the button's own minimum)
+pub(crate) fn popup_row_height(ui: &egui::Ui) -> f32 {
+    let text = ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(14.0)));
+    let padding = ui.spacing().button_padding.y;
+    (text + 2.0 * padding).max(ui.spacing().interact_size.y)
+}
+
 /// Asks for a control's tooltip once the pointer has rested on it, and keeps the answer to the
 /// latest question only.
 #[derive(Default)]
@@ -852,9 +860,10 @@ impl PopupWindow {
                 });
             }
             let height = c.size[1].clamp(80.0, 320.0);
-            // a selectable label's height: rows are laid out only where the list is scrolled
-            // to (the Mod Browser has thousands, R28)
-            let row_height = ui.spacing().interact_size.y;
+            // one row's height, measured: rows are laid out only where the list is scrolled to
+            // (the Mod Browser has thousands, R28), so every row must be this tall. A row is
+            // one line of 14 px text (truncated, never wrapped) in a button's padding.
+            let row_height = popup_row_height(ui);
             // a Shift+click range (the timeless results) shows selected end to end
             let at = |key: &Option<String>| {
                 key.as_deref()
@@ -879,8 +888,10 @@ impl PopupWindow {
                         let row = &c.rows[i];
                         let selected = c.row_selected.as_deref() == Some(row.key.as_str())
                             || range.is_some_and(|(a, b)| a <= i && i <= b);
-                        let mut response =
-                            ui.selectable_label(selected, pob_text(&row.label, 14.0, default));
+                        let mut response = ui.add(
+                            egui::Button::selectable(selected, pob_text(&row.label, 14.0, default))
+                                .truncate(),
+                        );
                         if c.reorder {
                             response = response.interact(egui::Sense::click_and_drag());
                             rects.push(response.rect);

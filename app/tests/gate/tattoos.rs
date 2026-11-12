@@ -644,6 +644,7 @@ fn no_silent_writes_crafting() {
                 .control_tooltip_view(&ControlTooltipQuery::DbItem {
                     db,
                     name: name.clone(),
+                    shift: false,
                 })
                 .unwrap()
                 .is_some(),

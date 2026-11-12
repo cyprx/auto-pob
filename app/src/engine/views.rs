@@ -870,6 +870,9 @@ pub struct SharedSetEntry {
     /// PoB's tooltip for the row: one "Slot: Item" line per slot
     #[serde(default)]
     pub lines: Vec<String>,
+    /// The set's own title, which Rename starts from; none for an untitled set
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_title: Option<String>,
 }
 
 /// One item of the build.
@@ -1726,8 +1729,12 @@ pub struct PopupRow {
 /// The answer to a `CopyItem` query: the text PoB copies, with its `\r\n` line ends.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemText {
+    /// The item's id, or the shared item's index when `shared`
     pub id: u32,
     pub text: String,
+    /// A shared item's text (`CopySharedItem`)
+    #[serde(default)]
+    pub shared: bool,
 }
 
 /// The item on the display panel (PoB's `displayItem`) with the controls PoB shows for it.

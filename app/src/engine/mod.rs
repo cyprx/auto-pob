@@ -15,8 +15,9 @@ pub(crate) mod fake;
 pub use commands::{
     BuySource, CalcsControl, CalcsCount, CharacterPart, Command, CompareSource, ConfigValue,
     ControlTooltipQuery, DeleteKind, GemFilter, GemSearchQuery, GemTarget, GemToggle,
-    GemTooltipQuery, HoverTarget, ImportMode, ItemDb, ItemDbQuery, ItemTooltipQuery, PopupInput,
-    PopupKind, Realm, SharedItemSource, SkillOption, SocketColour, Tab,
+    GemTooltipQuery, HoverTarget, ImportMode, ItemDb, ItemDbQuery, ItemDragSource,
+    ItemTooltipQuery, PopupInput, PopupKind, Realm, SharedItemSource, SkillOption, SocketColour,
+    Tab,
 };
 pub use run::{
     Affected, Backend, BackgroundTask, DbSnapshot, Engine, Event, Liveness, Snapshot, run_loop,

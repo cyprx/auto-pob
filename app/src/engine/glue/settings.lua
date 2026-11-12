@@ -140,8 +140,29 @@ local function options_open()
 	return glue.popup_is_options and glue.popup_is_options()
 end
 
+-- Settings.xml's bytes as we last read or wrote them: another program (classic PoB) may write
+-- the file while we run, and a shared item edit must not overwrite that (I-2 ruling)
+local known_bytes
+
+-- The file's bytes now; nil without a file (or one we can't open)
+local function file_bytes()
+	local file = io.open(main().userPath .. "Settings.xml", "rb")
+	if not file then
+		return nil
+	end
+	local bytes = file:read("*a")
+	file:close()
+	return bytes
+end
+
+-- Whether Settings.xml differs from what we last read or wrote
+function glue.settings_changed_outside()
+	return file_bytes() ~= known_bytes
+end
+
 -- Records `shared` after PoB's `LoadSettings` and wraps `main:SaveSettings` (R12)
 function glue.settings_init()
+	known_bytes = file_bytes()
 	for _, spec in ipairs(SPEC) do
 		shared[spec.key] = read(spec)
 	end
@@ -173,6 +194,10 @@ function glue.settings_init()
 		end
 		if not ok then
 			error(result, 0)
+		end
+		-- PoB returns true when it couldn't write (Main.lua:719-722, 776-779)
+		if result ~= true then
+			known_bytes = file_bytes()
 		end
 		return result
 	end

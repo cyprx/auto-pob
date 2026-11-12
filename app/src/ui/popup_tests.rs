@@ -1022,3 +1022,87 @@ fn a_long_list_lays_out_only_the_visible_rows() {
         [set("listControl", PopupInput::Row("mod 3".into()))]
     );
 }
+
+#[test]
+fn long_rows_keep_one_height_to_the_end_of_the_list() {
+    // labels far wider than the list: a wrapped row would be taller than the rest, and the
+    // virtual rows past it would be placed wrong
+    let rows: Vec<PopupRow> = (0..300)
+        .map(|i| PopupRow {
+            key: format!("mod {i}"),
+            label: format!("^7{i} {}", "a very long modifier line ".repeat(12)),
+        })
+        .collect();
+    let list = PopupControl {
+        rows,
+        ..control(
+            "listControl",
+            PopupControlKind::List,
+            [0.0, 0.0],
+            [300.0, 454.0],
+        )
+    };
+    let mut h = Harness::new(popup(vec![list]));
+    // rows taller than the interact height: the virtual list must use their real height
+    h.ctx
+        .all_styles_mut(|style| style.spacing.button_padding.y = 8.0);
+    h.frame(vec![]);
+    h.frame(vec![]);
+    let first = h.rect("listControl_row_0");
+    assert!(first.height() > h.ctx.global_style().spacing.interact_size.y + 1.0);
+    // the height the virtual list lays rows out by is a row's real height
+    let mut measured = 0.0;
+    let _ = h.ctx.run_ui(RawInput::default(), |ui| {
+        measured = popup_row_height(ui);
+    });
+    assert!(
+        (first.height() - measured).abs() < 0.5,
+        "a row is {} tall, the list assumes {measured}",
+        first.height()
+    );
+    // the list's viewport: it starts at the first row and is at most 320 tall
+    let bottom = first.top() + 320.0;
+    // scrolled to the end
+    h.frame(vec![Event::PointerMoved(first.center())]);
+    for _ in 0..20 {
+        h.frame(vec![Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, -2000.0),
+            modifiers: Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+        }]);
+    }
+    h.frame(vec![]);
+    let last = h.rect("listControl_row_299");
+    // the rows laid out at the end (rects of rows laid out earlier stay in the map)
+    let shown: Vec<Rect> = (250..300)
+        .filter_map(|i| {
+            h.popup
+                .rects
+                .map
+                .get(&format!("listControl_row_{i}"))
+                .copied()
+        })
+        .collect();
+    assert!(shown.len() > 3, "{} rows laid out", shown.len());
+    for rect in &shown {
+        assert!(
+            (rect.height() - first.height()).abs() < 0.5,
+            "a row is {} tall, the first {}",
+            rect.height(),
+            first.height()
+        );
+    }
+    // the last row is drawn inside the list, not cut off below it
+    assert!(
+        last.bottom() <= bottom + 0.5,
+        "the last row ends at {}, the list at {bottom}",
+        last.bottom()
+    );
+    let out = h.click("listControl_row_299");
+    assert_eq!(
+        debug(&out.commands),
+        [set("listControl", PopupInput::Row("mod 299".into()))]
+    );
+}

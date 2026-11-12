@@ -2435,6 +2435,7 @@ mod tests {
             Ok(crate::engine::ItemText {
                 id,
                 text: String::new(),
+                shared: false,
             })
         }
 

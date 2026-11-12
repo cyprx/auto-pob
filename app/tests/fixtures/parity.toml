@@ -95,6 +95,7 @@ note = "label"
 
 [controls."build.mainSkillMinion"]
 ported = "app/src/ui/sidebar.rs main-skill selector"
+note = "drag target (Build.lua:534-543): items from the item list, the databases and the shared list dropped on it go to the minion's item set (DropOnMinion, sidebar.rs minion_drop)"
 
 [controls."build.mainSkillMinion.scrollBar"]
 ported = "app/src/ui/sidebar.rs main-skill selector"
@@ -1881,7 +1882,7 @@ note = "part of items.displayItemVersion"
 ported = "app/src/ui/items/display.rs Edit (text_window.rs)"
 
 [controls."items.itemList"]
-ported = "app/src/ui/items/list.rs list, sort, drag, Delete, Ctrl+C; Ctrl+click equips into the item's slot and Ctrl+Shift+click into the second (QuickEquipItem, NF-16)"
+ported = "app/src/ui/items/list.rs list, sort, drag, Delete, Ctrl+C; Ctrl+click equips into the item's slot and Ctrl+Shift+click into the second (QuickEquipItem, NF-16); shared items and database rows dropped on it land at the row under the cursor (DropSharedItem, DropDbItemOnList); its rows drag onto the sidebar's minion dropdown (DropOnMinion)"
 
 [controls."items.itemList.delete"]
 ported = "app/src/ui/items/list.rs Delete"
@@ -1912,7 +1913,7 @@ ruled_out = "D-005"
 note = "trade price queries out"
 
 [controls."items.rareDB"]
-ported = "app/src/ui/items/db.rs as uniqueDB: Ctrl+Shift+click adds into the second slot, a row dragged onto a slot is DropDbItem (R23)"
+ported = "app/src/ui/items/db.rs as uniqueDB: Ctrl+Shift+click adds into the second slot, a row dragged onto a slot is DropDbItem (R23), onto the item list DropDbItemOnList, onto the shared list AddSharedItem, onto the sidebar's minion dropdown DropOnMinion; Shift on a hovered row shows the child tooltips"
 
 [controls."items.rareDB.scrollBarH"]
 ported = "app/src/ui/items/db.rs rows scroll area (part of items.rareDB)"
@@ -1968,7 +1969,8 @@ ported = "app/src/ui/items/sets.rs set combo"
 note = "part of items.setSelect"
 
 [controls."items.sharedItemList"]
-ported = "app/src/ui/items/shared.rs shared items under Craft item...: rows, hover, double-click, drag onto slots and the item list, build items and database rows dragged in, reorder; edits save Settings.xml through main:SaveSettings (R29 amended by the controller: shared item list edits)"
+ported = "app/src/ui/items/shared.rs shared items under Craft item...: rows, hover (Shift: child tooltips), double-click, Ctrl+C (CopySharedItem), drag onto slots, onto the item list at the row under the cursor and onto the sidebar's minion dropdown, build items and database rows dragged in, reorder; edits save Settings.xml through main:SaveSettings (R29 amended by the controller: shared item list edits), refused when another program changed the file since we last read or wrote it"
+note = "its Delete and Backspace keys are the keys ListControl.DELETE and ListControl.BACK rows (Task 14)"
 
 [controls."items.sharedItemList.delete"]
 ported = "app/src/ui/items/shared.rs Delete with PoB's question (DeleteSharedItem)"
@@ -1984,6 +1986,7 @@ ported = "app/src/ui/items/slots.rs"
 
 [controls."items.specButton"]
 ported = "app/src/ui/tree/mod.rs Manage... opens the Manage Passive Trees window with the Tree tab's spec controls and dialogs (opened from app/src/ui/items/slots.rs)"
+note = "the button is ported; the window's own parity (list, Copy, reorder, Import/Export Tree) is the Manage Passive Trees popup row (NF-3, Task 13a)"
 
 [controls."items.specLabel"]
 ported = "app/src/ui/items/slots.rs Passive tree: label"
@@ -1995,7 +1998,7 @@ ported = "app/src/ui/items/slots.rs Passive tree dropdown under the slots (Items
 ported = "app/src/ui/items/slots.rs Passive tree dropdown list (part of items.specSelect)"
 
 [controls."items.uniqueDB"]
-ported = "app/src/ui/items/db.rs list, hover, double-click, Ctrl+click; Ctrl+Shift+click adds into the second slot, a row dragged onto a slot is DropDbItem (R23)"
+ported = "app/src/ui/items/db.rs list, hover, double-click, Ctrl+click; Ctrl+Shift+click adds into the second slot, a row dragged onto a slot is DropDbItem (R23), onto the item list DropDbItemOnList, onto the shared list AddSharedItem, onto the sidebar's minion dropdown DropOnMinion; Shift on a hovered row shows the child tooltips"
 
 [controls."items.uniqueDB.league"]
 ported = "app/src/ui/items/db.rs filters"
@@ -3376,6 +3379,7 @@ ported = "app/src/ui/shortcuts.rs list_delete: Backspace deletes in the build, i
 
 [keys."ListControl.c"]
 ported = "app/src/ui/build_list.rs keys: Ctrl+C marks the row for CopyBuildTo"
+note = "also items/list.rs (CopyItem) and items/shared.rs (CopySharedItem), each as its list's OnSelCopy"
 
 [keys."ListControl.DELETE"]
 ported = "app/src/ui/shortcuts.rs list_delete: Delete in the build, item, socket group and set lists"

@@ -1,6 +1,7 @@
 //! The item list: rows, drag to equip or reorder, the "…" menu, keys and the confirms.
 
-use super::shared::{SharedDrag, released_over};
+use super::db::DbDrag;
+use super::shared::{SharedDrag, drop_row, released_over};
 use super::{ItemDrag, ItemsOutput, ItemsUi};
 use crate::engine::views::{ItemEntry, ItemsView};
 use crate::engine::{Command, ItemTooltipQuery};
@@ -177,8 +178,10 @@ impl ItemsUi {
             .filter_map(|id| view.items.iter().find(|e| e.id == *id))
             .collect();
         let selected = self.selected;
-        // a shared item dropped on the list is added to the build (NF-2)
+        // a shared item or a database row dropped on the list is added to the build (NF-2,
+        // ItemsTab.lua:1184-1191); peeked before the rows' own drop zone takes it
         let shared = egui::DragAndDrop::payload::<SharedDrag>(ui.ctx());
+        let db = egui::DragAndDrop::payload::<DbDrag>(ui.ctx());
         let top = ui.cursor().min;
         let reordered = reorder_rows(
             ui,
@@ -210,10 +213,26 @@ impl ItemsUi {
             },
         );
         let area = Rect::from_min_max(top, ui.max_rect().max);
+        // at the row under the cursor, as PoB's list marks it; a filtered list doesn't take a
+        // position (ListControl.lua:157-164), so the item is appended
+        let at = view.can_reorder.then(|| {
+            drop_row(
+                &reordered.rows,
+                ui.input(|i| i.pointer.interact_pos()).map(|p| p.y),
+            )
+        });
         if let Some(drag) = released_over(ui, shared, area) {
             out.commands.push(Command::DropSharedItem {
                 index: drag.index,
                 slot: None,
+                at,
+            });
+        }
+        if let Some(drag) = released_over(ui, db, area) {
+            out.commands.push(Command::DropDbItemOnList {
+                db: drag.db,
+                name: drag.name.clone(),
+                at,
             });
         }
         let mut list_focus = false;

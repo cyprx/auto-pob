@@ -461,6 +461,7 @@ fn copy_reply_reaches_clipboard_only_when_asked() {
         Snapshot::ItemText(Arc::new(ItemText {
             id,
             text: text.into(),
+            shared: false,
         }))
     };
     h.ui.on_snapshot(&reply(1, "unasked"));
@@ -2234,6 +2235,7 @@ fn db_row_tooltip_replies_are_kept_only_for_the_latest_question() {
             query: ControlTooltipQuery::DbItem {
                 db: ItemDb::Uniques,
                 name: name.into(),
+                shift: false,
             },
             tooltip: crate::engine::views::ItemTooltip::default(),
         }))
@@ -2246,7 +2248,8 @@ fn db_row_tooltip_replies_are_kept_only_for_the_latest_question() {
         h.ui.db.tip_query(),
         Some(&ControlTooltipQuery::DbItem {
             db: ItemDb::Uniques,
-            name: "Tabula Rasa".into()
+            name: "Tabula Rasa".into(),
+            shift: false,
         })
     );
     // moving off the row drops it
@@ -2267,7 +2270,7 @@ fn db_rows_ask_for_their_tooltip_after_100ms() {
     }
     assert_eq!(
         debug(&queries),
-        ["ControlTooltip(DbItem { db: Uniques, name: \"Tabula Rasa\" })"]
+        ["ControlTooltip(DbItem { db: Uniques, name: \"Tabula Rasa\", shift: false })"]
     );
 }
 

@@ -170,6 +170,8 @@ pub struct Affected {
     pub control_tooltip: Option<ControlTooltipQuery>,
     /// The text PoB copies for this item was requested; the latest request wins
     pub item_text: Option<u32>,
+    /// The text PoB copies for this shared item was requested; the latest request wins
+    pub shared_text: Option<usize>,
     /// The tree link was requested
     pub link: bool,
     /// A PoEURL shrink finished: `short_tree_link_view` has the short link (R20)
@@ -226,6 +228,7 @@ impl Affected {
         item_tooltip: None,
         control_tooltip: None,
         item_text: None,
+        shared_text: None,
         link: false,
         short_link: false,
         requests: true,
@@ -293,6 +296,7 @@ impl Affected {
             self.control_tooltip = other.control_tooltip;
         }
         self.item_text = other.item_text.or(self.item_text);
+        self.shared_text = other.shared_text.or(self.shared_text);
         self.link |= other.link;
         self.short_link |= other.short_link;
         self.requests |= other.requests;
@@ -369,6 +373,10 @@ pub trait Backend {
         query: &ItemTooltipQuery,
     ) -> anyhow::Result<Option<ItemTooltipView>>;
     fn item_text(&mut self, id: u32) -> anyhow::Result<ItemText>;
+    /// What Ctrl+C on shared item `index` copies; `ItemText::shared` is set
+    fn shared_item_text(&mut self, index: usize) -> anyhow::Result<ItemText> {
+        anyhow::bail!("no shared item {index}")
+    }
     /// The popup session's window; `None` when no session is open
     fn popup_view(&mut self) -> anyhow::Result<Option<PopupView>>;
     /// `None`: the control or entry is gone
@@ -659,6 +667,14 @@ pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send
     }
     if let Some(id) = flags.item_text {
         emit(seq, send, backend.item_text(id), Snapshot::ItemText);
+    }
+    if let Some(index) = flags.shared_text {
+        emit(
+            seq,
+            send,
+            backend.shared_item_text(index),
+            Snapshot::ItemText,
+        );
     }
     if flags.link {
         emit(seq, send, backend.tree_link_view(), Snapshot::TreeLink);

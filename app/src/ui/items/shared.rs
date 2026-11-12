@@ -99,11 +99,14 @@ impl ItemsUi {
             rows
         });
         let rows = area.inner;
+        let mut focused = false;
         for (i, row) in rows.rows.iter().enumerate() {
             self.rects.note(row, || format!("shared_row_{i}"));
             if row.clicked() {
                 self.shared_selected = Some(i);
+                row.request_focus();
             }
+            focused |= row.has_focus();
             if row.double_clicked() {
                 out.commands.push(Command::ViewSharedItem { index: i });
             }
@@ -119,6 +122,15 @@ impl ItemsUi {
             );
         }
         self.rects.note(&area.response, || "shared_list".into());
+        // PoB's Ctrl+C on the selected row (SharedItemListControl.lua:62-64)
+        if focused
+            && let Some(index) = self.shared_selected
+            && !(self.has_dialog() || self.modal || ui.ctx().text_edit_focused())
+            && ui.input(|inp| inp.events.iter().any(|e| matches!(e, egui::Event::Copy)))
+        {
+            self.shared_copy_asked = Some(index);
+            out.queries.push(Command::CopySharedItem { index });
+        }
         if let Some((from, to)) = rows.moved {
             self.shared_selected = Some(to);
             out.commands.push(Command::MoveSharedItem { from, to });

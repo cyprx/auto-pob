@@ -7,6 +7,7 @@ use super::items::{FIND_NO_SLIDER, NoSlider, display, gear_sessions, items_round
 use super::items_harness::{
     ItemsAction, ItemsCheckpoint, assert_same, checkpoints, json, json_of, open_popups,
     run_items_recipe, strip_nulls, upstream_json, upstream_with_items_lib,
+    upstream_with_items_lib_xml,
 };
 use super::{Session, fixtures_dir, lock, lua_value, snapshot_dir};
 use auto_pob::engine::{Backend, Command, ItemDb, ItemTooltipQuery, PopupInput, PopupKind, Tab};
@@ -508,17 +509,39 @@ fn items_tree_dropdown_matches_pob() {
 const SHARED_RING: &str = "Rarity: RARE\nShared Loop\nIron Ring\nImplicits: 0\n+20 to maximum Life";
 const SHARED_BODY: &str =
     "Rarity: UNIQUE\nKaom's Heart\nGlorious Plate\nImplicits: 0\n+500 to maximum Life";
+/// A shared item that grants a skill: Shift shows its gem's tooltip as a child (R34)
+const SHARED_CHARM: &str =
+    "Rarity: RARE\nShared Charm\nOnyx Amulet\nImplicits: 0\nGrants Level 20 Anger Skill";
 const SHARED_SET_RING: &str =
     "Rarity: RARE\nSet Loop\nIron Ring\nImplicits: 0\n+10 to maximum Life";
 
-/// A Settings.xml with two shared items and a shared set, the build list as the last mode and
+/// The `<Mode>` element as PoB's writer lays it out (xml.lua:116-158)
+fn mode_element(mode: &str, args: &[String]) -> String {
+    let mut out = format!("<Mode mode=\"{mode}\">\n");
+    for arg in args {
+        out.push_str(&format!("\t\t<Arg {arg}/>\n"));
+    }
+    out.push_str("\t</Mode>");
+    out
+}
+
+/// A Settings.xml with three shared items and a shared set, `mode` as the last mode and
 /// thousands separators off (which the session overrides)
-fn shared_seed() -> String {
+fn shared_seed(mode: &str) -> String {
     format!(
-        "<PathOfBuilding>\n\t<Mode mode=\"LIST\"><Arg boolean=\"false\"/><Arg string=\"\"/></Mode>\n\
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<PathOfBuilding>\n\t{mode}\n\
          \t<SharedItems>\n\t\t<Item>{SHARED_RING}</Item>\n\t\t<Item>{SHARED_BODY}</Item>\n\
+         \t\t<Item>{SHARED_CHARM}</Item>\n\
          \t\t<ItemSet title=\"Shared Set\"><Item slotName=\"Ring 1\">{SHARED_SET_RING}</Item></ItemSet>\n\
          \t</SharedItems>\n\t<Misc buildSortMode=\"NAME\" showThousandsSeparators=\"false\"/>\n</PathOfBuilding>\n"
+    )
+}
+
+/// The build list as the last mode, as PoB writes it with nothing selected
+fn list_mode() -> String {
+    mode_element(
+        "LIST",
+        &["boolean=\"false\"".to_string(), "string=\"\"".to_string()],
     )
 }
 
@@ -526,8 +549,24 @@ fn shared_seed() -> String {
 const SHARED_SEED_UPSTREAM: &str = r#"
 table.insert(main.sharedItemList, new("Item", SHARED_RING))
 table.insert(main.sharedItemList, new("Item", SHARED_BODY))
+table.insert(main.sharedItemList, new("Item", SHARED_CHARM))
 table.insert(main.sharedItemSetList, { title = "Shared Set", slots = { ["Ring 1"] = new("Item", SHARED_SET_RING) } })
 "#;
+
+/// Upstream with `xml` open and the seeded shared lists
+fn shared_upstream(xml: &str, name: &str) -> mlua::Lua {
+    let lua = upstream_with_items_lib_xml(xml, name);
+    for (name, text) in [
+        ("SHARED_RING", SHARED_RING),
+        ("SHARED_BODY", SHARED_BODY),
+        ("SHARED_CHARM", SHARED_CHARM),
+        ("SHARED_SET_RING", SHARED_SET_RING),
+    ] {
+        lua.globals().set(name, text).unwrap();
+    }
+    lua.load(SHARED_SEED_UPSTREAM).exec().unwrap();
+    lua
+}
 
 /// Settings.xml without its `<SharedItems>` element
 fn outside_shared(xml: &str) -> String {
@@ -552,15 +591,115 @@ fn shared_part(xml: &str) -> String {
     xml.replacen(&outside_shared(xml), "", 1)
 }
 
+/// The `<Mode>` element of Settings.xml, as written
+fn written_mode(xml: &str) -> &str {
+    let start = xml.find("<Mode").expect("no Mode element");
+    let end = start + xml[start..].find("</Mode>").expect("Mode is not closed") + "</Mode>".len();
+    &xml[start..end]
+}
+
+/// Every file under the user folder but Settings.xml
+fn other_files(user: &std::path::Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    let mut files = snapshot_dir(user);
+    files.retain(|path, _| !path.ends_with("Settings.xml"));
+    files
+}
+
+/// Opens the uniques database on both sides searched for `text`; the first row's name
+fn db_search(
+    s: &mut super::longtail_harness::LongtailSession,
+    lua: &mlua::Lua,
+    text: &str,
+) -> String {
+    use auto_pob::engine::ItemDbQuery;
+    s.run(Command::SetItemDb(ItemDbQuery {
+        db: ItemDb::Uniques,
+        slot: 0,
+        kind: 0,
+        league: 0,
+        requirement: 0,
+        obtainable: 0,
+        sort: 0,
+        search: text.into(),
+        search_mode: 0,
+    }))
+    .unwrap();
+    while let Some(task) = s.backend.next_background() {
+        s.backend.background_step(task, &|_| {}).unwrap();
+    }
+    lua.load(format!(
+        r#"act.db_open("Uniques", {{ search = {text:?} }})"#
+    ))
+    .exec()
+    .unwrap();
+    lua_value(lua, r#"return dbDump("Uniques").rows[1].name"#)
+}
+
+/// The items view with the items an import added made order-free: PoB adds a set's items in
+/// `pairs` order (ItemSetListControl.lua:97), which differs between Lua states. Items with ids
+/// above `before` lose their ids and are sorted; the listed ids past `before`'s are sorted.
+fn canonical_import(view: &serde_json::Value, before: u64) -> serde_json::Value {
+    let mut view = view.clone();
+    let items = view["items"].as_array_mut().unwrap();
+    let (old, mut new): (Vec<_>, Vec<_>) = items
+        .drain(..)
+        .partition(|e| e["id"].as_u64().unwrap() <= before);
+    for entry in &mut new {
+        entry.as_object_mut().unwrap().remove("id");
+    }
+    new.sort_by_key(|e| e.to_string());
+    items.extend(old);
+    items.extend(new);
+    let listed = view["listed"].as_array_mut().unwrap();
+    let (old, mut new): (Vec<_>, Vec<_>) = listed
+        .drain(..)
+        .partition(|id| id.as_u64().unwrap() <= before);
+    new.sort_by_key(|id| id.as_u64().unwrap());
+    listed.extend(old);
+    listed.extend(new);
+    view
+}
+
+/// The last item set's slots as slot -> the equipped item's raw text, read the same way on
+/// both sides (`TAB` is the Items tab)
+const LAST_SET_SLOTS: &str = r#"
+local tab = TAB
+local set = tab.itemSets[tab.itemSetOrderList[#tab.itemSetOrderList]]
+local out = { title = set.title or "", slots = {} }
+for slotName, slot in pairs(set) do
+	if type(slot) == "table" and slot.selItemId and slot.selItemId ~= 0 then
+		local item = tab.items[slot.selItemId]
+		out.slots[slotName] = item.name .. "\n" .. item.raw
+	end
+end
+return out
+"#;
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn shared_items_match_pob() {
     use super::longtail_harness::{LongtailSession, settings_folder};
-    use auto_pob::engine::{ItemDbQuery, SharedItemSource};
+    use auto_pob::engine::SharedItemSource;
     use std::collections::BTreeMap;
     let _guard = lock();
-    let mut s = LongtailSession::start("shared-items", &|_| shared_seed());
     let xml = fixtures_dir().join("attack.xml");
+    // the last mode is a build classic PoB had open, not the one opened here: a shared save
+    // must write it back as it was, args and all (I-3)
+    let seeded_mode = std::cell::RefCell::new(String::new());
+    let mut s = LongtailSession::start("shared-items", &|user| {
+        let other = settings_folder(user).join("Builds/Other.xml");
+        std::fs::copy(&xml, &other).unwrap();
+        let mode = mode_element(
+            "BUILD",
+            &[
+                format!("string=\"{}\"", other.display()),
+                "string=\"Other\"".to_string(),
+            ],
+        );
+        *seeded_mode.borrow_mut() = mode.clone();
+        shared_seed(&mode)
+    });
+    let seeded_mode = seeded_mode.into_inner();
     let dest = settings_folder(&s.user).join("Builds/attack.xml");
     std::fs::copy(&xml, &dest).unwrap();
     s.run(Command::OpenBuild { path: dest }).unwrap();
@@ -569,15 +708,8 @@ fn shared_items_match_pob() {
         values: BTreeMap::from([("showThousandsSeparators".to_string(), "true".to_string())]),
     })
     .unwrap();
-    let lua = upstream_with_items_lib(&xml, "attack");
-    for (name, text) in [
-        ("SHARED_RING", SHARED_RING),
-        ("SHARED_BODY", SHARED_BODY),
-        ("SHARED_SET_RING", SHARED_SET_RING),
-    ] {
-        lua.globals().set(name, text).unwrap();
-    }
-    lua.load(SHARED_SEED_UPSTREAM).exec().unwrap();
+    let files = other_files(&s.user);
+    let lua = shared_upstream(&std::fs::read_to_string(&xml).unwrap(), "attack");
     let text = |s: &LongtailSession| String::from_utf8(s.settings_bytes()).unwrap();
     let compare = |s: &mut LongtailSession, what: &str| -> serde_json::Value {
         let ours = json(&s.backend.items_view().unwrap());
@@ -593,40 +725,100 @@ fn shared_items_match_pob() {
 
     // PoB's own LoadSharedItems read the seed
     let seeded = compare(&mut s, "seeded");
-    assert_eq!(seeded["shared_items"].as_array().unwrap().len(), 2);
+    assert_eq!(seeded["shared_items"].as_array().unwrap().len(), 3);
     assert_eq!(seeded["shared_sets"][0]["title"], "Shared Set");
+    assert_eq!(seeded["shared_sets"][0]["raw_title"], "Shared Set");
     assert_eq!(
         seeded["shared_sets"][0]["lines"].as_array().unwrap().len(),
         1
     );
 
-    // viewing writes nothing: the view and a shared item's tooltip
+    // viewing writes nothing: the view, a shared item's tooltip with and without Shift, and a
+    // database row's (M-2)
     let before = s.settings_bytes();
-    let ours = s
-        .backend
-        .item_tooltip_view(&ItemTooltipQuery {
-            id: 0,
-            slot: None,
-            theirs: false,
-            shift: false,
-            shared: Some(1),
-        })
-        .unwrap()
-        .expect("a tooltip");
-    let theirs: serde_json::Value = lua_value(
-        &lua,
-        "local tt = new('Tooltip') build.itemsTab.controls.sharedItemList:AddValueTooltip(tt, 2, main.sharedItemList[2]) return tooltipDump(tt)",
-    );
-    assert_same(
-        &json_of(&ours.tooltip),
-        &strip_nulls(theirs),
-        "shared tooltip",
-    );
+    let children =
+        |v: &serde_json::Value| v.get("children").map_or(0, |c| c.as_array().unwrap().len());
+    for shift in [false, true] {
+        let ours = s
+            .backend
+            .item_tooltip_view(&ItemTooltipQuery {
+                id: 0,
+                slot: None,
+                theirs: false,
+                shift,
+                shared: Some(2),
+            })
+            .unwrap()
+            .expect("a tooltip");
+        let theirs: serde_json::Value = lua_value(
+            &lua,
+            &format!(
+                "local saved = IsKeyDown IsKeyDown = function(k) return {shift} and k == 'SHIFT' end \
+                 local tt = new('Tooltip') \
+                 local ok, err = pcall(function() build.itemsTab.controls.sharedItemList:AddValueTooltip(tt, 3, main.sharedItemList[3]) end) \
+                 IsKeyDown = saved assert(ok, err) return tooltipDump(tt)"
+            ),
+        );
+        let ours = json_of(&ours.tooltip);
+        assert_same(
+            &ours,
+            &strip_nulls(theirs),
+            &format!("shared tooltip, shift {shift}"),
+        );
+        assert_eq!(
+            children(&ours),
+            usize::from(shift),
+            "shared tooltip children, shift {shift}"
+        );
+    }
+    let skill_unique = db_search(&mut s, &lua, "Blood of Corruption");
+    for shift in [false, true] {
+        let ours = s
+            .backend
+            .control_tooltip_view(&auto_pob::engine::ControlTooltipQuery::DbItem {
+                db: ItemDb::Uniques,
+                name: skill_unique.clone(),
+                shift,
+            })
+            .unwrap()
+            .expect("a database tooltip");
+        let theirs: serde_json::Value = lua_value(
+            &lua,
+            &format!(
+                "local saved = IsKeyDown IsKeyDown = function(k) return {shift} and k == 'SHIFT' end \
+                 local ok, out = pcall(dbTooltip, 'Uniques', {skill_unique:?}) \
+                 IsKeyDown = saved assert(ok, out) return out"
+            ),
+        );
+        let ours = json_of(&ours.tooltip);
+        assert_same(
+            &ours,
+            &strip_nulls(theirs),
+            &format!("database tooltip, shift {shift}"),
+        );
+        assert_eq!(
+            children(&ours),
+            usize::from(shift),
+            "database tooltip children, shift {shift}"
+        );
+    }
+    let shift: bool = s.eval("return IsKeyDown('SHIFT') and true or false");
+    assert!(!shift, "IsKeyDown was left swapped");
     s.backend.items_view().unwrap();
     assert_eq!(s.settings_bytes(), before, "a view wrote Settings.xml");
 
-    // a build item dragged onto row 1 of the shared list: saved at once, the build list kept as
-    // the file's last mode and the override out of the file
+    // Ctrl+C on a shared row copies what PoB copies (I-4)
+    let affected = s.run(Command::CopySharedItem { index: 1 }).unwrap();
+    assert_eq!(affected.shared_text, Some(1));
+    let ours = s.backend.shared_item_text(1).unwrap();
+    let theirs: String = lua_value(&lua, "return act.shared_copy(1)");
+    assert!(ours.shared && ours.id == 1);
+    assert_eq!(ours.text, theirs, "the shared copy text");
+    assert!(ours.text.contains("Kaom's Heart\r\n"), "{}", ours.text);
+    compare(&mut s, "copied");
+
+    // a build item dragged onto row 1 of the shared list: saved at once, the last mode kept
+    // as the file has it and the override out of the file
     let id = seeded["items"][0]["id"].as_u64().unwrap() as u32;
     let affected = s
         .run(Command::AddSharedItem {
@@ -639,15 +831,12 @@ fn shared_items_match_pob() {
     compare(&mut s, "build item shared");
     let first = text(&s);
     assert_ne!(first.as_bytes(), before.as_slice(), "nothing was saved");
-    assert!(
-        first.contains("mode=\"LIST\""),
-        "the last mode changed: {first}"
-    );
+    assert_eq!(written_mode(&first), seeded_mode, "the last mode changed");
     assert!(
         first.contains("showThousandsSeparators=\"false\""),
         "the override reached Settings.xml"
     );
-    assert_eq!(shared_part(&first).matches("<Item>").count(), 3, "{first}");
+    assert_eq!(shared_part(&first).matches("<Item>").count(), 4, "{first}");
 
     // every later edit of the shared lists changes only <SharedItems>
     let mut last = first;
@@ -667,23 +856,7 @@ fn shared_items_match_pob() {
     };
 
     // a database row onto row 0
-    s.run(Command::SetItemDb(ItemDbQuery {
-        db: ItemDb::Uniques,
-        slot: 0,
-        kind: 0,
-        league: 0,
-        requirement: 0,
-        obtainable: 0,
-        sort: 0,
-        search: "Kalandra".into(),
-        search_mode: 0,
-    }))
-    .unwrap();
-    while let Some(task) = s.backend.next_background() {
-        s.backend.background_step(task, &|_| {}).unwrap();
-    }
-    act(r#"act.db_open("Uniques", { search = "Kalandra" })"#);
-    let name: String = lua_value(&lua, r#"return dbDump("Uniques").rows[1].name"#);
+    let name = db_search(&mut s, &lua, "Kalandra");
     edit(
         &mut s,
         Command::AddSharedItem {
@@ -709,22 +882,57 @@ fn shared_items_match_pob() {
         "deleted",
     );
 
-    // into the build: the shared list stays, nothing is saved
+    // into the build: the shared list stays, nothing is saved. On the item list a drop lands
+    // at the row under the cursor (I-4), and a database row dragged there is added unequipped.
     let saved = s.settings_bytes();
-    for (index, slot, code) in [
-        (0, Some("Ring 2"), "act.shared_drop(0, 'Ring 2')"),
-        (2, None, "act.shared_drop(2, nil)"),
+    for (index, slot, at, code) in [
+        (0, Some("Ring 2"), None, "act.shared_drop(0, 'Ring 2')"),
+        (2, None, Some(1), "act.shared_drop(2, nil, 1)"),
+        (3, None, None, "act.shared_drop(3, nil)"),
     ] {
         let affected = s
             .run(Command::DropSharedItem {
                 index,
                 slot: slot.map(str::to_string),
+                at,
             })
             .unwrap();
         assert!(affected.items && affected.build && affected.recalc);
         act(code);
-        compare(&mut s, &format!("dropped {index} on {slot:?}"));
+        let view = compare(&mut s, &format!("dropped {index} on {slot:?} at {at:?}"));
+        if let Some(at) = at {
+            let landed = view["listed"][at].as_u64().unwrap();
+            let entry = view["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["id"].as_u64() == Some(landed))
+                .unwrap();
+            assert!(
+                entry["name"].as_str().unwrap().starts_with("Kaom's Heart"),
+                "the drop didn't land at row {at}: {entry}"
+            );
+        }
     }
+    let affected = s
+        .run(Command::DropDbItemOnList {
+            db: ItemDb::Uniques,
+            name: name.clone(),
+            at: Some(0),
+        })
+        .unwrap();
+    assert!(affected.items && affected.build && affected.recalc);
+    act(&format!("act.db_drop_on_list('Uniques', {name:?}, 0)"));
+    let view = compare(&mut s, "database row dropped on the list");
+    let first_listed = view["listed"][0].as_u64().unwrap();
+    assert!(
+        view["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["id"].as_u64() == Some(first_listed) && e.get("equipped").is_none()),
+        "the database row isn't first and unequipped"
+    );
     s.run(Command::ViewSharedItem { index: 1 }).unwrap();
     act("act.shared_view(1)");
     let theirs: serde_json::Value = lua_value(&lua, "return displayDump()");
@@ -758,8 +966,17 @@ fn shared_items_match_pob() {
             Command::DropSharedItem {
                 index: 0,
                 slot: Some("Helmet".into()),
+                at: None,
             },
             "that item can't go in that slot",
+        ),
+        (
+            Command::DropSharedItem {
+                index: 0,
+                slot: None,
+                at: Some(999),
+            },
+            "no such row",
         ),
         (
             Command::AddSharedItem {
@@ -775,8 +992,20 @@ fn shared_items_match_pob() {
             },
             "no such row",
         ),
+        (Command::CopySharedItem { index: 99 }, ""),
+        // the main skill has no minion: the sidebar's minion dropdown is hidden (M-10)
+        (
+            Command::DropOnMinion {
+                source: auto_pob::engine::ItemDragSource::Shared { index: 1 },
+            },
+            "PoB doesn't offer that here",
+        ),
     ] {
         let view = s.backend.items_view().unwrap();
+        if let Command::CopySharedItem { index } = command {
+            assert!(s.backend.shared_item_text(index).is_err());
+            continue;
+        }
         let error = s.run(command.clone()).expect_err(&format!("{command:?}"));
         assert!(error.to_string().contains(message), "{command:?}: {error}");
         assert_eq!(
@@ -822,8 +1051,7 @@ fn shared_items_match_pob() {
         "set moved",
     );
     let saved = s.settings_bytes();
-    // the seeded one-slot set: PoB adds a set's items in `pairs` order (ItemSetListControl.lua:97),
-    // which differs between Lua states, so a set of one item compares exactly
+    // the seeded one-slot set compares exactly
     let affected = s.run(Command::ImportSharedItemSet { index: 1 }).unwrap();
     assert!(affected.items && affected.build);
     act("act.shared_set_import(1)");
@@ -832,9 +1060,222 @@ fn shared_items_match_pob() {
     assert_eq!(s.settings_bytes(), saved, "an import wrote Settings.xml");
     edit(
         &mut s,
-        Command::DeleteSharedItemSet { index: 0 },
-        "act.shared_set_delete(0)",
+        Command::DeleteSharedItemSet { index: 1 },
+        "act.shared_set_delete(1)",
         "set deleted",
     );
+    // the many-slot set, last: PoB adds its items in `pairs` order, so the new items, their ids
+    // and the slot they fill are compared order-free (M-1)
+    let saved = s.settings_bytes();
+    let before_ids = imported["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].as_u64().unwrap())
+        .max()
+        .unwrap();
+    let affected = s.run(Command::ImportSharedItemSet { index: 0 }).unwrap();
+    assert!(affected.items && affected.build);
+    act("act.shared_set_import(0)");
+    let ours = json(&s.backend.items_view().unwrap());
+    let theirs = upstream_json(&lua);
+    assert!(
+        ours["items"].as_array().unwrap().len() > imported["items"].as_array().unwrap().len() + 1,
+        "the many-slot set added too few items"
+    );
+    assert_same(
+        &canonical_import(&ours, before_ids),
+        &canonical_import(&theirs, before_ids),
+        "many-slot set imported",
+    );
+    let slots_ours: serde_json::Value = lua_value(
+        &s.backend.lua,
+        &LAST_SET_SLOTS.replace("TAB", "pob.build.itemsTab"),
+    );
+    let slots_theirs: serde_json::Value =
+        lua_value(&lua, &LAST_SET_SLOTS.replace("TAB", "build.itemsTab"));
+    assert_eq!(slots_ours, slots_theirs, "the imported set's slots");
+    assert!(
+        slots_ours["slots"].as_object().unwrap().len() > 1,
+        "{slots_ours}"
+    );
+    assert_eq!(slots_ours["title"], "Renamed");
+    assert_eq!(s.settings_bytes(), saved, "an import wrote Settings.xml");
     assert_eq!(s.open_popups(), 0);
+    // no build file, cache or other file was written (M-7)
+    assert_eq!(other_files(&s.user), files, "a file was written");
+}
+
+/// Restores a file's permissions however the test ends
+struct Writable(std::path::PathBuf);
+
+impl Drop for Writable {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o644));
+    }
+}
+
+/// A Settings.xml shared edits can't save (I-1), and one another program changed (I-2)
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn shared_items_save_failures() {
+    use super::longtail_harness::{LongtailSession, settings_folder};
+    use auto_pob::engine::{BuildSort, SharedItemSource};
+    use std::os::unix::fs::PermissionsExt;
+    let _guard = lock();
+    let mut s = LongtailSession::start("shared-failures", &|_| shared_seed(&list_mode()));
+    // our own writer refreshes what we last wrote: a shared edit after it is saved
+    s.run(Command::SetBuildSort {
+        sort: BuildSort::Level,
+    })
+    .unwrap();
+    let xml = fixtures_dir().join("attack.xml");
+    let dest = settings_folder(&s.user).join("Builds/attack.xml");
+    std::fs::copy(&xml, &dest).unwrap();
+    s.run(Command::OpenBuild { path: dest }).unwrap();
+    let id = s.backend.items_view().unwrap().items[0].id;
+    let add = Command::AddSharedItem {
+        source: SharedItemSource::Item { id },
+        index: 0,
+    };
+    let sorted = s.settings_bytes();
+    s.run(add.clone())
+        .expect("a shared edit after our own write");
+    assert_ne!(s.settings_bytes(), sorted, "nothing was saved");
+
+    // a write PoB can't make fails the same command, and the edit is undone
+    let path = s.settings_path();
+    let _restore = Writable(path.clone());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+    let before = (s.settings_bytes(), s.backend.items_view().unwrap());
+    let error = s.run(add.clone()).expect_err("an unwritable Settings.xml");
+    assert!(
+        error.to_string().contains("Settings.xml"),
+        "{error}: not the save's reason"
+    );
+    assert_eq!(
+        (s.settings_bytes(), s.backend.items_view().unwrap()),
+        before,
+        "a failed save changed something"
+    );
+    let prompt: bool = s.eval("return pob.main.promptMsg ~= nil");
+    assert!(!prompt, "the save's prompt was left for a later command");
+    assert_eq!(s.open_popups(), 0);
+    // the next, unrelated command is clean
+    s.run(Command::SortItems).expect("the next command");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    // another program wrote the file: the edit is refused and the file left as it wrote it
+    let mut theirs = String::from_utf8(s.settings_bytes()).unwrap();
+    theirs = theirs.replace("buildSortMode=\"LEVEL\"", "buildSortMode=\"CLASS\"");
+    assert!(theirs.contains("CLASS"), "{theirs}");
+    std::fs::write(&path, &theirs).unwrap();
+    let view = s.backend.items_view().unwrap();
+    let error = s.run(add).expect_err("an outside write");
+    assert_eq!(
+        error.to_string(),
+        "Settings.xml was changed by another program; restart auto-pob to edit shared items"
+    );
+    assert_eq!(
+        s.settings_bytes(),
+        theirs.as_bytes(),
+        "Settings.xml was written"
+    );
+    assert_eq!(
+        s.backend.items_view().unwrap(),
+        view,
+        "the refusal changed something"
+    );
+    assert_eq!(s.open_popups(), 0);
+}
+
+/// An Animate Guardian build: its minion uses an item set, which the sidebar's minion dropdown
+/// lists (Build.lua:1610-1620)
+fn guardian_xml() -> String {
+    let xml = std::fs::read_to_string(fixtures_dir().join("attack.xml")).unwrap();
+    let guardian = xml.replacen(
+        "skillId=\"Boneshatter\" skillPartCalcs=\"1\" skillPart=\"1\" enableGlobal1=\"true\" enableGlobal2=\"true\" nameSpec=\"Boneshatter\" gemId=\"Metadata/Items/Gems/SkillGemBoneshatter\" enabled=\"true\" variantId=\"Boneshatter\"",
+        "skillId=\"AnimateGuardian\" enableGlobal1=\"true\" enableGlobal2=\"true\" nameSpec=\"Animate Guardian\" gemId=\"Metadata/Items/Gems/SkillGemAnimateGuardian\" enabled=\"true\" variantId=\"AnimateGuardian\"",
+        1,
+    );
+    assert_ne!(guardian, xml, "the main skill wasn't replaced");
+    guardian
+}
+
+/// Items dragged onto the sidebar's minion dropdown from the item list, a database and the
+/// shared list (Build.lua:534-543, ItemsTab.lua:1182-1191; M-10)
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn minion_drop_matches_pob() {
+    use super::longtail_harness::{LongtailSession, settings_folder};
+    use auto_pob::engine::ItemDragSource;
+    let _guard = lock();
+    let mut s = LongtailSession::start("minion-drop", &|_| shared_seed(&list_mode()));
+    let xml = guardian_xml();
+    let dest = settings_folder(&s.user).join("Builds/guardian.xml");
+    std::fs::write(&dest, &xml).unwrap();
+    s.run(Command::OpenBuild { path: dest }).unwrap();
+    let lua = shared_upstream(&xml, "guardian");
+    let files = snapshot_dir(&s.user);
+    let compare = |s: &mut LongtailSession, what: &str| {
+        let ours = json(&s.backend.items_view().unwrap());
+        assert_same(&ours, &upstream_json(&lua), what);
+        assert_eq!(s.open_popups(), 0, "{what}: a popup was left open");
+        ours
+    };
+    compare(&mut s, "opened");
+    let helmet = db_search(&mut s, &lua, "Goldrim");
+    // the build's weapon: the guardian uses Weapon 1
+    let weapon = compare(&mut s, "searched")["items"][0]["id"]
+        .as_u64()
+        .unwrap() as u32;
+    let drops = vec![
+        (
+            ItemDragSource::Item { id: weapon },
+            format!("act.minion_drop('item', {weapon})"),
+        ),
+        (
+            ItemDragSource::Db {
+                db: ItemDb::Uniques,
+                name: helmet.clone(),
+            },
+            format!("act.minion_drop('db', 'Uniques', {helmet:?})"),
+        ),
+        // Kaom's Heart, a body armour
+        (
+            ItemDragSource::Shared { index: 1 },
+            "act.minion_drop('shared', 1)".to_string(),
+        ),
+    ];
+    for (source, code) in drops {
+        let affected = s
+            .run(Command::DropOnMinion {
+                source: source.clone(),
+            })
+            .unwrap_or_else(|e| panic!("{source:?}: {e}"));
+        assert!(affected.items && affected.build && affected.recalc);
+        lua.load(&code)
+            .exec()
+            .unwrap_or_else(|e| panic!("{code}: {e}"));
+        compare(&mut s, &format!("{source:?} dropped on the minion"));
+    }
+    // the guardian doesn't use rings: the dropdown refuses it
+    let view = s.backend.items_view().unwrap();
+    let error = s
+        .run(Command::DropOnMinion {
+            source: ItemDragSource::Shared { index: 0 },
+        })
+        .expect_err("a ring");
+    assert!(
+        error.to_string().contains("the minion can't use that item"),
+        "{error}"
+    );
+    assert_eq!(
+        s.backend.items_view().unwrap(),
+        view,
+        "the refusal changed something"
+    );
+    assert_eq!(s.open_popups(), 0);
+    assert_eq!(snapshot_dir(&s.user), files, "a file was written");
 }

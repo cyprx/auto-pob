@@ -516,6 +516,8 @@ fn rows(ui: &mut egui::Ui, view: &ItemDbView, state: &mut DbState, out: &mut Ite
                     ControlTooltipQuery::DbItem {
                         db,
                         name: row.name.clone(),
+                        // Shift held asks for PoB's child tooltips (R34)
+                        shift,
                     },
                 );
             }

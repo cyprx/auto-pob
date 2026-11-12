@@ -30,9 +30,33 @@ fn db_row_drop_on_slot_sends_drop() {
         debug(&sent),
         ["DropDbItem { db: Uniques, name: \"Tabula Rasa\", slot: \"Ring 1\" }"]
     );
+    // dropped on the item list, it is added at the row under the cursor, unequipped
+    // (ItemsTab.lua:1184-1187)
+    let to = h.ui.rect("row_2").center();
+    assert_eq!(
+        debug(&h.drag_between(from, to)),
+        ["DropDbItemOnList { db: Uniques, name: \"Tabula Rasa\", at: Some(2) }"]
+    );
     // dropped anywhere else, nothing is sent
-    let to = h.ui.rect("row_1").center();
+    let to = h.ui.rect("db_row_2").center();
     assert!(h.drag_between(from, to).is_empty());
+}
+
+#[test]
+fn shift_hover_on_a_db_row_asks_child_tooltips() {
+    let mut h = Harness::new(sample());
+    h.open_db();
+    h.step = 0.06;
+    let pos = h.ui.rect("db_row_1").center();
+    h.modifiers = Modifiers::SHIFT;
+    let mut asked = h.frame(vec![Event::PointerMoved(pos)]).queries;
+    for _ in 0..3 {
+        asked.extend(h.frame(vec![]).queries);
+    }
+    assert_eq!(
+        debug(&asked),
+        ["ControlTooltip(DbItem { db: Uniques, name: \"Tabula Rasa\", shift: true })"]
+    );
 }
 
 #[test]
@@ -110,6 +134,37 @@ fn text_window_blocks_list_clicks() {
     // its own close button still works
     h.click("text_close");
     assert!(h.ui.display.text_window.is_none());
+}
+
+#[test]
+fn text_window_closes_on_escape_but_not_on_a_click_outside() {
+    let mut h = Harness::new(sample());
+    h.frame(vec![]);
+    h.click("create");
+    h.frame(vec![]);
+    // a click on the backdrop leaves it open, as PoB's popup
+    let pos = Pos2::new(5.0, 5.0);
+    for pressed in [true, false] {
+        h.frame(vec![
+            Event::PointerMoved(pos),
+            Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            },
+        ]);
+    }
+    h.frame(vec![]);
+    assert!(
+        h.ui.display.text_window.is_some(),
+        "a click outside closed it"
+    );
+    // Escape closes it, even with the text box focused
+    h.click("text_edit");
+    h.key(Key::Escape, Modifiers::NONE);
+    h.frame(vec![]);
+    assert!(h.ui.display.text_window.is_none(), "Escape left it open");
 }
 
 fn stacked_view() -> DisplayItemView {
@@ -240,6 +295,7 @@ fn shared_sample() -> ItemsView {
         shared_sets: vec![SharedSetEntry {
             title: "Shared Set".into(),
             lines: vec!["^7Ring 1: ^xFFFF77Set Loop".into()],
+            raw_title: Some("Shared Set".into()),
         }],
         shared_shown: true,
         ..sample()
@@ -258,12 +314,49 @@ fn shared_rows_drag_onto_slots_and_the_list() {
     h.settle();
     assert_eq!(
         drag(&mut h, "shared_row_0", "slot_Ring 1"),
-        ["DropSharedItem { index: 0, slot: Some(\"Ring 1\") }"]
+        ["DropSharedItem { index: 0, slot: Some(\"Ring 1\"), at: None }"]
     );
+    // on the item list, at the row under the cursor (ItemListControl.lua:279)
     assert_eq!(
         drag(&mut h, "shared_row_1", "row_2"),
-        ["DropSharedItem { index: 1, slot: None }"]
+        ["DropSharedItem { index: 1, slot: None, at: Some(2) }"]
     );
+    // a list PoB doesn't let reorder (a loadout filter) appends
+    let mut view = shared_sample();
+    view.can_reorder = false;
+    let mut h = Harness::new(view);
+    h.settle();
+    assert_eq!(
+        drag(&mut h, "shared_row_1", "row_2"),
+        ["DropSharedItem { index: 1, slot: None, at: None }"]
+    );
+}
+
+#[test]
+fn ctrl_c_on_a_shared_row_copies_it() {
+    let mut h = Harness::new(shared_sample());
+    h.settle();
+    h.click("shared_row_1");
+    let o = h.frame(vec![Event::Copy]);
+    assert!(
+        debug(&o.queries).contains(&"CopySharedItem { index: 1 }".to_owned()),
+        "{:?}",
+        o.queries
+    );
+    let reply = |id: u32, shared: bool, text: &str| {
+        Snapshot::ItemText(Arc::new(ItemText {
+            id,
+            text: text.into(),
+            shared,
+        }))
+    };
+    // a build item's text with the same number is not the shared one
+    h.ui.on_snapshot(&reply(1, false, "build item"));
+    h.frame(vec![]);
+    assert!(h.copied.is_empty(), "{:?}", h.copied);
+    h.ui.on_snapshot(&reply(1, true, "Rarity: RARE\r\nShared Band\r\n"));
+    h.frame(vec![]);
+    assert_eq!(h.copied, ["Rarity: RARE\r\nShared Band\r\n"]);
 }
 
 #[test]
@@ -342,6 +435,8 @@ fn shared_sets_drag_rename_and_delete() {
     // F2 on the focused row renames, as PoB's
     h.key(Key::F2, Modifiers::NONE);
     h.settle();
+    // Save waits for an edit (SharedItemSetListControl.lua:31-38)
+    assert!(h.click("shared_sets_save").commands.is_empty());
     h.type_into("shared_sets_name", "Renamed");
     assert_eq!(
         debug(&h.click("shared_sets_save").commands),
@@ -353,4 +448,29 @@ fn shared_sets_drag_rename_and_delete() {
         debug(&h.click("shared_sets_confirm_delete").commands),
         ["DeleteSharedItemSet { index: 0 }"]
     );
+}
+
+#[test]
+fn renaming_an_untitled_shared_set_starts_empty() {
+    use crate::engine::views::SharedSetEntry;
+    let mut view = shared_sample();
+    // PoB draws an untitled set as "Default" but names it nothing
+    view.shared_sets = vec![SharedSetEntry {
+        title: "Default".into(),
+        lines: Vec::new(),
+        raw_title: None,
+    }];
+    let mut h = Harness::new(view);
+    h.click("manage");
+    h.settle();
+    h.click("shared_sets_row_0");
+    h.click("shared_sets_rename");
+    h.settle();
+    assert_eq!(
+        h.ui.sets.shared_naming_text(),
+        Some(""),
+        "the box starts from the set's own title"
+    );
+    // unchanged, Save is off: an untitled set isn't saved as "Default"
+    assert!(h.click("shared_sets_save").commands.is_empty());
 }

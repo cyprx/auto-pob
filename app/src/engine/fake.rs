@@ -637,6 +637,7 @@ impl Backend for Fake {
         Ok(ItemText {
             id,
             text: String::new(),
+            shared: false,
         })
     }
 

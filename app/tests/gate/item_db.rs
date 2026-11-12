@@ -177,6 +177,7 @@ fn same_panel(
             .control_tooltip_view(&ControlTooltipQuery::DbItem {
                 db: labels.db,
                 name: name.clone(),
+                shift: false,
             })
             .unwrap()
             .unwrap_or_else(|| panic!("{what}: no tooltip for {name}"));

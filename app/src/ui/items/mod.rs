@@ -48,6 +48,8 @@ pub struct ItemsUi {
     confirm_delete_all: bool,
     /// The item whose copy text we asked for
     copy_asked: Option<u32>,
+    /// The shared item whose copy text we asked for (Ctrl+C on a shared row)
+    shared_copy_asked: Option<usize>,
     /// Text to hand to the system clipboard next frame
     clipboard: Option<String>,
     tooltip: Option<Arc<ItemTooltipView>>,
@@ -115,6 +117,7 @@ impl ItemsUi {
         self.confirm_delete = None;
         self.confirm_delete_all = false;
         self.copy_asked = None;
+        self.shared_copy_asked = None;
         self.clipboard = None;
         self.sets.close();
         self.display.text_window = None;
@@ -261,8 +264,12 @@ impl ItemsUi {
                     self.tooltip = Some(t.clone());
                 }
             }
-            Snapshot::ItemText(t) if self.copy_asked == Some(t.id) => {
+            Snapshot::ItemText(t) if !t.shared && self.copy_asked == Some(t.id) => {
                 self.copy_asked = None;
+                self.clipboard = Some(t.text.clone());
+            }
+            Snapshot::ItemText(t) if t.shared && self.shared_copy_asked == Some(t.id as usize) => {
+                self.shared_copy_asked = None;
                 self.clipboard = Some(t.text.clone());
             }
             _ => {}

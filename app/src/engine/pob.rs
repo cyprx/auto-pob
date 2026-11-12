@@ -4,8 +4,8 @@ use super::buildpaths;
 use super::commands::{
     CharacterPart, Command, CompareSource, ConfigValue, ControlTooltipQuery, DeleteKind,
     GemSearchQuery, GemTarget, GemToggle, GemTooltipQuery, HoverTarget, ImportMode, ItemDb,
-    ItemDbQuery, ItemTooltipQuery, PopupInput, PopupKind, SharedItemSource, SkillOption,
-    SocketColour, Tab,
+    ItemDbQuery, ItemDragSource, ItemTooltipQuery, PopupInput, PopupKind, SharedItemSource,
+    SkillOption, SocketColour, Tab,
 };
 use super::net::{Dispatch, NetHandle};
 use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Engine, Event};
@@ -645,6 +645,7 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::CloseItemDb
             | Command::ItemTooltip(_)
             | Command::CopyItem { .. }
+            | Command::CopySharedItem { .. }
             | Command::Breakdown(_)
             | Command::GemTooltip(_)
             | Command::GroupTooltip { .. }
@@ -809,8 +810,8 @@ impl PobBackend {
                 }
                 Ok(shared_changed())
             }
-            Command::DropSharedItem { index, slot } => {
-                self.call::<_, ()>("shared_drop", (index + 1, slot))?;
+            Command::DropSharedItem { index, slot, at } => {
+                self.call::<_, ()>("shared_drop", (index + 1, slot, at.map(|a| a + 1)))?;
                 self.items_edited()
             }
             Command::DeleteSharedItem { index } => {
@@ -848,6 +849,31 @@ impl PobBackend {
             Command::MoveSharedItemSet { from, to } => {
                 self.call::<_, ()>("shared_set_move", (from + 1, to + 1))?;
                 Ok(shared_changed())
+            }
+            Command::DropDbItemOnList { db, name, at } => {
+                self.call::<_, ()>(
+                    "item_db_drop_on_list",
+                    (db_name(db), name, at.map(|a| a + 1)),
+                )?;
+                self.items_edited()
+            }
+            Command::CopySharedItem { index } => Ok(Affected {
+                shared_text: Some(index),
+                ..Affected::default()
+            }),
+            Command::DropOnMinion { source } => {
+                match source {
+                    ItemDragSource::Item { id } => {
+                        self.call::<_, ()>("minion_drop", ("item", id, mlua::Value::Nil))?
+                    }
+                    ItemDragSource::Db { db, name } => {
+                        self.call::<_, ()>("minion_drop", ("db", db_name(db), name))?
+                    }
+                    ItemDragSource::Shared { index } => {
+                        self.call::<_, ()>("minion_drop", ("shared", index + 1, mlua::Value::Nil))?
+                    }
+                }
+                self.items_edited()
             }
             Command::ItemTooltip(query) => Ok(Affected {
                 item_tooltip: Some(query),
@@ -2467,7 +2493,7 @@ impl Backend for PobBackend {
 
     fn item_tooltip_view(&mut self, query: &ItemTooltipQuery) -> Result<Option<ItemTooltipView>> {
         let found: Option<ItemTooltip> = if let Some(index) = query.shared {
-            self.view("shared_tooltip", index + 1)?
+            self.view("shared_tooltip", (index + 1, query.shift))?
         } else if query.theirs {
             self.view("compare_item_tooltip", query.slot.clone())?
         } else {
@@ -2494,8 +2520,8 @@ impl Backend for PobBackend {
             ControlTooltipQuery::Affix { slot, index } => {
                 self.view("affix_tooltip", (*slot, index.map(|i| i as i64)))?
             }
-            ControlTooltipQuery::DbItem { db, name } => {
-                self.view("item_db_tooltip", (db_name(*db), name.clone()))?
+            ControlTooltipQuery::DbItem { db, name, shift } => {
+                self.view("item_db_tooltip", (db_name(*db), name.clone(), *shift))?
             }
         };
         Ok(found.map(|tooltip| ControlTooltipView {
@@ -2506,7 +2532,20 @@ impl Backend for PobBackend {
 
     fn item_text(&mut self, id: u32) -> Result<ItemText> {
         let text: String = self.call("item_copy", id)?;
-        Ok(ItemText { id, text })
+        Ok(ItemText {
+            id,
+            text,
+            shared: false,
+        })
+    }
+
+    fn shared_item_text(&mut self, index: usize) -> Result<ItemText> {
+        let text: String = self.call("shared_copy", index + 1)?;
+        Ok(ItemText {
+            id: index as u32,
+            text,
+            shared: true,
+        })
     }
 
     fn node_power_view(&mut self) -> Result<NodePower> {
@@ -2661,8 +2700,10 @@ mod tests {
             Command::ControlTooltip(ControlTooltipQuery::DbItem {
                 db: ItemDb::Uniques,
                 name: "x".into(),
+                shift: false,
             }),
             Command::CopyItem { id: 1 },
+            Command::CopySharedItem { index: 0 },
             Command::Breakdown(CellRef {
                 section: "s".into(),
                 sub: 0,

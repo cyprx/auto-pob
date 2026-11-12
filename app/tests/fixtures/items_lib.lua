@@ -57,7 +57,7 @@ function itemsDump()
 		for _, line in ipairs(tt.lines) do
 			if line.text then lines[#lines + 1] = line.text end
 		end
-		out.shared_sets[i] = { title = setList:GetRowValue(1, i, set), lines = lines }
+		out.shared_sets[i] = { title = setList:GetRowValue(1, i, set), lines = lines, raw_title = set.title }
 	end
 	for i, id in ipairs(list.list) do out.listed[i] = id end
 
@@ -1163,7 +1163,8 @@ local function sharedDrop(source, index, target, at)
 		end
 	end
 	assert(target.otherDragSource == source, "the target doesn't take it")
-	target.selDragIndex = at
+	-- Draw marks a drop row only on a list that can be reordered (ListControl.lua:157-164)
+	target.selDragIndex = target.isMutable and at or nil
 	source.dragTarget = target
 	source:OnKeyUp("LEFTBUTTON")
 	target.selDragIndex = nil
@@ -1189,11 +1190,53 @@ function act.shared_add_db(db, name, at)
 	sharedDrop(c, index, sharedList(), at + 1)
 end
 
--- shared item `index` (0-based) dragged onto a slot, or onto the item list
-function act.shared_drop(index, slotName)
+-- shared item `index` (0-based) dragged onto a slot, or onto the item list at 0-based row `at`
+function act.shared_drop(index, slotName, at)
 	tab():UpdateSockets()
+	itemList():UpdateList()
 	local target = slotName and tab().slots[slotName] or itemList()
-	sharedDrop(sharedList(), index + 1, target, nil)
+	sharedDrop(sharedList(), index + 1, target, at and at + 1)
+end
+
+-- a database row dragged onto the item list at 0-based row `at` (ItemsTab.lua:1184-1187)
+function act.db_drop_on_list(db, name, at)
+	local c, _, index = dbRow(db, name)
+	itemList():UpdateList()
+	sharedDrop(c, index, itemList(), at and at + 1)
+end
+
+-- Ctrl+C on shared item `index` (0-based), PoB's ListControl key path with `Copy` caught
+function act.shared_copy(index)
+	local list = sharedList()
+	list:SelectIndex(index + 1)
+	local saved, text = Copy, nil
+	Copy = function(copied) text = copied end
+	local savedKey = IsKeyDown
+	IsKeyDown = function(key) return key == "CTRL" end
+	local ok, err = pcall(list.OnKeyDown, list, "c")
+	IsKeyDown, Copy = savedKey, saved
+	assert(ok, err)
+	return text
+end
+
+-- an item dragged onto the sidebar's minion dropdown: a build item (`kind` "item", `a` its id),
+-- a database row ("db", `a` the database, `b` the name) or a shared item ("shared", 0-based `a`)
+function act.minion_drop(kind, a, b)
+	build:RefreshSkillSelectControls(build.controls, build.mainSocketGroup, "")
+	local target = build.controls.mainSkillMinion
+	if kind == "item" then
+		local list = itemList()
+		list:UpdateList()
+		for i, listed in ipairs(list.list) do
+			if listed == a then sharedDrop(list, i, target, nil) return end
+		end
+		error("item " .. a .. " is not listed")
+	elseif kind == "db" then
+		local c, _, index = dbRow(a, b)
+		sharedDrop(c, index, target, nil)
+	else
+		sharedDrop(sharedList(), a + 1, target, nil)
+	end
 end
 
 -- the Delete button and its confirmation

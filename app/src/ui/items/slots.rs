@@ -321,6 +321,7 @@ impl ItemsUi {
             out.commands.push(Command::DropSharedItem {
                 index: drag.index,
                 slot: Some(slot.name.clone()),
+                at: None,
             });
         }
         self.rects

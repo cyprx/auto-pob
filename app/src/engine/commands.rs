@@ -927,11 +927,15 @@ pub enum Command {
         source: SharedItemSource,
         index: usize,
     },
-    /// Shared item `index` dragged onto `slot`, or onto the build's item list (`None`, appended):
-    /// a copy is added to the build. The shared list is unchanged and nothing is saved.
+    /// Shared item `index` dragged onto `slot`, or onto the build's item list (`slot` `None`):
+    /// a copy is added to the build. On the item list it lands at 0-based row `at`, the row
+    /// under the cursor, as PoB's list marks it (ItemListControl.lua:275-283); `None`, or a list
+    /// PoB doesn't let reorder (a loadout filter), appends. The shared list is unchanged and
+    /// nothing is saved.
     DropSharedItem {
         index: usize,
         slot: Option<String>,
+        at: Option<usize>,
     },
     /// The shared list's Delete, confirmed in the UI (PoB's "Delete Item" question)
     DeleteSharedItem {
@@ -967,6 +971,34 @@ pub enum Command {
         from: usize,
         to: usize,
     },
+    /// A database row dragged onto the build's item list: added at 0-based row `at` (as
+    /// `DropSharedItem`), not equipped (ItemsTab.lua:1184-1187, ItemListControl.lua:275-283)
+    DropDbItemOnList {
+        db: ItemDb,
+        name: String,
+        at: Option<usize>,
+    },
+    /// Ctrl+C on a shared item row (SharedItemListControl.lua:62-64): a query, answered with
+    /// the text PoB copies
+    CopySharedItem {
+        index: usize,
+    },
+    /// An item dragged onto the sidebar's minion dropdown while it shows an item set (Animate
+    /// Guardian): PoB equips it into that set for the minion (Build.lua:534-543)
+    DropOnMinion {
+        source: ItemDragSource,
+    },
+}
+
+/// A row being dragged from one of the Items tab's lists
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ItemDragSource {
+    /// A build item, by id
+    Item { id: u32 },
+    /// A database row
+    Db { db: ItemDb, name: String },
+    /// A shared item, by 0-based index
+    Shared { index: usize },
 }
 
 /// What is dragged onto the shared item list
@@ -1196,6 +1228,8 @@ pub enum ControlTooltipQuery {
     DbItem {
         db: ItemDb,
         name: String,
+        /// Shift held: PoB's child tooltips (R34)
+        shift: bool,
     },
 }
 

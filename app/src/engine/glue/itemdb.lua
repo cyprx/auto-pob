@@ -370,7 +370,11 @@ function glue.item_db_drop(db, name, slot_name)
 end
 
 -- What hovering a row shows; nil for a vanished item or a database still loading
-function glue.item_db_tooltip(db, name)
+function glue.item_db_tooltip(db, name, shift)
+	if shift then
+		-- Shift held over the row: PoB's child tooltips (R34)
+		return glue.with_shift(true, glue.item_db_tooltip, db, name, false)
+	end
 	-- ItemDBControl:AddValueTooltip clears its tooltip while a popup is open
 	if glue.popup_live() then
 		return nil

@@ -131,7 +131,7 @@ fn selector(
             if let Some(text) = &sel.mines {
                 count(ui, "mines", "Active mines", text, behind, state, out);
             }
-            dropdown(
+            let minion = dropdown(
                 ui,
                 "minion",
                 "Minion",
@@ -139,6 +139,9 @@ fn selector(
                 sel.minion.as_ref(),
                 out,
             );
+            if let Some(rect) = minion {
+                minion_drop(ui, rect, out);
+            }
             // PoB's button beside the minion dropdown, for spectre skills (R18)
             if sel.spectre_library {
                 ui.label("");
@@ -168,12 +171,12 @@ fn dropdown(
     control: CalcsControl,
     list: Option<&DropList>,
     out: &mut Vec<Command>,
-) {
-    let Some(list) = list else { return };
+) -> Option<egui::Rect> {
+    let list = list?;
     ui.label(label);
     let default = ui.visuals().text_color();
     let current = list.labels.get(list.selected).map_or("", String::as_str);
-    ui.add_enabled_ui(list.enabled, |ui| {
+    let rect = ui.add_enabled_ui(list.enabled, |ui| {
         let combo = egui::ComboBox::from_id_salt(("sidebar_select", key))
             .width(150.0)
             .selected_text(pob_text(current, 14.0, default))
@@ -197,8 +200,37 @@ fn dropdown(
         ) {
             out.push(Command::SetMainSkillSelect { control, index });
         }
+        combo.response.rect
     });
     ui.end_row();
+    Some(rect.inner)
+}
+
+/// An item from the Items tab's lists released on the minion dropdown: PoB lists the dropdown
+/// as a drag target of the item list, the databases and the shared list, and equips the item
+/// into the minion's item set when it shows one (Build.lua:534-543, ItemsTab.lua:1182-1191)
+fn minion_drop(ui: &egui::Ui, rect: egui::Rect, out: &mut Vec<Command>) {
+    use crate::engine::ItemDragSource;
+    use crate::ui::items::{ItemDrag, db::DbDrag, shared::SharedDrag};
+    use egui::DragAndDrop;
+    let (released, pos) = ui.input(|i| (i.pointer.any_released(), i.pointer.interact_pos()));
+    if !released || !pos.is_some_and(|p| rect.contains(p)) {
+        return;
+    }
+    let ctx = ui.ctx();
+    let source = if let Some(drag) = DragAndDrop::payload::<ItemDrag>(ctx) {
+        ItemDragSource::Item { id: drag.id }
+    } else if let Some(drag) = DragAndDrop::payload::<DbDrag>(ctx) {
+        ItemDragSource::Db {
+            db: drag.db,
+            name: drag.name.clone(),
+        }
+    } else if let Some(drag) = DragAndDrop::payload::<SharedDrag>(ctx) {
+        ItemDragSource::Shared { index: drag.index }
+    } else {
+        return;
+    };
+    out.push(Command::DropOnMinion { source });
 }
 
 /// The stage or mine count: sent on Enter or when the box loses focus; Esc puts back what the
@@ -388,6 +420,64 @@ mod tests {
         let mut h = Harness::new(view(sel));
         let sent = h.click("spectre_library");
         assert_eq!(sent, ["OpenPopup(SpectreLibrary)"]);
+    }
+
+    #[test]
+    fn items_dropped_on_the_minion_dropdown_go_to_its_item_set() {
+        use crate::ui::items::{ItemDrag, db::DbDrag, shared::SharedDrag};
+        let mut sel = base();
+        sel.minion = Some(list(&["Default"], true));
+        let mut h = Harness::new(view(sel));
+        let pos = h.rect("minion").unwrap().center();
+        let drop = |h: &mut Harness, set: &dyn Fn(&egui::Context)| {
+            set(&h.ctx);
+            let mut sent = h.frame(vec![Event::PointerMoved(pos)]);
+            sent.extend(h.frame(vec![Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            }]));
+            egui::DragAndDrop::clear_payload(&h.ctx);
+            sent
+        };
+        assert_eq!(
+            drop(&mut h, &|ctx| egui::DragAndDrop::set_payload(
+                ctx,
+                ItemDrag { index: 0, id: 4 }
+            )),
+            ["DropOnMinion { source: Item { id: 4 } }"]
+        );
+        assert_eq!(
+            drop(&mut h, &|ctx| {
+                egui::DragAndDrop::set_payload(
+                    ctx,
+                    DbDrag {
+                        db: crate::engine::ItemDb::Uniques,
+                        name: "Goldrim".into(),
+                    },
+                )
+            }),
+            ["DropOnMinion { source: Db { db: Uniques, name: \"Goldrim\" } }"]
+        );
+        assert_eq!(
+            drop(&mut h, &|ctx| egui::DragAndDrop::set_payload(
+                ctx,
+                SharedDrag { index: 2 }
+            )),
+            ["DropOnMinion { source: Shared { index: 2 } }"]
+        );
+        // released anywhere else: nothing
+        let away = Pos2::new(pos.x, pos.y + 300.0);
+        egui::DragAndDrop::set_payload(&h.ctx, SharedDrag { index: 2 });
+        let mut sent = h.frame(vec![Event::PointerMoved(away)]);
+        sent.extend(h.frame(vec![Event::PointerButton {
+            pos: away,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        }]));
+        assert!(sent.is_empty(), "{sent:?}");
     }
 
     #[test]

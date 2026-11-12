@@ -25,8 +25,9 @@ pub(super) struct State {
     confirm_delete: Option<u32>,
     /// The shared set row the shared buttons act on (NF-2)
     shared_selected: Option<usize>,
-    /// The shared set being renamed, with the typed name
-    shared_naming: Option<(usize, String)>,
+    /// The shared set being renamed, with the typed name and whether it was edited: PoB's
+    /// Save is enabled only by an edit (SharedItemSetListControl.lua:31-38)
+    shared_naming: Option<(usize, String, bool)>,
     /// A shared set the user asked to delete, until PoB's question is answered
     confirm_shared_delete: Option<usize>,
     /// A shared set row had the keyboard last frame: the build list's keys wait, as PoB gives
@@ -37,6 +38,14 @@ pub(super) struct State {
 impl State {
     pub(super) fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// The typed name of the shared set being renamed
+    #[cfg(test)]
+    pub(super) fn shared_naming_text(&self) -> Option<&str> {
+        self.shared_naming
+            .as_ref()
+            .map(|(_, text, _)| text.as_str())
     }
 
     pub(super) fn close(&mut self) {
@@ -331,7 +340,7 @@ impl ItemsUi {
                 self.rects.note(&delete, || "shared_sets_delete".into());
                 if let Some(i) = sel {
                     if rename.clicked() {
-                        self.sets.shared_naming = Some((i, view.shared_sets[i].title.clone()));
+                        self.sets.shared_naming = Some(rename_start(view, i));
                     }
                     if delete.clicked() {
                         self.sets.confirm_shared_delete = Some(i);
@@ -388,7 +397,7 @@ impl ItemsUi {
                 }
                 // PoB's F2 renames the selected shared set
                 if row.has_focus() && ui.input(|inp| inp.key_pressed(egui::Key::F2)) {
-                    self.sets.shared_naming = Some((i, view.shared_sets[i].title.clone()));
+                    self.sets.shared_naming = Some(rename_start(view, i));
                 }
             }
             self.sets.shared_focused = rows.rows.iter().any(|r| r.has_focus());
@@ -402,15 +411,16 @@ impl ItemsUi {
                 out.commands.push(Command::AddSharedItemSet { id: set.id });
             }
         });
-        if let Some((index, text)) = &mut self.sets.shared_naming {
+        if let Some((index, text, edited)) = &mut self.sets.shared_naming {
             ui.separator();
             ui.label("Enter name for this item set:");
             let edit = ui.add(egui::TextEdit::singleline(text).desired_width(240.0));
             self.rects.note(&edit, || "shared_sets_name".into());
+            *edited |= edit.changed();
             let blank = text.trim().is_empty();
             let mut done = None;
             ui.horizontal(|ui| {
-                let save = ui.add_enabled(!blank, egui::Button::new("Save"));
+                let save = ui.add_enabled(*edited && !blank, egui::Button::new("Save"));
                 self.rects.note(&save, || "shared_sets_save".into());
                 if save.clicked() {
                     done = Some(true);
@@ -454,4 +464,14 @@ impl ItemsUi {
             });
         }
     }
+}
+
+/// PoB's name box for a shared set: the set's own title (empty when it has none), Save
+/// disabled until the text is edited (SharedItemSetListControl.lua:29-39)
+fn rename_start(view: &ItemsView, index: usize) -> (usize, String, bool) {
+    let title = view.shared_sets[index]
+        .raw_title
+        .clone()
+        .unwrap_or_default();
+    (index, title, false)
 }

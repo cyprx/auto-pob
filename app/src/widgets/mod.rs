@@ -2,6 +2,7 @@
 
 pub mod dropdown;
 pub mod edit_box;
+pub mod escape;
 pub mod item_tooltip;
 pub mod list;
 pub mod pob_text;

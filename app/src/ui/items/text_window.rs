@@ -37,8 +37,14 @@ pub enum Outcome {
 pub fn show(ctx: &egui::Context, window: &mut TextWindow, rects: &mut Rects) -> Outcome {
     let mut outcome = Outcome::Open;
     let mut open = true;
+    // PoB's popup closes on Escape (it has no escape control, PopupDialog.lua:72-77), but a
+    // selected box takes the first Esc, and an outside click does nothing
+    let escape_id = egui::Id::new("items_text_window");
+    if crate::widgets::escape::escape(ctx, escape_id) {
+        open = false;
+    }
     // modal, as PoB's popup: nothing behind it takes the mouse while it is open (R34)
-    let modal = egui::Modal::new(egui::Id::unique("items_text_window")).show(ctx, |ui| {
+    egui::Modal::new(egui::Id::unique("items_text_window")).show(ctx, |ui| {
         ui.set_width(520.0);
         ui.horizontal(|ui| {
             ui.heading(if window.creating {
@@ -98,11 +104,7 @@ pub fn show(ctx: &egui::Context, window: &mut TextWindow, rects: &mut Rects) -> 
             }
         });
     });
-    // PoB's popup closes on Escape (it has no escape control, PopupDialog.lua:72-77) but not
-    // on a click outside it
-    if modal.should_close() && !modal.backdrop_response.clicked() {
-        open = false;
-    }
+    crate::widgets::escape::note(ctx, escape_id);
     if !open {
         outcome = Outcome::Close;
     }

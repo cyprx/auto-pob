@@ -160,8 +160,19 @@ fn text_window_closes_on_escape_but_not_on_a_click_outside() {
         h.ui.display.text_window.is_some(),
         "a click outside closed it"
     );
-    // Escape closes it, even with the text box focused
+    // with the text box selected, the first Escape only leaves the box (EditControl.lua:505)
     h.click("text_edit");
+    h.frame(vec![Event::Text("Rarity: Rare".into())]);
+    h.key(Key::Escape, Modifiers::NONE);
+    h.frame(vec![]);
+    let window = h.ui.display.text_window.as_ref();
+    assert!(window.is_some(), "the first Escape closed it");
+    assert_eq!(
+        window.unwrap().text,
+        "Rarity: Rare",
+        "the typed item was lost"
+    );
+    // the second closes it (PopupDialog.lua:72-77)
     h.key(Key::Escape, Modifiers::NONE);
     h.frame(vec![]);
     assert!(h.ui.display.text_window.is_none(), "Escape left it open");

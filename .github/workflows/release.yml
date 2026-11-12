@@ -1,7 +1,8 @@
 name: Release
 
-# vX.Y.Z tag: gate, package, publish a GitHub release.
-# vX.Y.Z-test* tag or manual run: gate, package, upload a workflow artifact (no release).
+# A pushed vX.Y.Z tag: gate, package, publish a GitHub release.
+# A pushed vX.Y.Z-test* tag, or a manual run on any ref (a tag included): gate, package,
+# upload a workflow artifact. Only a pushed vX.Y.Z tag publishes.
 on:
   push:
     tags:
@@ -61,14 +62,17 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
         run: |
           if [[ $REF_TYPE == tag ]]; then
-            echo "args=--version $REF_NAME" >> "$GITHUB_OUTPUT"
+            printf 'version=%s\n' "$REF_NAME" >> "$GITHUB_OUTPUT"
           else
-            echo "args=--version 0.0.0-test" >> "$GITHUB_OUTPUT"
+            echo "version=0.0.0-test" >> "$GITHUB_OUTPUT"
           fi
 
-      # package.sh refuses a vX.Y.Z tag that differs from app/Cargo.toml's version.
+      # package.sh refuses a vX.Y.Z tag that differs from app/Cargo.toml's version. The tag
+      # reaches the shell only as an environment variable, never as script text.
       - name: Package
-        run: scripts/package.sh ${{ steps.version.outputs.args }} --out dist
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: scripts/package.sh --version "$VERSION" --out dist
 
       - uses: actions/upload-artifact@v4
         with:

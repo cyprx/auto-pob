@@ -64,6 +64,12 @@ pub struct HelpUi {
     /// Where the window last opened, for tests
     #[cfg(test)]
     placed: Option<(bool, usize)>,
+    /// The download button, for tests
+    #[cfg(test)]
+    pub download_rect: Option<egui::Rect>,
+    /// PoB's help files are being fetched
+    downloading: bool,
+    download_error: Option<String>,
     error: Option<String>,
 }
 
@@ -131,93 +137,150 @@ impl HelpUi {
         }
     }
 
+    #[cfg(test)]
+    pub fn view_for_test(&self) -> Option<&HelpView> {
+        self.view.as_deref()
+    }
+
     /// Where the window last opened: (version history, section)
     #[cfg(test)]
     pub fn target(&self) -> Option<(bool, usize)> {
         self.placed
     }
 
-    pub fn show(&mut self, ctx: &egui::Context) {
-        if !self.open {
-            return;
+    /// PoB's help files are being fetched (the user asked)
+    pub fn download_started(&mut self) {
+        self.downloading = true;
+        self.download_error = None;
+    }
+
+    /// The fetch ended. On success the window reads PoB's help again: returns the query.
+    pub fn download_done(&mut self, result: Result<(), String>) -> Option<Command> {
+        self.downloading = false;
+        match result {
+            Ok(()) => {
+                self.view = None;
+                self.error = None;
+                self.asked = None;
+                self.open.then_some(Command::Help)
+            }
+            Err(e) => {
+                self.download_error = Some(e);
+                None
+            }
         }
-        let mut open = true;
+    }
+
+    /// Draws the window, modal as PoB's popup is. Returns true when the user asked to
+    /// download PoB's missing help files.
+    pub fn show(&mut self, ctx: &egui::Context) -> bool {
+        if !self.open {
+            return false;
+        }
+        let mut close = false;
+        let mut download = false;
         let default = ctx.global_style().visuals.text_color();
-        egui::Window::new("About")
-            .id(egui::Id::unique("help_window"))
-            .collapsible(false)
-            .default_size([810.0, 628.0])
-            .open(&mut open)
-            .show(ctx, |ui| {
-                let Some(view) = self.view.clone() else {
-                    match &self.error {
-                        Some(error) => {
-                            ui.colored_label(ui.visuals().error_fg_color, error);
-                        }
-                        None => {
-                            ui.spinner();
-                        }
+        let modal = egui::Modal::new(egui::Id::unique("help_window")).show(ctx, |ui| {
+            ui.set_width(780.0);
+            ui.horizontal(|ui| {
+                ui.heading("About");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    close |= ui.button("Close").clicked();
+                });
+            });
+            let missing = self
+                .view
+                .as_ref()
+                .map(|v| v.missing.clone())
+                .unwrap_or_default();
+            if let Some(error) = &self.error {
+                ui.colored_label(ui.visuals().error_fg_color, error);
+            }
+            if !missing.is_empty() {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    format!("PoB's {} isn't installed.", missing.join(" and ")),
+                );
+                if self.downloading {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Downloading\u{2026}");
+                    });
+                } else {
+                    let button = ui.button("Download PoB's help files");
+                    #[cfg(test)]
+                    {
+                        self.download_rect = Some(button.rect);
                     }
-                    return;
-                };
-                for line in &view.header {
-                    let job = pob_text(line, 14.0, default);
-                    match line.find("https://") {
-                        Some(at) => {
-                            let url = line[at..].trim().to_owned();
-                            ui.hyperlink_to(job, url);
-                        }
-                        None => {
-                            ui.label(job);
-                        }
+                    download = button.clicked();
+                }
+                if let Some(error) = &self.download_error {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                }
+            }
+            let Some(view) = self.view.clone() else {
+                if self.error.is_none() {
+                    ui.spinner();
+                }
+                return;
+            };
+            for line in &view.header {
+                let job = pob_text(line, 14.0, default);
+                match line.find("https://") {
+                    Some(at) => {
+                        let url = line[at..].trim().to_owned();
+                        ui.hyperlink_to(job, url);
+                    }
+                    None => {
+                        ui.label(job);
                     }
                 }
-                ui.horizontal(|ui| {
-                    if ui
-                        .selectable_label(self.history, "Version history")
-                        .clicked()
-                    {
-                        self.history = true;
-                        self.scroll_to = Some((true, 0));
-                    }
-                    if ui.selectable_label(!self.history, "Help").clicked() {
-                        self.history = false;
-                        self.scroll_to = Some((false, 0));
+            }
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(self.history, "Version history")
+                    .clicked()
+                {
+                    self.history = true;
+                    self.scroll_to = Some((true, 0));
+                }
+                if ui.selectable_label(!self.history, "Help").clicked() {
+                    self.history = false;
+                    self.scroll_to = Some((false, 0));
+                }
+            });
+            ui.separator();
+            let sections = if self.history {
+                &view.changelog
+            } else {
+                &view.sections
+            };
+            let target = self.scroll_to.take().filter(|t| t.0 == self.history);
+            egui::ScrollArea::vertical()
+                .max_height(560.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    for (i, section) in sections.iter().enumerate() {
+                        let title = if self.history {
+                            section.title.clone()
+                        } else {
+                            format!("{} ({})", section.title, i + 1)
+                        };
+                        let heading = ui.label(pob_text(&title, 20.0, default));
+                        if target.is_some_and(|t| t.1 == i) {
+                            heading.scroll_to_me(Some(egui::Align::TOP));
+                        }
+                        for line in &section.lines {
+                            help_line(ui, line, default);
+                        }
+                        ui.add_space(8.0);
                     }
                 });
-                ui.separator();
-                let sections = if self.history {
-                    &view.changelog
-                } else {
-                    &view.sections
-                };
-                let target = self.scroll_to.take().filter(|t| t.0 == self.history);
-                egui::ScrollArea::vertical()
-                    .auto_shrink(false)
-                    .show(ui, |ui| {
-                        if sections.is_empty() && self.history {
-                            ui.label("PoB's version history isn't installed.");
-                        }
-                        for (i, section) in sections.iter().enumerate() {
-                            let title = if self.history {
-                                section.title.clone()
-                            } else {
-                                format!("{} ({})", section.title, i + 1)
-                            };
-                            let heading = ui.label(pob_text(&title, 20.0, default));
-                            if target.is_some_and(|t| t.1 == i) {
-                                heading.scroll_to_me(Some(egui::Align::TOP));
-                            }
-                            for line in &section.lines {
-                                help_line(ui, line, default);
-                            }
-                            ui.add_space(8.0);
-                        }
-                    });
-            });
-        if !open {
+        });
+        if close || modal.should_close() {
             self.open = false;
         }
+        download
     }
 }
 

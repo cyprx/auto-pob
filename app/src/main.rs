@@ -59,9 +59,22 @@ impl Setup {
             app = app.with_notice(notice);
         }
         if release_check {
-            app = app.with_release_check(update_notice::spawn_check(ctx));
+            app = app.with_release_check(update_notice::spawn_check(ctx.clone()));
         }
-        app
+        // the Help window's button fetches PoB's missing help files (only on that click)
+        let pob_dir = auto_pob::pob_files::pob_dir(game, &self.data_dir);
+        app.with_help_download(Box::new(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (dir, ctx) = (pob_dir.clone(), ctx.clone());
+            std::thread::spawn(move || {
+                let result = auto_pob::pob_files::download_help_files(game, &dir)
+                    .map(|_| ())
+                    .map_err(|e| format!("{e:#}"));
+                let _ = tx.send(result);
+                ctx.request_repaint();
+            });
+            rx
+        }))
     }
 }
 

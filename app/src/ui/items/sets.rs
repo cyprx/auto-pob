@@ -111,7 +111,8 @@ impl ItemsUi {
                 }
                 let blocked = self.sets.naming.is_some() || self.sets.confirm_delete.is_some();
                 // the list's keys (ListControl.lua:375-392)
-                if !blocked {
+                // a text field elsewhere keeps its keys
+                if !blocked && !ui.ctx().text_edit_focused() {
                     let at = view.sets.iter().position(|s| Some(s.id) == self.sets.selected);
                     let len = view.sets.len();
                     if let Some(i) =
@@ -178,8 +179,7 @@ impl ItemsUi {
                             let copy = ui.button("Copy");
                             self.rects.note(&copy, || "sets_copy".into());
                             // F2 renames the selected set (ItemSetListControl.lua)
-                            let f2 = self.sets.naming.is_none()
-                                && ui.input(|i| i.key_pressed(egui::Key::F2));
+                            let f2 = self.sets.naming.is_none() && !ui.ctx().text_edit_focused() && ui.input(|i| i.key_pressed(egui::Key::F2));
                             if let Some(set) = sel {
                                 if rename.clicked() || f2 {
                                     self.sets.naming =
@@ -195,9 +195,7 @@ impl ItemsUi {
                         let can_delete = sel.is_some() && view.sets.len() > 1;
                         let delete = ui.add_enabled(can_delete, egui::Button::new("Delete"));
                         self.rects.note(&delete, || "sets_delete".into());
-                        let key = can_delete
-                            && !blocked
-                            && ui.input(crate::ui::shortcuts::list_delete);
+                        let key = can_delete && !blocked && !ui.ctx().text_edit_focused() && ui.input(crate::ui::shortcuts::list_delete);
                         if (delete.clicked() || key)
                             && let Some(set) = sel
                         {

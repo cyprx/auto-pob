@@ -756,6 +756,7 @@ impl Backend for Fake {
             }],
             header: vec![],
             changelog: vec![],
+            missing: vec![],
         })
     }
 }

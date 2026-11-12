@@ -142,14 +142,23 @@ fn ctrl_f_focuses_the_tab_search() {
     frame(&mut app, &ctx, ctrl(Key::F));
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![]);
-    assert!(ctx.text_edit_focused(), "the database search isn't selected");
+    assert!(
+        ctx.text_edit_focused(),
+        "the database search isn't selected"
+    );
     let sent = sent_since(&app, before).join("\n");
-    assert!(sent.contains("SetItemDb") && sent.contains("Uniques"), "{sent}");
+    assert!(
+        sent.contains("SetItemDb") && sent.contains("Uniques"),
+        "{sent}"
+    );
     let before = app.sent_full.len();
     frame(&mut app, &ctx, ctrl(Key::F));
     frame(&mut app, &ctx, vec![]);
     let sent = sent_since(&app, before).join("\n");
-    assert!(sent.contains("SetItemDb") && sent.contains("Rares"), "{sent}");
+    assert!(
+        sent.contains("SetItemDb") && sent.contains("Rares"),
+        "{sent}"
+    );
     assert!(ctx.text_edit_focused());
 }
 
@@ -230,7 +239,11 @@ fn tree_with_text() -> (AutoPobApp, egui::Context) {
         snapshot: Snapshot::TreeLayout(Arc::new(crate::engine::TreeLayout {
             version: "3_28".into(),
             nodes: vec![
-                node(1, "Notable", &["+10 to Strength", "5% increased maximum Life"]),
+                node(
+                    1,
+                    "Notable",
+                    &["+10 to Strength", "5% increased maximum Life"],
+                ),
                 node(2, "Socket", &[]),
             ],
             edges: vec![],
@@ -270,7 +283,10 @@ fn page_keys_zoom() {
     // Shift: three steps (PassiveTreeView.lua:214-217)
     frame(&mut app, &ctx, key_with(Key::PageDown, Modifiers::SHIFT));
     let down = app.tree.zoom_for_test();
-    assert!((start / down - 1.2f32.powi(3)).abs() < 1e-3, "{start} -> {down}");
+    assert!(
+        (start / down - 1.2f32.powi(3)).abs() < 1e-3,
+        "{start} -> {down}"
+    );
     frame(&mut app, &ctx, plain(Key::PageUp));
     let up = app.tree.zoom_for_test();
     assert!((up / down - 1.2).abs() < 1e-3, "{down} -> {up}");
@@ -347,30 +363,27 @@ fn shortcuts_ignored_while_typing() {
     click(&mut app, &ctx, "search");
     assert!(ctx.text_edit_focused());
     let before = app.sent_full.len();
-    for events in [
-        plain(Key::P),
-        ctrl(Key::Num2),
-        ctrl(Key::D),
-        ctrl(Key::W),
-        plain(Key::ArrowDown),
-    ] {
+    // the tree view's keys and F1 go to the selected search box, as in PoB
+    for events in [plain(Key::P), ctrl(Key::D), release(Key::F1)] {
         frame(&mut app, &ctx, events);
     }
-    assert_eq!(app.tab, BuildTab::Tree);
-    assert_eq!(app.screen, Screen::Build);
-    // F1 is no typing key: PoB opens its help whatever has the focus (Main.lua:436-446)
-    frame(&mut app, &ctx, release(Key::F1));
-    assert!(app.help.is_open());
+    assert!(!app.help.is_open(), "F1 opened Help while typing");
     assert!(
         !sent_since(&app, before)
             .iter()
-            .any(|c| c.starts_with("ToggleHeatmap")
-                || c.starts_with("SetTreeStat")
-                || c.starts_with("SelectSpec")),
+            .any(|c| c.starts_with("ToggleHeatmap") || c.starts_with("SetTreeStat")),
         "{:?}",
         sent_since(&app, before)
     );
-    // the mouse's back button isn't a typing key: it still leaves, as in PoB
+    // ... and the box still gets the typed letter
+    assert!(ctx.text_edit_focused());
+    // TreeTab's own Down comes before its controls (TreeTab.lua:365-377)
+    frame(&mut app, &ctx, plain(Key::ArrowDown));
+    assert!(sent_since(&app, before).contains(&"SelectSpec { index: 1 }"));
+    // Build's Ctrl+2 too (Build.lua:1175)
+    frame(&mut app, &ctx, ctrl(Key::Num2));
+    assert_eq!(app.tab, BuildTab::Skills);
+    // and the mouse's back button
     frame(&mut app, &ctx, mouse4());
     frame(&mut app, &ctx, vec![]);
     assert_eq!(app.screen, Screen::List);
@@ -434,4 +447,104 @@ fn f2_renames_the_active_tree_and_config_set() {
     frame(&mut app, &ctx, vec![]);
     // the set's Rename box has the keyboard (config.rs set_edit)
     assert!(ctx.text_edit_focused(), "no Rename box");
+}
+
+#[test]
+fn the_help_windows_button_fetches_missing_files_only_on_its_click() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let (app, ctx) = started();
+    let mut app = app.with_help_download(Box::new(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Ok(())).unwrap();
+        rx
+    }));
+    // what the engine answers on an install without the files
+    app.help.open(HelpStart::Section(1));
+    app.help.on_view(Arc::new(crate::engine::HelpView {
+        missing: vec!["help.txt".into(), "changelog.txt".into()],
+        ..Default::default()
+    }));
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![]);
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "fetched without a click");
+    let pos = app.help.download_rect.expect("no download button").center();
+    let press = |pressed| Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    frame(&mut app, &ctx, vec![Event::PointerMoved(pos)]);
+    frame(&mut app, &ctx, vec![press(true)]);
+    frame(&mut app, &ctx, vec![press(false)]);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    // the files arrived: PoB's help is read again
+    pump_until(&mut app, &ctx, "help read again", |a| {
+        a.help.view_for_test().is_some_and(|v| v.missing.is_empty())
+    });
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn the_help_window_is_modal() {
+    let (mut app, ctx) = tree_app();
+    frame(&mut app, &ctx, release(Key::F1));
+    assert!(app.help.is_open());
+    // PoB's About is a popup: nothing behind it gets a key (Main.lua:365-367)
+    let before = app.sent_full.len();
+    frame(&mut app, &ctx, ctrl(Key::Num3));
+    frame(&mut app, &ctx, plain(Key::P));
+    assert_eq!(app.tab, BuildTab::Tree);
+    assert!(sent_since(&app, before).is_empty());
+    frame(&mut app, &ctx, plain(Key::Escape));
+    frame(&mut app, &ctx, vec![]);
+    assert!(!app.help.is_open(), "Esc closes it");
+}
+
+#[test]
+fn a_calcs_count_being_typed_asks_before_mouse4_leaves() {
+    let (mut app, ctx) = notes_app();
+    let mut view = crate::engine::views::CalcsView::default();
+    view.selector.stages = Some("1".into());
+    app.calcs.on_snapshot(&Snapshot::Calcs(Arc::new(view)));
+    app.tab = BuildTab::Calcs;
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![]);
+    assert!(!app.current_unsaved());
+    let pos = app.calcs.rects.map["stages"].center();
+    let press = |pressed| Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    for events in [
+        vec![Event::PointerMoved(pos)],
+        vec![press(true)],
+        vec![press(false)],
+        vec![Event::Text("3".into())],
+    ] {
+        frame(&mut app, &ctx, events);
+    }
+    // PoB's count box marks the build changed as it is typed in
+    assert!(app.current_unsaved());
+    frame(&mut app, &ctx, mouse4());
+    frame(&mut app, &ctx, vec![]);
+    assert_eq!(app.prompt, Some(Pending::BackToList));
+    assert_eq!(app.screen, Screen::Build);
+}
+
+#[test]
+fn pobs_fork_and_version_labels_show_on_every_screen() {
+    let (mut app, ctx) = started();
+    frame(&mut app, &ctx, vec![]);
+    let want = ["PoB Community Fork", "Version: 2.67.2"];
+    assert_eq!(app.label_texts, want);
+    let (mut app, ctx) = tree_app();
+    app.label_texts.clear();
+    frame(&mut app, &ctx, vec![]);
+    assert_eq!(app.label_texts, want);
 }

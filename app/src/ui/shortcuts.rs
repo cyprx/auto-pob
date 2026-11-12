@@ -11,10 +11,14 @@
 //! - Everywhere (Main.lua:436-446, ItemTools.lua:380-410): F1 opens the hovered thing's wiki
 //!   page, or else the Help window at the section for where the user is.
 //!
-//! Like Ctrl+Z, none fires under a modal window, except F1 over a gem of the gem list's
-//! window. The keyboard ones also wait while a text field has the keyboard, except the keys
-//! no text field uses that PoB reads whatever has the focus: F1, and Ctrl+F, which goes from
-//! one search box to another. The mouse's back button doesn't wait either, as in PoB.
+//! None fires under a modal window (the Help window included), except F1 over a row of the
+//! gem list's window. While a text field has the keyboard they do what PoB does with a
+//! selected control (ControlHost.lua:35-80): Build's keys and the tabs' own loops run first
+//! and still fire (Ctrl+1..6, Ctrl+I, Ctrl+W, Mouse4; Up/Down, Ctrl+F, Ctrl+M, E), and the
+//! box gets the key too; the tree view's keys, the set lists' F2 and F1's Help come after
+//! the controls and don't; a hovered list row's, slot's or gem box's wiki page still opens
+//! (OnHoverKeyUp). A box of the top bar or the sidebar is Build's own control, which takes
+//! every key before the tab (Build.lua:1230).
 
 use crate::ui::build::BuildTab;
 use eframe::egui::{self, Event, Key, PointerButton};
@@ -33,6 +37,13 @@ pub struct ShortcutState {
     pub spec_select_busy: bool,
     /// The wiki page F1 opens for what the pointer is over (`itemLib.wiki.open`)
     pub wiki: Option<String>,
+    /// The text field with the keyboard is the top bar's or the sidebar's
+    pub build_box: bool,
+    /// A node Ctrl+C can copy is under the pointer: no socket (PassiveTreeView.lua:208)
+    pub copy_node: bool,
+    /// `wiki` is a list row's, a slot's or a gem box's, read on hover even while typing
+    /// (OnHoverKeyUp); a tree node's isn't
+    pub hover_wiki: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,84 +172,101 @@ pub fn shortcut_action(state: &ShortcutState, input: &egui::InputState) -> Optio
     use ShortcutAction as A;
     let f1 = released(input, Key::F1);
     if state.modal {
-        // a window's own gem list still opens a gem's page (GemSelectControl.lua:822-833)
+        // the gem list's window still opens a gem's page (GemSelectControl.lua:822-833); the
+        // app passes `wiki` under a modal only for it
         return state
             .wiki
             .as_ref()
             .filter(|_| f1)
             .map(|n| A::Wiki(wiki_url(n)));
     }
-    if f1 {
-        return Some(match &state.wiki {
-            Some(name) => A::Wiki(wiki_url(name)),
-            None => A::Help,
-        });
-    }
     let tab = state.tab;
+    // Build.lua:1150-1186 reads its keys before any control: they fire whatever has the
+    // keyboard
     if tab.is_some() && input.pointer.button_pressed(PointerButton::Extra1) {
         return Some(A::Close);
     }
-    // the Calcs tab has its own Ctrl+F (calcs/mod.rs)
-    let search = pressed(input, Key::F, true)
-        && matches!(
-            tab,
-            Some(BuildTab::Tree | BuildTab::Items | BuildTab::Config | BuildTab::Compare)
-        );
-    if state.typing {
-        // Ctrl+F goes on from a search box, as in PoB: from the uniques' search it moves to
-        // the rares' (ItemsTab.lua:1471-1480)
-        return search.then_some(A::Search);
-    }
-    let tab = tab?;
-    let digits = [
-        (Key::Num1, BuildTab::Tree),
-        (Key::Num2, BuildTab::Skills),
-        (Key::Num3, BuildTab::Items),
-        (Key::Num4, BuildTab::Calcs),
-        (Key::Num5, BuildTab::Config),
-        (Key::Num6, BuildTab::Notes),
-    ];
-    for (key, to) in digits {
-        if pressed(input, key, true) {
-            return Some(A::Tab(to));
+    if tab.is_some() {
+        let digits = [
+            (Key::Num1, BuildTab::Tree),
+            (Key::Num2, BuildTab::Skills),
+            (Key::Num3, BuildTab::Items),
+            (Key::Num4, BuildTab::Calcs),
+            (Key::Num5, BuildTab::Config),
+            (Key::Num6, BuildTab::Notes),
+        ];
+        for (key, to) in digits {
+            if pressed(input, key, true) {
+                return Some(A::Tab(to));
+            }
+        }
+        if pressed(input, Key::I, true) {
+            return Some(A::Import);
+        }
+        if pressed(input, Key::W, true) {
+            return Some(A::Close);
         }
     }
-    if pressed(input, Key::I, true) {
-        return Some(A::Import);
+    // A box of the top bar or the sidebar is Build's own selected control: Build's
+    // ProcessControlsInput takes every key before the tab draws (Build.lua:1230)
+    if state.typing && state.build_box {
+        return None;
     }
-    if pressed(input, Key::W, true) {
-        return Some(A::Close);
+    if f1 {
+        // a selected control takes the key-up from Main's F1 (ControlHost.lua:56-63); the
+        // hovered list, slot and gem boxes still see it (OnHoverKeyUp, ControlHost.lua:71-79)
+        return match &state.wiki {
+            Some(name) if !state.typing || state.hover_wiki => Some(A::Wiki(wiki_url(name))),
+            _ if state.typing => None,
+            _ => Some(A::Help),
+        };
     }
-    if search {
+    let tab = tab?;
+    // the tabs read these before their controls (TreeTab.lua:359-386, ItemsTab.lua:1454-1487,
+    // ConfigTab.lua:978-993, CompareTab.lua:1685-1739): they fire while typing too. The
+    // Calcs tab has its own Ctrl+F (calcs/mod.rs)
+    if pressed(input, Key::F, true)
+        && matches!(
+            tab,
+            BuildTab::Tree | BuildTab::Items | BuildTab::Config | BuildTab::Compare
+        )
+    {
         return Some(A::Search);
+    }
+    match tab {
+        BuildTab::Tree if pressed(input, Key::M, true) => return Some(A::SpecManager),
+        BuildTab::Tree if !state.spec_select_busy && pressed(input, Key::ArrowUp, false) => {
+            return Some(A::PrevSpec);
+        }
+        BuildTab::Tree if !state.spec_select_busy && pressed(input, Key::ArrowDown, false) => {
+            return Some(A::NextSpec);
+        }
+        BuildTab::Items if pressed(input, Key::E, false) => return Some(A::EditSlot),
+        _ => {}
+    }
+    // the tree view and the set lists read theirs after the controls: a selected control
+    // takes them (PassiveTreeView.lua:198-218, ControlHost.lua:39-42)
+    if state.typing {
+        return None;
     }
     match tab {
         BuildTab::Tree => {
             let zoom =
                 |key, step: i32| pressed_shift(input, key).map(|s| if s { 3 * step } else { step });
-            if pressed(input, Key::M, true) {
-                Some(A::SpecManager)
-            } else if pressed(input, Key::F2, false) {
+            if pressed(input, Key::F2, false) {
                 Some(A::Rename)
             } else if pressed(input, Key::D, true) {
                 Some(A::StatDifferences)
-            } else if copy(input) {
+            } else if state.copy_node && copy(input) {
                 Some(A::CopyNode)
             } else if pressed(input, Key::P, false) {
                 Some(A::Heatmap)
-            } else if let Some(steps) = zoom(Key::PageUp, 1).or_else(|| zoom(Key::PageDown, -1)) {
-                Some(A::Zoom(steps))
-            } else if state.spec_select_busy {
-                None
-            } else if pressed(input, Key::ArrowUp, false) {
-                Some(A::PrevSpec)
-            } else if pressed(input, Key::ArrowDown, false) {
-                Some(A::NextSpec)
             } else {
-                None
+                zoom(Key::PageUp, 1)
+                    .or_else(|| zoom(Key::PageDown, -1))
+                    .map(A::Zoom)
             }
         }
-        BuildTab::Items if pressed(input, Key::E, false) => Some(A::EditSlot),
         BuildTab::Config if pressed(input, Key::F2, false) => Some(A::Rename),
         _ => None,
     }
@@ -347,7 +375,13 @@ mod tests {
             action(&tree, key(Key::PageDown, Modifiers::NONE)),
             Some(A::Zoom(-1))
         );
-        assert_eq!(action(&tree, vec![Event::Copy]), Some(A::CopyNode));
+        // Ctrl+C copies a node only with one under the pointer; else the copy goes on
+        assert_eq!(action(&tree, vec![Event::Copy]), None);
+        let over_node = ShortcutState {
+            copy_node: true,
+            ..on(BuildTab::Tree)
+        };
+        assert_eq!(action(&over_node, vec![Event::Copy]), Some(A::CopyNode));
         // the tree keys belong to the Tree tab
         let items = on(BuildTab::Items);
         assert_eq!(action(&items, key(Key::P, Modifiers::NONE)), None);
@@ -400,17 +434,48 @@ mod tests {
     }
 
     #[test]
-    fn typing_and_modals_hold_the_keys_but_not_mouse4() {
+    fn typing_holds_what_pobs_selected_control_takes() {
         let typing = ShortcutState {
             typing: true,
+            copy_node: true,
             ..on(BuildTab::Tree)
         };
-        assert_eq!(action(&typing, key(Key::Num2, Modifiers::COMMAND)), None);
-        assert_eq!(action(&typing, key(Key::P, Modifiers::NONE)), None);
-        // Ctrl+F still goes to the search box
+        // Build's and the tab's own loops read these before the controls (Build.lua:1150,
+        // TreeTab.lua:359)
+        assert_eq!(
+            action(&typing, key(Key::Num2, Modifiers::COMMAND)),
+            Some(ShortcutAction::Tab(BuildTab::Skills))
+        );
         assert_eq!(
             action(&typing, key(Key::F, Modifiers::COMMAND)),
             Some(ShortcutAction::Search)
+        );
+        assert_eq!(
+            action(&typing, key(Key::ArrowDown, Modifiers::NONE)),
+            Some(ShortcutAction::NextSpec)
+        );
+        // the tree view's keys come after them: the selected control has them
+        for (k, m) in [
+            (Key::P, Modifiers::NONE),
+            (Key::D, Modifiers::COMMAND),
+            (Key::C, Modifiers::COMMAND),
+            (Key::PageUp, Modifiers::NONE),
+            (Key::F2, Modifiers::NONE),
+        ] {
+            assert_eq!(action(&typing, key(k, m)), None, "{k:?}");
+        }
+        // a box of the top bar or the sidebar is Build's own: the tab gets nothing
+        let build_box = ShortcutState {
+            build_box: true,
+            ..typing.clone()
+        };
+        assert_eq!(
+            action(&build_box, key(Key::ArrowDown, Modifiers::NONE)),
+            None
+        );
+        assert_eq!(
+            action(&build_box, key(Key::Num3, Modifiers::COMMAND)),
+            Some(ShortcutAction::Tab(BuildTab::Items))
         );
         let back = vec![Event::PointerButton {
             pos: egui::Pos2::new(5.0, 5.0),
@@ -442,8 +507,23 @@ mod tests {
             action(&gem, f1.clone()),
             Some(ShortcutAction::Wiki(wiki_url("Fireball")))
         );
-        // F1 isn't a typing key
-        assert_eq!(action(&typing, f1), Some(ShortcutAction::Help));
+        // a selected control takes F1's key-up from Main (ControlHost.lua:56-63): no Help,
+        // and no tree node page; a hovered list row's page still opens (OnHoverKeyUp)
+        assert_eq!(action(&typing, f1.clone()), None);
+        let node = ShortcutState {
+            wiki: Some("Node".into()),
+            ..typing.clone()
+        };
+        assert_eq!(action(&node, f1.clone()), None);
+        let row = ShortcutState {
+            wiki: Some("Mageblood".into()),
+            hover_wiki: true,
+            ..typing
+        };
+        assert_eq!(
+            action(&row, f1),
+            Some(ShortcutAction::Wiki(wiki_url("Mageblood")))
+        );
         // the list has its own Mouse4 (folder back, build_list.rs)
         assert_eq!(action(&ShortcutState::default(), back), None);
     }

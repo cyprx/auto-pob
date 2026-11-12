@@ -731,17 +731,30 @@ fn help_matches_pob() {
         "<PathOfBuilding>\n\t<Misc showThousandsSeparators=\"false\"/>\n</PathOfBuilding>\n".into()
     });
 
-    // the pinned folder has no help.txt (pob_files didn't extract it before Task 14)
-    let err = s.run(Command::Help).and_then(|_| s.backend.help_view());
-    assert_eq!(
-        err.unwrap_err().to_string(),
-        "PoB's help file (help.txt) isn't installed"
-    );
+    // The farm's entries link to the pinned folder, which may or may not hold the help files:
+    // their links are removed (unlinking never follows a link), so nothing below can reach
+    // the pinned folder, and the files go into the farm itself
+    for name in ["help.txt", "changelog.txt"] {
+        let link = s.pob.join(name);
+        if fs::symlink_metadata(&link).is_ok() {
+            fs::remove_file(&link).unwrap();
+        }
+    }
+    // without them the window lists what's missing, reads nothing and leaves no popup
+    let missing = s
+        .run(Command::Help)
+        .and_then(|_| s.backend.help_view())
+        .unwrap();
+    assert_eq!(missing.missing, ["help.txt", "changelog.txt"]);
+    assert!(missing.sections.is_empty() && missing.header.is_empty());
     assert_eq!(s.open_popups(), 0);
 
-    // the farm is ours: the files go next to PoB's own, never into the pinned folder
     let text = fs::read_to_string(super::fixtures_dir().join("help.txt")).unwrap();
     fs::write(s.pob.join("help.txt"), &text).unwrap();
+    // help.txt alone: the sections, and changelog.txt still listed as missing
+    let partial = s.backend.help_view().unwrap();
+    assert_eq!(partial.missing, ["changelog.txt"]);
+    assert!(!partial.sections.is_empty() && partial.changelog.is_empty());
     fs::write(s.pob.join("changelog.txt"), CHANGELOG).unwrap();
     let up = upstream_lua(&s.pob).expect("starting upstream PoB");
     check_help_fixture(&up, &text);
@@ -771,6 +784,7 @@ fn help_matches_pob() {
     assert_eq!(s.open_popups(), 0, "the About window was left open");
 
     assert_eq!(ours.header, theirs.header);
+    assert!(ours.missing.is_empty());
     let versions: Vec<(String, Vec<String>)> = ours
         .changelog
         .iter()

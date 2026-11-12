@@ -110,14 +110,16 @@ impl SkillsUi {
                         // Ctrl+click enables or disables, Ctrl+right-click includes or
                         // excludes from Full DPS (SkillListControl.lua:202-225)
                         let ctrl = ui.input(|inp| inp.modifiers.command);
-                        if row.clicked() && ctrl {
-                            out.commands.push(Command::SetGroupEnabled {
-                                group: i,
-                                on: !g.enabled,
-                            });
-                        } else if row.clicked() {
+                        // the click selects the row first (ListControl.lua:338-370)
+                        if row.clicked() {
                             self.selected = i;
                             row.request_focus();
+                            if ctrl {
+                                out.commands.push(Command::SetGroupEnabled {
+                                    group: i,
+                                    on: !g.enabled,
+                                });
+                            }
                         }
                         let full_dps = row.secondary_clicked() && ctrl;
                         if full_dps {

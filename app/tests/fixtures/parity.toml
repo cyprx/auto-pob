@@ -2201,13 +2201,13 @@ ruled_out = "R13"
 note = "devMode is off in our engine"
 
 [controls."main.forkLabel"]
-ported = "app/src/ui/help.rs header: PoB's version and fork labels from its About window"
+ported = "app/src/ui/app.rs main_labels: PoB Community Fork at the foot of every screen (Main.lua:230-233)"
 
 [controls."main.options"]
 ported = "app/src/ui/build.rs top_bar and app/src/ui/build_list.rs Options buttons open app/src/ui/options.rs OptionsUi"
 
 [controls."main.versionLabel"]
-ported = "app/src/ui/help.rs header: PoB's version label from its About window"
+ported = "app/src/ui/app.rs main_labels: Version and PoB's pinned version at the foot of every screen (Main.lua:234-237)"
 
 [controls."notes.chaos"]
 ported = "app/src/ui/notes.rs colour buttons"

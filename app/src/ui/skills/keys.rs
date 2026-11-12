@@ -13,6 +13,11 @@ fn gem_page(name: &str, support: bool) -> String {
 }
 
 impl SkillsUi {
+    /// The gem list's window is open
+    pub fn picker_open(&self) -> bool {
+        self.picker.is_some()
+    }
+
     /// The wiki page of what the pointer is over: a row of the open gem list, a gem of the
     /// group shown, or a socket group of the list (its first gem)
     pub fn hovered_wiki(&self) -> Option<String> {

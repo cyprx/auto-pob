@@ -30,6 +30,9 @@ use crate::ui::{sidebar, startup};
 use crate::update_notice::Release;
 use eframe::egui;
 
+/// Starts fetching PoB's help files in the background; the answer comes on the channel.
+pub type HelpDownload = Box<dyn Fn() -> std::sync::mpsc::Receiver<Result<(), String>>>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Screen {
     List,
@@ -163,6 +166,14 @@ pub struct AutoPobApp {
     allow_close: bool,
     /// PoB's About window: its help and version history (R25)
     help: HelpUi,
+    /// Where the top bar and the sidebar were drawn last: a box there is Build's own control
+    bar_rects: Vec<egui::Rect>,
+    /// Starts fetching PoB's missing help files (the user's click), answering on the channel
+    help_download: Option<HelpDownload>,
+    help_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
+    /// PoB's foot labels as drawn, for tests
+    #[cfg(test)]
+    label_texts: Vec<String>,
     /// Names of the commands sent through `send`, for tests.
     #[cfg(test)]
     sent_log: Vec<String>,
@@ -230,11 +241,23 @@ impl AutoPobApp {
             ready_actions: Vec::new(),
             allow_close: false,
             help: HelpUi::default(),
+            bar_rects: Vec::new(),
+            help_download: None,
+            help_rx: None,
+            #[cfg(test)]
+            label_texts: Vec::new(),
             #[cfg(test)]
             sent_log: Vec::new(),
             #[cfg(test)]
             sent_full: Vec::new(),
         }
+    }
+
+    /// How the Help window fetches PoB's help files when the user asks.
+    #[must_use]
+    pub fn with_help_download(mut self, download: HelpDownload) -> Self {
+        self.help_download = Some(download);
+        self
     }
 
     /// A `pob://` link to import after the user confirms it.
@@ -495,6 +518,7 @@ impl AutoPobApp {
                 || self.skills.has_pending()
                 || self.sidebar.has_pending()
                 || self.top_bar.has_pending()
+                || self.calcs.has_pending()
                 || self.build.as_ref().is_some_and(|b| b.unsaved))
     }
 
@@ -986,14 +1010,41 @@ impl AutoPobApp {
         }
         self.notices_panel(ui);
         self.pending_panel(ui);
+        self.main_labels(ui);
         match self.screen {
             Screen::List => self.list_screen(ui),
             Screen::Build => self.build_screen(ui),
         }
         self.options_window(ui);
-        self.help.show(&ctx);
+        self.help_window(&ctx);
         self.apply_ui_settings(&ctx);
         self.dialogs(&ctx);
+    }
+
+    /// The Help window, and the fetch of PoB's help files its button asks for (I3): no
+    /// request is made without that click.
+    fn help_window(&mut self, ctx: &egui::Context) {
+        if self.help.show(ctx) && self.help_rx.is_none() {
+            match &self.help_download {
+                Some(download) => {
+                    self.help_rx = Some(download());
+                    self.help.download_started();
+                }
+                None => {
+                    self.help
+                        .download_done(Err("downloading isn't available here".into()));
+                }
+            }
+        }
+        if let Some(rx) = &self.help_rx
+            && let Ok(result) = rx.try_recv()
+        {
+            self.help_rx = None;
+            if let Some(query) = self.help.download_done(result) {
+                let seq = self.engine.send(query);
+                self.help.asked(seq);
+            }
+        }
     }
 
     /// Opens PoB's About window at `start`; its text is asked of the engine the first time.
@@ -1059,6 +1110,23 @@ impl AutoPobApp {
             }
         }
         None
+    }
+
+    /// PoB's labels at the foot of every screen (Main.lua:230-237): the fork and its version.
+    fn main_labels(&mut self, ui: &mut egui::Ui) {
+        let grey = crate::widgets::pob_text::pob_colour("^8", ui.visuals().weak_text_color());
+        egui::Panel::bottom("pob_labels").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let fork = "PoB Community Fork".to_owned();
+                let version = format!("Version: {}", self.pob_version);
+                ui.colored_label(grey, &fork);
+                ui.colored_label(grey, &version);
+                #[cfg(test)]
+                {
+                    self.label_texts = vec![fork, version];
+                }
+            });
+        });
     }
 
     /// The `pob://` argument never imports by itself: the user is asked first (R4).
@@ -1192,7 +1260,8 @@ impl AutoPobApp {
             || self.import.is_some()
             || self.confirm.is_some()
             || self.popup.is_blocking()
-            || self.options.window.is_blocking();
+            || self.options.window.is_blocking()
+            || self.help.is_open();
         // F1: the Help window ("Build List tab" matches no section: the first, Main.lua:441)
         let state = ShortcutState {
             typing: ui.ctx().text_edit_focused(),
@@ -1283,7 +1352,9 @@ impl AutoPobApp {
             || self.compare.has_dialog()
             || self.top_bar.has_dialog()
             || self.popup.is_blocking()
-            || self.options.window.is_blocking();
+            || self.options.window.is_blocking()
+            // PoB's About is a popup: nothing behind it gets a key (Main.lua:365-367)
+            || self.help.is_open();
         // a focused button or row doesn't take Ctrl+Z from the tab
         let typing = ui.ctx().text_edit_focused();
         let mut action = None;
@@ -1305,16 +1376,36 @@ impl AutoPobApp {
             });
         }
         // PoB's other shortcuts (R25)
+        let ctx = ui.ctx().clone();
+        let build_box = typing
+            && ctx
+                .memory(|m| m.focused())
+                .and_then(|id| ctx.read_response(id))
+                .is_some_and(|r| self.bar_rects.iter().any(|b| b.contains(r.rect.center())));
+        // under a window only the gem list's own rows open a page
+        let wiki = if modal {
+            (self.tab == BuildTab::Skills && self.skills.picker_open())
+                .then(|| self.skills.hovered_wiki())
+                .flatten()
+        } else {
+            self.wiki_target()
+        };
         let state = ShortcutState {
             tab: Some(self.tab),
             typing,
             modal,
             spec_select_busy: self.tree.spec_select_busy(),
-            wiki: self.wiki_target(),
+            wiki,
+            build_box,
+            copy_node: self.tab == BuildTab::Tree && self.tree.hovered_node_text().is_some(),
+            hover_wiki: self.tab != BuildTab::Tree,
         };
         let shortcut = ui.input_mut(|i| {
             let a = shortcuts::shortcut_action(&state, i);
-            if let Some(a) = &a {
+            // while typing PoB's keys reach the box too
+            if let Some(a) = &a
+                && !typing
+            {
                 shortcuts::consume(a, i);
             }
             a
@@ -1325,7 +1416,7 @@ impl AutoPobApp {
 
         let behind = self.behind();
         let mut top_commands = Vec::new();
-        egui::Panel::top("top_bar").show(ui, |ui| {
+        let top = egui::Panel::top("top_bar").show(ui, |ui| {
             let history = match self.undo_tab() {
                 Some(Tab::Tree) => self.tree.history(),
                 Some(Tab::Skills) => self.skills.history(),
@@ -1353,13 +1444,14 @@ impl AutoPobApp {
         self.items.set_modal(modal);
         self.import_ui.set_modal(modal);
         let mut sidebar_commands = Vec::new();
-        egui::Panel::left("stats_sidebar")
+        let side = egui::Panel::left("stats_sidebar")
             .resizable(true)
             .default_size(300.0)
             .show(ui, |ui| {
                 sidebar_commands =
                     sidebar::show(ui, self.stats.as_deref(), behind, &mut self.sidebar);
             });
+        self.bar_rects = vec![top.response.rect, side.response.rect];
         for command in sidebar_commands {
             self.send(command);
         }
@@ -2360,6 +2452,7 @@ mod tests {
                 title: "Version 2.67.2 (2026/08/07)".into(),
                 lines: vec!["^7* Fix a thing".into()],
             }],
+            missing: vec![],
         }
     }
 

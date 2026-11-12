@@ -2025,6 +2025,10 @@ pub struct HelpView {
     /// first; its title is "Version <n> (<date>)". Empty when the file isn't installed.
     #[serde(default)]
     pub changelog: Vec<HelpSection>,
+    /// PoB's files the window reads that aren't installed ("help.txt", "changelog.txt"); with
+    /// help.txt missing there are no sections or labels either
+    #[serde(default)]
+    pub missing: Vec<String>,
 }
 
 /// One `---[Title]` section of `help.txt`, or one version of `changelog.txt`.

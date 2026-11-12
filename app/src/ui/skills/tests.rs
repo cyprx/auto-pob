@@ -660,11 +660,16 @@ fn ctrl_click(h: &mut Harness, key: &str, button: PointerButton) -> SkillsOutput
 #[test]
 fn ctrl_clicks_on_a_group_toggle_it_and_its_full_dps() {
     let mut h = Harness::new(sample());
-    let o = ctrl_click(&mut h, "row_0", PointerButton::Primary);
+    let o = ctrl_click(&mut h, "row_1", PointerButton::Primary);
+    // PoB's list selects the row and toggles it (ListControl.lua:338-370)
+    assert_eq!(h.ui.selected, 1);
+    let o2 = ctrl_click(&mut h, "row_0", PointerButton::Primary);
+    assert_eq!(h.ui.selected, 0);
     assert_eq!(
-        debug(&o.commands),
+        debug(&o2.commands),
         ["SetGroupEnabled { group: 0, on: false }"]
     );
+    assert_eq!(debug(&o.commands).len(), 1);
     let o = ctrl_click(&mut h, "row_0", PointerButton::Secondary);
     assert_eq!(
         debug(&o.commands),

@@ -110,6 +110,11 @@ impl CalcsUi {
         Some(count_command(key, text))
     }
 
+    /// A count is being typed: PoB's box sets the build changed on each keystroke
+    pub fn has_pending(&self) -> bool {
+        self.counts.has_pending()
+    }
+
     /// Drops the count being typed (the user chose not to save).
     pub fn discard(&mut self) {
         self.counts.discard();

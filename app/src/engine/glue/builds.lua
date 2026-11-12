@@ -341,12 +341,19 @@ end
 -- the list (Main.lua:1360-1407); the rows are read off its TextListControl, then its "Version
 -- history:" button swaps in the changelog's (Main.lua:1425-1428), and the window is closed.
 function glue.help_view()
-	-- without the file OpenAboutPopup(1) indexes a missing section (Main.lua:1407-1416)
-	local file = io.open("help.txt", "r")
-	if not file then
-		error("PoB's help file (help.txt) isn't installed", 0)
+	local missing = {}
+	for _, name in ipairs({ "help.txt", "changelog.txt" }) do
+		local file = io.open(name, "r")
+		if file then
+			file:close()
+		else
+			missing[#missing + 1] = name
+		end
 	end
-	file:close()
+	-- without help.txt OpenAboutPopup(1) indexes a missing section (Main.lua:1407-1416)
+	if missing[1] == "help.txt" then
+		return { sections = {}, header = {}, changelog = {}, missing = missing }
+	end
 	local main = main_module()
 	local view
 	glue.in_popups(function()
@@ -364,6 +371,7 @@ function glue.help_view()
 			sections = sections,
 			header = { controls.version.label, controls.forum.label, controls.github.label },
 			changelog = changelog,
+			missing = missing,
 		}
 	end)
 	return view

@@ -3590,6 +3590,26 @@ mod tests {
     }
 
     #[test]
+    fn class_question_is_asked_on_any_tab() {
+        let (mut app, ctx) = tree_app();
+        // PoB's class dropdown is in the top bar on every tab
+        app.tab = BuildTab::Config;
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "class_combo");
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "class:1");
+        assert!(app.tree.has_dialog(), "the question is open");
+        // a frame off the Tree tab keeps it
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "class_connect");
+        assert_eq!(
+            sent_since(&app, before),
+            ["SelectClass { id: 1, connect: true }"]
+        );
+    }
+
+    #[test]
     fn reset_asks_first() {
         let (mut app, ctx) = tree_app();
         let before = app.sent_full.len();

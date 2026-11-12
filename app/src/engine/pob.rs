@@ -1126,11 +1126,10 @@ impl PobBackend {
             }
             Command::SyncLoadouts => {
                 self.call::<_, ()>("sync_loadouts", ())?;
-                // a rebuilt list and PoB's selection; Sync edits nothing
-                Ok(Affected {
-                    build: true,
-                    ..Affected::default()
-                })
+                // the rebuilt list ends in a `SetSel`, whose callback can switch sets when a
+                // title only contains the loadout's name (`find` there, exact match in
+                // `findSetId`): treated as a loadout pick
+                self.loadout_changed()
             }
             Command::RemoveAllTattoos => {
                 self.call::<_, ()>("remove_all_tattoos", ())?;

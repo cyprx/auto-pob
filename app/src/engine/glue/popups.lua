@@ -471,7 +471,7 @@ function glue.popup_open(kind, arg)
 			error("PoB didn't open that window", 0)
 		end
 		drop()
-		session = { popup = top, kind = "SpectreLibrary", owner = "build", build = pob.build }
+		session = { popup = top, kind = "SpectreLibrary", owner = "build", gen = glue.build_generation() }
 		return
 	end
 	if kind == "node_replacement" then

@@ -489,4 +489,15 @@ fn spectre_and_top_bar_match_pob() {
         .unwrap_err();
     assert_eq!(err.to_string(), "the loadout needs a name");
     assert_eq!(ours.top().specs, back.specs);
+
+    // ---- The library is build-owned (R18, R19): it outlives commands on its build only ----
+    ours.run(Command::OpenPopup(PopupKind::SpectreLibrary))
+        .expect("opening the library");
+    ours.run(Command::SetCharacterLevel { level: 80 }).unwrap();
+    assert!(
+        ours.popup().is_some(),
+        "a command on the same build ended the library"
+    );
+    ours.open(&spectre, "spectre again");
+    assert!(ours.popup().is_none(), "the library outlived its build");
 }

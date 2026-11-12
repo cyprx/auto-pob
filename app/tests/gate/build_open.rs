@@ -369,8 +369,15 @@ fn unknown_tree_version_matches_pob() {
             s.backend.item_db_view().unwrap(),
             DbSnapshot::View(_)
         ));
+        let generation = s.backend.build_view().unwrap().generation;
         let err = s.run(open).expect_err(what);
-        // the failed open still left the build: a new one stands in
+        // the failed open still left the build: a new one stands in, and its view says so,
+        // so the UI shows the build list as PoB does
+        assert_ne!(
+            s.backend.build_view().unwrap().generation,
+            generation,
+            "{what}: the stand-in build looks like the old one"
+        );
         assert!(
             matches!(s.backend.item_db_view().unwrap(), DbSnapshot::Ended),
             "{what}: the database outlived its build"

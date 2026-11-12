@@ -199,6 +199,7 @@ function glue.build_view()
 		loadout_selected = loadout_selected,
 		progress = controls.pointDisplay.req or "",
 		level_tooltip = level_tooltip(controls.characterLevel),
+		generation = glue.build_generation(),
 	}
 end
 

@@ -50,6 +50,11 @@ pub struct BuildView {
     /// monster level
     #[serde(default)]
     pub level_tooltip: Option<ItemTooltip>,
+    /// How many builds PoB has initialised (`glue.build_generation`): a failed open or import
+    /// that still changed it replaced the build with a new one, which PoB never shows (it goes
+    /// to its build list)
+    #[serde(default)]
+    pub generation: u64,
 }
 
 /// Whether a `BuildView.loadouts` entry is one of PoB's headers or actions rather than a

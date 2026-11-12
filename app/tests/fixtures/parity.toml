@@ -2908,7 +2908,7 @@ ported = "app/src/ui/folder_picker.rs ask_delete: PoB's text The folder is not e
 ported = "app/src/ui/app.rs on_picker sends DeleteBuild; a failure shows the engine's PoB text as a notice"
 
 [popups."Game Version"]
-gap = "Task 16 final fix wave: the engine side is ported (app/src/engine/glue/net.lua Build:Init wrapper adopts PoB's window as a GameVersion popup session over a new Unnamed build; Convert reopens the build converted; gate build_open::game_version_matches_pob, game_version_on_the_first_open, starting_on_the_build_the_exit_save_recorded). Left: PoB's Cancel goes back to the build list (Build.lua:1344-1347); the app stays on the Unnamed build. Needs a UI hook in app/src/ui/app.rs: a GameVersion window ended without Convert goes to Screen::List"
+ported = "app/src/engine/glue/net.lua Build:Init wrapper adopts PoB's window as a main-owned GameVersion popup session over a new Unnamed build; Convert reopens the build converted (gate build_open::game_version_matches_pob, game_version_on_the_first_open, starting_on_the_build_the_exit_save_recorded). app/src/ui/app.rs keeps the window up on every tab, and its Cancel, Esc or close box goes back to the build list as PoB's Cancel (Build.lua:1344-1347); one met on the list at start is cancelled there (test game_version_stays_up_and_its_cancel_goes_to_the_list)"
 note = "never the previous build's tabs under the new name; an import's Convert makes an empty build, as upstream's"
 
 [popups."Import Comparison Build"]
@@ -3429,7 +3429,7 @@ note = "wired at the Task 13 merge (M9); test f2_in_the_tree_manager_renames_the
 ported = "app/src/ui/tree/keys.rs F1 over a node opens its poewiki page"
 
 [keys."popup.ESCAPE"]
-ported = "app/src/ui/popup.rs Esc closes the session"
+ported = "app/src/widgets/escape.rs every popup closes on an Esc no control takes: the engine sessions (popup.rs) and the app's own windows; a selected box takes the first Esc, and the top window closes first"
 note = "PoB presses the popup's escape button, which closes it"
 
 [keys."popup.RETURN"]

@@ -120,6 +120,9 @@ pub struct AutoPobApp {
     popup: PopupWindow,
     /// The tab that opened the popup: leaving it closes the window
     popup_tab: Option<BuildTab>,
+    /// A failed open or import (its seq) and the build generation before it: if the build that
+    /// follows is another one, PoB's Init failed and PoB would show its list (`on_failed_open`)
+    failed_open: Option<(u64, u64)>,
     /// The trade link a popup press asked for: opened and copied for that press only (R20)
     trade_link: popup::TradeLink,
     /// The Options window, which any screen can open and a build change doesn't end (R19)
@@ -219,6 +222,7 @@ impl AutoPobApp {
             items: ItemsUi::default(),
             popup: PopupWindow::default(),
             popup_tab: None,
+            failed_open: None,
             trade_link: popup::TradeLink::default(),
             options: OptionsUi::default(),
             settings: AppSettings::default(),
@@ -608,7 +612,14 @@ impl AutoPobApp {
                 }
                 match snapshot {
                     Snapshot::Build(view) => {
+                        let replaced = self
+                            .failed_open
+                            .take_if(|(at, _)| seq >= *at)
+                            .is_some_and(|(_, before)| view.generation != before);
                         self.build = Some(view);
+                        if replaced {
+                            self.on_failed_open();
+                        }
                         self.last_unsaved = self.current_unsaved();
                         if self.pending_save.as_ref().is_some_and(|p| seq >= p.seq) {
                             self.save_succeeded();
@@ -750,7 +761,14 @@ impl AutoPobApp {
                 self.notices.push(format!("{}: {error}", done.label));
             }
         }
-        if view.finished.iter().any(|f| f.new_build) {
+        // a link whose build PoB couldn't open: a new one stands in, which PoB never shows
+        if view
+            .finished
+            .iter()
+            .any(|f| f.new_build && f.error.is_some() && !f.cancelled)
+        {
+            self.on_failed_open();
+        } else if view.finished.iter().any(|f| f.new_build) {
             // the step's other views follow this one (the engine sends the requests first)
             self.reset_for_new_build();
         }
@@ -777,6 +795,10 @@ impl AutoPobApp {
             self.list_ui.move_refused();
         }
         self.import_ui.on_error(seq);
+        if self.import_seq == Some(seq) || self.entering == Some(seq) {
+            let generation = self.build.as_ref().map_or(0, |b| b.generation);
+            self.failed_open = Some((seq, generation));
+        }
         if self.import_seq == Some(seq) {
             self.import_seq = None;
         }
@@ -883,15 +905,7 @@ impl AutoPobApp {
                 self.allow_close = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-            Pending::BackToList => {
-                self.screen = Screen::List;
-                // the heat map would go on calculating for a build nobody is looking at
-                if let Some(stop) = self.tree.stop_heatmap() {
-                    self.send(stop);
-                }
-                let folder = self.list_folder();
-                self.send(Command::ListBuilds { folder });
-            }
+            Pending::BackToList => self.back_to_list(),
             Pending::Open(path) => self.enter_build(Command::OpenBuild { path }),
             Pending::New => self.enter_build(Command::NewBuild),
             Pending::ImportNew(url) => {
@@ -901,6 +915,27 @@ impl AutoPobApp {
                 });
             }
         }
+    }
+
+    fn back_to_list(&mut self) {
+        self.screen = Screen::List;
+        // the heat map would go on calculating for a build nobody is looking at
+        if let Some(stop) = self.tree.stop_heatmap() {
+            self.send(stop);
+        }
+        let folder = self.list_folder();
+        self.send(Command::ListBuilds { folder });
+    }
+
+    /// An open or import failed after PoB's Init ran: the engine put a new build in the failed
+    /// one's place. PoB shows its build list, with its message (already a notice), so the app
+    /// does too, and forgets the old build's tab state.
+    fn on_failed_open(&mut self) {
+        self.entering = None;
+        self.import_seq = None;
+        self.reset_build_state();
+        self.tab = BuildTab::default();
+        self.back_to_list();
     }
 
     /// Sends a command that loads a different build and shows the build screen when it's done.
@@ -1337,6 +1372,13 @@ impl AutoPobApp {
     }
 
     fn list_screen(&mut self, ui: &mut egui::Ui) {
+        // a Game Version window met on the list (the build PoB opened at start) is cancelled:
+        // PoB's Cancel goes to the list, where the user already is (Build.lua:1344-1347)
+        if matches!(self.popup.kind(), Some(PopupKind::GameVersion))
+            && let Some(command) = self.popup.close()
+        {
+            self.send(command);
+        }
         // PoB's edit box has no Ctrl+W (EditControl.lua:500-640): egui's word delete never
         // sees it
         strip_ctrl_w(ui);
@@ -1710,8 +1752,11 @@ impl AutoPobApp {
                 self.send(command);
             }
         }
+        // PoB's Game Version window is main's, not a tab's (Build.lua:1323-1350): no tab
+        // switch ends it
+        let game_version = matches!(self.popup.kind(), Some(PopupKind::GameVersion));
         // leaving the tab that opened the window ends its session
-        if self.popup.is_open() && self.popup_tab != Some(self.tab) {
+        if self.popup.is_open() && self.popup_tab != Some(self.tab) && !game_version {
             for command in self.popup.flush().into_iter().chain(self.popup.close()) {
                 self.send(command);
             }
@@ -1722,8 +1767,20 @@ impl AutoPobApp {
         } else {
             popup::PopupOutput::default()
         };
+        // the Game Version window ending any way but Convert is PoB's Cancel, which goes back
+        // to the build list (Build.lua:1344-1347)
+        let mut to_list = false;
         for command in popup_out.commands {
+            to_list |= game_version
+                && match &command {
+                    Command::PressPopupButton { name } => name != "convert",
+                    Command::ClosePopup => true,
+                    _ => false,
+                };
             self.send(command);
+        }
+        if to_list {
+            self.run_action(ui.ctx(), Pending::BackToList);
         }
         // questions never leave the app waiting
         for query in popup_out.queries {
@@ -4864,6 +4921,185 @@ mod tests {
             )))),
         });
         assert!(!app.popup.is_open());
+    }
+
+    #[test]
+    fn a_failed_import_that_replaced_the_build_shows_the_list_with_pobs_message() {
+        // PoB's Init fails, PoB closes the build and shows its list with the message; the
+        // engine puts a new build in its place, which the app never shows
+        let message = "Unknown Passive Tree Version: the tree version of this build isn't known";
+        let fail = |app: &mut AutoPobApp, generation: u64| {
+            let seq = app.send(Command::ImportFromUrl {
+                url: "eNrtWk1z".into(),
+                mode: ImportMode::ThisBuild,
+            });
+            app.on_event(Event::Error {
+                seq,
+                message: message.into(),
+            });
+            let mut view = (**app.build.as_ref().unwrap()).clone();
+            view.generation = generation;
+            view.name = "Unnamed build".into();
+            app.on_event(Event::Snapshot {
+                seq,
+                snapshot: Snapshot::Build(Arc::new(view)),
+            });
+        };
+        let (mut app, ctx) = open_new_build();
+        app.tab = BuildTab::Import;
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        let generation = app.build.as_ref().unwrap().generation;
+        fail(&mut app, generation + 1);
+        assert_eq!(app.screen, Screen::List);
+        assert!(
+            app.notices.iter().any(|n| n == message),
+            "{:?}",
+            app.notices
+        );
+        assert!(
+            sent_since(&app, before)
+                .iter()
+                .any(|c| c.starts_with("ListBuilds")),
+        );
+        // an import refused before PoB's Init (a bad code) leaves the build as it was
+        let (mut app, ctx) = open_new_build();
+        app.tab = BuildTab::Import;
+        frame(&mut app, &ctx, vec![]);
+        let generation = app.build.as_ref().unwrap().generation;
+        fail(&mut app, generation);
+        assert_eq!(app.screen, Screen::Build);
+        assert_eq!(app.tab, BuildTab::Import);
+    }
+
+    #[test]
+    fn a_failed_link_import_that_replaced_the_build_shows_the_list() {
+        let (mut app, ctx) = open_new_build();
+        frame(&mut app, &ctx, vec![]);
+        app.on_requests(&RequestsView {
+            pending: vec![],
+            finished: vec![crate::engine::views::FinishedRequest {
+                id: 1,
+                label: "Import".into(),
+                error: Some("Unknown Passive Tree Version".into()),
+                cancelled: false,
+                new_build: true,
+            }],
+        });
+        assert_eq!(app.screen, Screen::List);
+        assert!(
+            app.notices
+                .iter()
+                .any(|n| n.contains("Unknown Passive Tree Version"))
+        );
+    }
+
+    /// PoB's Game Version window as the engine reports it after an open that needs it
+    fn game_version_app() -> (AutoPobApp, egui::Context) {
+        let (mut app, ctx) = open_new_build();
+        let button = |name: &str, x: f32| crate::engine::views::PopupControl {
+            name: name.into(),
+            kind: crate::engine::views::PopupControlKind::Button,
+            label: name.into(),
+            pos: [x, 40.0],
+            size: [80.0, 20.0],
+            shown: true,
+            enabled: true,
+            choices: vec![],
+            selected: 0,
+            value: 0.0,
+            divisions: None,
+            checked: false,
+            text: String::new(),
+            tooltip_text: None,
+            hover_tooltip: false,
+            rows: vec![],
+            row_selected: None,
+            row_highlight: None,
+            note: None,
+            reorder: false,
+        };
+        // an open whose build needs it: the engine's window comes with the open's views, the
+        // first of them here, before the build screen's reset
+        app.run_action(&ctx, Pending::Open("/b/old.xml".into()));
+        let seq = app.entering.expect("an open");
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::Popup(Some(Arc::new(crate::engine::PopupView {
+                kind: crate::engine::PopupKind::GameVersion,
+                title: "Game Version".into(),
+                enter: None,
+                controls: vec![button("convert", 0.0), button("cancel", 100.0)],
+            }))),
+        });
+        pump_until(&mut app, &ctx, "the open's views", |a| a.entering.is_none());
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        (app, ctx)
+    }
+
+    fn click_popup(app: &mut AutoPobApp, ctx: &egui::Context, key: &str) {
+        let pos = app.popup.rects.map[key].center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![],
+        ] {
+            frame(app, ctx, events);
+        }
+    }
+
+    #[test]
+    fn game_version_stays_up_and_its_cancel_goes_to_the_list() {
+        // PoB's window is main's: it stays up over the build, whatever the tab
+        // (Build.lua:1323-1350)
+        let (mut app, ctx) = game_version_app();
+        assert!(app.popup.is_open(), "the window went at once");
+        app.tab = BuildTab::Items;
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.popup.is_open(), "a tab switch ended it");
+        assert!(!app.sent_full.iter().any(|c| c == "ClosePopup"));
+        // Cancel goes back to the build list (Build.lua:1344-1347)
+        let before = app.sent_full.len();
+        click_popup(&mut app, &ctx, "btn_cancel");
+        assert_eq!(app.screen, Screen::List);
+        let sent = sent_since(&app, before);
+        assert!(
+            sent.first()
+                .is_some_and(|c| c.starts_with("PressPopupButton { name: \"cancel\"")),
+            "{sent:?}"
+        );
+        assert!(sent.iter().any(|c| c.starts_with("ListBuilds")), "{sent:?}");
+
+        // Esc is Cancel too
+        let (mut app, ctx) = game_version_app();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Escape, egui::Modifiers::NONE),
+        );
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.screen, Screen::List);
+
+        // Convert stays on the build screen
+        let (mut app, ctx) = game_version_app();
+        let before = app.sent_full.len();
+        click_popup(&mut app, &ctx, "btn_convert");
+        assert_eq!(app.screen, Screen::Build);
+        assert!(
+            sent_since(&app, before)
+                .iter()
+                .any(|c| c.starts_with("PressPopupButton { name: \"convert\"")),
+        );
     }
 
     #[test]

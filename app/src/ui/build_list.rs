@@ -49,6 +49,8 @@ pub enum ListScreenAction {
     },
     SetSort(BuildSort),
     SetFilter(String),
+    /// PoB's About button (Main.lua:209-211)
+    About,
 }
 
 /// A question the list is waiting on.
@@ -416,6 +418,11 @@ impl BuildListUi {
                 }
                 if ui.button("Options").clicked() {
                     action = Some(ListScreenAction::Options);
+                }
+                let about = ui.button("About");
+                mark(ui, "list_about", &about);
+                if about.clicked() {
+                    action = Some(ListScreenAction::About);
                 }
                 let combo = egui::ComboBox::from_id_salt("build_sort")
                     .selected_text(sort_label(view.sort))

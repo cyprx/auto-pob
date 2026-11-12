@@ -72,6 +72,8 @@ pub struct ItemsUi {
     /// An app-level dialog is open, so shortcuts are left alone
     modal: bool,
     pub(crate) rects: Rects,
+    /// The slot under the pointer last frame holds this item: E edits it (ItemsTab.lua:1460)
+    hovered_slot: Option<u32>,
 }
 
 impl ItemsUi {
@@ -302,6 +304,7 @@ impl ItemsUi {
                 .push(Command::CancelDisplayItem { if_id: Some(id) });
         }
         self.hovered_now = None;
+        self.hovered_slot = None;
         self.shortcuts(ui, &view, &mut out);
 
         self.set_bar(ui, &view, &mut out);

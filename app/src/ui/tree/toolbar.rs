@@ -52,6 +52,12 @@ pub(super) struct Toolbar {
     /// "Copy link" was clicked and the link has not arrived yet
     copy_pending: bool,
     link_fresh: bool,
+    /// The tree selector drawn last: its id, and whether it was pointed at or open, when Up
+    /// and Down leave the trees alone (TreeTab.lua:367-371)
+    pub(super) spec_combo: Option<egui::Id>,
+    pub(super) spec_busy: bool,
+    /// Ctrl+F: the search box takes the keyboard when next drawn
+    pub(super) focus_search: bool,
 }
 
 impl Toolbar {
@@ -143,6 +149,9 @@ impl Toolbar {
                 }
             });
         rects.note(&combo.response, || "spec_combo".into());
+        self.spec_combo = Some(combo.response.id);
+        self.spec_busy = combo.response.hovered()
+            || egui::Popup::is_id_open(ui.ctx(), combo.response.id.with("popup"));
         let add = ui.button("+").on_hover_text("Add a tree");
         rects.note(&add, || "spec_new".into());
         if add.clicked() {
@@ -287,6 +296,9 @@ impl Toolbar {
                 .desired_width(160.0),
         );
         rects.note(&field, || "search".into());
+        if std::mem::take(&mut self.focus_search) {
+            field.request_focus();
+        }
         if field.changed() {
             self.search_edit = Some(now);
         }
@@ -324,11 +336,16 @@ impl Toolbar {
             |stat: Option<String>, max_depth: Option<u32>| Command::SetHeatmap { stat, max_depth };
         ui.label("Heat map");
         let combo = egui::ComboBox::from_id_salt("tree_heat_stat")
-            .selected_text(state.heatmap.as_deref().unwrap_or("Off"))
+            .selected_text(state.heatmap.as_deref().unwrap_or(if state.heatmap_shown {
+                "Damage / defence"
+            } else {
+                "Off"
+            }))
             .show_ui(ui, |ui| {
-                let off = ui.selectable_label(state.heatmap.is_none(), "Off");
+                let shown = state.heatmap.is_some() || state.heatmap_shown;
+                let off = ui.selectable_label(!shown, "Off");
                 rects.note(&off, || "heat:off".into());
-                if off.clicked() && state.heatmap.is_some() {
+                if off.clicked() && shown {
                     commands.push(set(None, state.max_depth));
                 }
                 for stat in &state.power_stats {

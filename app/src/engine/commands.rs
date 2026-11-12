@@ -824,6 +824,14 @@ pub enum Command {
     /// A query: PoB's help, as its About window lists it (`Snapshot::Help`). It needs no build
     /// and changes nothing.
     Help,
+    /// P on the tree (PassiveTreeView.lua:204-205): shows or hides the heat map, keeping its
+    /// stat. With no stat chosen yet PoB shows damage against defence.
+    ToggleHeatmap,
+    /// Ctrl+D on the tree (PassiveTreeView.lua:206-207): whether a node's tooltip lists what
+    /// allocating it changes (PassiveTreeView.lua:1659)
+    SetTreeStatDifferences {
+        on: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

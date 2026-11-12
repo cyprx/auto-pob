@@ -663,6 +663,9 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::Wake
             | Command::Shutdown
             | Command::Help
+            // what the tree shows, not the build or the item
+            | Command::ToggleHeatmap
+            | Command::SetTreeStatDifferences { .. }
     )
 }
 
@@ -1002,6 +1005,23 @@ impl PobBackend {
                 help: true,
                 ..Affected::default()
             }),
+            // unlike `SetHeatmap` nothing is recalculated: PoB only flips the flag
+            Command::ToggleHeatmap => {
+                self.heatmap_on = self.call::<_, bool>("toggle_heatmap", ())?;
+                self.power_failed = false;
+                Ok(Affected {
+                    tree: true,
+                    power: true,
+                    ..Affected::default()
+                })
+            }
+            Command::SetTreeStatDifferences { on } => {
+                self.call::<_, ()>("set_tree_stat_differences", on)?;
+                Ok(Affected {
+                    tree: true,
+                    ..Affected::default()
+                })
+            }
             Command::CancelRequest { id } => {
                 self.cancel_request(id)?;
                 self.network_affected()

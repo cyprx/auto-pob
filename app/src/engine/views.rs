@@ -469,6 +469,13 @@ pub struct TreeState {
     pub max_depth: Option<u32>,
     pub can_undo: bool,
     pub can_redo: bool,
+    /// PoB's `showHeatMap`: P can show the heat map before any stat was chosen, when
+    /// `heatmap` is `None` and the map shows damage against defence
+    #[serde(default)]
+    pub heatmap_shown: bool,
+    /// PoB's `showStatDifferences` of the tree (Ctrl+D)
+    #[serde(default)]
+    pub show_stat_differences: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -2010,9 +2017,13 @@ pub struct HelpView {
     /// Building" and the GitHub page, with PoB's colour codes
     #[serde(default)]
     pub header: Vec<String>,
+    /// The window's "Version history" (`changelog.txt`), one section per version, newest
+    /// first; its title is "Version <n> (<date>)". Empty when the file isn't installed.
+    #[serde(default)]
+    pub changelog: Vec<HelpSection>,
 }
 
-/// One `---[Title]` section of `help.txt`.
+/// One `---[Title]` section of `help.txt`, or one version of `changelog.txt`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct HelpSection {
     pub title: String,

@@ -108,6 +108,8 @@ pub struct ImportUi {
     /// An `ExportShareCode` is out; its answer is copied
     await_code: bool,
     copy_ready: Option<String>,
+    /// Ctrl+I: the code box takes the keyboard when next drawn (Build.lua:1162-1163)
+    focus_code: bool,
 }
 
 impl Default for ImportUi {
@@ -144,7 +146,15 @@ impl Default for ImportUi {
             site: None,
             await_code: false,
             copy_ready: None,
+            focus_code: false,
         }
+    }
+}
+
+impl ImportUi {
+    /// Ctrl+I selects the code box (`importCodeIn`)
+    pub fn focus_code(&mut self) {
+        self.focus_code = true;
     }
 }
 
@@ -736,6 +746,9 @@ impl ImportUi {
                 .desired_width(f32::INFINITY),
         );
         mark(ui, "code_box", &r);
+        if std::mem::take(&mut self.focus_code) {
+            r.request_focus();
+        }
         if r.changed() {
             self.code_dirty = Some(now);
         }

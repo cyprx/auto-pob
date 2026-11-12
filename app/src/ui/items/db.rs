@@ -34,6 +34,12 @@ pub struct DbState {
     selected: Option<String>,
     tip: HoverTip,
     pub(crate) rects: Rects,
+    /// The search box's id, and Ctrl+F's ask that it take the keyboard when next drawn
+    search_id: Option<egui::Id>,
+    focus_search: bool,
+    /// The wiki page of the row under the pointer: a unique's name, a rare's base
+    /// (ItemDBControl.lua:375-382, ItemTools.lua:395-399)
+    pub(super) hovered_wiki: Option<String>,
 }
 
 fn default_query(db: ItemDb) -> ItemDbQuery {
@@ -63,11 +69,33 @@ impl Default for DbState {
             selected: None,
             tip: HoverTip::default(),
             rects: Rects::default(),
+            search_id: None,
+            focus_search: false,
+            hovered_wiki: None,
         }
     }
 }
 
 impl DbState {
+    /// Ctrl+F (ItemsTab.lua:1471-1480): from the uniques' search, or anywhere while the rares
+    /// show, the rares' search; else the uniques'. Ours is one box over both, so the panel
+    /// opens on that database and its box takes the keyboard. Returns the query to resend
+    /// when the database changed under an open panel.
+    pub fn focus_search(&mut self, ctx: &egui::Context) -> Option<Command> {
+        let in_box = self
+            .search_id
+            .is_some_and(|id| ctx.memory(|m| m.has_focus(id)));
+        let db = match (self.query.db, in_box) {
+            (ItemDb::Uniques, true) | (ItemDb::Rares, false) => ItemDb::Rares,
+            _ => ItemDb::Uniques,
+        };
+        let changed = db != self.query.db;
+        self.toggle_db(db);
+        self.expanded = true;
+        self.focus_search = true;
+        (changed && self.open_sent).then(|| Command::SetItemDb(self.query.clone()))
+    }
+
     /// The engine's answer (or its end). A view of another database than the toggles say is
     /// stale and ignored by the panel.
     pub fn on_view(&mut self, view: Option<&ItemDbView>) {
@@ -202,6 +230,7 @@ pub fn show(
     now: f64,
 ) -> ItemsOutput {
     let mut out = ItemsOutput::default();
+    state.hovered_wiki = None;
     let header = egui::CollapsingHeader::new("Item databases")
         .id_salt("items_db_header")
         .open(Some(state.expanded))
@@ -305,6 +334,10 @@ fn body(
             .search
             .show(ui, id, &state.query.search.clone(), false, &opts);
         state.rects.note(&response, || "db_search".into());
+        state.search_id = Some(id);
+        if std::mem::take(&mut state.focus_search) {
+            response.request_focus();
+        }
         if let Some(text) = send {
             state.query.search = text;
             changed = true;
@@ -447,6 +480,12 @@ fn rows(ui: &mut egui::Ui, view: &ItemDbView, state: &mut DbState, out: &mut Ite
                             name: row.name.clone(),
                         });
                     }
+                }
+                if response.hovered() {
+                    state.hovered_wiki = Some(match db {
+                        ItemDb::Uniques => row.name.clone(),
+                        ItemDb::Rares => row.base.clone(),
+                    });
                 }
                 state.tip.note(
                     &response,

@@ -651,13 +651,44 @@ for k, start in ipairs(starts) do
     end
     sections[k] = { title = list[start + 1][1], rows = rows }
 end
-return { sections = sections, header = labels, popups = #main.popups }
+-- with no section asked for, the window opens on the version history, each version where
+-- its `sectionHeights` entry says (Main.lua:1342-1351, 1431)
+main:OpenAboutPopup()
+local p = main.popups[1]
+local changes, heights = p.controls.changelog.list, p.controls.changelog.sectionHeights
+main:ClosePopup()
+local versions = {}
+for k, height in ipairs(heights) do
+    local start = height / 16
+    local stop = heights[k + 1] and heights[k + 1] / 16 or #changes
+    local rows = {}
+    for r = start + 2, stop do
+        if changes[r][1] then rows[#rows + 1] = { changes[r][1] } end
+    end
+    versions[k] = { title = changes[start + 1][1], rows = rows }
+end
+return { sections = sections, header = labels, versions = versions, popups = #main.popups }
 "#;
+
+/// A changelog in PoB's format (two versions, a sub-title and blank lines), written next to
+/// help.txt for both sides
+const CHANGELOG: &str = "VERSION[2.67.2][2026/08/07]
+
+--- Fixed Calculations ---
+* Fix one thing (someone)
+* Fix another (someone else)
+
+VERSION[2.67.1][2026/08/01]
+
+--- Other changes ---
+* Change a thing
+";
 
 #[derive(Debug, serde::Deserialize)]
 struct UpHelp {
     sections: Vec<UpSection>,
     header: Vec<String>,
+    versions: Vec<UpSection>,
     popups: usize,
 }
 
@@ -708,9 +739,10 @@ fn help_matches_pob() {
     );
     assert_eq!(s.open_popups(), 0);
 
-    // the farm is ours: the file goes next to PoB's own, never into the pinned folder
+    // the farm is ours: the files go next to PoB's own, never into the pinned folder
     let text = fs::read_to_string(super::fixtures_dir().join("help.txt")).unwrap();
     fs::write(s.pob.join("help.txt"), &text).unwrap();
+    fs::write(s.pob.join("changelog.txt"), CHANGELOG).unwrap();
     let up = upstream_lua(&s.pob).expect("starting upstream PoB");
     check_help_fixture(&up, &text);
     // as our engine runs it (bootstrap.lua:181-194): help.txt from PoB's folder, no DEV[] rows
@@ -739,6 +771,29 @@ fn help_matches_pob() {
     assert_eq!(s.open_popups(), 0, "the About window was left open");
 
     assert_eq!(ours.header, theirs.header);
+    let versions: Vec<(String, Vec<String>)> = ours
+        .changelog
+        .iter()
+        .map(|v| (format!("^7{}", v.title), v.lines.clone()))
+        .collect();
+    let up_versions: Vec<(String, Vec<String>)> = theirs
+        .versions
+        .iter()
+        .map(|v| {
+            (
+                v.title.clone(),
+                v.rows.iter().map(|r| r[0].clone()).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(versions, up_versions);
+    assert_eq!(versions.len(), 2);
+    assert_eq!(versions[0].0, "^7Version 2.67.2 (2026/08/07)");
+    assert!(
+        versions[0]
+            .1
+            .contains(&"^7--- Fixed Calculations ---".to_string())
+    );
     assert!(ours.header[0].contains("v2.67.2"), "{:?}", ours.header);
     assert_eq!(ours.sections.len(), theirs.sections.len());
     for (k, (o, t)) in ours.sections.iter().zip(&theirs.sections).enumerate() {
@@ -768,5 +823,141 @@ fn help_matches_pob() {
             .flat_map(|s| &s.lines)
             .any(|l| l.contains("Developer Mode")),
         "a DEV[] row was shown"
+    );
+}
+
+// ---- Task 14: the Tree tab's P and Ctrl+D ----
+
+/// Upstream presses a key as PoB gets it: the key event, then a frame on the Tree tab
+/// (Main.lua:458-460, Build.lua:1150-1186, TreeTab.lua:359-384, PassiveTreeView.lua:198-218).
+/// Ctrl is held through `IsKeyDown`, as `longtail_lib.lua` does for the build list.
+fn up_key(up: &Upstream, key: &str, ctrl: bool) {
+    up.lua.globals().set("KEY", key).unwrap();
+    up.lua.globals().set("CTRL", ctrl).unwrap();
+    up.lua
+        .load(
+            r#"
+            assert(build.viewMode == "TREE", "not on the Tree tab")
+            local real = IsKeyDown
+            IsKeyDown = function(k) return CTRL and k == "CTRL" end
+            runCallback("OnKeyDown", KEY, false)
+            runCallback("OnFrame")
+            runCallback("OnKeyUp", KEY)
+            runCallback("OnFrame")
+            IsKeyDown = real
+            "#,
+        )
+        .exec()
+        .expect("upstream key");
+}
+
+/// The tree view's flags and the controls TreeTab:Draw syncs to them, and whether the build
+/// was marked changed
+const TREE_FLAGS: &str = r#"
+local tab = B.treeTab
+return {
+    heat = tab.viewer.showHeatMap and true or false,
+    check = tab.controls.treeHeatMap.state and true or false,
+    stat_shown = tab.controls.treeHeatMapStatSelect.shown and true or false,
+    diff = tab.viewer.showStatDifferences and true or false,
+    changed = (B.modFlag or B.buildFlag) and true or false,
+}
+"#;
+
+#[derive(Debug, PartialEq, serde::Deserialize)]
+struct TreeFlags {
+    heat: bool,
+    check: bool,
+    stat_shown: bool,
+    diff: bool,
+    changed: bool,
+}
+
+fn up_flags(up: &Upstream) -> TreeFlags {
+    up.lua.load("B = build").exec().unwrap();
+    let value: mlua::Value = up.lua.load(TREE_FLAGS).eval().unwrap();
+    up.lua.from_value(value).unwrap()
+}
+
+fn our_flags(ours: &Ours) -> TreeFlags {
+    ours.eval::<()>("B = pob.build");
+    let value: mlua::Value = ours.eval(TREE_FLAGS);
+    ours.s.backend.lua.from_value(value).unwrap()
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tree_keys_match_pob() {
+    let _guard = lock();
+    let xml = fs::read_to_string(fixture_xml("attack")).unwrap();
+    let up = Upstream::new();
+    let mut ours = Ours::new();
+    ours.open(&xml, "attack");
+    up.load(&xml, "attack");
+    ours.clear_flags();
+    ours.eval::<()>("pob.build.buildFlag = false");
+    up.lua.load("build.buildFlag = false").exec().unwrap();
+    let start = our_flags(&ours);
+    assert_eq!(start, up_flags(&up));
+    // PoB's defaults: no heat map, stat differences on
+    assert!(!start.heat && start.diff);
+
+    // P shows the heat map with no stat chosen: damage against defence; nothing changes
+    ours.run(Command::ToggleHeatmap).unwrap();
+    up_key(&up, "p", false);
+    let shown = our_flags(&ours);
+    assert_eq!(shown, up_flags(&up), "after P");
+    assert!(shown.heat && shown.check && shown.stat_shown && !shown.changed);
+    let state = ours.s.backend.tree_state_view().unwrap();
+    assert!(state.heatmap_shown);
+    assert_eq!(state.heatmap, None);
+    // the power calculation starts, as PoB's Draw starts it (PassiveTreeView.lua:773-775)
+    assert_eq!(
+        ours.s.backend.next_background(),
+        Some(auto_pob::engine::BackgroundTask::NodePower)
+    );
+    // and P again hides it
+    ours.run(Command::ToggleHeatmap).unwrap();
+    up_key(&up, "p", false);
+    let hidden = our_flags(&ours);
+    assert_eq!(hidden, up_flags(&up), "after P twice");
+    assert!(!hidden.heat);
+    assert!(!ours.s.backend.tree_state_view().unwrap().heatmap_shown);
+
+    // Ctrl+D: the node tooltips stop listing what allocating changes
+    let node: u32 = ours.eval(
+        "for id, node in pairs(pob.build.spec.nodes) do \
+         if node.type == 'Notable' and not node.alloc and node.path then return id end end",
+    );
+    let with = ours.s.backend.node_tooltip_view(node).unwrap().unwrap();
+    ours.run(Command::SetTreeStatDifferences { on: false })
+        .unwrap();
+    up_key(&up, "d", true);
+    let off = our_flags(&ours);
+    assert_eq!(off, up_flags(&up), "after Ctrl+D");
+    assert!(!off.diff && !off.changed);
+    assert!(
+        !ours
+            .s
+            .backend
+            .tree_state_view()
+            .unwrap()
+            .show_stat_differences
+    );
+    let without = ours.s.backend.node_tooltip_view(node).unwrap().unwrap();
+    assert!(
+        without.lines.len() < with.lines.len(),
+        "the tooltip still lists the differences"
+    );
+    ours.run(Command::SetTreeStatDifferences { on: true })
+        .unwrap();
+    up_key(&up, "d", true);
+    assert_eq!(our_flags(&ours), up_flags(&up), "after Ctrl+D twice");
+    assert!(
+        ours.s
+            .backend
+            .tree_state_view()
+            .unwrap()
+            .show_stat_differences
     );
 }

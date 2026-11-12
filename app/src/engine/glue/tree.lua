@@ -429,6 +429,8 @@ function glue.tree_state()
 		max_depth = build.calcsTab.nodePowerMaxDepth,
 		can_undo = spec.undo[2] ~= nil,
 		can_redo = spec.redo[1] ~= nil,
+		heatmap_shown = build.treeTab.viewer.showHeatMap and true or false,
+		show_stat_differences = build.treeTab.viewer.showStatDifferences and true or false,
 	}
 end
 
@@ -926,4 +928,21 @@ function glue.node_tooltip(id)
 		error(tostring(err):match("[^\n]+") or "couldn't build the tooltip", 0)
 	end
 	return { id = id, lines = tooltip:lines() }
+end
+
+-- ---- Keys ----
+
+-- P on the tree (PassiveTreeView.lua:204-205); TreeTab:Draw then syncs the checkbox and the
+-- stat dropdown to it (TreeTab.lua:459-460). Returns whether the heat map shows.
+function glue.toggle_heatmap()
+	local tab = pob.build.treeTab
+	tab.viewer.showHeatMap = not tab.viewer.showHeatMap
+	tab.controls.treeHeatMap.state = tab.viewer.showHeatMap
+	tab.controls.treeHeatMapStatSelect.shown = tab.viewer.showHeatMap
+	return tab.viewer.showHeatMap
+end
+
+-- Ctrl+D on the tree (PassiveTreeView.lua:206-207)
+function glue.set_tree_stat_differences(on)
+	pob.build.treeTab.viewer.showStatDifferences = on and true or false
 end

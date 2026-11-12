@@ -120,7 +120,8 @@ pub fn show(
     }
 
     // nodes
-    let heat_on = state.heatmap.is_some();
+    // P shows the map before any stat was chosen: damage against defence
+    let heat_on = state.heatmap.is_some() || state.heatmap_shown;
     for node in &layout.nodes {
         let pos = to_screen(node.pos);
         if !visible.contains(pos) {

@@ -209,6 +209,10 @@ impl ItemsUi {
                     button.request_focus();
                     egui::Popup::open_id(ui.ctx(), button.id.with("popup"));
                 }
+                // PoB's E reads the slot control under the mouse: its name or its dropdown
+                if slot.selected != 0 && (label.hovered() || combo.inner.response.hovered()) {
+                    self.hovered_slot = Some(slot.selected);
+                }
                 if slot.selected != 0 {
                     self.note_hover(
                         &combo.inner.response,
@@ -245,5 +249,40 @@ impl ItemsUi {
                 id: Some(drag.id),
             });
         }
+    }
+}
+
+/// The Items tab's keys (R25, ItemsTab.lua:1454-1490).
+impl ItemsUi {
+    /// E over a slot holding an item: the item list's double click on it, which edits it
+    /// (ItemsTab.lua:1459-1464)
+    pub fn edit_hovered_slot(&self) -> Option<Command> {
+        self.hovered_slot.map(|id| Command::EditItem { id })
+    }
+
+    /// The wiki page of the item under the pointer: a unique's or relic's name, else its
+    /// base (ItemTools.lua:395-399)
+    pub fn hovered_wiki(&self) -> Option<String> {
+        if let Some(name) = &self.db.hovered_wiki {
+            return Some(name.clone());
+        }
+        let (query, _) = self.hover.as_ref()?;
+        let item = self
+            .view
+            .as_ref()?
+            .items
+            .iter()
+            .find(|i| i.id == query.id)?;
+        Some(if matches!(item.rarity.as_str(), "UNIQUE" | "RELIC") {
+            item.name.clone()
+        } else {
+            item.base.clone()
+        })
+    }
+
+    /// Ctrl+F: the item database's search box (ItemsTab.lua:1471-1480); returns the query to
+    /// resend if the database changed
+    pub fn focus_db_search(&mut self, ctx: &egui::Context) -> Option<Command> {
+        self.db.focus_search(ctx)
     }
 }

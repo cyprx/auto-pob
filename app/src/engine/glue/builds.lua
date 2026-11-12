@@ -322,9 +322,24 @@ end
 -- The title rows' height in OpenAboutPopup (Main.lua:1337, `titleSize`)
 local HELP_TITLE_SIZE = 24
 
+-- The rows of an About window list as sections: a title row ("^7<title>" at titleSize) starts
+-- one; the rows under it are kept with a tab between two cells; spacer rows have no cells.
+local function about_sections(list, strip)
+	local sections = {}
+	for _, row in ipairs(list) do
+		if row.height == HELP_TITLE_SIZE and row[1] then
+			sections[#sections + 1] = { title = strip(row[1]), lines = {} }
+		elseif row[1] and #sections > 0 then
+			local lines = sections[#sections].lines
+			lines[#lines + 1] = row[2] and (row[1] .. "\t" .. row[2]) or row[1]
+		end
+	end
+	return sections
+end
+
 -- PoB's help as its About window lists it: main:OpenAboutPopup(1) reads help.txt and builds
--- the list (Main.lua:1360-1407); the rows are read off its TextListControl and the window is
--- closed. A title row is "^7<title> (<n>)"; a row of two cells is joined with a tab.
+-- the list (Main.lua:1360-1407); the rows are read off its TextListControl, then its "Version
+-- history:" button swaps in the changelog's (Main.lua:1425-1428), and the window is closed.
 function glue.help_view()
 	-- without the file OpenAboutPopup(1) indexes a missing section (Main.lua:1407-1416)
 	local file = io.open("help.txt", "r")
@@ -337,19 +352,18 @@ function glue.help_view()
 	glue.in_popups(function()
 		main:OpenAboutPopup(1)
 		local controls = main.popups[1].controls
-		local sections = {}
-		for _, row in ipairs(controls.changelog.list) do
-			if row.height == HELP_TITLE_SIZE and row[1] then
-				local title = row[1]:gsub("^%^7", ""):gsub(" %(%d+%)$", "")
-				sections[#sections + 1] = { title = title, lines = {} }
-			elseif row[1] and #sections > 0 then
-				local lines = sections[#sections].lines
-				lines[#lines + 1] = row[2] and (row[1] .. "\t" .. row[2]) or row[1]
-			end
-		end
+		local sections = about_sections(controls.changelog.list, function(title)
+			-- "^7<title> (<n>)" (Main.lua:1371)
+			return (title:gsub("^%^7", ""):gsub(" %(%d+%)$", ""))
+		end)
+		controls.verLabel.onClick()
+		local changelog = about_sections(controls.changelog.list, function(title)
+			return (title:gsub("^%^7", ""))
+		end)
 		view = {
 			sections = sections,
 			header = { controls.version.label, controls.forum.label, controls.github.label },
+			changelog = changelog,
 		}
 	end)
 	return view

@@ -3,6 +3,7 @@
 
 pub mod group;
 pub mod groups;
+mod keys;
 pub mod picker;
 pub mod sets;
 

@@ -123,6 +123,8 @@ pub struct ConfigUi {
     set_edit: Option<SetEdit>,
     confirm_delete: bool,
     confirm_remove: Option<usize>,
+    /// Ctrl+F: the search box takes the keyboard when next drawn (ConfigTab.lua:987-988)
+    pub focus_search: bool,
     /// Where widgets were drawn last frame, so tests can click them
     #[cfg(test)]
     pub(crate) rects: HashMap<String, egui::Rect>,
@@ -202,11 +204,14 @@ impl ConfigUi {
             self.note("set_combo".into(), &combo.response);
             self.set_buttons(ui, view, active.map(|s| s.title.as_str()), commands);
             ui.separator();
-            ui.add(
+            let search = ui.add(
                 egui::TextEdit::singleline(&mut self.search)
                     .hint_text("Search options")
                     .desired_width(160.0),
             );
+            if std::mem::take(&mut self.focus_search) {
+                search.request_focus();
+            }
             if !self.search.is_empty() && ui.small_button("x").clicked() {
                 self.search.clear();
             }

@@ -2186,8 +2186,7 @@ ported = "app/src/ui/build_list.rs top_rows sort combo"
 note = "part of list.sort"
 
 [controls."main.about"]
-gap = "Task 14"
-note = "Help window (R25); PoB's About popup shows help and the changelog"
+ported = "app/src/ui/build_list.rs and app/src/ui/build.rs About buttons open app/src/ui/help.rs HelpUi on the version history; help and changelog read off PoB's own About window (glue/builds.lua help_view)"
 
 [controls."main.applyUpdate"]
 ruled_out = "D-009"
@@ -2202,15 +2201,13 @@ ruled_out = "R13"
 note = "devMode is off in our engine"
 
 [controls."main.forkLabel"]
-gap = "Task 14"
-note = "fork name; with the version in the Help window"
+ported = "app/src/ui/help.rs header: PoB's version and fork labels from its About window"
 
 [controls."main.options"]
 ported = "app/src/ui/build.rs top_bar and app/src/ui/build_list.rs Options buttons open app/src/ui/options.rs OptionsUi"
 
 [controls."main.versionLabel"]
-gap = "Task 14"
-note = "PoB version shown only on the startup screen; the Help window should show it"
+ported = "app/src/ui/help.rs header: PoB's version label from its About window"
 
 [controls."notes.chaos"]
 ported = "app/src/ui/notes.rs colour buttons"
@@ -2869,8 +2866,7 @@ note = "label; the version shows in the Link menu"
 # ---- popups ----
 
 [popups."About"]
-gap = "Task 14"
-note = "Help window (R25)"
+ported = "app/src/ui/help.rs HelpUi: help sections, version history, labels and GitHub link from PoB's About window (Command::Help); F1, About and the loadouts' Help >> open it"
 
 [popups."Add Crucible Modifier to Item"]
 ported = "app/src/ui/popup.rs session (SP5b)"
@@ -3190,47 +3186,38 @@ note = "PoB self-update off"
 # ---- keys ----
 
 [keys."build.1"]
-gap = "Task 14"
-note = "Ctrl+1..6 tabs (R25)"
+ported = "app/src/ui/shortcuts.rs Ctrl+1 Tree tab"
 
 [keys."build.2"]
-gap = "Task 14"
-note = "Ctrl+1..6 tabs (R25)"
+ported = "app/src/ui/shortcuts.rs Ctrl+2 Skills tab"
 
 [keys."build.3"]
-gap = "Task 14"
-note = "Ctrl+1..6 tabs (R25)"
+ported = "app/src/ui/shortcuts.rs Ctrl+3 Items tab"
 
 [keys."build.4"]
-gap = "Task 14"
-note = "Ctrl+1..6 tabs (R25)"
+ported = "app/src/ui/shortcuts.rs Ctrl+4 Calcs tab"
 
 [keys."build.5"]
-gap = "Task 14"
-note = "Ctrl+1..6 tabs (R25)"
+ported = "app/src/ui/shortcuts.rs Ctrl+5 Config tab"
 
 [keys."build.6"]
-gap = "Task 14"
-note = "Ctrl+1..6 tabs (R25)"
+ported = "app/src/ui/shortcuts.rs Ctrl+6 Notes tab"
 
 [keys."build.7"]
 ruled_out = "R25"
 note = "Ctrl+7 is Party, out"
 
 [keys."build.i"]
-gap = "Task 14"
-note = "Ctrl+I (R25)"
+ported = "app/src/ui/shortcuts.rs Ctrl+I: the Import/Export tab with its code box selected (import.rs focus_code)"
 
 [keys."build.MOUSE4"]
-gap = "Task 14"
-note = "Mouse4 back (R25)"
+ported = "app/src/ui/shortcuts.rs Mouse4 closes the build through the unsaved prompt"
 
 [keys."build.s"]
 ported = "app/src/ui/app.rs Ctrl+S"
 
 [keys."build.w"]
-gap = "Task 14"
-note = "Ctrl+W (R25)"
+ported = "app/src/ui/shortcuts.rs Ctrl+W closes the build through the unsaved prompt"
 
 [keys."BuildListControl.F2"]
 ported = "app/src/ui/build_list.rs keys F2 opens Rename"
@@ -3262,8 +3249,7 @@ ported = "app/src/ui"
 note = "egui's own widget behaviour"
 
 [keys."compare.f"]
-gap = "Task 14"
-note = "Ctrl+F on Compare Config (R25)"
+ported = "app/src/ui/compare/mod.rs Ctrl+F selects the Config view's search"
 
 [keys."compare.LEFTBUTTON"]
 ported = "app/src/ui/compare/items.rs Copy and Equip buttons on each Items row"
@@ -3282,8 +3268,7 @@ ruled_out = "R5"
 note = "Import from Folder is out"
 
 [keys."config.f"]
-gap = "Task 14"
-note = "Ctrl+F (R25)"
+ported = "app/src/ui/config.rs Ctrl+F selects the options search"
 
 [keys."config.y"]
 ported = "app/src/ui/app.rs Ctrl+Y redo"
@@ -3460,27 +3445,22 @@ ported = "app/src/ui/skills/picker.rs"
 note = "picker keys"
 
 [keys."GemSelectControl.wiki"]
-gap = "Task 14"
-note = "wiki key: controller ruling puts it in scope; the UI opens the wiki URL with ctx.open_url on the keypress"
+ported = "app/src/ui/skills/keys.rs F1 over a gem list row or a gem of the group opens its poewiki page"
 
 [keys."ItemDBControl.wiki"]
-gap = "Task 14"
-note = "wiki key: controller ruling puts it in scope; the UI opens the wiki URL with ctx.open_url on the keypress"
+ported = "app/src/ui/items/db.rs F1 over a database row opens its poewiki page (unique name, rare base)"
 
 [keys."ItemListControl.wiki"]
-gap = "Task 14"
-note = "wiki key: controller ruling puts it in scope; the UI opens the wiki URL with ctx.open_url on the keypress"
+ported = "app/src/ui/items/slots.rs F1 over an item row opens its poewiki page (unique name, else base)"
 
 [keys."items.d"]
 ported = "app/src/ui/items/mod.rs Ctrl+D"
 
 [keys."items.e"]
-gap = "Task 14"
-note = "E on a slot (R25)"
+ported = "app/src/ui/items/slots.rs E over a slot holding an item sends EditItem"
 
 [keys."items.f"]
-gap = "Task 14"
-note = "Ctrl+F on the item database search (R25)"
+ported = "app/src/ui/items/slots.rs Ctrl+F opens the item database on PoB's unique or rare search (items/db.rs focus_search)"
 
 [keys."items.v"]
 ported = "app/src/ui/items/mod.rs Ctrl+V paste"
@@ -3496,8 +3476,7 @@ gap = "Task 14"
 note = "NF-14 F2 rename"
 
 [keys."ItemSlotControl.wiki"]
-gap = "Task 14"
-note = "wiki key: controller ruling puts it in scope; the UI opens the wiki URL with ctx.open_url on the keypress"
+ported = "app/src/ui/items/slots.rs F1 over a slot or its dropdown entry opens the item's poewiki page"
 
 [keys."list.MOUSE4"]
 ported = "app/src/ui/build_list.rs keys folder back"
@@ -3549,8 +3528,7 @@ note = "keyboard selection in lists"
 ported = "app/src/ui/build_list.rs keys Ctrl+X marks the row, Ctrl+V in another folder moves it"
 
 [keys."main.F1"]
-gap = "Task 14"
-note = "F1 Help (R25)"
+ported = "app/src/ui/shortcuts.rs F1 (on release) opens app/src/ui/help.rs at the tab's section, or the hovered thing's wiki page"
 
 [keys."notes.y"]
 ported = "app/src/ui/notes.rs egui text editor redo"
@@ -3573,8 +3551,7 @@ gap = "Task 14"
 note = "NF-14 F2 rename"
 
 [keys."PassiveTreeView.wiki"]
-gap = "Task 14"
-note = "wiki key: controller ruling puts it in scope; the UI opens the wiki URL with ctx.open_url on the keypress"
+ported = "app/src/ui/tree/keys.rs F1 over a node opens its poewiki page"
 
 [keys."popup.ESCAPE"]
 ported = "app/src/ui/popup.rs Esc closes the session"
@@ -3609,8 +3586,7 @@ gap = "Task 14"
 note = "right-click menu ported; NF-11 Ctrl+right-click toggles Full DPS"
 
 [keys."SkillListControl.wiki"]
-gap = "Task 14"
-note = "wiki key: controller ruling puts it in scope; the UI opens the wiki URL with ctx.open_url on the keypress"
+ported = "app/src/ui/skills/keys.rs F1 over a socket group opens its first gem's poewiki page"
 
 [keys."skills.v"]
 ported = "app/src/ui/skills/mod.rs Ctrl+V paste"
@@ -3662,48 +3638,39 @@ ported = "app/src/ui"
 note = "egui's own widget behaviour"
 
 [keys."tree.c"]
-gap = "Task 14"
-note = "Ctrl+C on a hovered node (R25)"
+ported = "app/src/ui/tree/keys.rs Ctrl+C copies the hovered node's # name and stat lines (not on sockets)"
 
 [keys."tree.d"]
-gap = "Task 14"
-note = "Ctrl+D stat differences (R25)"
+ported = "app/src/ui/tree/keys.rs Ctrl+D sends SetTreeStatDifferences (glue/tree.lua)"
 
 [keys."tree.DOWN"]
-gap = "Task 14"
-note = "next spec (R25)"
+ported = "app/src/ui/tree/keys.rs Down selects the next tree unless the tree selector is hovered or open"
 
 [keys."tree.f"]
-gap = "Task 14"
-note = "Ctrl+F (R25)"
+ported = "app/src/ui/tree/keys.rs Ctrl+F selects the tree search (tree/toolbar.rs)"
 
 [keys."tree.LEFTBUTTON"]
 gap = "Task 14"
 note = "click to allocate and drag to pan ported (tree/canvas.rs); NF-17 (new finding, in scope by controller ruling): Shift-held path tracing and Ctrl+click zoom are not"
 
 [keys."tree.m"]
-gap = "Task 14"
-note = "Ctrl+M spec manager (R25)"
+ported = "app/src/ui/tree/keys.rs Ctrl+M opens the tree selector, our tree manager with its New, Rename and Delete"
 
 [keys."tree.p"]
-gap = "Task 14"
-note = "P heat map (R25)"
+ported = "app/src/ui/tree/keys.rs P sends ToggleHeatmap (glue/tree.lua)"
 
 [keys."tree.PAGEDOWN"]
-gap = "Task 14"
-note = "zoom (R25)"
+ported = "app/src/ui/tree/keys.rs PageDown zooms out one of PoB's 1.2 steps, three with Shift"
 
 [keys."tree.PAGEUP"]
-gap = "Task 14"
-note = "zoom (R25)"
+ported = "app/src/ui/tree/keys.rs PageUp zooms in one of PoB's 1.2 steps, three with Shift"
 
 [keys."tree.RIGHTBUTTON"]
 gap = "Task 14"
 note = "right-click ported (tree/canvas.rs: tattoos, jewel jump, mastery); NF-17: Ctrl+right-click zooms out"
 
 [keys."tree.UP"]
-gap = "Task 14"
-note = "previous spec (R25)"
+ported = "app/src/ui/tree/keys.rs Up selects the previous tree unless the tree selector is hovered or open"
 
 [keys."tree.WHEELDOWN"]
 ported = "app/src/ui/tree/canvas.rs scroll zoom"

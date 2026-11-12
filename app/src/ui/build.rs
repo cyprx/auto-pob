@@ -14,6 +14,10 @@ pub enum BuildAction {
     Undo,
     Redo,
     Options,
+    /// The loadouts' "Help >>": the Help window at its seventh section (Build.lua:311-313)
+    Help,
+    /// PoB's About button: the window on its version history (Main.lua:209-211)
+    About,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -53,6 +57,8 @@ pub struct TopBarState {
     typed_in_auto: bool,
     /// "New Loadout" was chosen: the name being typed
     new_loadout: Option<String>,
+    /// "Help >>" was chosen in the loadouts list
+    help: bool,
 }
 
 impl TopBarState {
@@ -157,12 +163,20 @@ pub fn top_bar(
         if ui.button("Options").clicked() {
             out.action = Some(BuildAction::Options);
         }
+        let about = ui.button("About");
+        note(ui, "about", about.rect);
+        if about.clicked() {
+            out.action = Some(BuildAction::About);
+        }
         ui.separator();
         tree.top_bar_points(ui, &view.progress);
         level(ui, view, state, busy, &mut out.commands);
         out.commands.extend(tree.top_bar_class(ui));
         bloodline(ui, view, &mut out.commands);
         loadouts(ui, view, state, &mut out.commands);
+        if std::mem::take(&mut state.help) {
+            out.action = Some(BuildAction::Help);
+        }
     });
     new_loadout_dialog(ui.ctx(), state, &mut out.commands);
     out
@@ -314,8 +328,13 @@ fn loadouts(
                         }
                         r
                     }
-                    // the Help window isn't in the app yet
-                    "Help >>" => ui.add_enabled(false, egui::Button::new("Help >>")),
+                    "Help >>" => {
+                        let r = ui.button("Help >>");
+                        if r.clicked() {
+                            state.help = true;
+                        }
+                        r
+                    }
                     "-----" => {
                         ui.separator();
                         continue;
@@ -391,6 +410,8 @@ mod tests {
         view: BuildView,
         state: TopBarState,
         tree: TreeTab,
+        /// The last action the top bar asked for
+        action: Option<BuildAction>,
     }
 
     impl Harness {
@@ -400,6 +421,7 @@ mod tests {
                 view,
                 state: TopBarState::default(),
                 tree: TreeTab::default(),
+                action: None,
             };
             h.frame(vec![]);
             h
@@ -423,6 +445,7 @@ mod tests {
                     });
                 })
                 .drop_without_applying_deltas();
+            self.action = out.action.or(self.action);
             out.commands.iter().map(|c| format!("{c:?}")).collect()
         }
 
@@ -599,6 +622,18 @@ mod tests {
         sent.extend(h.click("new_loadout_save"));
         assert_eq!(sent, ["NewLoadout { name: \"L3\" }"]);
         assert!(!h.state.has_dialog());
+    }
+
+    #[test]
+    fn loadouts_help_opens_the_help_window_and_about_its_history() {
+        let mut h = Harness::new(view());
+        let mut sent = h.open("loadouts");
+        sent.extend(h.click("loadout_6"));
+        assert!(sent.is_empty(), "{sent:?}");
+        assert_eq!(h.action, Some(BuildAction::Help));
+        h.action = None;
+        h.click("about");
+        assert_eq!(h.action, Some(BuildAction::About));
     }
 
     #[test]

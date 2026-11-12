@@ -126,8 +126,8 @@ fn map_entry(relative: &Path, dest: &Path) -> Option<PathBuf> {
     if let Ok(tail) = relative.strip_prefix("runtime/lua") {
         return (!tail.as_os_str().is_empty()).then(|| dest.join("lua").join(tail));
     }
-    // help.txt is the Help window's text (Main.lua:1360)
-    ["manifest.xml", "LICENSE.md", "help.txt"]
+    // the Help window's text and version history (Main.lua:1336-1376)
+    ["manifest.xml", "LICENSE.md", "help.txt", "changelog.txt"]
         .iter()
         .any(|name| relative == Path::new(name))
         .then(|| dest.join(relative))
@@ -198,9 +198,9 @@ mod tests {
         assert!(dest.join("Classes/Item.lua").exists());
         assert!(dest.join("lua/xml.lua").exists());
         assert!(dest.join("manifest.xml").exists());
-        // the Help window reads it; the changelog isn't shown
+        // the Help window reads them
         assert!(dest.join("help.txt").exists());
-        assert!(!dest.join("changelog.txt").exists());
+        assert!(dest.join("changelog.txt").exists());
         assert!(!dest.join("docs").exists());
         assert!(!dest.join("src").exists());
     }

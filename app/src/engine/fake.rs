@@ -754,6 +754,7 @@ impl Backend for Fake {
                 lines: vec!["^7This file contains a list of shortcuts".into()],
             }],
             header: vec![],
+            changelog: vec![],
         })
     }
 }
@@ -801,5 +802,7 @@ pub fn empty_tree_state() -> TreeState {
         max_depth: None,
         can_undo: false,
         can_redo: false,
+        heatmap_shown: false,
+        show_stat_differences: true,
     }
 }

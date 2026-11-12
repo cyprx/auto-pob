@@ -15,12 +15,14 @@ use crate::ui::calcs::{CalcsOutput, CalcsUi};
 use crate::ui::compare::{CompareOutput, CompareUi};
 use crate::ui::config::ConfigUi;
 use crate::ui::folder_picker::{FolderPicker, PickerOutput};
+use crate::ui::help::{self, HelpStart, HelpUi};
 use crate::ui::import::{Confirm, ImportOutput, ImportUi, Plan};
 use crate::ui::items::{ItemsOutput, ItemsUi};
 use crate::ui::notes::NotesUi;
 use crate::ui::options::{self, OptionsUi};
 use crate::ui::popup::{self, PopupWindow};
 use crate::ui::requests;
+use crate::ui::shortcuts::{self, ShortcutAction, ShortcutState};
 use crate::ui::skills::{SkillsOutput, SkillsUi};
 use crate::ui::tree::{TreeOutput, TreeTab};
 use crate::ui::unsaved::{Pending, PromptChoice, Resolution, needs_prompt, resolve};
@@ -159,6 +161,8 @@ pub struct AutoPobApp {
     /// Actions waiting for the next frame (they need the egui context).
     ready_actions: Vec<Pending>,
     allow_close: bool,
+    /// PoB's About window: its help and version history (R25)
+    help: HelpUi,
     /// Names of the commands sent through `send`, for tests.
     #[cfg(test)]
     sent_log: Vec<String>,
@@ -225,6 +229,7 @@ impl AutoPobApp {
             import: None,
             ready_actions: Vec::new(),
             allow_close: false,
+            help: HelpUi::default(),
             #[cfg(test)]
             sent_log: Vec::new(),
             #[cfg(test)]
@@ -585,6 +590,7 @@ impl AutoPobApp {
                     // the Compare tab took it above
                     Snapshot::Compare(_) => {}
                     Snapshot::ExternalUrl(link) => self.trade_link.on_link(seq, &link.url),
+                    Snapshot::Help(view) => self.help.on_view(view),
                     // power results of the build being left
                     Snapshot::NodePower(_) | Snapshot::PowerReport(_)
                         if self.entering.is_some() => {}
@@ -685,6 +691,10 @@ impl AutoPobApp {
     }
 
     fn on_error(&mut self, seq: u64, message: String) {
+        // the Help window says it itself
+        if self.help.on_error(seq, &message) {
+            return;
+        }
         if let Some(dialog) = &mut self.save_as
             && let Some((_, back)) = dialog.new_folder.take_if(|(s, _)| *s == seq)
         {
@@ -981,8 +991,73 @@ impl AutoPobApp {
             Screen::Build => self.build_screen(ui),
         }
         self.options_window(ui);
+        self.help.show(&ctx);
         self.apply_ui_settings(&ctx);
         self.dialogs(&ctx);
+    }
+
+    /// Opens PoB's About window at `start`; its text is asked of the engine the first time.
+    /// A question: it never leaves the app waiting.
+    fn open_help(&mut self, start: HelpStart) {
+        if let Some(query) = self.help.open(start) {
+            #[cfg(test)]
+            self.sent_log.push("Help".into());
+            let seq = self.engine.send(query);
+            self.help.asked(seq);
+        }
+    }
+
+    /// What F1 would open on the wiki on this tab: the hovered node, item or gem.
+    fn wiki_target(&self) -> Option<String> {
+        match self.tab {
+            BuildTab::Tree => self.tree.hovered_wiki(),
+            BuildTab::Items => self.items.hovered_wiki(),
+            BuildTab::Skills => self.skills.hovered_wiki(),
+            _ => None,
+        }
+    }
+
+    /// Carries out a shortcut of the build screen; Ctrl+W and Mouse4 come back as Back.
+    fn run_shortcut(&mut self, ctx: &egui::Context, action: ShortcutAction) -> Option<BuildAction> {
+        use ShortcutAction as A;
+        match action {
+            A::Tab(tab) => self.tab = tab,
+            A::Import => {
+                self.tab = BuildTab::Import;
+                self.import_ui.focus_code();
+            }
+            A::Close => return Some(BuildAction::Back),
+            A::Help => self.open_help(HelpStart::Tab(help::tab_name(Some(self.tab)))),
+            // the user's own key asked for it (R20)
+            A::Wiki(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
+            A::Search => match self.tab {
+                BuildTab::Tree => self.tree.focus_search(),
+                BuildTab::Config => self.config_ui.focus_search = true,
+                BuildTab::Compare => self.compare.focus_search(),
+                BuildTab::Items => {
+                    if let Some(command) = self.items.focus_db_search(ctx) {
+                        self.send(command);
+                    }
+                }
+                _ => {}
+            },
+            A::CopyNode => {
+                if let Some(text) = self.tree.hovered_node_text() {
+                    ctx.copy_text(text);
+                }
+            }
+            A::EditSlot => {
+                if let Some(command) = self.items.edit_hovered_slot() {
+                    self.send(command);
+                }
+            }
+            tree => {
+                if let Some(command) = self.tree.on_shortcut(&tree, ctx) {
+                    self.send(command);
+                }
+            }
+        }
+        None
     }
 
     /// The `pob://` argument never imports by itself: the user is asked first (R4).
@@ -1117,6 +1192,22 @@ impl AutoPobApp {
             || self.confirm.is_some()
             || self.popup.is_blocking()
             || self.options.window.is_blocking();
+        // F1: the Help window ("Build List tab" matches no section: the first, Main.lua:441)
+        let state = ShortcutState {
+            typing: ui.ctx().text_edit_focused(),
+            modal: blocked,
+            ..ShortcutState::default()
+        };
+        let shortcut = ui.input_mut(|i| {
+            let a = shortcuts::shortcut_action(&state, i);
+            if let Some(a) = &a {
+                shortcuts::consume(a, i);
+            }
+            a
+        });
+        if shortcut == Some(ShortcutAction::Help) {
+            self.open_help(HelpStart::Tab(help::tab_name(None)));
+        }
         egui::CentralPanel::default().show(ui, |ui| match self.list.clone() {
             Some(view) => action = self.list_ui.show(ui, &view, blocked),
             None => {
@@ -1163,6 +1254,7 @@ impl AutoPobApp {
             ListScreenAction::SetFilter(text) => {
                 self.send(Command::SetBuildFilter { text });
             }
+            ListScreenAction::About => self.open_help(HelpStart::VersionHistory),
         }
     }
 
@@ -1210,6 +1302,24 @@ impl AutoPobApp {
                     }
                 }
             });
+        }
+        // PoB's other shortcuts (R25)
+        let state = ShortcutState {
+            tab: Some(self.tab),
+            typing,
+            modal,
+            spec_select_busy: self.tree.spec_select_busy(),
+            wiki: self.wiki_target(),
+        };
+        let shortcut = ui.input_mut(|i| {
+            let a = shortcuts::shortcut_action(&state, i);
+            if let Some(a) = &a {
+                shortcuts::consume(a, i);
+            }
+            a
+        });
+        if let Some(shortcut) = shortcut {
+            action = self.run_shortcut(ui.ctx(), shortcut).or(action);
         }
 
         let behind = self.behind();
@@ -1436,6 +1546,8 @@ impl AutoPobApp {
             Some(BuildAction::Undo) => self.undo_redo(false),
             Some(BuildAction::Redo) => self.undo_redo(true),
             Some(BuildAction::Options) => self.open_options(),
+            Some(BuildAction::Help) => self.open_help(HelpStart::Section(7)),
+            Some(BuildAction::About) => self.open_help(HelpStart::VersionHistory),
             None => {}
         }
     }
@@ -2243,6 +2355,10 @@ mod tests {
                 })
                 .collect(),
             header: vec!["^7Path of Building Community Fork v2.67.2".into()],
+            changelog: vec![crate::engine::HelpSection {
+                title: "Version 2.67.2 (2026/08/07)".into(),
+                lines: vec!["^7* Fix a thing".into()],
+            }],
         }
     }
 
@@ -5843,5 +5959,10 @@ mod tests {
             marked("release_dismiss").is_none(),
             "hidden for the session"
         );
+    }
+
+    // the shortcuts' tests (R25), with this module's helpers
+    mod shortcut_tests {
+        include!("app_shortcut_tests.rs");
     }
 }

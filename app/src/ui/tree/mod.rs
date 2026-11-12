@@ -3,6 +3,7 @@
 
 pub mod canvas;
 pub mod geometry;
+mod keys;
 pub mod overlays;
 pub mod power_report;
 pub mod toolbar;

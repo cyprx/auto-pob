@@ -55,6 +55,9 @@ pub(super) fn show(
                 .desired_width(240.0),
         );
         tab.rects.note(&search, || "config_search".into());
+        if std::mem::take(&mut tab.focus_search) {
+            search.request_focus();
+        }
         if let Some(config) = tab.config.clone() {
             ui.label("Config set:");
             let active = config

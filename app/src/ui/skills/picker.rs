@@ -60,6 +60,12 @@ pub struct GemPicker {
 }
 
 impl GemPicker {
+    /// The gem row under the pointer
+    pub(super) fn hovered_gem(&self) -> Option<&crate::engine::views::GemRow> {
+        let (id, _) = self.hover.as_ref()?;
+        self.view.as_ref()?.rows.iter().find(|r| r.gem_id == *id)
+    }
+
     pub fn open(group: usize, target: GemTarget, now: f64) -> GemPicker {
         GemPicker {
             group,
@@ -755,6 +761,19 @@ mod tests {
             debug(&asked),
             ["GemTooltip(GemTooltipQuery { group: 0, target: Slot(0), gem_id: Some(\"b\") })"]
         );
+    }
+
+    #[test]
+    fn the_hovered_row_is_the_wiki_keys_gem() {
+        let mut h = Harness::new(GemTarget::Slot(0), &["a", "b"]);
+        for _ in 0..3 {
+            h.frame(vec![]);
+        }
+        assert!(h.p.hovered_gem().is_none());
+        let pos = h.p.rects.map["picker_row_1"].center();
+        h.frame(vec![Event::PointerMoved(pos)]);
+        h.frame(vec![]);
+        assert_eq!(h.p.hovered_gem().map(|g| g.gem_id.as_str()), Some("b"));
     }
 
     #[test]

@@ -180,6 +180,8 @@ pub struct CompareUi {
     /// PoB switched to its Compare tab and the app hasn't followed yet
     switched: bool,
     pub(crate) rects: Rects,
+    /// Ctrl+F: the Config view's search takes the keyboard when next drawn
+    focus_search: bool,
 }
 
 impl CompareUi {
@@ -193,6 +195,12 @@ impl CompareUi {
 
     pub fn sub_tab(&self) -> SubTab {
         self.sub
+    }
+
+    /// Ctrl+F: the Config view's search, when that view shows a comparison
+    /// (CompareTab.lua:1686-1689)
+    pub fn focus_search(&mut self) {
+        self.focus_search = self.view.is_some() && self.sub == SubTab::Config;
     }
 
     /// The Tree view is up with a comparison loaded: the overlay should be on (R7).

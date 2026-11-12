@@ -18,7 +18,10 @@ cd auto-pob-<version>-linux-x86_64
 ```
 
 `install.sh [--prefix DIR] [--register-scheme] [--uninstall]` prints every path it writes and
-touches nothing else. `--uninstall` removes exactly those files.
+touches nothing else. `--uninstall` removes exactly those files. It does not undo a `--register-scheme`
+association (xdg-mime cannot unset one); it prints a note if `pob://` still points at auto-pob. Reset it
+with `xdg-mime default <other>.desktop x-scheme-handler/pob` or by deleting the
+`x-scheme-handler/pob` line from `~/.config/mimeapps.list`.
 
 **`--register-scheme` is opt-in.** Without it nothing claims `pob://` links. With it the
 installer adds `MimeType=x-scheme-handler/pob;` to the installed desktop file, runs

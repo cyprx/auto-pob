@@ -44,6 +44,14 @@ if [[ $uninstall -eq 1 ]]; then
             echo "removed $f"
         fi
     done
+    # --register-scheme may have made auto-pob the pob:// handler; xdg-mime can't unset that
+    for mimeapps in "${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list" "$HOME/.local/share/applications/mimeapps.list"; do
+        if [[ -f $mimeapps ]] && grep -qx 'x-scheme-handler/pob=auto-pob.desktop;\?' "$mimeapps"; then
+            echo "note: $mimeapps still lists auto-pob.desktop as the pob:// handler."
+            echo "      Reset it with: xdg-mime default <other>.desktop x-scheme-handler/pob"
+            echo "      or delete the x-scheme-handler/pob line from that file."
+        fi
+    done
     exit 0
 fi
 

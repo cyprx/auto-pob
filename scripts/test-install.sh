@@ -114,6 +114,14 @@ mkdir -p "$prefix/bin"
 echo keep >"$prefix/bin/other-tool"
 out=$(run_install --uninstall)
 echo "$out"
+check "uninstall printed a reset note without a pob:// default" bash -c "! grep -q 'Reset it with' <<<'$out'"
+mkdir -p "$tmp/xdg-config"
+printf '[Default Applications]\nx-scheme-handler/pob=auto-pob.desktop;\n' >"$tmp/xdg-config/mimeapps.list"
+out2=$(run_install --uninstall)
+check "uninstall must note a pob:// default pointing at auto-pob" grep -q 'xdg-mime default <other>.desktop x-scheme-handler/pob' <<<"$out2"
+check "uninstall must name the mimeapps.list" grep -qF "$tmp/xdg-config/mimeapps.list" <<<"$out2"
+check "uninstall must not edit mimeapps.list" grep -q 'auto-pob.desktop' "$tmp/xdg-config/mimeapps.list"
+rm "$tmp/xdg-config/mimeapps.list"
 run_install --prefix "$alt" --uninstall >/dev/null
 for p in "$bin" "$desktop" "$icon" "$alt/bin/auto-pob" "$alt/share/applications/auto-pob.desktop"; do
     check "uninstall left $p" test ! -e "$p"

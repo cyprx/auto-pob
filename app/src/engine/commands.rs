@@ -917,6 +917,65 @@ pub enum Command {
         id: u32,
         second_slot: bool,
     },
+    /// PoB's shared items (NF-2), kept in Settings.xml across builds. An edit of the shared
+    /// lists saves Settings.xml through PoB's `main:SaveSettings` (R29 amended by the
+    /// controller: shared item list edits), overrides kept out (R12).
+    ///
+    /// A build item or a database row dragged onto the shared list, dropped at 0-based row
+    /// `index` (`index` = the length appends).
+    AddSharedItem {
+        source: SharedItemSource,
+        index: usize,
+    },
+    /// Shared item `index` dragged onto `slot`, or onto the build's item list (`None`, appended):
+    /// a copy is added to the build. The shared list is unchanged and nothing is saved.
+    DropSharedItem {
+        index: usize,
+        slot: Option<String>,
+    },
+    /// The shared list's Delete, confirmed in the UI (PoB's "Delete Item" question)
+    DeleteSharedItem {
+        index: usize,
+    },
+    /// A shared item dragged within the shared list; `to` is its final position
+    MoveSharedItem {
+        from: usize,
+        to: usize,
+    },
+    /// The double click on a shared item: it goes to the display panel
+    ViewSharedItem {
+        index: usize,
+    },
+    /// The build's item set `id` dragged onto the Manage Item Sets window's shared set list
+    AddSharedItemSet {
+        id: u32,
+    },
+    /// Shared set `index` dragged onto the build's set list: a new item set with copies
+    ImportSharedItemSet {
+        index: usize,
+    },
+    /// The shared set list's Delete, confirmed in the UI (PoB's "Delete Item Set" question)
+    DeleteSharedItemSet {
+        index: usize,
+    },
+    /// The shared set list's Rename (or F2); a blank title is `that name isn't allowed`
+    RenameSharedItemSet {
+        index: usize,
+        title: String,
+    },
+    MoveSharedItemSet {
+        from: usize,
+        to: usize,
+    },
+}
+
+/// What is dragged onto the shared item list
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SharedItemSource {
+    /// A build item, by id
+    Item { id: u32 },
+    /// A database row
+    Db { db: ItemDb, name: String },
 }
 
 /// A control whose hover tooltip PoB computes (R22). Gem positions are 0-based.
@@ -1015,6 +1074,9 @@ pub struct ItemTooltipQuery {
     /// hover reads the item's second-slot mods (R34)
     #[serde(default)]
     pub shift: bool,
+    /// Hovering shared item `shared` (0-based; `id` and `slot` are not used)
+    #[serde(default)]
+    pub shared: Option<usize>,
 }
 
 /// A window PoB opens from the Items tab's buttons (R3).

@@ -41,6 +41,14 @@ impl Rects {
 
     #[cfg(not(test))]
     pub(super) fn note(&mut self, _response: &egui::Response, _key: impl FnOnce() -> String) {}
+    /// A rect that isn't a widget's (a drop area)
+    #[cfg(test)]
+    pub(crate) fn note_rect(&mut self, rect: egui::Rect, key: &str) {
+        self.map.insert(key.to_owned(), rect);
+    }
+
+    #[cfg(not(test))]
+    pub(crate) fn note_rect(&mut self, _rect: egui::Rect, _key: &str) {}
 }
 
 /// How long a node pulses after a power report row was clicked (seconds).
@@ -139,6 +147,8 @@ pub struct TreeTab {
     pub(crate) rects: Rects,
     /// The path traced with Shift held, from the tree to its end (PoB's `tracePath`)
     pub(super) trace: Vec<u32>,
+    /// The "Manage Passive Trees" window the Items tab's "Manage..." opens
+    spec_manager: bool,
 }
 
 impl TreeTab {
@@ -181,6 +191,55 @@ impl TreeTab {
         }
         self.toolbar
             .class_dialog(ui.ctx(), &mut self.rects, &mut commands);
+        commands
+    }
+
+    /// Opens PoB's "Manage Passive Trees" window (the Items tab's "Manage...",
+    /// ItemsTab.lua:203-205): the Tree tab's spec controls and their dialogs.
+    pub fn open_spec_manager(&mut self) {
+        self.spec_manager = true;
+    }
+
+    pub fn spec_manager_open(&self) -> bool {
+        self.spec_manager
+    }
+
+    pub fn close_spec_manager(&mut self) {
+        self.spec_manager = false;
+        self.toolbar.close_dialog();
+    }
+
+    /// Draws the "Manage Passive Trees" window while it is open; returns what the user chose
+    pub fn spec_manager(&mut self, ctx: &egui::Context) -> Vec<Command> {
+        let mut commands = Vec::new();
+        let Some(state) = self.state.clone() else {
+            return commands;
+        };
+        if !self.spec_manager {
+            return commands;
+        }
+        let mut open = true;
+        egui::Window::new("Manage Passive Trees")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, -80.0])
+            .show(ctx, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    self.toolbar
+                        .specs(ui, &state, &mut self.rects, &mut commands);
+                });
+                let done = ui.button("Done");
+                self.rects.note(&done, || "spec_manager_done".into());
+                if done.clicked() {
+                    self.spec_manager = false;
+                }
+            });
+        self.toolbar
+            .spec_dialogs(ctx, &state, &mut self.rects, &mut commands);
+        if !open {
+            self.close_spec_manager();
+        }
         commands
     }
 

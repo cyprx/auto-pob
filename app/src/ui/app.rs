@@ -1597,7 +1597,8 @@ impl AutoPobApp {
         {
             self.send(command);
         }
-        if self.tab != BuildTab::Tree {
+        // the Items tab's Manage Passive Trees window keeps its own dialogs
+        if self.tab != BuildTab::Tree && !self.tree.spec_manager_open() {
             self.tree.close_dialog();
         }
         if self.tab != BuildTab::Compare {
@@ -1658,9 +1659,17 @@ impl AutoPobApp {
         for query in popup_out.queries {
             self.engine.send(query);
         }
-        // the Items tab's "Manage..." under its tree dropdown: our tree manager is the Tree tab's
+        // the Items tab's "Manage..." under its tree dropdown: PoB's Manage Passive Trees window
         if items_out.manage_trees {
-            self.tab = BuildTab::Tree;
+            self.tree.open_spec_manager();
+        }
+        // the window belongs to the Items tab: leaving the tab closes it
+        if self.tab == BuildTab::Items {
+            for command in self.tree.spec_manager(ui.ctx()) {
+                self.send(command);
+            }
+        } else if self.tree.spec_manager_open() {
+            self.tree.close_spec_manager();
         }
         for command in items_out.commands {
             let is_text = matches!(command, Command::SetDisplayItemText { .. });
@@ -6150,9 +6159,10 @@ mod tests {
         );
     }
 
-    /// The Items tab's "Manage..." under its tree dropdown shows the Tree tab (our spec manager)
+    /// The Items tab's "Manage..." under its tree dropdown opens PoB's Manage Passive Trees
+    /// window, whose controls are the Tree tab's spec controls
     #[test]
-    fn items_manage_trees_shows_the_tree_tab() {
+    fn items_manage_opens_the_tree_manager() {
         let (mut app, ctx) = tree_app();
         let mut view = crate::ui::items::tests::sample();
         view.specs = Some(crate::engine::views::DropList {
@@ -6169,7 +6179,37 @@ mod tests {
             frame(&mut app, &ctx, vec![]);
         }
         click_item_key(&mut app, &ctx, "spec_manage");
-        assert_eq!(app.tab, BuildTab::Tree);
+        assert_eq!(app.tab, BuildTab::Items, "the tab stays");
+        assert!(app.tree.spec_manager_open());
+        // the window reaches its place over a few frames
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        assert!(
+            app.tree.rects.map.contains_key("spec_manager_done"),
+            "the window is not drawn"
+        );
+        // its "+" is the Tree tab's New tree, with the same dialog
+        let pos = app.tree.rects.map["spec_new"].center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        assert!(app.tree.has_dialog(), "no New tree dialog");
+        // leaving the tab closes the window
+        app.tab = BuildTab::Config;
+        frame(&mut app, &ctx, vec![]);
+        assert!(!app.tree.spec_manager_open());
     }
 
     /// "Add Mod" on the Config tab opens the Mod Browser there; leaving the tab ends it (R28)

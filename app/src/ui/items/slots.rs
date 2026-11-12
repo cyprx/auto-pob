@@ -1,6 +1,7 @@
 //! The slots column: a dropdown per slot, flask boxes and the jewel sockets.
 
 use super::db::DbDrag;
+use super::shared::SharedDrag;
 use super::{ItemDrag, ItemsOutput, ItemsUi};
 use crate::engine::views::{ItemsView, SlotKind, SlotView};
 use crate::engine::{BuySource, Command, ItemTooltipQuery, PopupKind};
@@ -170,6 +171,7 @@ impl ItemsUi {
         // egui's drop zone takes whatever payload is released on it, so the zone is typed by
         // what is being dragged: a list row or a database row (R23)
         let db_dragging = egui::DragAndDrop::has_payload_of_type::<DbDrag>(ui.ctx());
+        let shared_dragging = egui::DragAndDrop::has_payload_of_type::<SharedDrag>(ui.ctx());
         let contents = |ui: &mut egui::Ui| {
             ui.horizontal(|ui| {
                 let pad = if indent { 16.0 } else { 0.0 };
@@ -235,6 +237,7 @@ impl ItemsUi {
                                         slot: Some(slot.name.clone()),
                                         theirs: false,
                                         shift: false,
+                                        shared: None,
                                     },
                                 );
                             }
@@ -284,6 +287,7 @@ impl ItemsUi {
                             slot: Some(slot.name.clone()),
                             theirs: false,
                             shift: false,
+                            shared: None,
                         },
                     );
                 }
@@ -302,13 +306,23 @@ impl ItemsUi {
                 }
             });
         };
-        let (zone, dropped, db_dropped) = if db_dragging {
+        let (zone, dropped, db_dropped, shared_dropped) = if db_dragging {
             let (zone, dropped) = ui.dnd_drop_zone::<DbDrag, _>(egui::Frame::NONE, contents);
-            (zone, None, dropped)
+            (zone, None, dropped, None)
+        } else if shared_dragging {
+            let (zone, dropped) = ui.dnd_drop_zone::<SharedDrag, _>(egui::Frame::NONE, contents);
+            (zone, None, None, dropped)
         } else {
             let (zone, dropped) = ui.dnd_drop_zone::<ItemDrag, _>(egui::Frame::NONE, contents);
-            (zone, dropped, None)
+            (zone, dropped, None, None)
         };
+        // a shared item dropped on the slot: PoB decides whether the slot takes it (NF-2)
+        if let Some(drag) = shared_dropped {
+            out.commands.push(Command::DropSharedItem {
+                index: drag.index,
+                slot: Some(slot.name.clone()),
+            });
+        }
         self.rects
             .note(&zone.response, || format!("slot_{}", slot.name));
         // a database row dropped on the slot: PoB decides whether the slot takes it (R23)

@@ -4,7 +4,8 @@ use super::buildpaths;
 use super::commands::{
     CharacterPart, Command, CompareSource, ConfigValue, ControlTooltipQuery, DeleteKind,
     GemSearchQuery, GemTarget, GemToggle, GemTooltipQuery, HoverTarget, ImportMode, ItemDb,
-    ItemDbQuery, ItemTooltipQuery, PopupInput, PopupKind, SkillOption, SocketColour, Tab,
+    ItemDbQuery, ItemTooltipQuery, PopupInput, PopupKind, SharedItemSource, SkillOption,
+    SocketColour, Tab,
 };
 use super::net::{Dispatch, NetHandle};
 use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Engine, Event};
@@ -151,6 +152,10 @@ impl PobBackend {
             ("@glue/popups.lua", include_str!("glue/popups.lua")),
             ("@glue/timeless.lua", include_str!("glue/timeless.lua")),
             ("@glue/itemdb.lua", include_str!("glue/itemdb.lua")),
+            (
+                "@glue/shared_items.lua",
+                include_str!("glue/shared_items.lua"),
+            ),
             ("@glue/notes.lua", include_str!("glue/notes.lua")),
             ("@glue/net.lua", include_str!("glue/net.lua")),
             ("@glue/import.lua", include_str!("glue/import.lua")),
@@ -470,6 +475,14 @@ fn items_listed() -> Affected {
 }
 
 /// A change to the display item only: PoB counts none of it as an edit of the build (R10).
+/// A shared list changed (NF-2): the Items view shows it
+fn shared_changed() -> Affected {
+    Affected {
+        items: true,
+        ..Affected::default()
+    }
+}
+
 fn display_changed() -> Affected {
     Affected {
         display_item: true,
@@ -784,6 +797,57 @@ impl PobBackend {
             Command::QuickEquipItem { id, second_slot } => {
                 self.call::<_, ()>("item_quick_equip", (id, second_slot))?;
                 self.items_edited()
+            }
+            Command::AddSharedItem { source, index } => {
+                match source {
+                    SharedItemSource::Item { id } => {
+                        self.call::<_, ()>("shared_add", ("item", id, mlua::Value::Nil, index))?
+                    }
+                    SharedItemSource::Db { db, name } => {
+                        self.call::<_, ()>("shared_add", ("db", db_name(db), name, index))?
+                    }
+                }
+                Ok(shared_changed())
+            }
+            Command::DropSharedItem { index, slot } => {
+                self.call::<_, ()>("shared_drop", (index + 1, slot))?;
+                self.items_edited()
+            }
+            Command::DeleteSharedItem { index } => {
+                self.call::<_, ()>("shared_delete", index + 1)?;
+                Ok(shared_changed())
+            }
+            Command::MoveSharedItem { from, to } => {
+                self.call::<_, ()>("shared_move", (from + 1, to + 1))?;
+                Ok(shared_changed())
+            }
+            Command::ViewSharedItem { index } => {
+                self.call::<_, ()>("shared_view", index + 1)?;
+                Ok(display_changed())
+            }
+            Command::AddSharedItemSet { id } => {
+                self.call::<_, ()>("shared_set_add", id)?;
+                Ok(shared_changed())
+            }
+            Command::ImportSharedItemSet { index } => {
+                self.call::<_, ()>("shared_set_import", index + 1)?;
+                self.items_edited()
+            }
+            Command::DeleteSharedItemSet { index } => {
+                self.call::<_, ()>("shared_set_delete", index + 1)?;
+                Ok(shared_changed())
+            }
+            Command::RenameSharedItemSet { index, title } => {
+                self.call::<_, ()>("shared_set_rename", (index + 1, title))?;
+                // PoB's rename sets the tab's `modFlag` (SharedItemSetListControl.lua:37)
+                Ok(Affected {
+                    build: true,
+                    ..shared_changed()
+                })
+            }
+            Command::MoveSharedItemSet { from, to } => {
+                self.call::<_, ()>("shared_set_move", (from + 1, to + 1))?;
+                Ok(shared_changed())
             }
             Command::ItemTooltip(query) => Ok(Affected {
                 item_tooltip: Some(query),
@@ -2402,7 +2466,9 @@ impl Backend for PobBackend {
     }
 
     fn item_tooltip_view(&mut self, query: &ItemTooltipQuery) -> Result<Option<ItemTooltipView>> {
-        let found: Option<ItemTooltip> = if query.theirs {
+        let found: Option<ItemTooltip> = if let Some(index) = query.shared {
+            self.view("shared_tooltip", index + 1)?
+        } else if query.theirs {
             self.view("compare_item_tooltip", query.slot.clone())?
         } else {
             self.view("item_tooltip", (query.id, query.slot.clone(), query.shift))?
@@ -2586,6 +2652,7 @@ mod tests {
                 slot: None,
                 theirs: false,
                 shift: false,
+                shared: None,
             }),
             Command::ControlTooltip(ControlTooltipQuery::Popup {
                 control: "save".into(),

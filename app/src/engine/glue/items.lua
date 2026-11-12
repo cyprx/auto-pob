@@ -95,6 +95,7 @@ function glue.items_view()
 	tab.controls.specSelect:SetList(tab.build.treeTab:GetSpecList())
 	view.specs = glue.drop_list(tab.controls.specSelect)
 	view.specs.enabled = tab.controls.specSelect:IsEnabled() and true or false
+	view.shared_items, view.shared_sets, view.shared_shown = glue.shared_view_lists(tab)
 	for i, id in ipairs(tab.itemOrderList) do
 		view.items[i] = item_entry(tab, list, i, id)
 	end

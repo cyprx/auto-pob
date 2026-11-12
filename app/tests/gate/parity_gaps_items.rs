@@ -189,6 +189,7 @@ fn shift_tooltip_matches_pob() {
                     slot: slot.map(str::to_string),
                     theirs: false,
                     shift,
+                    shared: None,
                 })
                 .unwrap()
                 .unwrap_or_else(|| panic!("{name}: no tooltip"));
@@ -500,4 +501,338 @@ fn items_tree_dropdown_matches_pob() {
         assert_eq!(specs["selected"], index);
     }
     assert_eq!(snapshot_dir(&s.user), files, "a file was written");
+}
+
+// ---- Shared items and shared item sets (NF-2, R29 amended) ----
+
+const SHARED_RING: &str = "Rarity: RARE\nShared Loop\nIron Ring\nImplicits: 0\n+20 to maximum Life";
+const SHARED_BODY: &str =
+    "Rarity: UNIQUE\nKaom's Heart\nGlorious Plate\nImplicits: 0\n+500 to maximum Life";
+const SHARED_SET_RING: &str =
+    "Rarity: RARE\nSet Loop\nIron Ring\nImplicits: 0\n+10 to maximum Life";
+
+/// A Settings.xml with two shared items and a shared set, the build list as the last mode and
+/// thousands separators off (which the session overrides)
+fn shared_seed() -> String {
+    format!(
+        "<PathOfBuilding>\n\t<Mode mode=\"LIST\"><Arg boolean=\"false\"/><Arg string=\"\"/></Mode>\n\
+         \t<SharedItems>\n\t\t<Item>{SHARED_RING}</Item>\n\t\t<Item>{SHARED_BODY}</Item>\n\
+         \t\t<ItemSet title=\"Shared Set\"><Item slotName=\"Ring 1\">{SHARED_SET_RING}</Item></ItemSet>\n\
+         \t</SharedItems>\n\t<Misc buildSortMode=\"NAME\" showThousandsSeparators=\"false\"/>\n</PathOfBuilding>\n"
+    )
+}
+
+/// The same shared lists upstream, which reads no Settings.xml
+const SHARED_SEED_UPSTREAM: &str = r#"
+table.insert(main.sharedItemList, new("Item", SHARED_RING))
+table.insert(main.sharedItemList, new("Item", SHARED_BODY))
+table.insert(main.sharedItemSetList, { title = "Shared Set", slots = { ["Ring 1"] = new("Item", SHARED_SET_RING) } })
+"#;
+
+/// Settings.xml without its `<SharedItems>` element
+fn outside_shared(xml: &str) -> String {
+    let Some(start) = xml.find("<SharedItems") else {
+        return xml.to_string();
+    };
+    let rest = &xml[start..];
+    let end = if rest.starts_with("<SharedItems/>") {
+        start + "<SharedItems/>".len()
+    } else {
+        start
+            + rest
+                .find("</SharedItems>")
+                .expect("SharedItems is not closed")
+            + "</SharedItems>".len()
+    };
+    format!("{}{}", &xml[..start], &xml[end..])
+}
+
+/// The `<SharedItems>` element of Settings.xml
+fn shared_part(xml: &str) -> String {
+    xml.replacen(&outside_shared(xml), "", 1)
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn shared_items_match_pob() {
+    use super::longtail_harness::{LongtailSession, settings_folder};
+    use auto_pob::engine::{ItemDbQuery, SharedItemSource};
+    use std::collections::BTreeMap;
+    let _guard = lock();
+    let mut s = LongtailSession::start("shared-items", &|_| shared_seed());
+    let xml = fixtures_dir().join("attack.xml");
+    let dest = settings_folder(&s.user).join("Builds/attack.xml");
+    std::fs::copy(&xml, &dest).unwrap();
+    s.run(Command::OpenBuild { path: dest }).unwrap();
+    // an override the shared saves must keep out of the file (R12)
+    s.run(Command::SetOverrides {
+        values: BTreeMap::from([("showThousandsSeparators".to_string(), "true".to_string())]),
+    })
+    .unwrap();
+    let lua = upstream_with_items_lib(&xml, "attack");
+    for (name, text) in [
+        ("SHARED_RING", SHARED_RING),
+        ("SHARED_BODY", SHARED_BODY),
+        ("SHARED_SET_RING", SHARED_SET_RING),
+    ] {
+        lua.globals().set(name, text).unwrap();
+    }
+    lua.load(SHARED_SEED_UPSTREAM).exec().unwrap();
+    let text = |s: &LongtailSession| String::from_utf8(s.settings_bytes()).unwrap();
+    let compare = |s: &mut LongtailSession, what: &str| -> serde_json::Value {
+        let ours = json(&s.backend.items_view().unwrap());
+        assert_same(&ours, &upstream_json(&lua), what);
+        assert_eq!(s.open_popups(), 0, "{what}: a popup was left open");
+        ours
+    };
+    let act = |code: &str| {
+        lua.load(code)
+            .exec()
+            .unwrap_or_else(|e| panic!("{code}: {e}"))
+    };
+
+    // PoB's own LoadSharedItems read the seed
+    let seeded = compare(&mut s, "seeded");
+    assert_eq!(seeded["shared_items"].as_array().unwrap().len(), 2);
+    assert_eq!(seeded["shared_sets"][0]["title"], "Shared Set");
+    assert_eq!(
+        seeded["shared_sets"][0]["lines"].as_array().unwrap().len(),
+        1
+    );
+
+    // viewing writes nothing: the view and a shared item's tooltip
+    let before = s.settings_bytes();
+    let ours = s
+        .backend
+        .item_tooltip_view(&ItemTooltipQuery {
+            id: 0,
+            slot: None,
+            theirs: false,
+            shift: false,
+            shared: Some(1),
+        })
+        .unwrap()
+        .expect("a tooltip");
+    let theirs: serde_json::Value = lua_value(
+        &lua,
+        "local tt = new('Tooltip') build.itemsTab.controls.sharedItemList:AddValueTooltip(tt, 2, main.sharedItemList[2]) return tooltipDump(tt)",
+    );
+    assert_same(
+        &json_of(&ours.tooltip),
+        &strip_nulls(theirs),
+        "shared tooltip",
+    );
+    s.backend.items_view().unwrap();
+    assert_eq!(s.settings_bytes(), before, "a view wrote Settings.xml");
+
+    // a build item dragged onto row 1 of the shared list: saved at once, the build list kept as
+    // the file's last mode and the override out of the file
+    let id = seeded["items"][0]["id"].as_u64().unwrap() as u32;
+    let affected = s
+        .run(Command::AddSharedItem {
+            source: SharedItemSource::Item { id },
+            index: 1,
+        })
+        .unwrap();
+    assert!(affected.items, "the Items view is stale");
+    act(&format!("act.shared_add_item({id}, 1)"));
+    compare(&mut s, "build item shared");
+    let first = text(&s);
+    assert_ne!(first.as_bytes(), before.as_slice(), "nothing was saved");
+    assert!(
+        first.contains("mode=\"LIST\""),
+        "the last mode changed: {first}"
+    );
+    assert!(
+        first.contains("showThousandsSeparators=\"false\""),
+        "the override reached Settings.xml"
+    );
+    assert_eq!(shared_part(&first).matches("<Item>").count(), 3, "{first}");
+
+    // every later edit of the shared lists changes only <SharedItems>
+    let mut last = first;
+    let mut edit = |s: &mut LongtailSession, command: Command, code: &str, what: &str| {
+        let affected = s.run(command).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert!(affected.items, "{what}: the Items view is stale");
+        act(code);
+        compare(s, what);
+        let now = text(s);
+        assert_eq!(
+            outside_shared(&now),
+            outside_shared(&last),
+            "{what}: more than the shared items changed"
+        );
+        assert_ne!(shared_part(&now), shared_part(&last), "{what}: not saved");
+        last = now;
+    };
+
+    // a database row onto row 0
+    s.run(Command::SetItemDb(ItemDbQuery {
+        db: ItemDb::Uniques,
+        slot: 0,
+        kind: 0,
+        league: 0,
+        requirement: 0,
+        obtainable: 0,
+        sort: 0,
+        search: "Kalandra".into(),
+        search_mode: 0,
+    }))
+    .unwrap();
+    while let Some(task) = s.backend.next_background() {
+        s.backend.background_step(task, &|_| {}).unwrap();
+    }
+    act(r#"act.db_open("Uniques", { search = "Kalandra" })"#);
+    let name: String = lua_value(&lua, r#"return dbDump("Uniques").rows[1].name"#);
+    edit(
+        &mut s,
+        Command::AddSharedItem {
+            source: SharedItemSource::Db {
+                db: ItemDb::Uniques,
+                name: name.clone(),
+            },
+            index: 0,
+        },
+        &format!("act.shared_add_db('Uniques', {name:?}, 0)"),
+        "database row shared",
+    );
+    edit(
+        &mut s,
+        Command::MoveSharedItem { from: 0, to: 2 },
+        "act.shared_move(0, 2)",
+        "moved",
+    );
+    edit(
+        &mut s,
+        Command::DeleteSharedItem { index: 2 },
+        "act.shared_delete(2)",
+        "deleted",
+    );
+
+    // into the build: the shared list stays, nothing is saved
+    let saved = s.settings_bytes();
+    for (index, slot, code) in [
+        (0, Some("Ring 2"), "act.shared_drop(0, 'Ring 2')"),
+        (2, None, "act.shared_drop(2, nil)"),
+    ] {
+        let affected = s
+            .run(Command::DropSharedItem {
+                index,
+                slot: slot.map(str::to_string),
+            })
+            .unwrap();
+        assert!(affected.items && affected.build && affected.recalc);
+        act(code);
+        compare(&mut s, &format!("dropped {index} on {slot:?}"));
+    }
+    s.run(Command::ViewSharedItem { index: 1 }).unwrap();
+    act("act.shared_view(1)");
+    let theirs: serde_json::Value = lua_value(&lua, "return displayDump()");
+    let ours = json_of(&s.backend.display_item_view().unwrap().expect("displayed"));
+    assert_same(&ours, &strip_nulls(theirs), "shared item displayed");
+    assert_eq!(
+        s.settings_bytes(),
+        saved,
+        "a build change wrote Settings.xml"
+    );
+    // PoB hides the shared list under the displayed item: nothing reaches it
+    assert!(!s.backend.items_view().unwrap().shared_shown);
+    let error = s
+        .run(Command::DeleteSharedItem { index: 0 })
+        .expect_err("the list is hidden");
+    assert!(
+        error.to_string().contains("PoB doesn't offer that here"),
+        "{error}"
+    );
+    s.run(Command::CancelDisplayItem { if_id: None }).unwrap();
+    act("act.cancel()");
+    assert!(compare(&mut s, "display cancelled")["shared_shown"] == true);
+
+    // refusals change nothing and write nothing
+    for (command, message) in [
+        (
+            Command::DeleteSharedItem { index: 9 },
+            "no such shared item",
+        ),
+        (
+            Command::DropSharedItem {
+                index: 0,
+                slot: Some("Helmet".into()),
+            },
+            "that item can't go in that slot",
+        ),
+        (
+            Command::AddSharedItem {
+                source: SharedItemSource::Item { id: 9999 },
+                index: 0,
+            },
+            "no such item",
+        ),
+        (
+            Command::AddSharedItem {
+                source: SharedItemSource::Item { id },
+                index: 99,
+            },
+            "no such row",
+        ),
+    ] {
+        let view = s.backend.items_view().unwrap();
+        let error = s.run(command.clone()).expect_err(&format!("{command:?}"));
+        assert!(error.to_string().contains(message), "{command:?}: {error}");
+        assert_eq!(
+            s.backend.items_view().unwrap(),
+            view,
+            "{command:?} changed something"
+        );
+        assert_eq!(s.open_popups(), 0);
+    }
+    assert_eq!(s.settings_bytes(), saved, "a refusal wrote Settings.xml");
+
+    // shared item sets, through PoB's Manage Item Sets window
+    let set = s.backend.items_view().unwrap().active_set;
+    edit(
+        &mut s,
+        Command::AddSharedItemSet { id: set },
+        &format!("act.shared_set_add({set})"),
+        "set shared",
+    );
+    edit(
+        &mut s,
+        Command::RenameSharedItemSet {
+            index: 1,
+            title: "Renamed".into(),
+        },
+        "act.shared_set_rename(1, 'Renamed')",
+        "set renamed",
+    );
+    let error = s
+        .run(Command::RenameSharedItemSet {
+            index: 0,
+            title: "  ".into(),
+        })
+        .expect_err("a blank title");
+    assert!(
+        error.to_string().contains("that name isn't allowed"),
+        "{error}"
+    );
+    edit(
+        &mut s,
+        Command::MoveSharedItemSet { from: 0, to: 1 },
+        "act.shared_set_move(0, 1)",
+        "set moved",
+    );
+    let saved = s.settings_bytes();
+    let affected = s.run(Command::ImportSharedItemSet { index: 0 }).unwrap();
+    assert!(affected.items && affected.build);
+    act("act.shared_set_import(0)");
+    let imported = compare(&mut s, "set imported");
+    assert_eq!(imported["sets"].as_array().unwrap().len(), 2);
+    assert_eq!(s.settings_bytes(), saved, "an import wrote Settings.xml");
+    edit(
+        &mut s,
+        Command::DeleteSharedItemSet { index: 0 },
+        "act.shared_set_delete(0)",
+        "set deleted",
+    );
+    assert_eq!(s.open_popups(), 0);
 }

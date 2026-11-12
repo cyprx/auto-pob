@@ -852,25 +852,31 @@ impl PopupWindow {
                 });
             }
             let height = c.size[1].clamp(80.0, 320.0);
+            // a selectable label's height: rows are laid out only where the list is scrolled
+            // to (the Mod Browser has thousands, R28)
+            let row_height = ui.spacing().interact_size.y;
+            // a Shift+click range (the timeless results) shows selected end to end
+            let at = |key: &Option<String>| {
+                key.as_deref()
+                    .and_then(|k| c.rows.iter().position(|r| r.key == k))
+            };
+            let range = match (at(&c.row_selected), at(&c.row_highlight)) {
+                (Some(a), Some(b)) => Some((a.min(b), a.max(b))),
+                _ => None,
+            };
             egui::ScrollArea::vertical()
                 .id_salt(("popup_list", name))
                 .max_height(height)
                 .auto_shrink([false, true])
-                .show(ui, |ui| {
+                .show_rows(ui, row_height, c.rows.len(), |ui, shown| {
                     ui.set_min_width(c.size[0].clamp(120.0, MAX_CONTROL_WIDTH));
-                    // a Shift+click range (the timeless results) shows selected end to end
-                    let at = |key: &Option<String>| {
-                        key.as_deref()
-                            .and_then(|k| c.rows.iter().position(|r| r.key == k))
-                    };
-                    let range = match (at(&c.row_selected), at(&c.row_highlight)) {
-                        (Some(a), Some(b)) => Some((a.min(b), a.max(b))),
-                        _ => None,
-                    };
-                    // a mutable list's rows are dragged to a new place, as in PoB
-                    let mut rects = Vec::with_capacity(c.rows.len());
+                    // a mutable list's rows are dragged to a new place, as in PoB; only the
+                    // rows laid out have rects, from `first` on
+                    let first = shown.start;
+                    let mut rects = Vec::with_capacity(shown.len());
                     let mut dragged = None;
-                    for (i, row) in c.rows.iter().enumerate() {
+                    for i in shown {
+                        let row = &c.rows[i];
                         let selected = c.row_selected.as_deref() == Some(row.key.as_str())
                             || range.is_some_and(|(a, b)| a <= i && i <= b);
                         let mut response =
@@ -914,7 +920,10 @@ impl PopupWindow {
                     if let Some((from, dropped)) = dragged
                         && let Some(pos) = ui.input(|i| i.pointer.latest_pos())
                     {
-                        let to = drop_place(&rects, from, pos.y);
+                        // the rows above the laid-out ones all stay above the drop
+                        let local = from - first;
+                        let to_local = drop_place(&rects, local, pos.y);
+                        let to = first + to_local;
                         if dropped {
                             if to != from {
                                 out.commands.push(Command::SetPopupControl {
@@ -925,17 +934,17 @@ impl PopupWindow {
                                     },
                                 });
                             }
-                        } else if let Some(line) = drop_line(&rects, from, to) {
+                        } else if let Some(line) = drop_line(&rects, local, to_local) {
                             let stroke = ui.visuals().selection.stroke;
                             ui.painter().hline(line.0, line.1, stroke);
                         }
                     }
-                    if c.rows.is_empty()
-                        && let Some(note) = &c.note
-                    {
-                        ui.label(pob_text(note, 14.0, ui.visuals().weak_text_color()));
-                    }
                 });
+            if c.rows.is_empty()
+                && let Some(note) = &c.note
+            {
+                ui.label(pob_text(note, 14.0, ui.visuals().weak_text_color()));
+            }
         });
     }
 

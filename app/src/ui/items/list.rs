@@ -1,5 +1,6 @@
 //! The item list: rows, drag to equip or reorder, the "…" menu, keys and the confirms.
 
+use super::shared::{SharedDrag, released_over};
 use super::{ItemDrag, ItemsOutput, ItemsUi};
 use crate::engine::views::{ItemEntry, ItemsView};
 use crate::engine::{Command, ItemTooltipQuery};
@@ -176,6 +177,9 @@ impl ItemsUi {
             .filter_map(|id| view.items.iter().find(|e| e.id == *id))
             .collect();
         let selected = self.selected;
+        // a shared item dropped on the list is added to the build (NF-2)
+        let shared = egui::DragAndDrop::payload::<SharedDrag>(ui.ctx());
+        let top = ui.cursor().min;
         let reordered = reorder_rows(
             ui,
             "items_row",
@@ -205,6 +209,13 @@ impl ItemsUi {
                     });
             },
         );
+        let area = Rect::from_min_max(top, ui.max_rect().max);
+        if let Some(drag) = released_over(ui, shared, area) {
+            out.commands.push(Command::DropSharedItem {
+                index: drag.index,
+                slot: None,
+            });
+        }
         let mut list_focus = false;
         for (i, row) in reordered.rows.iter().enumerate() {
             let entry = rows[i];
@@ -237,6 +248,7 @@ impl ItemsUi {
                     slot: None,
                     theirs: false,
                     shift: false,
+                    shared: None,
                 },
             );
             if row.has_focus() {

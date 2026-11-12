@@ -988,3 +988,37 @@ fn enter_presses_pobs_enter_control_unless_a_box_has_the_keyboard() {
     let mut h = Harness::new(view);
     assert!(h.key(Key::Enter).commands.is_empty());
 }
+
+/// The Mod Browser's 6188 rows (R28): a long list lays out only the rows its scroll area shows,
+/// and a click on one still picks it
+#[test]
+fn a_long_list_lays_out_only_the_visible_rows() {
+    let rows: Vec<PopupRow> = (0..6000)
+        .map(|i| PopupRow {
+            key: format!("mod {i}"),
+            label: format!("+{i} to maximum Life"),
+        })
+        .collect();
+    let list = PopupControl {
+        rows,
+        row_selected: Some("mod 0".into()),
+        ..control(
+            "listControl",
+            PopupControlKind::List,
+            [0.0, 0.0],
+            [700.0, 454.0],
+        )
+    };
+    let mut h = Harness::new(popup(vec![list]));
+    h.frame(vec![]);
+    let laid_out = (0..6000)
+        .filter(|i| h.has(&format!("listControl_row_{i}")))
+        .count();
+    assert!(laid_out > 0 && laid_out < 40, "{laid_out} rows laid out");
+    assert!(!h.has("listControl_row_5999"));
+    let out = h.click("listControl_row_3");
+    assert_eq!(
+        debug(&out.commands),
+        [set("listControl", PopupInput::Row("mod 3".into()))]
+    );
+}

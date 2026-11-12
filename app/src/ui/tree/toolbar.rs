@@ -726,6 +726,22 @@ impl Toolbar {
         }
     }
 
+    /// The spec dialogs only (New, Rename, Delete tree), for the "Manage Passive Trees" window
+    pub(super) fn spec_dialogs(
+        &mut self,
+        ctx: &egui::Context,
+        state: &TreeState,
+        rects: &mut Rects,
+        commands: &mut Vec<Command>,
+    ) {
+        if matches!(
+            self.dialog,
+            Some(Dialog::NewSpec(_) | Dialog::RenameSpec { .. } | Dialog::DeleteSpec(_))
+        ) {
+            self.dialogs(ctx, state, rects, commands);
+        }
+    }
+
     fn dialogs(
         &mut self,
         ctx: &egui::Context,

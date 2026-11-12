@@ -42,6 +42,23 @@ function itemsDump()
 	specSelect:SetList(build.treeTab:GetSpecList())
 	out.specs = { labels = {}, selected = specSelect.selIndex - 1, enabled = specSelect:IsEnabled() and true or false }
 	for i, label in ipairs(specSelect.list) do out.specs.labels[i] = label end
+	-- the shared lists (NF-2): the rows as PoB's list draws them; the set rows and tooltips
+	-- through a set list control of the kind the Manage Item Sets window shows
+	out.shared_items, out.shared_sets = {}, {}
+	out.shared_shown = t.controls.sharedItemList:IsShown() and true or false
+	for i, item in ipairs(main.sharedItemList) do
+		out.shared_items[i] = { name = item.name, rarity = item.rarity, label = t.controls.sharedItemList:GetRowValue(1, i, item) }
+	end
+	local setList = new("SharedItemSetListControl", nil, { 0, 0, 300, 200 }, t)
+	for i, set in ipairs(main.sharedItemSetList) do
+		local tt = new("Tooltip")
+		setList:AddValueTooltip(tt, i, set)
+		local lines = {}
+		for _, line in ipairs(tt.lines) do
+			if line.text then lines[#lines + 1] = line.text end
+		end
+		out.shared_sets[i] = { title = setList:GetRowValue(1, i, set), lines = lines }
+	end
 	for i, id in ipairs(list.list) do out.listed[i] = id end
 
 	for i, id in ipairs(t.itemOrderList) do
@@ -1127,4 +1144,130 @@ function act.quick_equip(id, second)
 	IsKeyDown = saved
 	assert(ok, err)
 	record({ cmd = "QuickEquipItem", id = id, second_slot = second or false })
+end
+
+-- ---- Shared items (NF-2) ----
+
+-- A row of `source` dragged onto `target` and released there, as act.db_drop does: `at` is the
+-- row the target's Draw marks under the cursor
+local function sharedDrop(source, index, target, at)
+	-- each Draw starts with no drop row of its own (ListControl.lua:157)
+	source.selDragIndex = nil
+	source:SelectIndex(index)
+	source.selDragging = true
+	source.selDragActive = true
+	source.dragType, source.dragValue = source:GetDragValue(source.selIndex, source.selValue)
+	for _, t in ipairs(source.dragTargetList) do
+		if not t.CanReceiveDrag or t:CanReceiveDrag(source.dragType, source.dragValue) then
+			t.otherDragSource = source
+		end
+	end
+	assert(target.otherDragSource == source, "the target doesn't take it")
+	target.selDragIndex = at
+	source.dragTarget = target
+	source:OnKeyUp("LEFTBUTTON")
+	target.selDragIndex = nil
+	assert(source.selValue == nil, "the drop didn't happen")
+	frame()
+end
+
+local function sharedList()
+	return tab().controls.sharedItemList
+end
+
+-- a build item dragged onto the shared list at 0-based row `at`
+function act.shared_add_item(id, at)
+	local list = itemList()
+	for i, listed in ipairs(list.list) do
+		if listed == id then sharedDrop(list, i, sharedList(), at + 1) return end
+	end
+	error("item " .. id .. " is not listed")
+end
+
+function act.shared_add_db(db, name, at)
+	local c, _, index = dbRow(db, name)
+	sharedDrop(c, index, sharedList(), at + 1)
+end
+
+-- shared item `index` (0-based) dragged onto a slot, or onto the item list
+function act.shared_drop(index, slotName)
+	tab():UpdateSockets()
+	local target = slotName and tab().slots[slotName] or itemList()
+	sharedDrop(sharedList(), index + 1, target, nil)
+end
+
+-- the Delete button and its confirmation
+function act.shared_delete(index)
+	local list = sharedList()
+	list:SelectIndex(index + 1)
+	list.controls.delete.onClick()
+	confirm()
+end
+
+-- a drag within the list: `to` is the final 0-based position
+function act.shared_move(from, to)
+	local list = sharedList()
+	list:SelectIndex(from + 1)
+	list.selDragging = true
+	list.selDragActive = true
+	list.selDragIndex = to > from and to + 2 or to + 1
+	list:OnKeyUp("LEFTBUTTON")
+end
+
+function act.shared_view(index)
+	local list = sharedList()
+	list:OnSelClick(index + 1, main.sharedItemList[index + 1], true)
+end
+
+-- The Items tab's "Manage..." (ItemsTab.lua:113-116): PoB's Manage Item Sets window
+local function withSetManager(fn)
+	local depth = #main.popups
+	tab().controls.setManage.onClick()
+	assert(#main.popups == depth + 1, "Manage... opened no window")
+	local c = main.popups[1].controls
+	fn(c.setList, c.sharedList)
+	while #main.popups > depth do main:ClosePopup() end
+end
+
+function act.shared_set_add(id)
+	withSetManager(function(setList, shared)
+		for i, value in ipairs(setList.list) do
+			if value == id then sharedDrop(setList, i, shared, nil) return end
+		end
+		error("no set " .. id)
+	end)
+end
+
+function act.shared_set_import(index)
+	withSetManager(function(setList, shared)
+		sharedDrop(shared, index + 1, setList, nil)
+	end)
+end
+
+function act.shared_set_delete(index)
+	withSetManager(function(_, shared)
+		shared:SelectIndex(index + 1)
+		shared.controls.delete.onClick()
+		confirm()
+	end)
+end
+
+function act.shared_set_rename(index, title)
+	withSetManager(function(_, shared)
+		shared:SelectIndex(index + 1)
+		shared.controls.rename.onClick()
+		local popup = main.popups[1]
+		popup.controls.edit:SetText(title, true)
+		popup.controls.save.onClick()
+	end)
+end
+
+function act.shared_set_move(from, to)
+	withSetManager(function(_, shared)
+		shared:SelectIndex(from + 1)
+		shared.selDragging = true
+		shared.selDragActive = true
+		shared.selDragIndex = to > from and to + 2 or to + 1
+		shared:OnKeyUp("LEFTBUTTON")
+	end)
 end

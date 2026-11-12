@@ -842,6 +842,34 @@ pub struct ItemsView {
     /// the active tree selected
     #[serde(default)]
     pub specs: Option<DropList>,
+    /// PoB's shared items (`main.sharedItemList`, NF-2), in PoB's order
+    #[serde(default)]
+    pub shared_items: Vec<SharedItemEntry>,
+    /// PoB's shared item sets (`main.sharedItemSetList`), in PoB's order
+    #[serde(default)]
+    pub shared_sets: Vec<SharedSetEntry>,
+    /// PoB shows the shared list (and takes drags onto it) only while no item is displayed
+    #[serde(default)]
+    pub shared_shown: bool,
+}
+
+/// One row of PoB's shared item list
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SharedItemEntry {
+    pub name: String,
+    pub rarity: String,
+    /// The row as PoB draws it (`GetRowValue`), colour codes included
+    pub label: String,
+}
+
+/// One row of PoB's shared item set list
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SharedSetEntry {
+    /// The row as PoB draws it: the title, or "Default"
+    pub title: String,
+    /// PoB's tooltip for the row: one "Slot: Item" line per slot
+    #[serde(default)]
+    pub lines: Vec<String>,
 }
 
 /// One item of the build.

@@ -1,9 +1,11 @@
 //! The set bar and PoB's item set manager as a window.
 
 use super::list::reorder_rows;
+use super::shared::released_over;
 use super::{ItemsOutput, ItemsUi};
 use crate::engine::Command;
 use crate::engine::views::{ItemSetEntry, ItemsView};
+use crate::widgets::pob_text;
 use eframe::egui::{self, Color32};
 
 /// What the name box of the manager is asking for.
@@ -21,6 +23,15 @@ pub(super) struct State {
     selected: Option<u32>,
     naming: Option<(Naming, String)>,
     confirm_delete: Option<u32>,
+    /// The shared set row the shared buttons act on (NF-2)
+    shared_selected: Option<usize>,
+    /// The shared set being renamed, with the typed name
+    shared_naming: Option<(usize, String)>,
+    /// A shared set the user asked to delete, until PoB's question is answered
+    confirm_shared_delete: Option<usize>,
+    /// A shared set row had the keyboard last frame: the build list's keys wait, as PoB gives
+    /// keys only to its selected list
+    shared_focused: bool,
 }
 
 impl State {
@@ -43,6 +54,9 @@ fn title(set: &ItemSetEntry) -> &str {
 }
 
 struct SetDrag(usize);
+
+/// A shared set row being dragged: within its list, or onto the build's sets
+struct SharedSetDrag(usize);
 
 impl ItemsUi {
     /// The row above the tab: `Set: [name v] [Manage...]  Weapons: [I] [II]`.
@@ -125,10 +139,13 @@ impl ItemsUi {
                 if !view.sets.iter().any(|s| Some(s.id) == self.sets.selected) {
                     self.sets.selected = view.sets.first().map(|s| s.id);
                 }
-                let blocked = self.sets.naming.is_some() || self.sets.confirm_delete.is_some();
+                let blocked = self.sets.naming.is_some()
+                    || self.sets.confirm_delete.is_some()
+                    || self.sets.shared_naming.is_some()
+                    || self.sets.confirm_shared_delete.is_some();
                 // the list's keys (ListControl.lua:375-392)
                 // a text field elsewhere keeps its keys
-                if !blocked && !ui.ctx().text_edit_focused() {
+                if !blocked && !ui.ctx().text_edit_focused() && !self.sets.shared_focused {
                     let at = view.sets.iter().position(|s| Some(s.id) == self.sets.selected);
                     let len = view.sets.len();
                     if let Some(i) =
@@ -139,6 +156,9 @@ impl ItemsUi {
                 }
                 ui.add_enabled_ui(!blocked, |ui| {
                     let selected = self.sets.selected;
+                    // a shared set dropped on the build's sets is imported (NF-2)
+                    let shared = egui::DragAndDrop::payload::<SharedSetDrag>(ui.ctx());
+                    let top = ui.cursor().min;
                     let rows = reorder_rows(
                         ui,
                         "items_sets",
@@ -178,6 +198,15 @@ impl ItemsUi {
                     if let Some((from, to)) = rows.moved {
                         out.commands.push(Command::MoveItemSet { from, to });
                     }
+                    let area = egui::Rect::from_min_max(
+                        top,
+                        egui::pos2(ui.max_rect().right(), ui.cursor().min.y),
+                    );
+                    self.rects.note_rect(area, "sets_list");
+                    if let Some(drag) = released_over(ui, shared, area) {
+                        out.commands
+                            .push(Command::ImportSharedItemSet { index: drag.0 });
+                    }
                     ui.separator();
                     let sel = self
                         .sets
@@ -195,7 +224,7 @@ impl ItemsUi {
                             let copy = ui.button("Copy");
                             self.rects.note(&copy, || "sets_copy".into());
                             // F2 renames the selected set (ItemSetListControl.lua)
-                            let f2 = self.sets.naming.is_none() && !ui.ctx().text_edit_focused() && ui.input(|i| i.key_pressed(egui::Key::F2));
+                            let f2 = self.sets.naming.is_none() && !ui.ctx().text_edit_focused() && !self.sets.shared_focused && ui.input(|i| i.key_pressed(egui::Key::F2));
                             if let Some(set) = sel {
                                 if rename.clicked() || f2 {
                                     self.sets.naming =
@@ -211,7 +240,7 @@ impl ItemsUi {
                         let can_delete = sel.is_some() && view.sets.len() > 1;
                         let delete = ui.add_enabled(can_delete, egui::Button::new("Delete"));
                         self.rects.note(&delete, || "sets_delete".into());
-                        let key = can_delete && !blocked && !ui.ctx().text_edit_focused() && ui.input(crate::ui::shortcuts::list_delete);
+                        let key = can_delete && !blocked && !ui.ctx().text_edit_focused() && !self.sets.shared_focused && ui.input(crate::ui::shortcuts::list_delete);
                         if (delete.clicked() || key)
                             && let Some(set) = sel
                         {
@@ -219,6 +248,7 @@ impl ItemsUi {
                         }
                     });
                 });
+                self.shared_sets(ui, view, blocked, out);
                 if let Some((kind, text)) = &mut self.sets.naming {
                     ui.separator();
                     ui.label("Enter name for this item set:");
@@ -274,6 +304,154 @@ impl ItemsUi {
             });
         if !open {
             self.sets.close();
+        }
+    }
+
+    /// PoB's shared set list beside the build's (ItemsTab.lua:2506-2516): sets shared by every
+    /// build, kept in Settings.xml (NF-2)
+    fn shared_sets(
+        &mut self,
+        ui: &mut egui::Ui,
+        view: &ItemsView,
+        blocked: bool,
+        out: &mut ItemsOutput,
+    ) {
+        let n = view.shared_sets.len();
+        if self.sets.shared_selected.is_some_and(|i| i >= n) {
+            self.sets.shared_selected = None;
+        }
+        ui.separator();
+        ui.add_enabled_ui(!blocked, |ui| {
+            ui.horizontal(|ui| {
+                ui.strong("Shared sets");
+                let sel = self.sets.shared_selected;
+                let rename = ui.add_enabled(sel.is_some(), egui::Button::new("Rename"));
+                self.rects.note(&rename, || "shared_sets_rename".into());
+                let delete = ui.add_enabled(sel.is_some(), egui::Button::new("Delete"));
+                self.rects.note(&delete, || "shared_sets_delete".into());
+                if let Some(i) = sel {
+                    if rename.clicked() {
+                        self.sets.shared_naming = Some((i, view.shared_sets[i].title.clone()));
+                    }
+                    if delete.clicked() {
+                        self.sets.confirm_shared_delete = Some(i);
+                    }
+                }
+            });
+            // a build set dropped here is shared
+            let build_set = egui::DragAndDrop::payload::<SetDrag>(ui.ctx());
+            let top = ui.cursor().min;
+            let selected = self.sets.shared_selected;
+            let rows = reorder_rows(
+                ui,
+                "items_shared_sets",
+                n,
+                true,
+                false,
+                SharedSetDrag,
+                |p: &SharedSetDrag| p.0,
+                |ui, i| {
+                    let fill = if selected == Some(i) {
+                        ui.visuals().selection.bg_fill
+                    } else {
+                        Color32::TRANSPARENT
+                    };
+                    egui::Frame::NONE.fill(fill).inner_margin(2.0).show(ui, |ui| {
+                        ui.set_min_width(240.0);
+                        ui.add(egui::Label::new(&view.shared_sets[i].title).selectable(false));
+                    });
+                },
+            );
+            if n == 0 {
+                // PoB's hint for the empty list (SharedItemSetListControl.lua:13)
+                ui.weak("This is a list of item sets that will be shared between all of your builds.\nYou can add sets to this list by dragging them from the build's set list.");
+            }
+            let area = egui::Rect::from_min_max(
+                top,
+                egui::pos2(ui.max_rect().right(), ui.cursor().min.y),
+            );
+            self.rects.note_rect(area, "shared_sets_list");
+            for (i, row) in rows.rows.iter().enumerate() {
+                self.rects.note(row, || format!("shared_sets_row_{i}"));
+                if row.clicked() {
+                    self.sets.shared_selected = Some(i);
+                    row.request_focus();
+                }
+                let lines = &view.shared_sets[i].lines;
+                if !lines.is_empty() {
+                    let default = ui.visuals().text_color();
+                    row.clone().on_hover_ui(|ui| {
+                        for line in lines {
+                            ui.label(pob_text(line, 14.0, default));
+                        }
+                    });
+                }
+                // PoB's F2 renames the selected shared set
+                if row.has_focus() && ui.input(|inp| inp.key_pressed(egui::Key::F2)) {
+                    self.sets.shared_naming = Some((i, view.shared_sets[i].title.clone()));
+                }
+            }
+            self.sets.shared_focused = rows.rows.iter().any(|r| r.has_focus());
+            if let Some((from, to)) = rows.moved {
+                self.sets.shared_selected = Some(to);
+                out.commands.push(Command::MoveSharedItemSet { from, to });
+            }
+            if let Some(drag) = released_over(ui, build_set, area)
+                && let Some(set) = view.sets.get(drag.0)
+            {
+                out.commands.push(Command::AddSharedItemSet { id: set.id });
+            }
+        });
+        if let Some((index, text)) = &mut self.sets.shared_naming {
+            ui.separator();
+            ui.label("Enter name for this item set:");
+            let edit = ui.add(egui::TextEdit::singleline(text).desired_width(240.0));
+            self.rects.note(&edit, || "shared_sets_name".into());
+            let blank = text.trim().is_empty();
+            let mut done = None;
+            ui.horizontal(|ui| {
+                let save = ui.add_enabled(!blank, egui::Button::new("Save"));
+                self.rects.note(&save, || "shared_sets_save".into());
+                if save.clicked() {
+                    done = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    done = Some(false);
+                }
+            });
+            if done == Some(true) {
+                out.commands.push(Command::RenameSharedItemSet {
+                    index: *index,
+                    title: text.clone(),
+                });
+            }
+            if done.is_some() {
+                self.sets.shared_naming = None;
+            }
+        }
+        if let Some(index) = self.sets.confirm_shared_delete {
+            ui.separator();
+            let name = view
+                .shared_sets
+                .get(index)
+                .map_or("", |s| s.title.as_str())
+                .to_owned();
+            ui.label(format!(
+                "Are you sure you want to delete '{name}' from the shared item set list?"
+            ));
+            ui.horizontal(|ui| {
+                let yes = ui.button("Delete");
+                self.rects
+                    .note(&yes, || "shared_sets_confirm_delete".into());
+                if yes.clicked() {
+                    out.commands.push(Command::DeleteSharedItemSet { index });
+                    self.sets.confirm_shared_delete = None;
+                    self.sets.shared_selected = None;
+                }
+                if ui.button("Cancel").clicked() {
+                    self.sets.confirm_shared_delete = None;
+                }
+            });
         }
     }
 }

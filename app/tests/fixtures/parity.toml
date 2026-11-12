@@ -933,8 +933,7 @@ note = "PoB's per-option wrapper controls"
 ported = "app/src/ui/config.rs custom mod groups (D-038)"
 
 [controls."config.#CustomModBlockControl.addModBtn"]
-gap = "Task 13"
-note = "Mod Browser (R28)"
+ported = "app/src/ui/config.rs Add Mod opens PoB's Mod Browser for the group (PopupKind::ModBrowser, R28)"
 
 [controls."config.#CustomModBlockControl.deleteBtn"]
 ported = "app/src/ui/config.rs remove custom mod group"
@@ -1969,26 +1968,22 @@ ported = "app/src/ui/items/sets.rs set combo"
 note = "part of items.setSelect"
 
 [controls."items.sharedItemList"]
-gap = "Task 13"
-note = "NF-2 shared items: needs a controller ruling; PoB keeps them only in Settings.xml, written by main:SaveSettings (Main.lua:701-741, at exit, main:Shutdown Main.lua:337-340), and R29 allows no Settings.xml writer beyond Options Save, SetBuildSort and the token paths; was: NF-2 (new finding, in scope by controller ruling): PoB's shared items (kept in Settings.xml, across builds) are not shown"
+ported = "app/src/ui/items/shared.rs shared items under Craft item...: rows, hover, double-click, drag onto slots and the item list, build items and database rows dragged in, reorder; edits save Settings.xml through main:SaveSettings (R29 amended by the controller: shared item list edits)"
 
 [controls."items.sharedItemList.delete"]
-gap = "Task 13"
-note = "NF-2 shared items: needs a controller ruling; PoB keeps them only in Settings.xml, written by main:SaveSettings (Main.lua:701-741, at exit, main:Shutdown Main.lua:337-340), and R29 allows no Settings.xml writer beyond Options Save, SetBuildSort and the token paths; was: NF-2 (new finding, in scope by controller ruling)"
+ported = "app/src/ui/items/shared.rs Delete with PoB's question (DeleteSharedItem)"
 
 [controls."items.sharedItemList.scrollBarH"]
-gap = "Task 13"
-note = "NF-2 shared items: needs a controller ruling; PoB keeps them only in Settings.xml, written by main:SaveSettings (Main.lua:701-741, at exit, main:Shutdown Main.lua:337-340), and R29 allows no Settings.xml writer beyond Options Save, SetBuildSort and the token paths; was: part of items.sharedItemList"
+ported = "app/src/ui/items/shared.rs rows (part of items.sharedItemList)"
 
 [controls."items.sharedItemList.scrollBarV"]
-gap = "Task 13"
-note = "NF-2 shared items: needs a controller ruling; PoB keeps them only in Settings.xml, written by main:SaveSettings (Main.lua:701-741, at exit, main:Shutdown Main.lua:337-340), and R29 allows no Settings.xml writer beyond Options Save, SetBuildSort and the token paths; was: part of items.sharedItemList"
+ported = "app/src/ui/items/shared.rs rows (part of items.sharedItemList)"
 
 [controls."items.slotHeader"]
 ported = "app/src/ui/items/slots.rs"
 
 [controls."items.specButton"]
-ported = "app/src/ui/items/slots.rs Manage... shows the Tree tab, where our spec manager is (tree/toolbar.rs)"
+ported = "app/src/ui/tree/mod.rs Manage... opens the Manage Passive Trees window with the Tree tab's spec controls and dialogs (opened from app/src/ui/items/slots.rs)"
 
 [controls."items.specLabel"]
 ported = "app/src/ui/items/slots.rs Passive tree: label"
@@ -2879,12 +2874,10 @@ note = "two sites: items and socket groups"
 ported = "app/src/ui/config.rs confirm"
 
 [popups."Delete Item"]
-gap = "Task 13"
-note = "NF-2 shared items: needs a controller ruling; PoB keeps them only in Settings.xml, written by main:SaveSettings (Main.lua:701-741, at exit, main:Shutdown Main.lua:337-340), and R29 allows no Settings.xml writer beyond Options Save, SetBuildSort and the token paths; was: item list sites ported (items/list.rs with PoB's texts); the shared-item site is NF-2"
+ported = "app/src/ui/items/list.rs item list sites with PoB's texts; app/src/ui/items/shared.rs the shared item site"
 
 [popups."Delete Item Set"]
-gap = "Task 13"
-note = "NF-2 shared items: needs a controller ruling; PoB keeps them only in Settings.xml, written by main:SaveSettings (Main.lua:701-741, at exit, main:Shutdown Main.lua:337-340), and R29 allows no Settings.xml writer beyond Options Save, SetBuildSort and the token paths; was: item set and skill set sites ported (items/sets.rs, skills/sets.rs); the shared item set site is NF-2"
+ported = "app/src/ui/items/sets.rs item set and shared item set sites, app/src/ui/skills/sets.rs skill sets"
 
 [popups."Delete Socket Group"]
 ported = "app/src/ui/skills/groups.rs confirm"
@@ -2986,8 +2979,7 @@ note = "Change Settings Path is out (R15)"
 ported = "app/src/ui/config.rs set buttons and Order window (NF-4)"
 
 [popups."Manage Item Sets"]
-gap = "Task 13"
-note = "NF-2 shared items: needs a controller ruling; PoB keeps them only in Settings.xml, written by main:SaveSettings (Main.lua:701-741, at exit, main:Shutdown Main.lua:337-340), and R29 allows no Settings.xml writer beyond Options Save, SetBuildSort and the token paths; was: item sets ported (items/sets.rs); the popup's shared item set list is NF-2"
+ported = "app/src/ui/items/sets.rs item sets and PoB's shared set list: drag a set in, drag a shared set to the build, rename, delete, reorder"
 
 [popups."Manage Passive Trees"]
 ported = "app/src/ui/tree/toolbar.rs tree buttons: New, Rename, Delete, Copy (CopySpec) and Order window (MoveSpec, NF-3)"
@@ -3017,8 +3009,7 @@ ruled_out = "D-005"
 note = "trade query generator"
 
 [popups."Rename"]
-gap = "Task 13"
-note = "NF-2 shared items: needs a controller ruling; PoB keeps them only in Settings.xml, written by main:SaveSettings (Main.lua:701-741, at exit, main:Shutdown Main.lua:337-340), and R29 allows no Settings.xml writer beyond Options Save, SetBuildSort and the token paths; was: config, item and skill set sites ported; the shared item set site is NF-2"
+ported = "app/src/ui/items/sets.rs item set and shared item set sites; config and skill set sites ported"
 
 [popups."Replace Modifier of Node"]
 ported = "app/src/ui/popup.rs session (tattoos, SP5b)"
@@ -3452,8 +3443,7 @@ ported = "app/src/widgets/search_combo.rs a dropped dropdown's search box: Backs
 ported = "app/src/widgets/search_combo.rs Esc empties a search and keeps the list dropped; with no search Esc closes it (SearchHost.lua:109-111)"
 
 [keys."SharedItemSetListControl.F2"]
-gap = "Task 13"
-note = "NF-2 shared items: needs a controller ruling; PoB keeps them only in Settings.xml, written by main:SaveSettings (Main.lua:701-741, at exit, main:Shutdown Main.lua:337-340), and R29 allows no Settings.xml writer beyond Options Save, SetBuildSort and the token paths; was: NF-2 shared item sets, NF-14 F2"
+ported = "app/src/ui/items/sets.rs F2 on the focused shared set renames it"
 
 [keys."SkillListControl.LEFTBUTTON"]
 ported = "app/src/ui/skills/groups.rs click selects; Ctrl+click sends SetGroupEnabled"

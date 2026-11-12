@@ -6,6 +6,7 @@ pub mod db;
 pub mod display;
 pub mod list;
 pub mod sets;
+pub mod shared;
 pub mod slots;
 pub mod text_window;
 
@@ -77,6 +78,10 @@ pub struct ItemsUi {
     pub(crate) rects: Rects,
     /// The slot under the pointer last frame holds this item: E edits it (ItemsTab.lua:1460)
     hovered_slot: Option<u32>,
+    /// The shared item row the Delete button acts on
+    shared_selected: Option<usize>,
+    /// A shared item the user asked to delete, until PoB's question is answered
+    confirm_shared_delete: Option<usize>,
 }
 
 impl ItemsUi {
@@ -102,6 +107,7 @@ impl ItemsUi {
             || self.confirm_delete_all
             || self.sets.is_open()
             || self.display.text_window.is_some()
+            || self.confirm_shared_delete.is_some()
     }
 
     /// Closes the dialogs, as when the user leaves the tab.
@@ -113,6 +119,7 @@ impl ItemsUi {
         self.sets.close();
         self.display.text_window = None;
         self.display.submitted = None;
+        self.confirm_shared_delete = None;
     }
 
     /// What must go out before Save or a tab change, even while the tab isn't drawn: a quality
@@ -277,7 +284,8 @@ impl ItemsUi {
     /// Notes what the pointer is over, and draws the tooltip once its reply is here.
     pub(crate) fn note_hover(&mut self, response: &egui::Response, mut query: ItemTooltipQuery) {
         let dragging = egui::DragAndDrop::has_payload_of_type::<ItemDrag>(&response.ctx)
-            || egui::DragAndDrop::has_payload_of_type::<db::DbDrag>(&response.ctx);
+            || egui::DragAndDrop::has_payload_of_type::<db::DbDrag>(&response.ctx)
+            || egui::DragAndDrop::has_payload_of_type::<shared::SharedDrag>(&response.ctx);
         if dragging {
             return;
         }
@@ -326,9 +334,12 @@ impl ItemsUi {
                 Some(d) => out
                     .commands
                     .extend(display::show(ui, &d, &mut self.display, busy)),
-                None => out
-                    .commands
-                    .extend(display::show_empty(ui, &mut self.display)),
+                None => {
+                    out.commands
+                        .extend(display::show_empty(ui, &mut self.display));
+                    // PoB's shared list hangs below "Craft item..."
+                    self.shared_panel(ui, &view, &mut out);
+                }
             });
         out.queries.extend(self.display.crafting.take_queries());
         egui::CentralPanel::default().show(ui, |ui| {
@@ -346,6 +357,7 @@ impl ItemsUi {
 
         let ctx = ui.ctx().clone();
         self.dialogs(&ctx, &mut out);
+        self.shared_dialog(&ctx, &view, &mut out);
         out.commands.extend(self.display.text_window(&ctx));
         self.sets_window(&ctx, &view, &mut out);
 

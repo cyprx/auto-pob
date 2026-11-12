@@ -305,6 +305,7 @@ fn compare_tooltips(s: &mut Session, lua: &mlua::Lua, what: &str) -> Seen {
                 slot,
                 theirs: false,
                 shift: false,
+                shared: None,
             };
             let ours = s.backend.item_tooltip_view(&query).unwrap();
             let theirs = upstream_tooltip(lua, &format!("return {code}"));
@@ -541,6 +542,7 @@ fn item_tooltips_match_pob() {
                 slot: slot.map(str::to_string),
                 theirs: false,
                 shift: false,
+                shared: None,
             })
             .unwrap()
     };
@@ -606,6 +608,7 @@ fn tooltip_of_the_unique_jewel() {
             slot: Some(slot.name.clone()),
             theirs: false,
             shift: false,
+            shared: None,
         };
         let start = std::time::Instant::now();
         let ours = s
@@ -2001,6 +2004,7 @@ fn no_silent_writes_items() {
                 slot: None,
                 theirs: false,
                 shift: false,
+                shared: None,
             })
             .unwrap();
     }

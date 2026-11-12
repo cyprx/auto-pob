@@ -317,6 +317,9 @@ local function find_item(db, name)
 	return control, item, index
 end
 
+-- the shared items' drags pick a database row up (glue/shared_items.lua)
+glue.item_db_find = find_item
+
 -- The draw-only updates the tab's Draw makes before a click acts on its slots (SP5a R16)
 local function sync_tab()
 	items_tab().controls.itemList:UpdateList()

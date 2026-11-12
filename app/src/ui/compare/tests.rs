@@ -601,6 +601,7 @@ fn copy_item_sends_slot_and_use() {
         slot: Some("Body Armour".into()),
         theirs: true,
         shift: false,
+        shared: None,
     };
     assert_eq!(
         debug(&out.queries),
@@ -634,6 +635,7 @@ fn copy_item_sends_slot_and_use() {
             slot: Some("Body Armour".into()),
             theirs: false,
             shift: false,
+            shared: None,
         })])
     );
 }
@@ -759,6 +761,7 @@ fn expanded_mode_shows_both_tooltips_inline_one_question_at_a_time() {
         slot: Some(slot.into()),
         theirs,
         shift: false,
+        shared: None,
     };
     // the rows' items in order, ours then theirs, each asked once the last is answered
     let expected = [

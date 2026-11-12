@@ -61,7 +61,9 @@ fn shift_hover_asks_child_tooltip() {
     let asked = h.frame(vec![]).queries;
     assert_eq!(
         debug(&asked),
-        ["ItemTooltip(ItemTooltipQuery { id: 1, slot: None, theirs: false, shift: false })"]
+        [
+            "ItemTooltip(ItemTooltipQuery { id: 1, slot: None, theirs: false, shift: false, shared: None })"
+        ]
     );
     // holding Shift is a new question, asked once after the delay
     h.modifiers = Modifiers::SHIFT;
@@ -70,7 +72,9 @@ fn shift_hover_asks_child_tooltip() {
     asked.extend(h.frame(vec![]).queries);
     assert_eq!(
         debug(&asked),
-        ["ItemTooltip(ItemTooltipQuery { id: 1, slot: None, theirs: false, shift: true })"]
+        [
+            "ItemTooltip(ItemTooltipQuery { id: 1, slot: None, theirs: false, shift: true, shared: None })"
+        ]
     );
 }
 
@@ -220,4 +224,133 @@ fn add_mod_opens_the_mod_browser() {
         sent.extend(run(events).0);
     }
     assert_eq!(debug(&sent), ["OpenPopup(ModBrowser { group: 1 })"]);
+}
+
+// ---- Shared items (NF-2) ----
+
+fn shared_sample() -> ItemsView {
+    use crate::engine::views::{SharedItemEntry, SharedSetEntry};
+    let entry = |name: &str| SharedItemEntry {
+        name: name.into(),
+        rarity: "RARE".into(),
+        label: format!("^xFFFF77{name}"),
+    };
+    ItemsView {
+        shared_items: vec![entry("Shared Loop"), entry("Shared Band")],
+        shared_sets: vec![SharedSetEntry {
+            title: "Shared Set".into(),
+            lines: vec!["^7Ring 1: ^xFFFF77Set Loop".into()],
+        }],
+        shared_shown: true,
+        ..sample()
+    }
+}
+
+fn drag(h: &mut Harness, from: &str, to: &str) -> Vec<String> {
+    let from = h.ui.rect(from).center();
+    let to = h.ui.rect(to).center();
+    debug(&h.drag_between(from, to))
+}
+
+#[test]
+fn shared_rows_drag_onto_slots_and_the_list() {
+    let mut h = Harness::new(shared_sample());
+    h.settle();
+    assert_eq!(
+        drag(&mut h, "shared_row_0", "slot_Ring 1"),
+        ["DropSharedItem { index: 0, slot: Some(\"Ring 1\") }"]
+    );
+    assert_eq!(
+        drag(&mut h, "shared_row_1", "row_2"),
+        ["DropSharedItem { index: 1, slot: None }"]
+    );
+}
+
+#[test]
+fn build_items_and_db_rows_drag_onto_the_shared_list() {
+    let mut h = Harness::new(shared_sample());
+    h.open_db();
+    // a drop on a row's lower half lands after it, as PoB rounds the cursor's row
+    // (ListControl.lua:160)
+    assert_eq!(
+        drag(&mut h, "row_1", "shared_row_1"),
+        ["AddSharedItem { source: Item { id: 1 }, index: 2 }"]
+    );
+    assert_eq!(
+        drag(&mut h, "db_row_1", "shared_row_0"),
+        ["AddSharedItem { source: Db { db: Uniques, name: \"Tabula Rasa\" }, index: 1 }"]
+    );
+}
+
+#[test]
+fn shared_delete_asks_and_double_click_views() {
+    let mut h = Harness::new(shared_sample());
+    h.settle();
+    h.click("shared_row_1");
+    assert!(
+        h.click("shared_delete").commands.is_empty(),
+        "PoB asks first"
+    );
+    assert_eq!(
+        debug(&h.click("confirm_shared_delete").commands),
+        ["DeleteSharedItem { index: 1 }"]
+    );
+    assert_eq!(
+        debug(&h.double_click("shared_row_0")),
+        ["ViewSharedItem { index: 0 }"]
+    );
+}
+
+#[test]
+fn shared_hover_asks_the_shared_tooltip() {
+    let mut h = Harness::new(shared_sample());
+    h.settle();
+    let pos = h.ui.rect("shared_row_1").center();
+    h.frame(vec![Event::PointerMoved(pos)]);
+    let asked = h.frame(vec![]).queries;
+    assert_eq!(
+        debug(&asked),
+        [
+            "ItemTooltip(ItemTooltipQuery { id: 0, slot: None, theirs: false, shift: false, shared: Some(1) })"
+        ]
+    );
+}
+
+#[test]
+fn the_shared_list_hides_under_a_displayed_item() {
+    let mut view = shared_sample();
+    view.shared_shown = false;
+    let mut h = Harness::new(view);
+    h.settle();
+    assert!(!h.ui.has_rect("shared_list"));
+}
+
+#[test]
+fn shared_sets_drag_rename_and_delete() {
+    let mut h = Harness::new(shared_sample());
+    h.click("manage");
+    h.settle();
+    assert_eq!(
+        drag(&mut h, "sets_row_0", "shared_sets_row_0"),
+        ["AddSharedItemSet { id: 1 }"]
+    );
+    assert_eq!(
+        drag(&mut h, "shared_sets_row_0", "sets_row_1"),
+        ["ImportSharedItemSet { index: 0 }"]
+    );
+    h.click("shared_sets_row_0");
+    // F2 on the focused row renames, as PoB's
+    h.key(Key::F2, Modifiers::NONE);
+    h.settle();
+    h.type_into("shared_sets_name", "Renamed");
+    assert_eq!(
+        debug(&h.click("shared_sets_save").commands),
+        ["RenameSharedItemSet { index: 0, title: \"Renamed\" }"]
+    );
+    h.click("shared_sets_row_0");
+    h.click("shared_sets_delete");
+    assert_eq!(
+        debug(&h.click("shared_sets_confirm_delete").commands),
+        ["DeleteSharedItemSet { index: 0 }"]
+    );
 }

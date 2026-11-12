@@ -487,6 +487,7 @@ fn tip(id: u32, text: &str) -> Snapshot {
             slot: None,
             theirs: false,
             shift: false,
+            shared: None,
         },
         tooltip: ItemTooltip {
             lines: vec![ItemTooltipLine::Line {
@@ -511,7 +512,9 @@ fn hovering_a_row_asks_for_its_tooltip_after_the_delay() {
     let o = h.frame(vec![]);
     assert_eq!(
         debug(&o.queries),
-        ["ItemTooltip(ItemTooltipQuery { id: 1, slot: None, theirs: false, shift: false })"]
+        [
+            "ItemTooltip(ItemTooltipQuery { id: 1, slot: None, theirs: false, shift: false, shared: None })"
+        ]
     );
     let o = h.frame(vec![]);
     assert!(o.queries.is_empty(), "asked once");
@@ -529,7 +532,7 @@ fn hovering_a_dropdown_entry_asks_with_the_slot() {
     assert_eq!(
         all.iter().map(|c| format!("{c:?}")).collect::<Vec<_>>(),
         [
-            "ItemTooltip(ItemTooltipQuery { id: 1, slot: Some(\"Ring 1\"), theirs: false, shift: false })"
+            "ItemTooltip(ItemTooltipQuery { id: 1, slot: Some(\"Ring 1\"), theirs: false, shift: false, shared: None })"
         ]
     );
 }
@@ -547,7 +550,9 @@ fn stale_item_tooltip_reply_ignored() {
     let o = h.frame(vec![]);
     assert_eq!(
         debug(&o.queries),
-        ["ItemTooltip(ItemTooltipQuery { id: 2, slot: None, theirs: false, shift: false })"]
+        [
+            "ItemTooltip(ItemTooltipQuery { id: 2, slot: None, theirs: false, shift: false, shared: None })"
+        ]
     );
     h.ui.on_snapshot(&tip(1, "old"));
     assert!(

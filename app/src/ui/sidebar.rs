@@ -2,7 +2,7 @@
 //! coloured like PoB.
 
 use crate::engine::views::{DropList, MainSkillSelector, StatRow, StatsView};
-use crate::engine::{CalcsControl, CalcsCount, Command};
+use crate::engine::{CalcsControl, CalcsCount, Command, PopupKind};
 use crate::theme;
 use crate::widgets::{EditBoxOptions, EditBoxes, pob_text};
 use eframe::egui;
@@ -84,6 +84,7 @@ pub fn show(
             ui.strong("Minion");
             rows(ui, "minion_stats", &stats.minion);
         }
+        warnings(ui, &stats.warnings);
     });
     state.counts.discard_undrawn();
     out
@@ -138,6 +139,16 @@ fn selector(
                 sel.minion.as_ref(),
                 out,
             );
+            // PoB's button beside the minion dropdown, for spectre skills (R18)
+            if sel.spectre_library {
+                ui.label("");
+                let button = ui.button("Manage Spectres…");
+                note(ui, "spectre_library", button.rect);
+                if button.clicked() {
+                    out.push(Command::OpenPopup(PopupKind::SpectreLibrary));
+                }
+                ui.end_row();
+            }
             dropdown(
                 ui,
                 "minion_skill",
@@ -201,6 +212,23 @@ fn count(
     note(ui, key, response.rect);
     out.extend(sent.map(|text| count_command(key, text)));
     ui.end_row();
+}
+
+/// PoB's "N Warnings" line under the stats, its lines on hover (NF-1)
+fn warnings(ui: &mut egui::Ui, lines: &[String]) {
+    if lines.is_empty() {
+        return;
+    }
+    ui.add_space(6.0);
+    let default = ui.visuals().text_color();
+    let label = ui
+        .label(egui::RichText::new(format!("{} Warnings", lines.len())).color(theme::NEGATIVE))
+        .on_hover_ui(|ui| {
+            for line in lines {
+                ui.label(pob_text(line, 14.0, default));
+            }
+        });
+    note(ui, "warnings", label.rect);
 }
 
 fn rows(ui: &mut egui::Ui, id: &str, rows: &[StatRow]) {
@@ -337,6 +365,32 @@ mod tests {
         assert!(h.rect("group_item_1").is_some(), "the list opened");
         sent.extend(h.click("group_item_1"));
         assert_eq!(sent, ["SetMainSkillSelect { control: Group, index: 1 }"]);
+    }
+
+    #[test]
+    fn spectre_button_only_when_pob_shows_it() {
+        let mut sel = base();
+        sel.minion = Some(list(&["<No spectres in build>"], false));
+        let h = Harness::new(view(sel.clone()));
+        assert!(h.rect("minion").is_some());
+        assert!(h.rect("spectre_library").is_none(), "PoB hides it here");
+
+        sel.spectre_library = true;
+        let mut h = Harness::new(view(sel));
+        let sent = h.click("spectre_library");
+        assert_eq!(sent, ["OpenPopup(SpectreLibrary)"]);
+    }
+
+    #[test]
+    fn warnings_show_their_count() {
+        let h = Harness::new(view(base()));
+        assert!(h.rect("warnings").is_none());
+        let stats = StatsView {
+            warnings: vec!["one".into(), "two".into()],
+            ..view(base())
+        };
+        let h = Harness::new(stats);
+        assert!(h.rect("warnings").is_some());
     }
 
     #[test]

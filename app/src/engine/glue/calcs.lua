@@ -168,6 +168,7 @@ function selector_view(calcs)
 		show_minion = show_minion,
 		minion = drop("mainSkillMinion"),
 		minion_skill = drop("mainSkillMinionSkill"),
+		spectre_library = shown_control(calcs, section, "mainSkillMinionLibrary") ~= nil,
 		mode = drop("mode", true),
 		mode_tooltip = section.controls.mode.tooltipText or "",
 	}
@@ -343,4 +344,11 @@ function glue.calcs_breakdown(section_id, sub, row, cell)
 		end
 	end
 	return view
+end
+
+-- The Calcs selector's "Manage Spectres..." button when PoB shows it (R18), after the sync
+function glue.calcs_spectre_library()
+	local calcs = pob.build.calcsTab
+	local section = refreshed_select(calcs)
+	return shown_control(calcs, section, "mainSkillMinionLibrary")
 end

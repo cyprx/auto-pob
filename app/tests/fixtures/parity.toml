@@ -10,58 +10,54 @@
 # ---- controls ----
 
 [controls."build.ascendDrop"]
-gap = "Task 12"
-note = "controller ruling: full parity; in the top bar on every tab, as PoB; today ported app/src/ui/tree/toolbar.rs Ascendancy combo; on the Tree tab, not the top bar"
+ported = "app/src/ui/build.rs top_bar Ascendancy combo (tree/toolbar.rs class), on every tab"
 
 [controls."build.ascendDrop.scrollBar"]
-gap = "Task 12"
+ported = "app/src/ui/build.rs top_bar Ascendancy combo"
 note = "part of build.ascendDrop"
 
 [controls."build.back"]
 ported = "app/src/ui/build.rs top_bar < Builds"
 
 [controls."build.buildLoadouts"]
-gap = "Task 12"
-note = "loadouts dropdown (R21)"
+ported = "app/src/ui/build.rs top_bar loadouts combo: loadouts, headers as labels, New Loadout, Sync (R21)"
+note = "its Help >> entry is drawn disabled until the Help window (Task 14)"
 
 [controls."build.buildLoadouts.scrollBar"]
-gap = "Task 12"
+ported = "app/src/ui/build.rs top_bar loadouts combo"
 note = "part of build.buildLoadouts"
 
 [controls."build.buildName"]
 ported = "app/src/ui/build.rs top_bar name with unsaved marker"
 
 [controls."build.characterLevel"]
-gap = "Task 12"
-note = "level box (R21); the top bar only shows the level today"
+ported = "app/src/ui/build.rs top_bar level box (EditBox: Enter or blur sends, Esc reverts; %D filter, 3 characters)"
 
 [controls."build.characterLevel.buttonDown"]
-gap = "Task 12"
+ported = "app/src/ui/build.rs top_bar level box"
 note = "part of build.characterLevel"
 
 [controls."build.characterLevel.buttonUp"]
-gap = "Task 12"
+ported = "app/src/ui/build.rs top_bar level box"
 note = "part of build.characterLevel"
 
 [controls."build.characterLevel.scrollBarH"]
-gap = "Task 12"
+ported = "app/src/ui/build.rs top_bar level box"
 note = "part of build.characterLevel"
 
 [controls."build.characterLevel.scrollBarV"]
-gap = "Task 12"
+ported = "app/src/ui/build.rs top_bar level box"
 note = "part of build.characterLevel"
 
 [controls."build.classDrop"]
-gap = "Task 12"
-note = "controller ruling: full parity; in the top bar on every tab, as PoB; today ported app/src/ui/tree/toolbar.rs Class combo; on the Tree tab, not the top bar"
+ported = "app/src/ui/build.rs top_bar Class combo (tree/toolbar.rs class, with the class question), on every tab"
 
 [controls."build.classDrop.scrollBar"]
-gap = "Task 12"
+ported = "app/src/ui/build.rs top_bar Class combo"
 note = "part of build.classDrop"
 
 [controls."build.levelScalingButton"]
-gap = "Task 12"
-note = "Auto/Manual level (R21)"
+ported = "app/src/ui/build.rs top_bar Auto/Manual button (R21)"
 
 [controls."build.mainSkill"]
 ported = "app/src/ui/sidebar.rs main-skill selector"
@@ -105,8 +101,7 @@ ported = "app/src/ui/sidebar.rs main-skill selector"
 note = "part of build.mainSkillMinion"
 
 [controls."build.mainSkillMinionLibrary"]
-gap = "Task 12"
-note = "Manage Spectres in the sidebar (R18)"
+ported = "app/src/ui/sidebar.rs Manage Spectres button (PoB popup session, R18)"
 
 [controls."build.mainSkillMinionSkill"]
 ported = "app/src/ui/sidebar.rs main-skill selector"
@@ -182,8 +177,7 @@ ported = "app/src/ui/build.rs tab_strip"
 ported = "app/src/ui/build.rs tab_strip"
 
 [controls."build.pointDisplay"]
-gap = "Task 12"
-note = "controller ruling: full parity; in the top bar on every tab, as PoB; today ported app/src/ui/tree/toolbar.rs Points and Ascendancy counts; shown on the Tree tab only"
+ported = "app/src/ui/build.rs top_bar points (tree/toolbar.rs points) with PoB's progress tooltip, on every tab"
 
 [controls."build.save"]
 ported = "app/src/ui/build.rs top_bar Save"
@@ -192,11 +186,10 @@ ported = "app/src/ui/build.rs top_bar Save"
 ported = "app/src/ui/build.rs top_bar Save as"
 
 [controls."build.secondaryAscendDrop"]
-gap = "Task 12"
-note = "bloodline (R21)"
+ported = "app/src/ui/build.rs top_bar bloodline combo (R21)"
 
 [controls."build.secondaryAscendDrop.scrollBar"]
-gap = "Task 12"
+ported = "app/src/ui/build.rs top_bar bloodline combo"
 note = "part of build.secondaryAscendDrop"
 
 [controls."build.statBox"]
@@ -211,8 +204,7 @@ ported = "app/src/ui/sidebar.rs"
 note = "layout anchor"
 
 [controls."build.warnings"]
-gap = "Task 12"
-note = "NF-1 (new finding, in scope by controller ruling): PoB's N Warnings line under the stats (too many points, unmet requirements, warnFunc lines) is not shown"
+ported = "app/src/ui/sidebar.rs N Warnings line with PoB's lines on hover (NF-1)"
 
 [controls."calcs.#CalcSectionControl"]
 gap = "Task 13"
@@ -228,8 +220,7 @@ ported = "app/src/ui/calcs/mod.rs selector row"
 ported = "app/src/ui/calcs/mod.rs selector row"
 
 [controls."calcs.#CalcSectionControl.mainSkillMinionLibrary"]
-gap = "Task 12"
-note = "Manage Spectres in the Calcs selector (R18)"
+ported = "app/src/ui/calcs/mod.rs selector Manage Spectres button (R18)"
 
 [controls."calcs.#CalcSectionControl.mainSkillMinionSkill"]
 ported = "app/src/ui/calcs/mod.rs selector row"
@@ -3149,8 +3140,8 @@ ported = "app/src/ui/app.rs save_as_dialog with the folder list (app/src/ui/fold
 ported = "app/src/ui/unsaved.rs prompt"
 
 [popups."Set Name"]
-gap = "Task 12"
-note = "set-manager sites ported; Build.lua New Loadout is R21; the shared item set site is NF-2"
+ported = "app/src/ui/build.rs New Loadout name window (R21); set-manager sites in items/sets.rs, skills/sets.rs, tree/toolbar.rs, config.rs"
+note = "the shared item set site is NF-2, tracked by the items.sharedItemList rows"
 
 [popups."Similar Builds"]
 ruled_out = "R3"
@@ -3161,8 +3152,7 @@ ported = "app/src/ui/skills/groups.rs"
 note = "Delete is disabled for item-granted groups, so the message can't arise"
 
 [popups."Spectre Library"]
-gap = "Task 12"
-note = "R18"
+ported = "app/src/engine/glue/popups.lua Spectre Library session (R18), opened from the sidebar and the Calcs selector"
 
 [popups."Stat Weight Multipliers"]
 ruled_out = "D-005"

@@ -1,6 +1,9 @@
 //! The build screen's top bar and tab strip.
 
-use crate::engine::views::BuildView;
+use super::tree::TreeTab;
+use crate::engine::Command;
+use crate::engine::views::{BuildView, is_loadout_marker};
+use crate::widgets::{EditBox, EditBoxOptions, pob_text};
 use eframe::egui;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,51 +45,282 @@ impl BuildTab {
     }
 }
 
+/// The top bar's own state: the level box and the New Loadout name being typed.
+#[derive(Default)]
+pub struct TopBarState {
+    level: EditBox,
+    /// "New Loadout" was chosen: the name being typed
+    new_loadout: Option<String>,
+}
+
+impl TopBarState {
+    /// A New Loadout name is being asked for, so shortcuts must wait.
+    pub fn has_dialog(&self) -> bool {
+        self.new_loadout.is_some()
+    }
+
+    /// A level typed but not sent: the build has changes the engine doesn't know about yet.
+    pub fn has_pending(&self) -> bool {
+        self.level.has_pending()
+    }
+
+    /// Takes the pending level as the command that sends it.
+    pub fn flush(&mut self) -> Option<Command> {
+        level_command(&self.level.take_pending()?)
+    }
+
+    /// Drops the pending level (the user chose not to save).
+    pub fn discard(&mut self) {
+        self.level.discard();
+    }
+}
+
+/// What the top bar asks for in one frame.
+#[derive(Debug, Default)]
+pub struct TopBarOutput {
+    pub action: Option<BuildAction>,
+    pub commands: Vec<Command>,
+}
+
+/// The level PoB would take from the box: its `%D` filter keeps digits only, and an empty box
+/// is level 1 (Build.lua:218-219); nothing is sent for text that holds no number.
+fn level_command(text: &str) -> Option<Command> {
+    let digits: String = text.chars().filter(char::is_ascii_digit).take(3).collect();
+    let level = if digits.is_empty() {
+        1
+    } else {
+        digits.parse().ok()?
+    };
+    Some(Command::SetCharacterLevel { level })
+}
+
+/// Where a widget was drawn, so tests can click it. Does nothing outside tests.
+#[cfg(test)]
+fn note(ui: &egui::Ui, key: &str, rect: egui::Rect) {
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(egui::Id::NULL.with(("top_bar_rect", key.to_owned())), rect));
+}
+
+#[cfg(not(test))]
+fn note(_ui: &egui::Ui, _key: &str, _rect: egui::Rect) {}
+
 /// `undo`: the tab has an engine history here; `history`: whether its undo and redo have
-/// anything to do.
+/// anything to do. The right half is PoB's: points, Auto/Manual, the level box, class,
+/// ascendancy, bloodline and loadouts (Build.lua:186-415); the class part is the tree tab's.
 pub fn top_bar(
     ui: &mut egui::Ui,
     view: &BuildView,
     undo: bool,
     history: (bool, bool),
-) -> Option<BuildAction> {
-    let mut action = None;
-    ui.horizontal(|ui| {
+    state: &mut TopBarState,
+    tree: &mut TreeTab,
+    busy: bool,
+) -> TopBarOutput {
+    let mut out = TopBarOutput::default();
+    ui.horizontal_wrapped(|ui| {
         if ui.button("< Builds").clicked() {
-            action = Some(BuildAction::Back);
+            out.action = Some(BuildAction::Back);
         }
         ui.separator();
         let marker = if view.unsaved { " *" } else { "" };
         ui.strong(format!("{}{marker}", view.name));
         ui.separator();
         if ui.button("Save").clicked() {
-            action = Some(BuildAction::Save);
+            out.action = Some(BuildAction::Save);
         }
         if ui.button("Save as…").clicked() {
-            action = Some(BuildAction::SaveAs);
+            out.action = Some(BuildAction::SaveAs);
         }
         ui.separator();
         if ui
             .add_enabled(undo && history.0, egui::Button::new("Undo"))
             .clicked()
         {
-            action = Some(BuildAction::Undo);
+            out.action = Some(BuildAction::Undo);
         }
         if ui
             .add_enabled(undo && history.1, egui::Button::new("Redo"))
             .clicked()
         {
-            action = Some(BuildAction::Redo);
+            out.action = Some(BuildAction::Redo);
         }
         ui.separator();
         if ui.button("Options").clicked() {
-            action = Some(BuildAction::Options);
+            out.action = Some(BuildAction::Options);
         }
         ui.separator();
-        let class = view.ascendancy.as_deref().unwrap_or(&view.class);
-        ui.label(format!("Level {} {class}", view.level));
+        tree.top_bar_points(ui, &view.progress);
+        level(ui, view, state, busy, &mut out.commands);
+        out.commands.extend(tree.top_bar_class(ui));
+        bloodline(ui, view, &mut out.commands);
+        loadouts(ui, view, state, &mut out.commands);
     });
-    action
+    new_loadout_dialog(ui.ctx(), state, &mut out.commands);
+    out
+}
+
+/// The Auto/Manual button and the level box (`levelScalingButton`, `characterLevel`)
+fn level(
+    ui: &mut egui::Ui,
+    view: &BuildView,
+    state: &mut TopBarState,
+    busy: bool,
+    commands: &mut Vec<Command>,
+) {
+    let mode = ui
+        .button(if view.level_auto { "Auto" } else { "Manual" })
+        .on_hover_text(if view.level_auto {
+            "The level follows the passive points spent"
+        } else {
+            "The level is the one typed"
+        });
+    note(ui, "level_mode", mode.rect);
+    if mode.clicked() {
+        commands.push(Command::SetLevelMode {
+            auto: !view.level_auto,
+        });
+    }
+    ui.label("Level");
+    let opts = EditBoxOptions {
+        width: 36.0,
+        char_limit: Some(3),
+        filter: Some(|c| c.is_ascii_digit()),
+        hint: None,
+    };
+    let current = view.level.to_string();
+    let (response, sent) =
+        state
+            .level
+            .show(ui, egui::Id::unique("top_bar_level"), &current, busy, &opts);
+    note(ui, "level", response.rect);
+    commands.extend(sent.as_deref().and_then(level_command));
+}
+
+/// The bloodline dropdown (`secondaryAscendDrop`); PoB enables it with more than "None"
+fn bloodline(ui: &mut egui::Ui, view: &BuildView, commands: &mut Vec<Command>) {
+    if view.secondary.is_empty() {
+        return;
+    }
+    let current = view
+        .secondary
+        .iter()
+        .find(|(id, _)| *id == view.secondary_selected)
+        .map_or("None", |(_, label)| label.as_str());
+    ui.add_enabled_ui(view.secondary.len() > 1, |ui| {
+        let combo = egui::ComboBox::from_id_salt("top_bar_bloodline")
+            .selected_text(current)
+            .show_ui(ui, |ui| {
+                for (i, (id, label)) in view.secondary.iter().enumerate() {
+                    let item = ui.selectable_label(*id == view.secondary_selected, label);
+                    note(ui, &format!("bloodline_{i}"), item.rect);
+                    if item.clicked() && *id != view.secondary_selected {
+                        commands.push(Command::SelectSecondaryAscendancy { id: *id });
+                    }
+                }
+            });
+        note(ui, "bloodline", combo.response.rect);
+    });
+}
+
+/// The loadouts dropdown (`buildLoadouts`): PoB's headers are labels, its actions are buttons,
+/// and only real loadouts are picked
+fn loadouts(
+    ui: &mut egui::Ui,
+    view: &BuildView,
+    state: &mut TopBarState,
+    commands: &mut Vec<Command>,
+) {
+    if view.loadouts.is_empty() {
+        return;
+    }
+    let default = ui.visuals().text_color();
+    let current = view
+        .loadout_selected
+        .and_then(|i| view.loadouts.get(i))
+        .map_or("Loadouts", String::as_str);
+    let combo = egui::ComboBox::from_id_salt("top_bar_loadouts")
+        .selected_text(pob_text(current, 14.0, default))
+        .width(160.0)
+        .show_ui(ui, |ui| {
+            for (i, entry) in view.loadouts.iter().enumerate() {
+                let key = format!("loadout_{i}");
+                if !is_loadout_marker(entry) {
+                    let item = ui.selectable_label(
+                        view.loadout_selected == Some(i),
+                        pob_text(entry, 14.0, default),
+                    );
+                    note(ui, &key, item.rect);
+                    if item.clicked() && view.loadout_selected != Some(i) {
+                        commands.push(Command::SelectLoadout {
+                            label: entry.clone(),
+                        });
+                    }
+                    continue;
+                }
+                let response = match &entry[4..] {
+                    "New Loadout" => {
+                        let r = ui.button("New Loadout…");
+                        if r.clicked() {
+                            state.new_loadout = Some(String::new());
+                        }
+                        r
+                    }
+                    "Sync" => {
+                        let r = ui
+                            .button("Sync")
+                            .on_hover_text("Rebuild the list from the sets' names");
+                        if r.clicked() {
+                            commands.push(Command::SyncLoadouts);
+                        }
+                        r
+                    }
+                    // the Help window isn't in the app yet
+                    "Help >>" => ui.add_enabled(false, egui::Button::new("Help >>")),
+                    "-----" => {
+                        ui.separator();
+                        continue;
+                    }
+                    // "Loadouts:" and any other header: a label, never a choice
+                    _ => ui.label(pob_text(entry, 14.0, ui.visuals().weak_text_color())),
+                };
+                note(ui, &key, response.rect);
+            }
+        });
+    note(ui, "loadouts", combo.response.rect);
+}
+
+/// "New Loadout"'s name popup ("Set Name"): Save needs a name with a visible character
+fn new_loadout_dialog(ctx: &egui::Context, state: &mut TopBarState, commands: &mut Vec<Command>) {
+    let Some(name) = &mut state.new_loadout else {
+        return;
+    };
+    let mut close = false;
+    egui::Window::new("Set Name")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.label("Enter name for this loadout:");
+            let field = ui.add(egui::TextEdit::singleline(name).char_limit(100));
+            // the window opens on its box, as PoB's does
+            if ui.memory(|m| m.focused().is_none()) {
+                field.request_focus();
+            }
+            let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let valid = !name.trim().is_empty();
+            ui.horizontal(|ui| {
+                let save = ui.add_enabled(valid, egui::Button::new("Save"));
+                note(ui, "new_loadout_save", save.rect);
+                if (save.clicked() || enter) && valid {
+                    commands.push(Command::NewLoadout { name: name.clone() });
+                    close = true;
+                }
+                close |= ui.button("Cancel").clicked();
+            });
+        });
+    if close {
+        state.new_loadout = None;
+    }
 }
 
 pub fn tab_strip(ui: &mut egui::Ui, tab: &mut BuildTab) {
@@ -100,4 +334,199 @@ pub fn tab_strip(ui: &mut egui::Ui, tab: &mut BuildTab) {
         ui.selectable_value(tab, BuildTab::Compare, "Compare");
         ui.selectable_value(tab, BuildTab::Import, "Import/Export");
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::egui::{Event, Key, Modifiers, PointerButton, RawInput, Rect};
+
+    struct Harness {
+        ctx: egui::Context,
+        view: BuildView,
+        state: TopBarState,
+        tree: TreeTab,
+    }
+
+    impl Harness {
+        fn new(view: BuildView) -> Self {
+            let mut h = Self {
+                ctx: egui::Context::default(),
+                view,
+                state: TopBarState::default(),
+                tree: TreeTab::default(),
+            };
+            h.frame(vec![]);
+            h
+        }
+
+        fn frame(&mut self, events: Vec<Event>) -> Vec<String> {
+            let input = RawInput {
+                events,
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(2000.0, 800.0),
+                )),
+                ..Default::default()
+            };
+            let mut out = TopBarOutput::default();
+            let (view, state, tree) = (&self.view, &mut self.state, &mut self.tree);
+            self.ctx
+                .run_ui(input, |ui| {
+                    egui::Panel::top("top").show(ui, |ui| {
+                        out = top_bar(ui, view, true, (false, false), state, tree, false);
+                    });
+                })
+                .drop_without_applying_deltas();
+            out.commands.iter().map(|c| format!("{c:?}")).collect()
+        }
+
+        fn rect(&self, key: &str) -> Option<Rect> {
+            self.ctx
+                .data(|d| d.get_temp(egui::Id::NULL.with(("top_bar_rect", key.to_owned()))))
+        }
+
+        fn click(&mut self, key: &str) -> Vec<String> {
+            let pos = self
+                .rect(key)
+                .unwrap_or_else(|| panic!("no widget {key}"))
+                .center();
+            let button = |pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            let mut all = Vec::new();
+            for events in [
+                vec![Event::PointerMoved(pos)],
+                vec![button(true)],
+                vec![button(false)],
+                vec![],
+            ] {
+                all.extend(self.frame(events));
+            }
+            all
+        }
+
+        fn key(&mut self, key: Key) -> Vec<String> {
+            let mut all = Vec::new();
+            for pressed in [true, false] {
+                all.extend(self.frame(vec![Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                }]));
+            }
+            all
+        }
+
+        /// Opens a combo box and lets its popup lay out
+        fn open(&mut self, key: &str) -> Vec<String> {
+            let mut sent = self.click(key);
+            for _ in 0..3 {
+                sent.extend(self.frame(vec![]));
+            }
+            sent
+        }
+    }
+
+    fn view() -> BuildView {
+        BuildView {
+            name: "b".into(),
+            class: "Witch".into(),
+            level: 90,
+            secondary: vec![(0, "None".into()), (8, "Aul Bloodline".into())],
+            loadouts: [
+                "^7^7Loadouts:",
+                "Default",
+                "L2",
+                "^7^7-----",
+                "^7^7New Loadout",
+                "^7^7Sync",
+                "^7^7Help >>",
+            ]
+            .map(String::from)
+            .to_vec(),
+            loadout_selected: Some(1),
+            ..BuildView::default()
+        }
+    }
+
+    #[test]
+    fn level_box_sends_on_enter() {
+        let mut h = Harness::new(view());
+        let mut sent = h.click("level");
+        // the box keeps PoB's `%D` filter and its three characters
+        sent.extend(h.frame(vec![Event::Key {
+            key: Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        }]));
+        sent.extend(h.frame(vec![Event::Text("7x5".into())]));
+        assert!(sent.is_empty(), "nothing goes out while typing: {sent:?}");
+        assert!(h.state.has_pending());
+        sent.extend(h.key(Key::Enter));
+        assert_eq!(sent, ["SetCharacterLevel { level: 75 }"]);
+
+        // Escape puts back the build's level and sends nothing
+        let mut h = Harness::new(view());
+        let mut sent = h.click("level");
+        sent.extend(h.frame(vec![Event::Text("1".into())]));
+        sent.extend(h.key(Key::Escape));
+        assert!(sent.is_empty());
+        assert!(!h.state.has_pending());
+        assert_eq!(h.state.level.text, "90");
+    }
+
+    #[test]
+    fn level_mode_toggles() {
+        let mut h = Harness::new(view());
+        assert_eq!(h.click("level_mode"), ["SetLevelMode { auto: true }"]);
+        let mut h = Harness::new(BuildView {
+            level_auto: true,
+            ..view()
+        });
+        assert_eq!(h.click("level_mode"), ["SetLevelMode { auto: false }"]);
+    }
+
+    #[test]
+    fn loadout_headers_not_selectable() {
+        let mut h = Harness::new(BuildView {
+            loadout_selected: None,
+            ..view()
+        });
+        let mut sent = h.open("loadouts");
+        assert!(h.rect("loadout_0").is_some(), "the list opened");
+        // the "Loadouts:" header is a label: clicking it picks nothing
+        sent.extend(h.click("loadout_0"));
+        assert!(sent.is_empty(), "{sent:?}");
+        sent.extend(h.open("loadouts"));
+        sent.extend(h.click("loadout_2"));
+        assert_eq!(sent, ["SelectLoadout { label: \"L2\" }"]);
+        let mut sent = h.open("loadouts");
+        sent.extend(h.click("loadout_5"));
+        assert_eq!(sent, ["SyncLoadouts"]);
+        // New Loadout asks for a name first
+        let mut sent = h.open("loadouts");
+        sent.extend(h.click("loadout_4"));
+        assert!(sent.is_empty());
+        assert!(h.state.has_dialog());
+        let mut sent = h.frame(vec![Event::Text("L3".into())]);
+        sent.extend(h.click("new_loadout_save"));
+        assert_eq!(sent, ["NewLoadout { name: \"L3\" }"]);
+        assert!(!h.state.has_dialog());
+    }
+
+    #[test]
+    fn bloodline_sends_its_id() {
+        let mut h = Harness::new(view());
+        let mut sent = h.open("bloodline");
+        sent.extend(h.click("bloodline_1"));
+        assert_eq!(sent, ["SelectSecondaryAscendancy { id: 8 }"]);
+    }
 }

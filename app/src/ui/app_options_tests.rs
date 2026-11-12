@@ -260,6 +260,7 @@ fn zoom_follows_dpi_override() {
         unsaved: false,
         can_undo: false,
         can_redo: false,
+        ..BuildView::default()
     }));
     app.on_settings(&view("0", "true"), 0);
     frame(&mut app, &ctx, vec![]);

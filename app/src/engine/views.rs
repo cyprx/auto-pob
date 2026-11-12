@@ -11,7 +11,7 @@ use super::commands::{
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct BuildView {
     pub name: String,
     #[serde(default)]
@@ -23,6 +23,35 @@ pub struct BuildView {
     pub unsaved: bool,
     pub can_undo: bool,
     pub can_redo: bool,
+    /// The top bar's Auto/Manual button: the level follows the points spent (R21)
+    #[serde(default)]
+    pub level_auto: bool,
+    /// The bloodline dropdown (`secondaryAscendDrop`) as PoB lists it: (id, label), "None"
+    /// (id 0) first. PoB enables it only with more than one entry.
+    #[serde(default)]
+    pub secondary: Vec<(u32, String)>,
+    /// The chosen bloodline's id; 0 is "None"
+    #[serde(default)]
+    pub secondary_selected: u32,
+    /// The loadouts dropdown (`buildLoadouts`) as PoB holds it, colour codes kept. Entries
+    /// starting with `^7^7` are PoB's headers and actions ("Loadouts:", "-----", "New
+    /// Loadout", "Sync", "Help >>"), see [`is_loadout_marker`].
+    #[serde(default)]
+    pub loadouts: Vec<String>,
+    /// The loadout PoB shows as selected (0-based into `loadouts`); `None` while it shows the
+    /// "Loadouts:" header
+    #[serde(default)]
+    pub loadout_selected: Option<usize>,
+    /// The point display's tooltip (`pointDisplay.req`): required level and estimated
+    /// progress, colour codes kept
+    #[serde(default)]
+    pub progress: String,
+}
+
+/// Whether a `BuildView.loadouts` entry is one of PoB's headers or actions rather than a
+/// loadout: PoB marks them with a doubled `^7` so no set title can match them (Build.lua:851).
+pub fn is_loadout_marker(entry: &str) -> bool {
+    entry.starts_with("^7^7")
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -128,6 +157,10 @@ pub struct StatsView {
     /// The sidebar's main-skill dropdowns.
     #[serde(default)]
     pub main_skill: MainSkillSelector,
+    /// PoB's warning lines under the stats (`controls.warnings.lines`, NF-1), in PoB's order;
+    /// empty while Options' "Show warnings" is off
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -162,6 +195,9 @@ pub struct MainSkillSelector {
     pub minion: Option<DropList>,
     #[serde(default)]
     pub minion_skill: Option<DropList>,
+    /// PoB shows "Manage Spectres..." (`mainSkillMinionLibrary`) for the main skill (R18)
+    #[serde(default)]
+    pub spectre_library: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -880,6 +916,9 @@ pub struct CalcsSelector {
     pub minion: Option<DropList>,
     #[serde(default)]
     pub minion_skill: Option<DropList>,
+    /// PoB shows "Manage Spectres..." (`mainSkillMinionLibrary`) in the selector (R18)
+    #[serde(default)]
+    pub spectre_library: bool,
     pub mode: DropList,
     #[serde(default)]
     pub mode_tooltip: String,

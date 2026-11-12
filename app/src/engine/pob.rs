@@ -274,6 +274,22 @@ impl PobBackend {
         })
     }
 
+    /// A loadout pick or a new loadout (R21): the tree, item, skill and config sets may all
+    /// change, and with them every tab.
+    fn loadout_changed(&self) -> Result<Affected> {
+        Ok(Affected {
+            build: true,
+            tree: true,
+            items: true,
+            skills: true,
+            config: true,
+            calcs: true,
+            recalc: true,
+            tree_layout: self.layout_changed()?,
+            ..Affected::default()
+        })
+    }
+
     /// A build that is opened or replaced starts with the heat map off.
     fn reset_heatmap(&mut self) {
         self.heatmap_on = false;
@@ -403,6 +419,17 @@ impl PobBackend {
 fn list_changed() -> Affected {
     Affected {
         list: true,
+        ..Affected::default()
+    }
+}
+
+/// The level or its mode (R21): PoB rebuilds the config's mods and recalculates; in Auto mode
+/// the level itself comes out of the calculation.
+fn level_changed() -> Affected {
+    Affected {
+        build: true,
+        config: true,
+        recalc: true,
         ..Affected::default()
     }
 }
@@ -559,6 +586,9 @@ fn ends_gem_search(command: &Command) -> bool {
             | Command::NewSkillSet { .. }
             | Command::CopySkillSet { .. }
             | Command::DeleteSkillSet { .. }
+            // a loadout picks or adds a skill set (R21)
+            | Command::SelectLoadout { .. }
+            | Command::NewLoadout { .. }
             | Command::Undo(Tab::Skills)
             | Command::Redo(Tab::Skills)
             | Command::ListBuilds { .. }
@@ -1073,6 +1103,34 @@ impl PobBackend {
             Command::ResetTree => {
                 self.call::<_, ()>("reset_tree", ())?;
                 self.tree_edited()
+            }
+            Command::SetCharacterLevel { level } => {
+                self.call::<_, ()>("set_character_level", level)?;
+                Ok(level_changed())
+            }
+            Command::SetLevelMode { auto } => {
+                self.call::<_, ()>("set_level_mode", auto)?;
+                Ok(level_changed())
+            }
+            Command::SelectSecondaryAscendancy { id } => {
+                self.call::<_, ()>("select_secondary_ascendancy", id)?;
+                self.tree_edited()
+            }
+            Command::SelectLoadout { label } => {
+                self.call::<_, ()>("select_loadout", label)?;
+                self.loadout_changed()
+            }
+            Command::NewLoadout { name } => {
+                self.call::<_, ()>("new_loadout", name)?;
+                self.loadout_changed()
+            }
+            Command::SyncLoadouts => {
+                self.call::<_, ()>("sync_loadouts", ())?;
+                // a rebuilt list and PoB's selection; Sync edits nothing
+                Ok(Affected {
+                    build: true,
+                    ..Affected::default()
+                })
             }
             Command::RemoveAllTattoos => {
                 self.call::<_, ()>("remove_all_tattoos", ())?;
@@ -1642,6 +1700,7 @@ impl PobBackend {
                     PopupKind::NodeReplacement { node } => ("node_replacement", i64::from(node)),
                     PopupKind::Options => ("options", 0),
                     PopupKind::TimelessJewel => ("timeless", 0),
+                    PopupKind::SpectreLibrary => ("spectre_library", 0),
                     PopupKind::BuySimilar { source } => {
                         let source = self.lua.to_value(&source).map_err(|e| anyhow!("{e}"))?;
                         self.call::<_, ()>("popup_open", ("buy_similar", source))?;

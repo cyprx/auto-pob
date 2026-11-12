@@ -90,11 +90,52 @@ function glue.recalculate()
 	frame()
 end
 
+-- ---- The top bar (R21) ----
+
+-- The top bar's dropdowns as PoB's frame leaves them before it draws (Build.lua:1232-1236):
+-- the class and ascendancy selections and the bloodline list. The loadouts list is not
+-- rebuilt in a frame; PoB rebuilds it only in `SyncLoadouts`, which every set change calls.
+local function top_bar_sync()
+	local build = pob.build
+	local controls = build.controls
+	controls.classDrop:SelByValue(build.spec.curClassId, "classId")
+	controls.ascendDrop.list = controls.classDrop:GetSelValueByKey("ascendancies")
+	controls.ascendDrop:SelByValue(build.spec.curAscendClassId, "ascendClassId")
+	build:UpdateSecondaryAscendancyDropdown()
+	return controls
+end
+
+-- PoB marks the loadouts dropdown's headers and actions with a doubled colour code
+-- (Build.lua:851), so no set title can match them
+local function loadout_marker(entry)
+	return type(entry) ~= "string" or entry:sub(1, 4) == "^7^7"
+end
+
+local function require_usable(control)
+	if not (control:IsShown() and control:IsEnabled()) then
+		error("PoB doesn't offer that here", 0)
+	end
+end
+
 function glue.build_view()
 	local build = pob.build
 	local spec = build.spec
 	local ascendancy = spec.curAscendClassName
 	if ascendancy == "None" or ascendancy == "" then ascendancy = nil end
+	local controls = top_bar_sync()
+	local secondary = {}
+	for i, entry in ipairs(controls.secondaryAscendDrop.list) do
+		secondary[i] = { entry.ascendClassId, entry.label }
+	end
+	local loadouts = {}
+	for i, entry in ipairs(controls.buildLoadouts.list) do
+		loadouts[i] = tostring(entry)
+	end
+	local sel = controls.buildLoadouts.selIndex
+	local loadout_selected
+	if sel and loadouts[sel] and not loadout_marker(loadouts[sel]) then
+		loadout_selected = sel - 1
+	end
 	return {
 		name = build.buildName or "",
 		path = build.dbFileName or nil,
@@ -104,7 +145,87 @@ function glue.build_view()
 		unsaved = build.unsaved and true or false,
 		can_undo = build.configTab.undo[2] ~= nil,
 		can_redo = build.configTab.redo[1] ~= nil,
+		level_auto = build.characterLevelAutoMode and true or false,
+		secondary = secondary,
+		secondary_selected = spec.curSecondaryAscendClassId or 0,
+		loadouts = loadouts,
+		loadout_selected = loadout_selected,
+		progress = controls.pointDisplay.req or "",
 	}
+end
+
+-- Typed into the level box (Build.lua:218): PoB's `%D` filter and 3-character limit, then
+-- its callback, which clamps the level and switches to Manual
+function glue.set_character_level(level)
+	local control = pob.build.controls.characterLevel
+	require_usable(control)
+	if not glue.type_into(control, tostring(level)) then
+		error("that isn't a level", 0)
+	end
+end
+
+-- The Auto/Manual button (Build.lua:211), pressed when the mode differs
+function glue.set_level_mode(auto)
+	local build = pob.build
+	local button = build.controls.levelScalingButton
+	require_usable(button)
+	if (build.characterLevelAutoMode and true or false) ~= auto then
+		button.onClick()
+	end
+end
+
+-- A pick in the bloodline dropdown (Build.lua:285), from the list PoB's frame builds
+function glue.select_secondary_ascendancy(id)
+	local drop = top_bar_sync().secondaryAscendDrop
+	require_usable(drop)
+	for index, entry in ipairs(drop.list) do
+		if entry.ascendClassId == id then
+			drop:SetSel(index)
+			return
+		end
+	end
+	error("PoB doesn't offer that bloodline here", 0)
+end
+
+-- The loadouts dropdown's entry with this text, by its 1-based index
+local function loadout_index(label)
+	local drop = pob.build.controls.buildLoadouts
+	require_usable(drop)
+	for index, entry in ipairs(drop.list) do
+		if entry == label then
+			return drop, index
+		end
+	end
+	error("no such loadout", 0)
+end
+
+-- A pick of a loadout (Build.lua:301-415); PoB's headers and actions are not loadouts
+function glue.select_loadout(label)
+	local drop, index = loadout_index(label)
+	if loadout_marker(label) then
+		error("PoB doesn't offer that here", 0)
+	end
+	drop:SetSel(index)
+end
+
+-- "New Loadout", its name popup and Save (Build.lua:316-352)
+function glue.new_loadout(name)
+	local drop, index = loadout_index("^7^7New Loadout")
+	glue.in_popups(function()
+		local main = main_module()
+		local depth = #main.popups
+		drop:SetSel(index)
+		if #main.popups <= depth then
+			error("PoB didn't open that window", 0)
+		end
+		glue.save_name("loadout", name)
+	end)
+end
+
+-- "Sync" (Build.lua:306-309)
+function glue.sync_loadouts()
+	local drop, index = loadout_index("^7^7Sync")
+	drop:SetSel(index)
 end
 
 -- A folder is "" or ends with "/", so it can be joined to a file name.

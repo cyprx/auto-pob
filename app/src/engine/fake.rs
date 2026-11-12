@@ -372,6 +372,7 @@ impl Backend for Fake {
             unsaved: false,
             can_undo: false,
             can_redo: false,
+            ..BuildView::default()
         })
     }
 

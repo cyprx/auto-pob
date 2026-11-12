@@ -1,9 +1,10 @@
-//! The Tree tab's toolbar and the dialogs it opens: trees, class and ascendancy, reset, search,
+//! The Tree tab's toolbar and the dialogs it opens: trees, reset, search,
 //! the timeless jewel search, heat map, the power report toggle and the link menu.
 
 use super::{Rects, TreeOutput};
 use crate::engine::{Command, PopupKind, TreeState};
 use crate::theme;
+use crate::widgets::pob_text;
 use eframe::egui;
 
 /// A search edit is sent once typing has paused this long (seconds).
@@ -27,11 +28,6 @@ enum Dialog {
         title: String,
     },
     DeleteSpec(usize),
-    /// Choosing the class would drop points that don't connect to it
-    Class {
-        id: u32,
-        name: String,
-    },
     Reset,
     /// PoB's "Remove All Tattoos" can't be undone
     RemoveTattoos,
@@ -50,6 +46,9 @@ pub(super) struct Toolbar {
     search_edit: Option<f64>,
     pub(super) report_open: bool,
     dialog: Option<Dialog>,
+    /// Choosing this class would drop points that don't connect to it: asked by the top bar's
+    /// class dropdown, on every tab (id, name)
+    class_dialog: Option<(u32, String)>,
     /// "Copy link" was clicked and the link has not arrived yet
     copy_pending: bool,
     link_fresh: bool,
@@ -57,9 +56,10 @@ pub(super) struct Toolbar {
 
 impl Toolbar {
     pub(super) fn has_dialog(&self) -> bool {
-        self.dialog.is_some()
+        self.dialog.is_some() || self.class_dialog.is_some()
     }
 
+    /// Drops the tab's own dialog; the class question belongs to the top bar and stays.
     pub(super) fn close_dialog(&mut self) {
         self.dialog = None;
     }
@@ -89,9 +89,6 @@ impl Toolbar {
         ui.horizontal_wrapped(|ui| {
             self.specs(ui, state, rects, commands);
             ui.separator();
-            self.points(ui, state);
-            ui.separator();
-            self.class(ui, state, rects, commands);
             let reset = ui.button("Reset").on_hover_text("Reset the passive tree");
             rects.note(&reset, || "reset".into());
             if reset.clicked() {
@@ -194,7 +191,8 @@ impl Toolbar {
         rects.note(&compare.response, || "compare_combo".into());
     }
 
-    fn points(&self, ui: &mut egui::Ui, state: &TreeState) {
+    /// PoB's point display (`pointDisplay`), in the top bar; `progress` is its tooltip
+    pub(super) fn points(&self, ui: &mut egui::Ui, state: &TreeState, progress: &str) {
         let p = state.points;
         let colour = |over: bool| {
             if over {
@@ -203,20 +201,29 @@ impl Toolbar {
                 theme::TEXT_DIM
             }
         };
-        ui.label(
+        let points = ui.label(
             egui::RichText::new(format!("Points {}/{}", p.used, p.available))
                 .color(colour(p.used > p.available)),
         );
-        ui.label(
+        let ascendancy = ui.label(
             egui::RichText::new(format!(
                 "Ascendancy {}/{}",
                 p.ascendancy_used, p.ascendancy_available
             ))
             .color(colour(p.ascendancy_used > p.ascendancy_available)),
         );
+        if !progress.is_empty() {
+            let default = ui.visuals().text_color();
+            for response in [points, ascendancy] {
+                response.on_hover_ui(|ui| {
+                    ui.label(pob_text(progress, 14.0, default));
+                });
+            }
+        }
     }
 
-    fn class(
+    /// PoB's class and ascendancy dropdowns (`classDrop`, `ascendDrop`), in the top bar
+    pub(super) fn class(
         &mut self,
         ui: &mut egui::Ui,
         state: &TreeState,
@@ -232,10 +239,7 @@ impl Toolbar {
                     rects.note(&item, || format!("class:{}", c.id));
                     if item.clicked() && c.id != state.class_id {
                         if c.needs_confirm {
-                            self.dialog = Some(Dialog::Class {
-                                id: c.id,
-                                name: c.name.clone(),
-                            });
+                            self.class_dialog = Some((c.id, c.name.clone()));
                         } else {
                             commands.push(Command::SelectClass {
                                 id: c.id,
@@ -439,6 +443,44 @@ impl Toolbar {
         rects.note(&menu.response, || "link_menu".into());
     }
 
+    /// The class question, asked from the top bar on any tab
+    pub(super) fn class_dialog(
+        &mut self,
+        ctx: &egui::Context,
+        rects: &mut Rects,
+        commands: &mut Vec<Command>,
+    ) {
+        let Some((id, name)) = &self.class_dialog else {
+            return;
+        };
+        let (id, name) = (*id, name.clone());
+        let mut close = false;
+        egui::Window::new("Change class")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(format!(
+                    "Some of your points don't connect to {name}. Reset the tree, or keep the \
+                     points that can connect to it?"
+                ));
+                ui.horizontal(|ui| {
+                    if button(ui, rects, "class_reset", "Reset tree", true) {
+                        commands.push(Command::SelectClass { id, connect: false });
+                        close = true;
+                    }
+                    if button(ui, rects, "class_connect", "Connect path", true) {
+                        commands.push(Command::SelectClass { id, connect: true });
+                        close = true;
+                    }
+                    close |= ui.button("Cancel").clicked();
+                });
+            });
+        if close {
+            self.class_dialog = None;
+        }
+    }
+
     fn dialogs(
         &mut self,
         ctx: &egui::Context,
@@ -454,7 +496,6 @@ impl Toolbar {
             Dialog::NewSpec(_) => "New tree",
             Dialog::RenameSpec { .. } => "Rename tree",
             Dialog::DeleteSpec(_) => "Delete tree",
-            Dialog::Class { .. } => "Change class",
             Dialog::Reset => "Reset tree",
             Dialog::RemoveTattoos => "Remove all tattoos",
             Dialog::Import { .. } => "Import tree link",
@@ -504,29 +545,6 @@ impl Toolbar {
                     ui.horizontal(|ui| {
                         if button(ui, rects, "spec_delete_yes", "Delete", true) {
                             commands.push(Command::DeleteSpec { index: *index });
-                            close = true;
-                        }
-                        close |= ui.button("Cancel").clicked();
-                    });
-                }
-                Dialog::Class { id, name } => {
-                    ui.label(format!(
-                        "Some of your points don't connect to {name}. Reset the tree, or \
-                             keep the points that can connect to it?"
-                    ));
-                    ui.horizontal(|ui| {
-                        if button(ui, rects, "class_reset", "Reset tree", true) {
-                            commands.push(Command::SelectClass {
-                                id: *id,
-                                connect: false,
-                            });
-                            close = true;
-                        }
-                        if button(ui, rects, "class_connect", "Connect path", true) {
-                            commands.push(Command::SelectClass {
-                                id: *id,
-                                connect: true,
-                            });
                             close = true;
                         }
                         close |= ui.button("Cancel").clicked();

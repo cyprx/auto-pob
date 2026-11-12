@@ -26,7 +26,8 @@ pub fn opener_label(kind: &PopupKind) -> Option<String> {
         | PopupKind::NodeReplacement { .. }
         | PopupKind::Options
         | PopupKind::BuySimilar { .. }
-        | PopupKind::TimelessJewel => return None,
+        | PopupKind::TimelessJewel
+        | PopupKind::SpectreLibrary => return None,
     })
 }
 

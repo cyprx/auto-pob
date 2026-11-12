@@ -445,6 +445,7 @@ fn load_menu_sends_each_source() {
         unsaved: false,
         can_undo: false,
         can_redo: false,
+        ..BuildView::default()
     })));
     h.frame(vec![]);
     h.click("load");

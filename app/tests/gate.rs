@@ -39,6 +39,8 @@ mod net_harness;
 mod network;
 #[path = "gate/parity.rs"]
 mod parity;
+#[path = "gate/parity_gaps.rs"]
+mod parity_gaps;
 #[path = "gate/settings.rs"]
 mod settings;
 #[path = "gate/skills.rs"]

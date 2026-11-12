@@ -155,9 +155,30 @@ impl TreeTab {
         *self = kept;
     }
 
-    /// Drops a pending confirmation; its dialog only draws on this tab.
+    /// Drops a pending confirmation; its dialog only draws on this tab. The top bar's class
+    /// question stays.
     pub fn close_dialog(&mut self) {
         self.toolbar.close_dialog();
+    }
+
+    /// The top bar's point display (PoB's `pointDisplay`), with PoB's progress tooltip
+    pub fn top_bar_points(&self, ui: &mut egui::Ui, progress: &str) {
+        if let Some(state) = &self.state {
+            self.toolbar.points(ui, state, progress);
+        }
+    }
+
+    /// The top bar's class and ascendancy dropdowns, on every tab as PoB has them, and the
+    /// question a class change can ask. Returns what the user chose.
+    pub fn top_bar_class(&mut self, ui: &mut egui::Ui) -> Vec<Command> {
+        let mut commands = Vec::new();
+        if let Some(state) = self.state.clone() {
+            self.toolbar
+                .class(ui, &state, &mut self.rects, &mut commands);
+        }
+        self.toolbar
+            .class_dialog(ui.ctx(), &mut self.rects, &mut commands);
+        commands
     }
 
     /// A toolbar dialog is open, so shortcuts must wait.

@@ -447,6 +447,30 @@ function glue.popup_open(kind, arg)
 		session = { popup = top, kind = "TimelessJewel", owner = "build", build = pob.build }
 		return
 	end
+	if kind == "spectre_library" then
+		glue.popup_cancel_options()
+		-- PoB's own buttons (Build.lua:552, CalcsTab.lua:105-109): the sidebar's, else the
+		-- Calcs selector's; their main skills can differ, so each is refreshed as PoB draws it
+		local button = glue.sidebar_spectre_library() or glue.calcs_spectre_library()
+		if not (button and button:IsEnabled()) then
+			error("PoB doesn't offer that here", 0)
+		end
+		local popups = main().popups
+		local depth = #popups
+		local ok, err = pcall(button.onClick)
+		local count = #popups - depth
+		local top = popups[1]
+		close_above(depth)
+		if not ok then
+			error(err, 0)
+		end
+		if count == 0 then
+			error("PoB didn't open that window", 0)
+		end
+		drop()
+		session = { popup = top, kind = "SpectreLibrary", owner = "build", build = pob.build }
+		return
+	end
 	if kind == "node_replacement" then
 		-- the right-click's body (PassiveTreeView.lua:519-533) without `buildFlag`, which
 		-- changes nothing: the node must pass PoB's rule; an allocated mastery is the effect

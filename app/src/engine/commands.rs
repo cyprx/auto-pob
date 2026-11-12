@@ -271,6 +271,31 @@ pub enum Command {
     SelectAscendancy {
         id: u32,
     },
+    /// Types the level into the top bar's level box (`characterLevel`, R21). PoB clamps it to
+    /// 1..=100 and switches to Manual.
+    SetCharacterLevel {
+        level: u32,
+    },
+    /// Presses the top bar's Auto/Manual button when the mode differs (R21).
+    SetLevelMode {
+        auto: bool,
+    },
+    /// Picks the bloodline (`secondaryAscendDrop`, R21) by its id; 0 is "None".
+    SelectSecondaryAscendancy {
+        id: u32,
+    },
+    /// Picks a loadout in the top bar's dropdown (R21): a real entry of `BuildView.loadouts`,
+    /// not one of PoB's headers or actions.
+    SelectLoadout {
+        label: String,
+    },
+    /// The loadouts dropdown's "New Loadout" and its name popup: a tree, item set, skill set and
+    /// config set with this title (R21).
+    NewLoadout {
+        name: String,
+    },
+    /// The loadouts dropdown's "Sync" (R21).
+    SyncLoadouts,
     ResetTree,
     /// "Remove All Tattoos" on the Reset window: presses PoB's button, which adds no undo state
     /// (R18).
@@ -908,6 +933,9 @@ pub enum PopupKind {
     /// The Tree tab's "Find Timeless Jewel" window (`TreeTab:FindTimelessJewel`, R17), a
     /// build-owned session. Its `searchButton` press starts `BackgroundTask::Timeless`.
     TimelessJewel,
+    /// PoB's "Spectre Library" (`build:OpenSpectreLibrary`, R18), a build-owned session opened
+    /// by the sidebar's or the Calcs selector's "Manage Spectres..." button; its Save commits
+    SpectreLibrary,
 }
 
 /// Where a "Buy similar" search starts from (R10): PoB's own three entry points

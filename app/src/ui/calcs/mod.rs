@@ -5,7 +5,7 @@ pub mod breakdown;
 pub mod grid;
 
 use crate::engine::views::{CalcsSection, CalcsSelector, CalcsView, DropList, TooltipLine};
-use crate::engine::{CalcsControl, CalcsCount, CellRef, Command, Snapshot};
+use crate::engine::{CalcsControl, CalcsCount, CellRef, Command, PopupKind, Snapshot};
 use crate::ui::tree::Rects;
 use crate::widgets::{EditBoxOptions, EditBoxes, pob_text, tooltip_ui};
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
@@ -247,6 +247,14 @@ impl CalcsUi {
                 sel.minion.as_ref(),
                 out,
             );
+            // PoB's "Spectre Library" row, for spectre skills (R18)
+            if sel.spectre_library {
+                let button = ui.button("Manage Spectres…");
+                self.rects.note(&button, || "spectre_library".into());
+                if button.clicked() {
+                    out.push(Command::OpenPopup(PopupKind::SpectreLibrary));
+                }
+            }
             self.dropdown(
                 ui,
                 "minion_skill",
@@ -705,6 +713,17 @@ mod tests {
         );
         sent.extend(h.click("part_item_1"));
         assert_eq!(debug(&sent), ["SetCalcsSelect { control: Part, index: 1 }"]);
+    }
+
+    #[test]
+    fn calcs_spectre_button_only_when_pob_shows_it() {
+        let h = Harness::new(sample(None));
+        assert!(!h.ui.rects.map.contains_key("spectre_library"));
+        let mut view = sample(None);
+        view.selector.spectre_library = true;
+        let mut h = Harness::new(view);
+        let sent = h.click("spectre_library");
+        assert_eq!(debug(&sent), ["OpenPopup(SpectreLibrary)"]);
     }
 
     #[test]

@@ -127,6 +127,8 @@ pub struct AutoPobApp {
     /// The seq of the raw item text last sent, to keep its window open on an error
     text_seq: Option<u64>,
     sidebar: sidebar::SidebarState,
+    /// The top bar's level box and New Loadout name
+    top_bar: build::TopBarState,
     notes: NotesUi,
     compare: CompareUi,
     /// `SetCompareOverlay { on: true }` is the engine's state: the Compare tab's Tree view is up
@@ -201,6 +203,7 @@ impl AutoPobApp {
             applied_title: "auto-pob".into(),
             text_seq: None,
             sidebar: sidebar::SidebarState::default(),
+            top_bar: build::TopBarState::default(),
             notes: NotesUi::default(),
             compare: CompareUi::default(),
             compare_overlay: false,
@@ -478,6 +481,7 @@ impl AutoPobApp {
             && (self.notes.has_pending()
                 || self.skills.has_pending()
                 || self.sidebar.has_pending()
+                || self.top_bar.has_pending()
                 || self.build.as_ref().is_some_and(|b| b.unsaved))
     }
 
@@ -632,6 +636,7 @@ impl AutoPobApp {
         self.popup.reset();
         self.popup_tab = None;
         self.sidebar = sidebar::SidebarState::default();
+        self.top_bar = build::TopBarState::default();
         self.notes.reset();
         self.import_ui.reset();
         self.compare.reset();
@@ -759,6 +764,9 @@ impl AutoPobApp {
     fn flush_edits(&mut self) {
         self.flush_notes();
         if let Some(command) = self.sidebar.flush() {
+            self.send(command);
+        }
+        if let Some(command) = self.top_bar.flush() {
             self.send(command);
         }
         if let Some(command) = self.calcs.flush() {
@@ -1172,6 +1180,7 @@ impl AutoPobApp {
             || self.skills.has_dialog()
             || self.items.has_dialog()
             || self.compare.has_dialog()
+            || self.top_bar.has_dialog()
             || self.popup.is_blocking()
             || self.options.window.is_blocking();
         // a focused button or row doesn't take Ctrl+Z from the tab
@@ -1195,6 +1204,8 @@ impl AutoPobApp {
             });
         }
 
+        let behind = self.behind();
+        let mut top_commands = Vec::new();
         egui::Panel::top("top_bar").show(ui, |ui| {
             let history = match self.undo_tab() {
                 Some(Tab::Tree) => self.tree.history(),
@@ -1204,9 +1215,21 @@ impl AutoPobApp {
                 _ => (view.can_undo, view.can_redo),
             };
             let undo = self.undo_tab().is_some();
-            action = build::top_bar(ui, &view, undo, history).or(action);
+            let out = build::top_bar(
+                ui,
+                &view,
+                undo,
+                history,
+                &mut self.top_bar,
+                &mut self.tree,
+                behind,
+            );
+            action = out.action.or(action);
+            top_commands = out.commands;
         });
-        let behind = self.behind();
+        for command in top_commands {
+            self.send(command);
+        }
         self.skills.set_modal(modal);
         self.items.set_modal(modal);
         self.import_ui.set_modal(modal);
@@ -1555,6 +1578,7 @@ impl AutoPobApp {
                 self.notes.discard();
                 self.skills.discard();
                 self.sidebar.discard();
+                self.top_bar.discard();
                 self.calcs.discard();
                 self.ready_actions.push(pending);
             }
@@ -1888,6 +1912,7 @@ mod tests {
                 unsaved: self.unsaved,
                 can_undo: true,
                 can_redo: false,
+                ..BuildView::default()
             })
         }
 
@@ -5119,6 +5144,7 @@ mod tests {
             unsaved: false,
             can_undo: false,
             can_redo: false,
+            ..BuildView::default()
         };
         let items = crate::engine::ItemsView {
             can_undo: true,

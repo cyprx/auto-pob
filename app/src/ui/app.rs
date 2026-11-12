@@ -30,6 +30,9 @@ use crate::ui::{sidebar, startup};
 use crate::update_notice::Release;
 use eframe::egui;
 
+/// Reads the system clipboard's text.
+pub type ClipboardRead = Box<dyn Fn() -> Option<String>>;
+
 /// Starts fetching PoB's help files in the background; the answer comes on the channel.
 pub type HelpDownload = Box<dyn Fn() -> std::sync::mpsc::Receiver<Result<(), String>>>;
 
@@ -171,6 +174,11 @@ pub struct AutoPobApp {
     /// Starts fetching PoB's missing help files (the user's click), answering on the channel
     help_download: Option<HelpDownload>,
     help_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
+    /// Reads the system clipboard, for a right-click into a text box (EditControl.lua:527);
+    /// read only on that click
+    clipboard_read: Option<ClipboardRead>,
+    /// The text a right-click pastes into the box it focused, at the next frame's start
+    paste_next: Option<String>,
     /// PoB's foot labels as drawn, for tests
     #[cfg(test)]
     label_texts: Vec<String>,
@@ -244,6 +252,8 @@ impl AutoPobApp {
             bar_rects: Vec::new(),
             help_download: None,
             help_rx: None,
+            clipboard_read: None,
+            paste_next: None,
             #[cfg(test)]
             label_texts: Vec::new(),
             #[cfg(test)]
@@ -251,6 +261,13 @@ impl AutoPobApp {
             #[cfg(test)]
             sent_full: Vec::new(),
         }
+    }
+
+    /// How a right-click into a text box reads the clipboard.
+    #[must_use]
+    pub fn with_clipboard_reader(mut self, read: ClipboardRead) -> Self {
+        self.clipboard_read = Some(read);
+        self
     }
 
     /// How the Help window fetches PoB's help files when the user asks.
@@ -949,6 +966,7 @@ impl AutoPobApp {
     pub fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.process_events();
+        self.right_click_paste(&ctx);
 
         // closing the window with unsaved changes asks first
         if ctx.input(|i| i.viewport().close_requested())
@@ -1110,6 +1128,33 @@ impl AutoPobApp {
             }
         }
         None
+    }
+
+    /// PoB's right-click into a text box selects it and pastes the clipboard there
+    /// (EditControl.lua:527). The box under the pointer is last frame's; it takes the focus
+    /// now and the paste at the next frame's start, when it has it.
+    fn right_click_paste(&mut self, ctx: &egui::Context) {
+        if let Some(text) = self.paste_next.take() {
+            ctx.input_mut(|i| i.events.insert(0, egui::Event::Paste(text)));
+        }
+        if !ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
+            return;
+        }
+        let Some(read) = &self.clipboard_read else {
+            return;
+        };
+        let hovered: Vec<egui::Id> =
+            ctx.interaction_snapshot(|s| s.hovered.iter().copied().collect());
+        let target = hovered
+            .into_iter()
+            .find(|id| egui::TextEdit::load_state(ctx, *id).is_some());
+        if let Some(id) = target
+            && let Some(text) = read().filter(|t| !t.is_empty())
+        {
+            ctx.memory_mut(|m| m.request_focus(id));
+            self.paste_next = Some(text.replace("\r\n", "\n"));
+            ctx.request_repaint();
+        }
     }
 
     /// PoB's labels at the foot of every screen (Main.lua:230-237): the fork and its version.

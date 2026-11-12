@@ -548,3 +548,39 @@ fn pobs_fork_and_version_labels_show_on_every_screen() {
     frame(&mut app, &ctx, vec![]);
     assert_eq!(app.label_texts, want);
 }
+
+#[test]
+fn a_right_click_into_a_text_box_pastes_the_clipboard() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let reads = Arc::new(AtomicUsize::new(0));
+    let counted = reads.clone();
+    let (app, ctx) = tree_app();
+    let mut app = app.with_clipboard_reader(Box::new(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+        Some("life".into())
+    }));
+    // a right-click away from any box reads nothing
+    let away = rect_of(&app, "reset").center();
+    let right = |pos, pressed| Event::PointerButton {
+        pos,
+        button: PointerButton::Secondary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    frame(&mut app, &ctx, vec![Event::PointerMoved(away)]);
+    frame(&mut app, &ctx, vec![right(away, true)]);
+    frame(&mut app, &ctx, vec![right(away, false)]);
+    assert_eq!(reads.load(Ordering::SeqCst), 0);
+    // on the tree search it selects the box and pastes (EditControl.lua:527)
+    let search = rect_of(&app, "search").center();
+    frame(&mut app, &ctx, vec![Event::PointerMoved(search)]);
+    frame(&mut app, &ctx, vec![right(search, true)]);
+    frame(&mut app, &ctx, vec![right(search, false)]);
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    assert!(ctx.text_edit_focused());
+    pump_until(&mut app, &ctx, "the pasted search", |a| {
+        a.sent_full
+            .iter()
+            .any(|c| c == "SetTreeSearch { text: \"life\" }")
+    });
+}

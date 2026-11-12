@@ -3278,12 +3278,11 @@ ported = "app/src/ui/app.rs Ctrl+Z undo"
 ported = "app/src/ui/shortcuts.rs F2 on the Config tab opens the active set's Rename box (config.rs)"
 
 [keys."DraggerControl.LEFTBUTTON"]
-ported = "app/src/ui/app.rs resizable sidebar"
-note = "egui side panel drag"
+ported = "app/src/widgets/size_grip.rs on app/src/ui/config.rs custom-modifier boxes: dragging the grip sets the height within PoB's 40 to 600 (ConfigTab.lua:70, ResizableEditControl.lua:32-45)"
+note = "PoB's only dragger is ResizableEditControl's grip, not the sidebar"
 
 [keys."DraggerControl.RIGHTBUTTON"]
-gap = "Task 14"
-note = "PoB's dragger is the Config custom-modifier box's size grip, not the sidebar's: a right-click toggles the box between its least and most size (ResizableEditControl.lua:16-25); our box has no grip"
+ported = "app/src/widgets/size_grip.rs right-click puts the box at its least, or its most when it is at its least (ResizableEditControl.lua:16-25)"
 
 [keys."DropDownControl.DOWN"]
 gap = "Task 14"
@@ -3382,8 +3381,7 @@ ported = "app/src/ui"
 note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
 
 [keys."EditControl.RIGHTBUTTON"]
-gap = "Task 14"
-note = "right-click pastes into a box"
+ported = "app/src/ui/app.rs right_click_paste: a right-click into a text box selects it and pastes the clipboard, read on that click only (EditControl.lua:527)"
 
 [keys."EditControl.TAB"]
 ported = "app/src/ui"

@@ -125,6 +125,8 @@ pub struct ConfigUi {
     confirm_remove: Option<usize>,
     /// Ctrl+F: the search box takes the keyboard when next drawn (ConfigTab.lua:987-988)
     pub focus_search: bool,
+    /// The custom-modifier boxes' heights, as their grips left them
+    heights: HashMap<String, f32>,
     /// F2: the active set's Rename box opens when next drawn
     pub rename: bool,
     /// Where widgets were drawn last frame, so tests can click them
@@ -472,6 +474,11 @@ impl ConfigUi {
 
     /// A text field that shows what the user typed until the engine has caught up. Returns
     /// the text to send, if the field's edit is due to be sent.
+    /// A resizable box's height: PoB's 80 until its grip moves it (ConfigTab.lua:70)
+    fn box_height(&self, key: &str) -> f32 {
+        self.heights.get(key).copied().unwrap_or(80.0)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn draft_field(
         &mut self,
@@ -494,9 +501,25 @@ impl ConfigUi {
             }
             FieldStyle::Multi { rows } => egui::TextEdit::multiline(&mut text)
                 .desired_rows(rows)
-                .desired_width(f32::INFINITY),
+                .desired_width(f32::INFINITY)
+                .min_size(egui::vec2(0.0, self.box_height(&key))),
         };
         let response = ui.add(edit.hint_text(hint));
+        if matches!(style, FieldStyle::Multi { .. }) {
+            // PoB's custom-modifier box has a size grip (ConfigTab.lua:70: 80 high, 40 to 600)
+            let mut height = self.box_height(&key);
+            let grip = crate::widgets::size_grip::size_grip(
+                ui,
+                ui.make_persistent_id(("config_grip", &key)),
+                response.rect,
+                &mut height,
+                (40.0, 600.0),
+            );
+            #[cfg(test)]
+            self.rects.insert(format!("grip:{key}"), grip.rect);
+            let _ = &grip;
+            self.heights.insert(key.clone(), height);
+        }
         if response.changed() {
             self.drafts.insert(key.clone(), text.clone());
         }

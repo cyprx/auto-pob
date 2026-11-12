@@ -61,6 +61,9 @@ impl Setup {
         if release_check {
             app = app.with_release_check(update_notice::spawn_check(ctx.clone()));
         }
+        // a right-click into a text box pastes, as PoB's does; the clipboard is read then only
+        let app =
+            app.with_clipboard_reader(Box::new(|| arboard::Clipboard::new().ok()?.get_text().ok()));
         // the Help window's button fetches PoB's missing help files (only on that click)
         let pob_dir = auto_pob::pob_files::pob_dir(game, &self.data_dir);
         app.with_help_download(Box::new(move || {

@@ -224,6 +224,12 @@ impl TreeTab {
         self.toolbar.has_dialog()
     }
 
+    /// PoB's Class Change question is up
+    #[cfg(test)]
+    pub(crate) fn class_question(&self) -> bool {
+        self.toolbar.class_question()
+    }
+
     /// The heat map is on in the latest tree state.
     pub fn heatmap_on(&self) -> bool {
         self.state.as_ref().is_some_and(|s| s.heatmap.is_some())

@@ -1339,6 +1339,7 @@ impl AutoPobApp {
             ui.ctx(),
             crate::widgets::scroll_step::FocusScope {
                 typing: ui.ctx().text_edit_focused(),
+                modal: blocked,
                 ..Default::default()
             },
         );
@@ -1435,6 +1436,9 @@ impl AutoPobApp {
             || self.options.window.is_blocking()
             // PoB's About is a popup: nothing behind it gets a key (Main.lua:365-367)
             || self.help.is_open();
+        // a dropped list of the top bar's or the sidebar's is Build's selected control: it
+        // takes every key, as a Build box does (Build.lua:1230, ControlHost.lua:35-45)
+        let build_dropped = crate::widgets::scroll_step::take_build_dropped(ui.ctx());
         // a focused button or row doesn't take Ctrl+Z from the tab
         let typing = ui.ctx().text_edit_focused();
         let mut action = None;
@@ -1457,18 +1461,22 @@ impl AutoPobApp {
         }
         // PoB's other shortcuts (R25)
         let ctx = ui.ctx().clone();
-        let build_box = typing
-            && ctx
-                .memory(|m| m.focused())
-                .and_then(|id| ctx.read_response(id))
-                .is_some_and(|r| self.bar_rects.iter().any(|b| b.contains(r.rect.center())));
-        // the dropdowns and sliders hold their keys while their host has a box focused
+        let build_box = build_dropped
+            || (typing
+                && ctx
+                    .memory(|m| m.focused())
+                    .and_then(|id| ctx.read_response(id))
+                    .is_some_and(|r| self.bar_rects.iter().any(|b| b.contains(r.rect.center()))));
+        let typing = typing || build_dropped;
+        // the dropdowns and sliders hold their keys while their host has a box focused, and
+        // the panels' ones under a window
         crate::widgets::scroll_step::set_scope(
             &ctx,
             crate::widgets::scroll_step::FocusScope {
                 typing,
                 build_box,
                 build_host: false,
+                modal,
             },
         );
         // under a window only the gem list's own rows open a page
@@ -1498,6 +1506,14 @@ impl AutoPobApp {
                 shortcuts::consume(a, i);
             }
             a
+        });
+        // PoB's edit box has no Ctrl+W (EditControl.lua:500-640): it closes the build and
+        // edits nothing, so egui's word delete never sees it, under a window too
+        ui.input_mut(|i| {
+            i.events.retain(|e| {
+                !matches!(e, egui::Event::Key { key: egui::Key::W, modifiers, .. }
+                    if modifiers.command || modifiers.ctrl)
+            })
         });
         if let Some(shortcut) = shortcut {
             action = self.run_shortcut(ui.ctx(), shortcut).or(action);

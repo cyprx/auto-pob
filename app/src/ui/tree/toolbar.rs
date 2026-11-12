@@ -99,6 +99,11 @@ impl Toolbar {
         self.dialog = Some(Dialog::ClassChange { node, class });
     }
 
+    #[cfg(test)]
+    pub(super) fn class_question(&self) -> bool {
+        self.class_dialog.is_some()
+    }
+
     pub(super) fn has_dialog(&self) -> bool {
         self.dialog.is_some() || self.class_dialog.is_some() || self.manager.is_some()
     }

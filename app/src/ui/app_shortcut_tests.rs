@@ -115,6 +115,26 @@ fn ctrl_w_closes_with_unsaved_prompt() {
 }
 
 #[test]
+fn ctrl_w_while_typing_closes_and_edits_nothing() {
+    // PoB's edit box has no Ctrl+W (EditControl.lua:500-640): the build closes, the box keeps
+    // its text
+    let (mut app, ctx) = notes_app();
+    ctx.memory_mut(|m| m.request_focus(app.notes.edit_id_for_test()));
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![Event::Text("my notes".into())]);
+    assert_eq!(app.notes.text_for_test(), "my notes");
+    assert!(ctx.text_edit_focused());
+    frame(
+        &mut app,
+        &ctx,
+        key_with(Key::W, Modifiers::COMMAND | Modifiers::CTRL),
+    );
+    frame(&mut app, &ctx, vec![]);
+    assert_eq!(app.notes.text_for_test(), "my notes", "a word was deleted");
+    assert_eq!(app.prompt, Some(Pending::BackToList));
+}
+
+#[test]
 fn ctrl_f_focuses_the_tab_search() {
     let (mut app, ctx) = tree_app();
     assert!(!ctx.text_edit_focused());
@@ -679,6 +699,54 @@ fn a_focused_box_holds_its_hosts_dropdowns_but_not_builds() {
     frame(&mut app, &ctx, vec![wheel_event(-1.0)]);
     // Marauder asks first (needs_confirm)
     assert!(app.tree.has_dialog(), "the class dropdown didn't step");
+}
+
+#[test]
+fn a_dropped_build_dropdown_takes_the_tabs_arrows() {
+    // the Tree tab's Up/Down switch trees (TreeTab.lua:367-378), but a dropped class list is
+    // Build's selected control, which takes every key first (Build.lua:1230)
+    let (mut app, ctx) = tree_app();
+    click(&mut app, &ctx, "class_combo");
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![]);
+    assert!(egui::Popup::is_any_open(&ctx), "the class list didn't drop");
+    let before = app.sent_full.len();
+    frame(&mut app, &ctx, plain(Key::ArrowDown));
+    frame(&mut app, &ctx, vec![]);
+    assert!(
+        !sent_since(&app, before)
+            .iter()
+            .any(|c| c.starts_with("SelectSpec")),
+        "{:?}",
+        sent_since(&app, before)
+    );
+    // the list itself stepped: Marauder asks first (needs_confirm)
+    assert!(app.tree.has_dialog(), "the class list didn't step");
+}
+
+#[test]
+fn a_window_holds_the_wheel_from_the_panels_beside_it() {
+    // with a popup open, no control behind it gets the wheel (Main.lua:365-367)
+    let (mut app, ctx) = tree_app();
+    frame(&mut app, &ctx, ctrl(Key::M));
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![]);
+    assert!(app.tree.spec_manager_open(), "no Manage Passive Trees");
+    let class = rect_of(&app, "class_combo").center();
+    frame(&mut app, &ctx, vec![Event::PointerMoved(class)]);
+    assert_eq!(
+        ctx.layer_id_at(class).map(|l| l.order),
+        Some(egui::Order::Background),
+        "the window covers the class dropdown"
+    );
+    frame(&mut app, &ctx, vec![wheel_event(-1.0)]);
+    frame(&mut app, &ctx, vec![]);
+    assert!(!app.tree.class_question(), "the class dropdown stepped");
+    // with the window closed, the class dropdown steps again
+    app.tree.close_spec_manager();
+    frame(&mut app, &ctx, vec![Event::PointerMoved(class)]);
+    frame(&mut app, &ctx, vec![wheel_event(-1.0)]);
+    assert!(app.tree.class_question(), "the class dropdown didn't step");
 }
 
 /// Opens the dropdown at `combo`, types `search`, and checks that `hidden` is filtered out

@@ -180,6 +180,7 @@ impl<'a> Dropdown<'a> {
             if first {
                 edit.request_focus();
             }
+            crate::widgets::scroll_step::note_search(ui.ctx(), search_id);
 
             let active = !search.trim().is_empty();
             ui.data_mut(|d| {

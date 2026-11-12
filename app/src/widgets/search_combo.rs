@@ -68,6 +68,7 @@ pub fn search_combo_ui(
         if first {
             edit.request_focus();
         }
+        super::scroll_step::note_search(ui.ctx(), filter_id);
         let mut first_match = None;
         egui::ScrollArea::vertical()
             .max_height(320.0)

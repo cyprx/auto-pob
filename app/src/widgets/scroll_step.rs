@@ -24,6 +24,9 @@ pub struct FocusScope {
     pub build_box: bool,
     /// The controls being drawn are Build's own (the top bar and the sidebar)
     pub build_host: bool,
+    /// A window is open that PoB would hold as a popup: nothing behind it gets the wheel or
+    /// a key (Main.lua:365-367)
+    pub modal: bool,
 }
 
 fn scope_id() -> egui::Id {
@@ -49,6 +52,39 @@ pub fn set_build_host(ctx: &egui::Context, build: bool) {
 fn held(ctx: &egui::Context) -> bool {
     let scope: FocusScope = ctx.data(|d| d.get_temp(scope_id())).unwrap_or_default();
     scope.typing && (scope.build_box || !scope.build_host)
+}
+
+/// Under one of the app's windows, a control of a panel behind it gets nothing: panels are
+/// egui's background layer, and the windows' own controls are drawn above it
+fn behind_window(ctx: &egui::Context, response: &egui::Response) -> bool {
+    let scope: FocusScope = ctx.data(|d| d.get_temp(scope_id())).unwrap_or_default();
+    scope.modal && response.layer_id.order == egui::Order::Background
+}
+
+fn build_searches_id() -> egui::Id {
+    egui::Id::NULL.with("pob_build_searches")
+}
+
+/// A dropped list of Build's own dropdown notes itself: it is Build's selected control
+/// (Build.lua:1230), though it sits in a popup outside the top bar and the sidebar
+pub fn note_search(ctx: &egui::Context, search: egui::Id) {
+    let scope: FocusScope = ctx.data(|d| d.get_temp(scope_id())).unwrap_or_default();
+    if scope.build_host {
+        let pass = ctx.cumulative_pass_nr();
+        ctx.data_mut(|d| {
+            d.get_temp_mut_or_default::<Vec<(u64, egui::Id)>>(build_searches_id())
+                .push((pass, search))
+        });
+    }
+}
+
+/// Whether one of Build's dropdowns was dropped last frame; forgets the notes
+pub fn take_build_dropped(ctx: &egui::Context) -> bool {
+    let now = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.remove_temp::<Vec<(u64, egui::Id)>>(build_searches_id()))
+        .unwrap_or_default()
+        .iter()
+        .any(|(pass, _)| pass + 1 == now)
 }
 
 fn options_id() -> egui::Id {
@@ -144,7 +180,11 @@ pub fn dropdown_step_in(
         Some(v) => (0..len).filter(|&i| v[i]).collect(),
         None => (0..len).collect(),
     };
-    if drop.is_empty() || !response.enabled() || !(response.hovered() || open) {
+    if drop.is_empty()
+        || !response.enabled()
+        || !(response.hovered() || open)
+        || behind_window(ui.ctx(), response)
+    {
         return None;
     }
     // a dropped list is the selected control itself: its own search box has the keyboard
@@ -189,7 +229,11 @@ const SLIDER_KEYS: [(Key, i32); 4] = [
 /// while it is pointed at: 0.05 a step, 0.25 with Shift, 0.01 with Ctrl, the wheel reversed
 /// by PoB's option.
 pub fn slider_step(ui: &egui::Ui, response: &egui::Response, value: f64) -> Option<f64> {
-    if !response.enabled() || !response.hovered() || held(ui.ctx()) {
+    if !response.enabled()
+        || !response.hovered()
+        || held(ui.ctx())
+        || behind_window(ui.ctx(), response)
+    {
         return None;
     }
     // a focused slider takes the arrows itself (egui's own step)
@@ -342,6 +386,58 @@ mod tests {
             modifiers: Modifiers::NONE,
         };
         assert_eq!(dropped(&ctx, 60, vec![down]), Some(1));
+    }
+
+    #[test]
+    fn under_a_window_only_the_windows_own_dropdowns_step() {
+        let down = || Event::Key {
+            key: Key::ArrowDown,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        // a dropped list in a panel, and one in a window, each stepped by Down
+        let run = |in_window: bool| {
+            let ctx = egui::Context::default();
+            let mut out = None;
+            // a window's first frame only sizes it
+            for events in [vec![], vec![down()]] {
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 200.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        set_scope(
+                            ui.ctx(),
+                            FocusScope {
+                                modal: true,
+                                ..Default::default()
+                            },
+                        );
+                        if in_window {
+                            egui::Window::new("w").show(ui.ctx(), |ui| {
+                                let r = ui.button("list");
+                                out = dropdown_step(ui, &r, 3, 0, true);
+                            });
+                        } else {
+                            let r = ui.button("list");
+                            out = dropdown_step(ui, &r, 3, 0, true);
+                        }
+                    },
+                )
+                .drop_without_applying_deltas();
+            }
+            out
+        };
+        assert_eq!(
+            run(false),
+            None,
+            "a panel's dropdown stepped under a window"
+        );
+        assert_eq!(run(true), Some(1), "the window's own dropdown didn't step");
     }
 
     #[test]

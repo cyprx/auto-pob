@@ -169,6 +169,16 @@ impl NotesUi {
     }
 
     #[cfg(test)]
+    pub fn text_for_test(&self) -> &str {
+        &self.text
+    }
+
+    #[cfg(test)]
+    pub fn edit_id_for_test(&self) -> egui::Id {
+        self.edit_id
+    }
+
+    #[cfg(test)]
     pub fn type_for_test(&mut self, text: &str, now: f64) {
         self.text = text.to_owned();
         self.touch(now);

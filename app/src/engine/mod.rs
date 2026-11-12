@@ -27,7 +27,7 @@ pub use views::{
     CalcsSelector, CalcsSub, CalcsView, CellRef, CharacterEntry, Choice, ClassChoice,
     CompareColour, ConfigKind, ConfigOption, ConfigSection, ConfigSet, ConfigView,
     ControlTooltipView, CustomModGroup, DbRow, DisplayItemView, DpsMark, DropList, EquippedIn,
-    FinishedRequest, GemRow, GemSearchView, GemToggleView, GemTooltipView, GemView,
+    FinishedRequest, FolderNode, GemRow, GemSearchView, GemToggleView, GemTooltipView, GemView,
     GroupTooltipView, ImbuedView, ImportCodeView, ItemDbView, ItemEntry, ItemSetEntry, ItemText,
     ItemTooltip, ItemTooltipLine, ItemTooltipView, ItemsView, JewelSocket, MainSkillSelector,
     MasteryChoice, MasteryOption, MasteryOptions, ModLineList, ModLineRef, NodeArt, NodePath,

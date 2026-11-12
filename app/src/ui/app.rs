@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::engine::commands::DeleteKind;
 use crate::engine::views::{BuildListView, BuildView, ConfigView, RequestsView, StatsView};
 use crate::engine::{BackgroundTask, Command, Engine, Event, ImportMode, PopupKind, Snapshot, Tab};
 use crate::game::Game;
@@ -12,6 +13,7 @@ use crate::ui::build::{self, BuildAction, BuildTab};
 use crate::ui::build_list::{BuildListUi, ListScreenAction};
 use crate::ui::calcs::{CalcsOutput, CalcsUi};
 use crate::ui::config::ConfigUi;
+use crate::ui::folder_picker::{FolderPicker, PickerOutput};
 use crate::ui::import::{Confirm, ImportOutput, ImportUi, Plan};
 use crate::ui::items::{ItemsOutput, ItemsUi};
 use crate::ui::notes::NotesUi;
@@ -41,6 +43,10 @@ struct SaveAsDialog {
     confirm_overwrite: bool,
     /// A `SaveAs` is on its way.
     waiting: bool,
+    /// PoB's folder list: where in the Builds tree the build goes
+    picker: FolderPicker,
+    /// A New Folder in the picker is on its way: the folder to go back to if it is refused
+    new_folder: Option<(u64, String)>,
 }
 
 /// A question asked before the tab or the pending line acts.
@@ -129,6 +135,8 @@ pub struct AutoPobApp {
     confirm_id: egui::Id,
     config_ui: ConfigUi,
     list_ui: BuildListUi,
+    /// The `MoveBuild` of the last paste: if it is refused the cut mark comes back
+    list_move_seq: Option<u64>,
     /// A `pob://` link from the command line, asked about once the engine is ready (R4)
     startup_link: Option<String>,
     /// The release check's answer, and the newer release it found (until dismissed)
@@ -194,6 +202,7 @@ impl AutoPobApp {
             confirm_id: egui::Id::unique("confirm_dialog"),
             config_ui: ConfigUi::default(),
             list_ui: BuildListUi::default(),
+            list_move_seq: None,
             startup_link: None,
             release_rx: None,
             release: None,
@@ -616,6 +625,15 @@ impl AutoPobApp {
     }
 
     fn on_error(&mut self, seq: u64, message: String) {
+        if let Some(dialog) = &mut self.save_as
+            && let Some((_, back)) = dialog.new_folder.take_if(|(s, _)| *s == seq)
+        {
+            dialog.folder = back;
+        }
+        if self.list_move_seq == Some(seq) {
+            self.list_move_seq = None;
+            self.list_ui.move_refused();
+        }
         self.import_ui.on_error(seq);
         if self.import_seq == Some(seq) {
             self.import_seq = None;
@@ -775,6 +793,8 @@ impl AutoPobApp {
             then,
             confirm_overwrite: false,
             waiting: false,
+            picker: FolderPicker::default(),
+            new_folder: None,
         });
     }
 
@@ -1053,7 +1073,11 @@ impl AutoPobApp {
                 self.send(Command::DeleteBuild { path, kind });
             }
             ListScreenAction::Move { path, folder } => {
-                self.send(Command::MoveBuild { path, folder });
+                let seq = self.send(Command::MoveBuild { path, folder });
+                self.list_move_seq = Some(seq);
+            }
+            ListScreenAction::CopyTo { path, folder } => {
+                self.send(Command::CopyBuildTo { path, folder });
             }
             ListScreenAction::SetSort(sort) => {
                 self.send(Command::SetBuildSort { sort });
@@ -1452,20 +1476,21 @@ impl AutoPobApp {
         let mut submit = false;
         let mut overwrite = false;
         let mut cancel = false;
+        let mut picker_out = None;
+        let list = self.list.clone();
         egui::Window::new("Save as")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.add_enabled_ui(!dialog.waiting, |ui| {
-                    ui.label(format!(
-                        "Folder: Builds/{}",
-                        dialog.folder.trim_end_matches('/')
-                    ));
                     let name = ui
                         .add(egui::TextEdit::singleline(&mut dialog.name).hint_text("Build name"));
                     if name.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         submit = true;
+                    }
+                    if let Some(view) = &list {
+                        picker_out = dialog.picker.show(ui, &mut dialog.folder, view);
                     }
                     if dialog.confirm_overwrite {
                         ui.colored_label(
@@ -1499,12 +1524,46 @@ impl AutoPobApp {
                     }
                 });
             });
+        if let Some(out) = picker_out {
+            self.on_picker(out);
+        }
+        let Some(dialog) = &mut self.save_as else {
+            return;
+        };
         if cancel {
             self.save_as = None;
         } else if overwrite {
             self.send_save_as(true);
         } else if submit && !dialog.name.trim().is_empty() {
             self.send_save_as(false);
+        }
+    }
+
+    /// What the Save As folder list asked for. A refusal comes back as the engine's own text.
+    fn on_picker(&mut self, out: PickerOutput) {
+        match out {
+            PickerOutput::Notice(text) => self.notices.push(text),
+            PickerOutput::DeleteFolder(path) => {
+                let Some(root) = self.list.as_ref().map(|l| l.root.clone()) else {
+                    return;
+                };
+                let full = format!("{}{}", root.display(), path.trim_end_matches('/'));
+                self.send(Command::DeleteBuild {
+                    path: full.into(),
+                    kind: DeleteKind::EmptyFolder,
+                });
+            }
+            PickerOutput::NewFolder { folder, name } => {
+                let seq = self.send(Command::NewFolderIn {
+                    folder: folder.clone(),
+                    name: name.clone(),
+                });
+                // PoB goes into the folder it made; if that fails the dialog comes back
+                if let Some(dialog) = &mut self.save_as {
+                    dialog.new_folder = Some((seq, folder.clone()));
+                    dialog.folder = format!("{folder}{name}/");
+                }
+            }
         }
     }
 
@@ -1739,6 +1798,7 @@ mod tests {
             let entry = |name: &str, is_folder| BuildListEntry {
                 name: name.into(),
                 is_folder,
+                folder: self.folder.clone(),
                 path: format!("/b/{}{name}.xml", self.folder).into(),
                 class: Some("Witch".into()),
                 ascendancy: None,
@@ -1750,6 +1810,7 @@ mod tests {
                 entries: vec![entry("sub", true), entry("one", false), entry("bad", false)],
                 sort: Default::default(),
                 filter: String::new(),
+                ..Default::default()
             })
         }
 
@@ -2082,6 +2143,10 @@ mod tests {
                 path,
                 folder: "sub/".into(),
             },
+            ListScreenAction::CopyTo {
+                path: "/b/one.xml".into(),
+                folder: "sub/".into(),
+            },
             ListScreenAction::SetSort(BuildSort::Level),
             ListScreenAction::SetFilter("class:witch".into()),
         ];
@@ -2097,6 +2162,7 @@ mod tests {
                 r#"CopyBuild { path: "/b/one.xml", name: "c" }"#,
                 r#"DeleteBuild { path: "/b/one.xml", kind: Folder }"#,
                 r#"MoveBuild { path: "/b/one.xml", folder: "sub/" }"#,
+                r#"CopyBuildTo { path: "/b/one.xml", folder: "sub/" }"#,
                 "SetBuildSort { sort: Level }",
                 r#"SetBuildFilter { text: "class:witch" }"#,
             ]
@@ -2111,6 +2177,133 @@ mod tests {
             message: "a build with that name already exists".into(),
         });
         assert_eq!(app.notices, ["a build with that name already exists"]);
+    }
+
+    /// A list view for the Save As picker: `sub/` holds things, `sub/inner/` is empty
+    fn picker_list() -> Snapshot {
+        use crate::engine::views::FolderNode;
+        let node = |path: &str, empty| FolderNode {
+            path: path.into(),
+            modified: 1,
+            empty,
+        };
+        Snapshot::BuildList(Arc::new(BuildListView {
+            root: "/b/".into(),
+            tree: vec![node("sub/", false), node("sub/inner/", true)],
+            ..BuildListView::default()
+        }))
+    }
+
+    fn double_click_mark(app: &mut AutoPobApp, ctx: &egui::Context, key: &str) {
+        crate::ui::import::clear_marks();
+        frame(app, ctx, vec![]);
+        let pos = marked(key)
+            .unwrap_or_else(|| panic!("no widget {key}"))
+            .center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(app, ctx, vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false, true, false] {
+            frame(app, ctx, vec![button(pressed)]);
+        }
+        frame(app, ctx, vec![]);
+    }
+
+    #[test]
+    fn save_as_picks_a_folder_makes_one_and_deletes_an_empty_one() {
+        let (mut app, ctx) = started();
+        deliver(&mut app, picker_list());
+        app.open_save_as(None);
+        frame(&mut app, &ctx, vec![]);
+        // walking into a folder and saving puts the build there
+        double_click_mark(&mut app, &ctx, "picker_row:sub/");
+        assert_eq!(app.save_as.as_ref().unwrap().folder, "sub/");
+        app.save_as.as_mut().unwrap().name = "mine".into();
+        let before = app.sent_full.len();
+        app.send_save_as(false);
+        assert_eq!(
+            sent_since(&app, before),
+            [r#"SaveAs { folder: "sub/", name: "mine", overwrite: false }"#]
+        );
+        // the engine saved it: the box is gone; open it again for the folder tests
+        pump_until(&mut app, &ctx, "saved", |a| a.save_as.is_none());
+        deliver(&mut app, picker_list());
+        app.open_save_as(None);
+        frame(&mut app, &ctx, vec![]);
+        app.save_as.as_mut().unwrap().folder = "sub/".into();
+        // New Folder names its folder, goes into it, and comes back if refused
+        click_mark(&mut app, &ctx, "picker_new");
+        click_mark(&mut app, &ctx, "picker_name");
+        frame(&mut app, &ctx, vec![egui::Event::Text("de/ep".into())]);
+        let before = app.sent_full.len();
+        click_mark(&mut app, &ctx, "picker_create");
+        assert_eq!(
+            sent_since(&app, before),
+            [r#"NewFolderIn { folder: "sub/", name: "deep" }"#]
+        );
+        assert_eq!(app.save_as.as_ref().unwrap().folder, "sub/deep/");
+        let seq = app.save_as.as_ref().unwrap().new_folder.as_ref().unwrap().0;
+        app.on_event(Event::Error {
+            seq,
+            message: "Couldn't create 'deep': File exists".into(),
+        });
+        assert_eq!(app.save_as.as_ref().unwrap().folder, "sub/");
+        assert_eq!(app.notices, ["Couldn't create 'deep': File exists"]);
+        // a folder with things in it is refused with PoB's text; an empty one is asked about
+        app.notices.clear();
+        click_mark(&mut app, &ctx, "picker_row:sub/inner/");
+        let before = app.sent_full.len();
+        click_mark(&mut app, &ctx, "picker_delete");
+        assert!(
+            sent_since(&app, before).is_empty(),
+            "deleted without asking"
+        );
+        click_mark(&mut app, &ctx, "picker_delete_yes");
+        assert_eq!(
+            sent_since(&app, before),
+            [r#"DeleteBuild { path: "/b/sub/inner", kind: EmptyFolder }"#]
+        );
+        // the Builds folder holds `sub/`, which has things in it
+        click_mark(&mut app, &ctx, "picker_crumb:0");
+        click_mark(&mut app, &ctx, "picker_row:sub/");
+        click_mark(&mut app, &ctx, "picker_delete");
+        assert_eq!(app.notices, ["The folder is not empty."]);
+    }
+
+    #[test]
+    fn a_refused_paste_move_gives_the_cut_mark_back() {
+        let (mut app, _ctx) = started();
+        // a mark, then the paste that spends it
+        let entry = BuildListEntry {
+            name: "one".into(),
+            is_folder: false,
+            folder: String::new(),
+            path: "/b/one.xml".into(),
+            class: None,
+            ascendancy: None,
+            level: None,
+            delete_prompt: String::new(),
+        };
+        app.list_ui.mark_for_test(entry);
+        app.list_ui.spend_for_test();
+        assert!(app.list_ui.marked_path().is_none());
+        let seq = app.send(Command::MoveBuild {
+            path: "/b/one.xml".into(),
+            folder: "sub/".into(),
+        });
+        app.list_move_seq = Some(seq);
+        app.on_event(Event::Error {
+            seq,
+            message: "couldn't move that build".into(),
+        });
+        assert_eq!(
+            app.list_ui.marked_path(),
+            Some(std::path::Path::new("/b/one.xml"))
+        );
     }
 
     #[test]

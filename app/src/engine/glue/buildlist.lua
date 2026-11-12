@@ -260,6 +260,36 @@ function glue.move_build(path, folder)
 	end)
 end
 
+-- PoB's Ctrl+C on the entry, then Ctrl+V in `folder` (BuildList.lua:138-148). In the folder the
+-- entry is in PoB opens its Copy box instead, which `CopyBuild` presses.
+function glue.copy_build_to(path, folder)
+	folder = glue.normalise_folder(folder)
+	relative(main().buildPath .. folder .. "x")
+	with_entry(path, function(mode, list, build)
+		if build.subPath == folder then
+			error("that build is already in that folder", 0)
+		end
+		list:OnSelCopy(list.selIndex, build)
+		mode.subPath = folder
+		local depth = #main().popups
+		local real = IsKeyDown
+		IsKeyDown = function(key)
+			return key == "CTRL"
+		end
+		local ok, err = pcall(mode.OnFrame, mode, { { type = "KeyDown", key = "v" } })
+		IsKeyDown = real
+		list.copyBuild = nil
+		if not ok then
+			error(err, 0)
+		end
+		-- "A folder cannot be copied into itself." and the like
+		check_error_popup(depth)
+		if #main().popups > depth then
+			error("PoB doesn't offer that here", 0)
+		end
+	end)
+end
+
 function glue.new_folder(subPath, name)
 	check_name(name)
 	local mode = prepare(subPath)
@@ -351,6 +381,7 @@ function glue.list_builds(subPath)
 			entries[#entries + 1] = {
 				name = item.folderName,
 				is_folder = true,
+				folder = item.subPath,
 				path = item.fullFileName,
 				delete_prompt = prompt,
 			}
@@ -358,6 +389,7 @@ function glue.list_builds(subPath)
 			entries[#entries + 1] = {
 				name = item.buildName,
 				is_folder = false,
+				folder = item.subPath,
 				path = item.fullFileName,
 				class = item.className,
 				ascendancy = item.ascendClassName,

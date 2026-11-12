@@ -747,8 +747,21 @@ impl PobBackend {
                 self.call::<_, ()>("move_build", (path, folder))?;
                 Ok(list_changed())
             }
+            Command::CopyBuildTo { path, folder } => {
+                let root = self.build_root()?;
+                let path = self.build_entry(&path, true)?;
+                let folder = buildpaths::folder(&root, &folder, true, true)?;
+                buildpaths::move_target_free(&path, &root, &folder)?;
+                self.call::<_, ()>("copy_build_to", (path, folder))?;
+                Ok(list_changed())
+            }
             Command::NewFolder { name } => {
                 let folder = buildpaths::folder(&self.build_root()?, &self.folder, true, true)?;
+                self.call::<_, ()>("new_folder", (folder, name))?;
+                Ok(list_changed())
+            }
+            Command::NewFolderIn { folder, name } => {
+                let folder = buildpaths::folder(&self.build_root()?, &folder, true, true)?;
                 self.call::<_, ()>("new_folder", (folder, name))?;
                 Ok(list_changed())
             }
@@ -1642,7 +1655,12 @@ impl Backend for PobBackend {
     }
 
     fn build_list_view(&mut self) -> Result<BuildListView> {
-        self.view("list_builds", self.folder.clone())
+        let mut view: BuildListView = self.view("list_builds", self.folder.clone())?;
+        // a missing Builds folder was already refused by the listing
+        let root = self.build_root()?;
+        view.tree = buildpaths::folder_tree(&root);
+        view.root = PathBuf::from(root);
+        Ok(view)
     }
 
     fn build_loaded(&mut self) -> Result<bool> {

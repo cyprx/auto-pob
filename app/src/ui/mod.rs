@@ -4,6 +4,7 @@ pub mod build_list;
 pub mod calcs;
 pub mod config;
 pub mod first_run;
+pub mod folder_picker;
 pub mod import;
 pub mod items;
 pub mod notes;

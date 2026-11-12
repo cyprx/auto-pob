@@ -353,6 +353,19 @@ impl Pair {
         result
     }
 
+    fn copy_to(&mut self, rel: &str, folder: &str) -> anyhow::Result<auto_pob::engine::Affected> {
+        let result = self.s.run(Command::CopyBuildTo {
+            path: self.path(rel),
+            folder: folder.into(),
+        });
+        let up: Option<String> = self.up.call("listCopyTo", (self.up.path(rel), folder));
+        self.outcome(up.clone(), &result);
+        if let (Some(up), Err(e)) = (up, &result) {
+            assert_eq!(e.to_string(), up, "PoB's own text");
+        }
+        result
+    }
+
     fn new_folder(
         &mut self,
         listed: &str,
@@ -475,6 +488,51 @@ fn build_list_ops() {
     t.copy("sub", "subcopy").expect("copy a folder");
     t.same("copy a folder");
     assert!(t.path("subcopy/b.xml").is_file());
+
+    // Ctrl+C then Ctrl+V in another folder: the original stays; a taken name gets PoB's
+    // name[2]; a folder is copied with what is in it; never into itself
+    t.copy_to("a2.xml", "n/").expect("copy into a folder");
+    t.same("copy into a folder");
+    assert!(t.path("n/a2.xml").is_file() && t.path("a2.xml").is_file());
+    t.copy_to("a2.xml", "n/").expect("copy into a folder again");
+    t.same("copy with a clash");
+    assert!(t.path("n/a2[2].xml").is_file(), "PoB's name for a clash");
+    let err = t
+        .copy_to("sub", "sub/")
+        .expect_err("a folder into itself")
+        .to_string();
+    assert_eq!(err, "A folder cannot be copied into itself.");
+    t.same("a folder copied into itself");
+    t.copy_to("n/empty", "sub/").expect("copy a folder");
+    t.same("copy a folder into a folder");
+    assert!(t.path("n/empty").is_dir() && t.path("sub/empty").is_dir());
+    // the Save As picker's New Folder names its folder; the tree lists every folder, links not
+    t.s.run(Command::NewFolderIn {
+        folder: "n/".into(),
+        name: "deep".into(),
+    })
+    .expect("new folder in another folder");
+    assert!(t.path("n/deep").is_dir());
+    let view = t.list("");
+    let node = view
+        .tree
+        .iter()
+        .find(|f| f.path == "n/deep/")
+        .expect("the new folder is in the tree");
+    assert!(node.empty && node.modified > 0);
+    assert!(view.tree.iter().any(|f| f.path == "n/" && !f.empty));
+    assert!(view.tree.iter().any(|f| f.path == "sub/empty/"));
+    fs::remove_dir(t.path("n/deep")).unwrap();
+    // in its own folder PoB asks for a name instead, which is Copy
+    let err = t.s.run(Command::CopyBuildTo {
+        path: t.path("a2.xml"),
+        folder: String::new(),
+    });
+    assert_eq!(
+        err.expect_err("same folder").to_string(),
+        "that build is already in that folder"
+    );
+    t.same("a copy into the same folder");
 
     // a taken name and the same name leave PoB's Save disabled; the engine says why first
     let err = t
@@ -1232,6 +1290,17 @@ fn build_list_data_loss_guards() {
         ),
         taken
     );
+    // and a copy into a folder, onto a link at the name PoB would try
+    assert_eq!(
+        err(
+            &mut s,
+            Command::CopyBuildTo {
+                path: builds.join("dot.xml"),
+                folder: "sub/".into()
+            }
+        ),
+        taken
+    );
     assert!(builds.join("dot.xml").is_file());
     fs::remove_file(builds.join("dang.xml")).unwrap();
     fs::remove_file(sub.join("dot.xml")).unwrap();
@@ -1272,6 +1341,18 @@ fn build_list_data_loss_guards() {
         Command::MoveBuild {
             path: builds.join("inner"),
             folder: "empty/".into(),
+        },
+        Command::CopyBuildTo {
+            path: builds.join("x"),
+            folder: "sub/".into(),
+        },
+        Command::CopyBuildTo {
+            path: builds.join("a.xml"),
+            folder: "x/l/".into(),
+        },
+        Command::CopyBuildTo {
+            path: builds.join("inner/b.xml"),
+            folder: String::new(),
         },
     ] {
         let what = format!("{command:?}");

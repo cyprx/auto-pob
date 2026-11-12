@@ -99,8 +99,20 @@ pub enum Command {
         path: PathBuf,
         folder: String,
     },
+    /// PoB's Ctrl+C on an entry, then Ctrl+V in `folder` (a sub-path of the Builds folder, not
+    /// the entry's own: there PoB asks for a name, which is `CopyBuild`)
+    CopyBuildTo {
+        path: PathBuf,
+        folder: String,
+    },
     /// PoB's New Folder in the listed folder
     NewFolder {
+        name: String,
+    },
+    /// PoB's New Folder in the Save As picker: the folder is named by `folder`, whatever the
+    /// build list shows
+    NewFolderIn {
+        folder: String,
         name: String,
     },
     /// PoB's sort dropdown; the choice is saved to `Settings.xml` at once (R16)

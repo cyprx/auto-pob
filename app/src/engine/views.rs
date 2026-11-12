@@ -25,9 +25,16 @@ pub struct BuildView {
     pub can_redo: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct BuildListView {
     pub folder: String,
+    /// Every folder reachable from the Builds folder (links are not followed), for the
+    /// "Move to…" list and the Save As folder picker. Filled in by the engine, not by PoB.
+    #[serde(default)]
+    pub tree: Vec<FolderNode>,
+    /// The Builds folder, which `tree` and the entries' `folder` are below
+    #[serde(default)]
+    pub root: PathBuf,
     #[serde(default)]
     pub entries: Vec<BuildListEntry>,
     /// PoB's `buildSortMode`, which orders `entries`
@@ -36,6 +43,19 @@ pub struct BuildListView {
     /// PoB's `main.filterBuildList`: the search text the list is filtered by
     #[serde(default)]
     pub filter: String,
+}
+
+/// A folder of the Builds tree
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct FolderNode {
+    /// Below the Builds folder, with a closing slash ("a/b/")
+    pub path: String,
+    /// Seconds since the epoch (the Save As picker's "Last Edited" sort)
+    #[serde(default)]
+    pub modified: u64,
+    /// Nothing in it: PoB deletes only such a folder from the picker
+    #[serde(default)]
+    pub empty: bool,
 }
 
 /// PoB's four build list sorts (`sortMode` ids NAME, CLASS, EDITED, LEVEL)
@@ -69,6 +89,10 @@ pub struct BuildListEntry {
     pub name: String,
     pub is_folder: bool,
     pub path: PathBuf,
+    /// The folder the entry is in, below the Builds folder ("" or "a/b/"). A search lists
+    /// matches from every folder, so this is not always the folder shown.
+    #[serde(default)]
+    pub folder: String,
     #[serde(default)]
     pub class: Option<String>,
     #[serde(default)]

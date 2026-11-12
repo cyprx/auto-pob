@@ -325,6 +325,7 @@ impl Backend for Fake {
             entries: vec![],
             sort: Default::default(),
             filter: String::new(),
+            ..Default::default()
         })
     }
 

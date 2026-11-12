@@ -184,6 +184,52 @@ pub(crate) fn name_free(entry: &str, new_name: &str, rename: bool) -> Result<()>
     Ok(())
 }
 
+/// The most folders and levels the tree lists (a Builds folder is never this deep)
+const TREE_FOLDERS: usize = 2000;
+const TREE_DEPTH: usize = 12;
+
+/// Every folder below `root`, links not followed (a link could lead out, or loop), shallowest
+/// first, each in name order.
+pub(crate) fn folder_tree(root: &str) -> Vec<crate::engine::views::FolderNode> {
+    use crate::engine::views::FolderNode;
+    let mut out = Vec::new();
+    let mut level = vec![(PathBuf::from(root_dir(root)), String::new())];
+    for _ in 0..TREE_DEPTH {
+        let mut next = Vec::new();
+        for (dir, rel) in level {
+            let Ok(read) = fs::read_dir(&dir) else {
+                continue;
+            };
+            let mut names: Vec<_> = read.filter_map(Result::ok).collect();
+            names.sort_by_key(|e| e.file_name());
+            for entry in names {
+                let Ok(meta) = fs::symlink_metadata(entry.path()) else {
+                    continue;
+                };
+                let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                if !meta.is_dir() || out.len() >= TREE_FOLDERS {
+                    continue;
+                }
+                let path = format!("{rel}{name}/");
+                out.push(FolderNode {
+                    path: path.clone(),
+                    modified: meta
+                        .modified()
+                        .ok()
+                        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map_or(0, |d| d.as_secs()),
+                    empty: fs::read_dir(entry.path()).is_ok_and(|mut r| r.next().is_none()),
+                });
+                next.push((entry.path(), path));
+            }
+        }
+        level = next;
+    }
+    out
+}
+
 /// Refuses a move that PoB's `GetDestName` would turn into a replacement. It tries `name`,
 /// `name[2]`, `name[3]` and so on while `io.open` succeeds (a readable file or a folder) and
 /// takes the first it can't open; `os.rename` then replaces whatever is there, a link or an
@@ -369,6 +415,24 @@ mod tests {
         let link = tree.0.join("Builds/lnk");
         symlink(tree.0.join("Builds/sub"), &link).unwrap();
         assert_eq!(err(name_free(link.to_str().unwrap(), "plain", true)), taken);
+    }
+
+    #[test]
+    fn the_folder_tree_lists_real_folders_only() {
+        let tree = Tree::new("tree");
+        fs::create_dir_all(tree.0.join("Builds/sub/deep")).unwrap();
+        fs::create_dir_all(tree.0.join("Builds/.dot")).unwrap();
+        symlink(tree.0.join("outside"), tree.0.join("Builds/escape")).unwrap();
+        symlink(tree.0.join("Builds/sub"), tree.0.join("Builds/sub/loop")).unwrap();
+        let folders = folder_tree(&tree.root());
+        let listed: Vec<(&str, bool)> =
+            folders.iter().map(|f| (f.path.as_str(), f.empty)).collect();
+        // shallowest first; the links are not folders here; `sub` holds b.xml and `deep`
+        assert_eq!(
+            listed,
+            [(".dot/", true), ("sub/", false), ("sub/deep/", true)]
+        );
+        assert!(folders.iter().all(|f| f.modified > 0));
     }
 
     #[test]

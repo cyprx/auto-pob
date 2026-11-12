@@ -119,6 +119,18 @@ function listMove(path, folder)
 	return takeError()
 end
 
+-- Ctrl+C on the row, the path bar to the folder, Ctrl+V. Returns the error popup's text.
+function listCopyTo(path, folder)
+	pick(path)
+	local real = IsKeyDown
+	IsKeyDown = function(key) return key == "CTRL" end
+	list.controls.buildList:OnKeyDown("c")
+	go(folder)
+	list:OnFrame({ { type = "KeyDown", key = "v" } })
+	IsKeyDown = real
+	return takeError()
+end
+
 -- The Delete button. Returns PoB's confirm text ("" when PoB doesn't ask) and presses the
 -- confirm when `confirm` is set.
 function listDelete(path, confirm)

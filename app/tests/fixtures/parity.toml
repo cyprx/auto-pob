@@ -2142,7 +2142,7 @@ ported = "app/src/ui/items/sets.rs weapon set I/II"
 ported = "app/src/ui/items/sets.rs weapon set I/II"
 
 [controls."list.buildList"]
-ported = "app/src/ui/build_list.rs table: PoB order, row menu, drag to folders, Ctrl+X/Ctrl+V, F2, Enter, Delete key; Ctrl+C then Ctrl+V is still open under keys list.v and ListControl.c"
+ported = "app/src/ui/build_list.rs table: PoB order, row menu, drag to folders, Ctrl+X/Ctrl+V, F2, Enter, Delete key; Ctrl+C then Ctrl+V into another folder"
 
 [controls."list.buildList.path"]
 ported = "app/src/ui/build_list.rs top_rows clickable path segments, Mouse4/5 history"
@@ -2978,7 +2978,7 @@ note = "build list delete confirm (R16)"
 
 [popups."Confirm Folder Delete"]
 ported = "app/src/ui/build_list.rs delete dialog with PoB's text"
-note = "folder delete confirm (R16)"
+note = "folder delete confirm (R16); an empty folder, which PoB deletes without asking, is asked about too (R29)"
 
 [popups."Craft Item"]
 ported = "app/src/ui/popup.rs session (SP5b)"
@@ -3021,12 +3021,10 @@ gap = "Task 11"
 note = "R17"
 
 [popups."FolderListControl:84"]
-gap = "Task 6"
-note = "PoB's message: Save As folder list: folder not empty (NF-15) (R16 operations show PoB's text)"
+ported = "app/src/ui/folder_picker.rs ask_delete: PoB's text The folder is not empty. as a notice"
 
 [popups."FolderListControl:88"]
-gap = "Task 6"
-note = "PoB's message: Save As folder list: delete failure (NF-15) (R16 operations show PoB's text)"
+ported = "app/src/ui/app.rs on_picker sends DeleteBuild; a failure shows the engine's PoB text as a notice"
 
 [popups."Game Version"]
 ruled_out = "R3"
@@ -3149,12 +3147,10 @@ ported = "app/src/ui/popup.rs session (tattoos, SP5b)"
 ported = "app/src/ui/tree/toolbar.rs Reset tree and Remove all tattoos confirms"
 
 [popups."Save"]
-gap = "Task 6"
-note = "name entry ported (app.rs save-as dialog); NF-15 (new finding, in scope by controller ruling): PoB picks the folder in a folder list with New Folder and sort, ours saves into the folder the list last showed"
+ported = "app/src/ui/app.rs save_as_dialog with the folder list (app/src/ui/folder_picker.rs): path, New Folder, sort, delete"
 
 [popups."Save As"]
-gap = "Task 6"
-note = "as Save: NF-15"
+ported = "app/src/ui/app.rs save_as_dialog with the folder list (app/src/ui/folder_picker.rs): path, New Folder, sort, delete"
 
 [popups."Save Changes"]
 ported = "app/src/ui/unsaved.rs prompt"
@@ -3533,16 +3529,14 @@ ported = "app/src/ui/build_list.rs keys Ctrl+N new build"
 note = "Ctrl+N (R25)"
 
 [keys."list.v"]
-gap = "Task 6"
-note = "Ctrl+V after Ctrl+X moves (R16); after Ctrl+C it copies into the folder, NF-13"
+ported = "app/src/ui/build_list.rs keys: Ctrl+V after Ctrl+X moves (MoveBuild), after Ctrl+C copies (CopyBuildTo), or opens the Copy box in the same folder; works on an empty clipboard"
 
 [keys."ListControl.BACK"]
 gap = "Task 14"
 note = "Delete key: item list ported (items/list.rs); build list is NF-13 (Task 6); socket groups and set lists need it"
 
 [keys."ListControl.c"]
-gap = "Task 6"
-note = "Ctrl+C: items and socket groups ported (items/list.rs, skills/groups.rs); the build list is NF-13"
+ported = "app/src/ui/build_list.rs keys: Ctrl+C marks the row for CopyBuildTo"
 
 [keys."ListControl.DELETE"]
 gap = "Task 14"

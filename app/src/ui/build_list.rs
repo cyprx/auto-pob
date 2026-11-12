@@ -43,6 +43,10 @@ pub enum ListScreenAction {
         path: PathBuf,
         folder: String,
     },
+    CopyTo {
+        path: PathBuf,
+        folder: String,
+    },
     SetSort(BuildSort),
     SetFilter(String),
 }
@@ -81,6 +85,19 @@ struct Menu {
     fresh: bool,
 }
 
+/// What Ctrl+X or Ctrl+C marked
+#[derive(Debug, Clone, PartialEq)]
+struct Mark {
+    entry: BuildListEntry,
+    /// Ctrl+C (the entry is copied), not Ctrl+X
+    copy: bool,
+}
+
+/// The folder (below Builds, with a closing slash) an entry stands for when it is a folder
+fn own_path(e: &BuildListEntry) -> String {
+    format!("{}{}/", e.folder, e.name)
+}
+
 /// A press on a row that may become a drag.
 #[derive(Debug, Clone)]
 struct Drag {
@@ -97,7 +114,11 @@ pub struct BuildListUi {
     filter_text: String,
     filter_edit: Option<f64>,
     /// The entry Ctrl+X marked, and the folder it was marked in
-    cut: Option<(PathBuf, String)>,
+    cut: Option<Mark>,
+    /// The mark a Move was sent for, kept until the engine says whether it worked
+    spent: Option<Mark>,
+    /// A Ctrl+V press was seen (as an event or a key), so its release is not a second paste
+    paste_seen: bool,
     dialog: Option<Dialog>,
     menu: Option<Menu>,
     drag: Option<Drag>,
@@ -124,6 +145,8 @@ impl Default for BuildListUi {
             filter_text: String::new(),
             filter_edit: None,
             cut: None,
+            spent: None,
+            paste_seen: false,
             dialog: None,
             menu: None,
             drag: None,
@@ -197,26 +220,25 @@ fn truncate_chars(text: &mut String, limit: usize) {
     }
 }
 
-/// The folders an entry can be moved to from this list: the Builds folder, the parent and the
-/// folders listed here (never the entry itself, nor the folder it is in).
+/// The folders an entry can be moved to or copied to: every folder of the Builds tree except
+/// the one it is in and, for a folder, itself and what is inside it.
 fn move_targets(view: &BuildListView, entry: &BuildListEntry) -> Vec<(String, String)> {
-    let mut targets = Vec::new();
-    let mut add = |folder: String| {
-        if folder != view.folder && !targets.iter().any(|(f, _)| *f == folder) {
-            let label = format!("Builds/{folder}");
-            targets.push((folder, label));
-        }
-    };
-    add(String::new());
-    add(parent_folder(&view.folder));
-    for e in view
-        .entries
-        .iter()
-        .filter(|e| e.is_folder && e.path != entry.path)
-    {
-        add(format!("{}{}/", view.folder, e.name));
-    }
-    targets
+    let inside = entry.is_folder.then(|| own_path(entry));
+    let mut folders = vec![String::new()];
+    folders.extend(view.tree.iter().map(|f| f.path.clone()));
+    folders
+        .into_iter()
+        .filter(|f| *f != entry.folder)
+        .filter(|f| {
+            inside
+                .as_ref()
+                .is_none_or(|own| !f.starts_with(own.as_str()))
+        })
+        .map(|f| {
+            let label = format!("Builds/{f}");
+            (f, label)
+        })
+        .collect()
 }
 
 fn dialog_for(entry: &BuildListEntry, copy: bool) -> Dialog {
@@ -302,6 +324,12 @@ impl BuildListUi {
         }
         action = self.menu(ui.ctx(), view).or(action);
         action = self.dialog(ui.ctx()).or(action);
+        // a folder asked for any other way than Mouse4/5 is not part of the history walk
+        if let Some(ListScreenAction::OpenFolder(f)) = &action
+            && self.navigating.as_deref() != Some(f.as_str())
+        {
+            self.navigating = None;
+        }
         action
     }
 
@@ -450,6 +478,29 @@ impl BuildListUi {
             .then(|| ListScreenAction::SetFilter(self.filter_text.clone()))
     }
 
+    /// The path Ctrl+X or Ctrl+C marked
+    #[cfg(test)]
+    pub(crate) fn marked_path(&self) -> Option<&std::path::Path> {
+        self.cut.as_ref().map(|m| m.entry.path.as_path())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mark_for_test(&mut self, entry: BuildListEntry) {
+        self.cut = Some(Mark { entry, copy: false });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn spend_for_test(&mut self) {
+        self.spent = self.cut.take();
+    }
+
+    /// The engine refused the move the last paste sent: the mark comes back
+    pub fn move_refused(&mut self) {
+        if self.cut.is_none() {
+            self.cut = self.spent.take();
+        }
+    }
+
     fn selected_entry<'a>(&self, rows: &[Row<'a>]) -> Option<&'a BuildListEntry> {
         match self.selected.and_then(|s| rows.get(s)) {
             Some(Row::Entry(e)) => Some(*e),
@@ -469,7 +520,8 @@ impl BuildListUi {
         let list_focused = ui.memory(|m| m.has_focus(self.id));
         let (new, back, forward) = ui.input_mut(|i| {
             (
-                i.consume_key(egui::Modifiers::COMMAND, Key::N),
+                // a text box keeps its Ctrl+N
+                !typing && i.consume_key(egui::Modifiers::COMMAND, Key::N),
                 i.pointer.button_pressed(PointerButton::Extra1),
                 i.pointer.button_pressed(PointerButton::Extra2),
             )
@@ -489,29 +541,64 @@ impl BuildListUi {
         if !list_focused || typing {
             return action;
         }
-        // egui turns Ctrl+X and Ctrl+V into these events
-        let (cut, paste, f2, delete) = ui.input_mut(|i| {
+        // egui-winit turns Ctrl+X and Ctrl+C into events, and Ctrl+V into one only when the
+        // clipboard holds text; with nothing on it the press is dropped and only the release
+        // arrives as a key. So a paste is the event, the key press, or a release whose press
+        // was not seen.
+        let command = egui::Modifiers::COMMAND;
+        let (cut, copy, paste_down, paste_up, f2, delete) = ui.input_mut(|i| {
             let cut = i.events.iter().any(|e| matches!(e, egui::Event::Cut))
-                || i.consume_key(egui::Modifiers::COMMAND, Key::X);
-            let paste = i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
-                || i.consume_key(egui::Modifiers::COMMAND, Key::V);
+                || i.consume_key(command, Key::X);
+            let copy = i.events.iter().any(|e| matches!(e, egui::Event::Copy))
+                || i.consume_key(command, Key::C);
+            let paste_down = i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
+                || i.consume_key(command, Key::V);
+            let paste_up = i.events.iter().any(|e| {
+                matches!(e, egui::Event::Key { key: Key::V, pressed: false, modifiers, .. }
+                    if modifiers.command)
+            });
             (
                 cut,
-                paste,
+                copy,
+                paste_down,
+                paste_up,
                 i.consume_key(egui::Modifiers::NONE, Key::F2),
                 i.consume_key(egui::Modifiers::NONE, Key::Delete),
             )
         });
+        let paste = if paste_down {
+            self.paste_seen = true;
+            true
+        } else if paste_up {
+            !std::mem::take(&mut self.paste_seen)
+        } else {
+            false
+        };
         let entry = self.selected_entry(rows);
-        if cut && let Some(e) = entry {
-            self.cut = Some((e.path.clone(), view.folder.clone()));
+        if (cut || copy)
+            && let Some(e) = entry
+        {
+            self.cut = Some(Mark {
+                entry: e.clone(),
+                copy: copy && !cut,
+            });
         }
-        if paste && let Some((path, from)) = self.cut.clone() {
-            // PoB moves only to another folder, and keeps the mark if it stays put
-            if from != view.folder {
-                self.cut = None;
+        if paste && let Some(mark) = self.cut.clone() {
+            let from = &mark.entry.folder;
+            if mark.copy && *from == view.folder {
+                // in its own folder PoB asks for a name
+                self.dialog = Some(dialog_for(&mark.entry, true));
+            } else if mark.copy {
+                // the mark stays, as PoB's does
+                return Some(ListScreenAction::CopyTo {
+                    path: mark.entry.path,
+                    folder: view.folder.clone(),
+                });
+            } else if *from != view.folder {
+                // PoB moves only to another folder; the mark waits for the engine's answer
+                self.spent = self.cut.take();
                 return Some(ListScreenAction::Move {
-                    path,
+                    path: mark.entry.path,
                     folder: view.folder.clone(),
                 });
             }
@@ -531,7 +618,9 @@ impl BuildListUi {
         view: &BuildListView,
         rows: &[Row<'_>],
     ) -> Option<ListScreenAction> {
-        let columns = [
+        // a search lists matches from every folder, so each says where it is
+        let searching = !view.filter.is_empty();
+        let mut columns = vec![
             ListColumn {
                 title: "Name",
                 width: 360.0,
@@ -545,8 +634,14 @@ impl BuildListUi {
                 width: 60.0,
             },
         ];
+        if searching {
+            columns.push(ListColumn {
+                title: "Folder",
+                width: 200.0,
+            });
+        }
         let total: f32 = columns.iter().map(|c| c.width).sum();
-        let cut = self.cut.as_ref().map(|(p, _)| p.clone());
+        let cut = self.cut.as_ref().map(|m| m.entry.path.clone());
         let mut rects = Vec::new();
         let result = list_with(
             ui,
@@ -575,6 +670,9 @@ impl BuildListUi {
                         });
                         cell(row, &|_| {});
                         cell(row, &|_| {});
+                        if searching {
+                            cell(row, &|_| {});
+                        }
                     }
                     Row::Entry(e) => {
                         let is_cut = cut.as_ref() == Some(&e.path);
@@ -598,6 +696,12 @@ impl BuildListUi {
                                 ui.label(level.to_string());
                             }
                         });
+                        if searching {
+                            cell(row, &|ui| {
+                                let r = ui.label(format!("Builds/{}", e.folder));
+                                mark(ui, &format!("folder_cell:{i}"), &r);
+                            });
+                        }
                     }
                 }
             },
@@ -608,10 +712,9 @@ impl BuildListUi {
         if let Some(ListAction::Activate(i)) = result {
             return match rows.get(i) {
                 Some(Row::Up) => Some(ListScreenAction::OpenFolder(parent_folder(&view.folder))),
-                Some(Row::Entry(e)) if e.is_folder => Some(ListScreenAction::OpenFolder(format!(
-                    "{}{}/",
-                    view.folder, e.name
-                ))),
+                Some(Row::Entry(e)) if e.is_folder => {
+                    Some(ListScreenAction::OpenFolder(own_path(e)))
+                }
                 Some(Row::Entry(e)) => Some(ListScreenAction::OpenBuild(e.path.clone())),
                 None => None,
             };
@@ -678,9 +781,7 @@ impl BuildListUi {
         }
         let folder = match row.map(|i| &rows[i]) {
             Some(Row::Up) => parent_folder(&view.folder),
-            Some(Row::Entry(e)) if e.is_folder && e.path != drag.path => {
-                format!("{}{}/", view.folder, e.name)
-            }
+            Some(Row::Entry(e)) if e.is_folder && e.path != drag.path => own_path(e),
             _ => return None,
         };
         Some(ListScreenAction::Move {
@@ -709,7 +810,7 @@ impl BuildListUi {
                     };
                     if item(ui, "menu:open", "Open") {
                         action = Some(if entry.is_folder {
-                            ListScreenAction::OpenFolder(format!("{}{}/", view.folder, entry.name))
+                            ListScreenAction::OpenFolder(own_path(&entry))
                         } else {
                             ListScreenAction::OpenBuild(entry.path.clone())
                         });
@@ -874,6 +975,7 @@ fn buttons_keyed(ui: &mut egui::Ui, ok: &str, yes_key: &str, no_key: &str) -> (b
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::views::FolderNode;
     use crate::ui::import::{clear_marks, marked};
     use eframe::egui::{Event, Modifiers, Pos2, RawInput, Rect, Vec2};
 
@@ -881,6 +983,7 @@ mod tests {
         BuildListEntry {
             name: name.into(),
             is_folder: folder,
+            folder: String::new(),
             path: if folder {
                 format!("/b/{name}").into()
             } else {
@@ -898,15 +1001,27 @@ mod tests {
     }
 
     fn view(folder: &str) -> BuildListView {
+        let mut entries = vec![
+            entry("sub", true, None),
+            entry("one", false, Some(90)),
+            entry("two", false, Some(10)),
+        ];
+        for e in &mut entries {
+            e.folder = folder.into();
+        }
         BuildListView {
             folder: folder.into(),
-            entries: vec![
-                entry("sub", true, None),
-                entry("one", false, Some(90)),
-                entry("two", false, Some(10)),
-            ],
+            tree: ["sub/", "other/", "other/inner/", "a/", "a/sub/"]
+                .iter()
+                .map(|p| FolderNode {
+                    path: (*p).into(),
+                    ..FolderNode::default()
+                })
+                .collect(),
+            entries,
             sort: BuildSort::Name,
             filter: String::new(),
+            ..Default::default()
         }
     }
 
@@ -961,6 +1076,7 @@ mod tests {
         /// Selects row `i` and gives the list the keyboard.
         fn select(&mut self, i: usize) {
             self.ui.selected = Some(i);
+            self.ui.selected_path = None;
             self.focus = true;
             self.frame(vec![]);
         }
@@ -1201,6 +1317,11 @@ mod tests {
         right(&mut h, 1);
         assert_eq!(h.click("menu:move"), None);
         h.frame(vec![]);
+        // every folder of the tree, not only the ones listed here
+        assert!(
+            marked("menu:to:other/inner/").is_some(),
+            "a deep folder is missing"
+        );
         assert!(
             marked("menu:to:").is_none(),
             "the folder it is in is offered"
@@ -1458,5 +1579,181 @@ mod tests {
         h.view.entries.insert(0, entry("aaa", false, Some(1)));
         h.frame(vec![]);
         assert_eq!(h.ui.selected, Some(2));
+    }
+
+    fn event_key(key: Key, pressed: bool, modifiers: Modifiers) -> Event {
+        Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn ctrl_n_does_nothing_while_a_text_box_has_focus() {
+        let mut h = H::new(view(""));
+        h.click("search");
+        assert_eq!(h.key(Key::N, Modifiers::COMMAND), None);
+        // with the focus off the box, it starts a build
+        h.click_at(Pos2::new(900.0, 650.0), PointerButton::Primary);
+        assert_eq!(
+            h.key(Key::N, Modifiers::COMMAND),
+            Some(ListScreenAction::New)
+        );
+    }
+
+    #[test]
+    fn paste_works_on_an_empty_clipboard() {
+        // egui-winit sends no Paste and no press for Ctrl+V when the clipboard is empty: only
+        // the release arrives
+        let mut h = H::new(view(""));
+        h.select(1);
+        h.frame(vec![Event::Cut]);
+        h.view = view("sub/");
+        h.frame(vec![]);
+        assert_eq!(
+            h.frame(vec![event_key(Key::V, false, Modifiers::COMMAND)]),
+            Some(ListScreenAction::Move {
+                path: "/b/one.xml".into(),
+                folder: "sub/".into(),
+            })
+        );
+        // with text on the clipboard the Paste event comes first and the release is not a
+        // second paste (a copy would be made twice)
+        let mut h = H::new(view(""));
+        h.select(1);
+        h.frame(vec![Event::Copy]);
+        h.view = view("sub/");
+        h.frame(vec![]);
+        assert!(matches!(
+            h.frame(vec![Event::Paste("x".into())]),
+            Some(ListScreenAction::CopyTo { .. })
+        ));
+        assert_eq!(
+            h.frame(vec![event_key(Key::V, false, Modifiers::COMMAND)]),
+            None
+        );
+        // the next press and release is a paste again
+        assert!(matches!(
+            h.frame(vec![Event::Paste("x".into())]),
+            Some(ListScreenAction::CopyTo { .. })
+        ));
+    }
+
+    #[test]
+    fn copy_paste_copies_into_another_folder() {
+        let mut h = H::new(view(""));
+        h.select(1);
+        assert_eq!(h.frame(vec![Event::Copy]), None);
+        // in its own folder PoB asks for a name: that is the Copy box
+        assert_eq!(h.frame(vec![Event::Paste(String::new())]), None);
+        assert!(matches!(h.ui.dialog, Some(Dialog::Name { copy: true, .. })));
+        h.ui.dialog = None;
+        h.view = view("sub/");
+        h.frame(vec![]);
+        let copy = Some(ListScreenAction::CopyTo {
+            path: "/b/one.xml".into(),
+            folder: "sub/".into(),
+        });
+        assert_eq!(h.frame(vec![Event::Paste(String::new())]), copy);
+        // the mark stays, as PoB's does
+        assert_eq!(h.frame(vec![Event::Paste(String::new())]), copy);
+        // Ctrl+X after Ctrl+C replaces the mark
+        h.select(2);
+        h.frame(vec![Event::Cut]);
+        h.view = view("");
+        h.frame(vec![]);
+        assert!(matches!(
+            h.frame(vec![Event::Paste(String::new())]),
+            Some(ListScreenAction::Move { .. })
+        ));
+    }
+
+    #[test]
+    fn a_refused_move_keeps_the_cut_mark() {
+        let mut h = H::new(view(""));
+        h.select(1);
+        h.frame(vec![Event::Cut]);
+        h.view = view("sub/");
+        h.frame(vec![]);
+        assert!(h.frame(vec![Event::Paste(String::new())]).is_some());
+        assert_eq!(h.frame(vec![Event::Paste(String::new())]), None);
+        // the engine said no
+        h.ui.move_refused();
+        assert!(matches!(
+            h.frame(vec![Event::Paste(String::new())]),
+            Some(ListScreenAction::Move { .. })
+        ));
+    }
+
+    /// A search shows matches from every folder: the entry knows where it is
+    fn search_view() -> BuildListView {
+        let mut v = view("");
+        v.filter = "x".into();
+        v.entries = vec![entry("deep", false, Some(1)), entry("dir", true, None)];
+        v.entries[0].folder = "x/y/".into();
+        v.entries[0].path = "/b/x/y/deep.xml".into();
+        v.entries[1].folder = "x/".into();
+        v.entries[1].path = "/b/x/dir".into();
+        v
+    }
+
+    #[test]
+    fn a_search_result_acts_from_its_own_folder() {
+        let mut h = H::new(search_view());
+        // each result says where it is
+        assert!(marked("folder_cell:0").is_some() && marked("folder_cell:1").is_some());
+        // Ctrl+X on a match from x/y/, Ctrl+V in the Builds folder moves it
+        h.select(0);
+        h.frame(vec![Event::Cut]);
+        assert_eq!(
+            h.frame(vec![Event::Paste(String::new())]),
+            Some(ListScreenAction::Move {
+                path: "/b/x/y/deep.xml".into(),
+                folder: String::new(),
+            })
+        );
+        // a folder found by the search opens where it is, and takes a drag to it
+        h.select(1);
+        assert_eq!(
+            h.key(Key::Enter, Modifiers::NONE),
+            Some(ListScreenAction::OpenFolder("x/dir/".into()))
+        );
+        let (deep, dir) = (h.row_center(0), h.row_center(1));
+        assert_eq!(
+            h.drag(deep, dir),
+            Some(ListScreenAction::Move {
+                path: "/b/x/y/deep.xml".into(),
+                folder: "x/dir/".into(),
+            })
+        );
+        // and the row menu's Move to… never offers the folder it is in
+        assert_eq!(h.click_at(deep, PointerButton::Secondary), None);
+        h.click("menu:move");
+        h.frame(vec![]);
+        assert!(marked("menu:to:x/y/").is_none());
+        assert!(marked("menu:to:").is_some());
+    }
+
+    #[test]
+    fn move_to_lists_the_tree_but_not_a_folder_or_what_is_inside_it() {
+        let v = view("");
+        let names = |e: &BuildListEntry| -> Vec<String> {
+            move_targets(&v, e).into_iter().map(|(f, _)| f).collect()
+        };
+        // a build in the Builds folder: every folder but the Builds folder itself
+        assert_eq!(
+            names(&v.entries[1]),
+            ["sub/", "other/", "other/inner/", "a/", "a/sub/"]
+        );
+        // a folder: not itself, not below itself
+        let other = entry("other", true, None);
+        assert_eq!(names(&other), ["sub/", "a/", "a/sub/"]);
+        // an entry deeper down can go to the top, too
+        let mut deep = entry("b", false, Some(1));
+        deep.folder = "other/".into();
+        assert_eq!(names(&deep), ["", "sub/", "other/inner/", "a/", "a/sub/"]);
     }
 }

@@ -279,6 +279,7 @@ fn options_button_opens_the_window_from_the_list() {
         entries: vec![],
         sort: Default::default(),
         filter: String::new(),
+        ..Default::default()
     }));
     frame(&mut app, &ctx, vec![]);
     assert!(!app.options.window.is_blocking());

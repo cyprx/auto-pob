@@ -9,10 +9,29 @@ use eframe::egui::{Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-fn temp_config(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("auto-pob-appopts-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    dir.join("auto-pob.toml")
+/// `auto-pob.toml` in a folder that isn't made yet and goes when the test ends
+struct TempConfig {
+    _dir: crate::test_dir::TestDir,
+    path: PathBuf,
+}
+
+impl std::ops::Deref for TempConfig {
+    type Target = PathBuf;
+    fn deref(&self) -> &PathBuf {
+        &self.path
+    }
+}
+
+impl AsRef<std::path::Path> for TempConfig {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+fn temp_config(name: &str) -> TempConfig {
+    let dir = crate::test_dir::TestDir::reserved(&format!("appopts-{name}"));
+    let path = dir.join("auto-pob.toml");
+    TempConfig { _dir: dir, path }
 }
 
 fn app(settings: AppSettings, config: &std::path::Path) -> (AutoPobApp, egui::Context) {

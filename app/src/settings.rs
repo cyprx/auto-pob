@@ -427,12 +427,8 @@ pub fn resolve_user_dir(
 mod tests {
     use super::*;
 
-    fn temp(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("auto-pob-settings-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn temp(name: &str) -> crate::test_dir::TestDir {
+        crate::test_dir::TestDir::new(&format!("settings-{name}"))
     }
 
     const COMMENTED: &str = "# my notes\nuser_dir = \"/old\" # where the builds are\nupdate_check = false\nfuture_key = 7\n\n# trade things\n[trade]\nrealm = \"PC\"\nleague = \"Standard\"\n\n[other]\nkeep = \"me\"\n\n[overrides]\n# a colour\ncolorPositive = \"^x00FF00\" # green\nshowAnimations = \"true\"\n";

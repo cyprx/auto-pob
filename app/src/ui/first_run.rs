@@ -302,8 +302,7 @@ mod tests {
 
     #[test]
     fn answering_writes_only_the_given_file() {
-        let dir = std::env::temp_dir().join(format!("auto-pob-firstrun-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = crate::test_dir::TestDir::reserved("firstrun");
         let config = dir.join("auto-pob.toml");
         let (settings, notice) = answer(
             Path::new("/classic/userdata"),

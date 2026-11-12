@@ -400,6 +400,11 @@ impl ItemsUi {
             .or_else(|| self.db.rects.map.get(key))
             .unwrap_or_else(|| panic!("no rect {key}; have {:?}", self.rects.map.keys()))
     }
+
+    #[cfg(test)]
+    pub(crate) fn has_rect(&self, key: &str) -> bool {
+        self.rects.map.contains_key(key) || self.display.rects.map.contains_key(key)
+    }
 }
 
 #[cfg(test)]

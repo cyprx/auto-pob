@@ -2,7 +2,7 @@
 
 use super::{ItemDrag, ItemsOutput, ItemsUi};
 use crate::engine::views::{ItemsView, SlotKind, SlotView};
-use crate::engine::{Command, ItemTooltipQuery};
+use crate::engine::{BuySource, Command, ItemTooltipQuery, PopupKind};
 use crate::widgets::pob_text;
 use eframe::egui::{self, text::LayoutJob};
 
@@ -132,10 +132,28 @@ impl ItemsUi {
             ui.horizontal(|ui| {
                 let pad = if indent { 16.0 } else { 0.0 };
                 ui.add_space(pad);
-                ui.add_sized(
+                let label = ui.add_sized(
                     [110.0 - pad, 18.0],
-                    egui::Label::new(&slot.label).truncate(),
+                    egui::Label::new(&slot.label)
+                        .truncate()
+                        .sense(egui::Sense::click()),
                 );
+                self.rects
+                    .note(&label, || format!("slot_label_{}", slot.name));
+                // PoB's trade search for the slot's item (R10); an empty slot has none. The menu
+                // is the slot name's: the dropdown's own popup would share its id.
+                if slot.selected != 0 {
+                    label.context_menu(|ui| {
+                        let buy = ui.button("Buy similar\u{2026}");
+                        self.rects.note(&buy, || format!("slot_buy_{}", slot.name));
+                        if buy.clicked() {
+                            out.commands.push(Command::OpenPopup(PopupKind::BuySimilar {
+                                source: BuySource::Slot(slot.name.clone()),
+                            }));
+                            ui.close();
+                        }
+                    });
+                }
                 let current = if slot.selected == 0 {
                     pob_text("None", 14.0, default)
                 } else {
@@ -182,6 +200,7 @@ impl ItemsUi {
                 self.rects.note(&combo.inner.response, || {
                     format!("slot_combo_{}", slot.name)
                 });
+
                 // the tree's right click on this slot's socket: scroll to it and drop it down
                 if self.focus_slot.as_deref() == Some(&slot.name) {
                     self.focus_slot = None;

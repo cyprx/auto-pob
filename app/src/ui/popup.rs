@@ -27,6 +27,42 @@ pub struct PopupOutput {
     pub queries: Vec<Command>,
 }
 
+/// Where PoB's trade windows link to (R20); the engine keeps only these, and so does the UI
+pub const TRADE_SEARCH: &str = "https://www.pathofexile.com/trade/search/";
+
+/// The trade link of the user's own press (R20): a popup button press may answer with one, and
+/// only the answer to that press, by its seq, is opened in the browser and copied, once.
+#[derive(Debug, Default)]
+pub struct TradeLink {
+    /// The seq of the last button press, while it is unanswered
+    pressed: Option<u64>,
+    /// A link to open and copy on the next frame
+    ready: Option<String>,
+}
+
+impl TradeLink {
+    /// A popup button press went out as `seq`.
+    pub fn pressed(&mut self, seq: u64) {
+        self.pressed = Some(seq);
+    }
+
+    /// The engine's answer: a link for `seq`
+    pub fn on_link(&mut self, seq: u64, url: &str) {
+        if self.pressed != Some(seq) {
+            return;
+        }
+        self.pressed = None;
+        if url.starts_with(TRADE_SEARCH) {
+            self.ready = Some(url.to_owned());
+        }
+    }
+
+    /// The link to open and copy now, once
+    pub fn take(&mut self) -> Option<String> {
+        self.ready.take()
+    }
+}
+
 /// Extras a window adds around the engine's controls (the Options window's "auto-pob only"
 /// boxes and fields). They draw only; what they change is theirs to send.
 pub trait Decorate {

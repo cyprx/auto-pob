@@ -1511,7 +1511,7 @@ ported = "app/src/ui/items/crafting.rs Anoint 3 button (PoB popup session)"
 ported = "app/src/ui/items/crafting.rs Anoint 4 button (PoB popup session)"
 
 [controls."items.displayItemBuySimilar"]
-gap = "Task 10"
+ported = "app/src/ui/items/display.rs Buy similar button (PoB popup session, R10)"
 note = "Buy similar (R10)"
 
 [controls."items.displayItemCatalyst"]
@@ -2950,7 +2950,7 @@ gap = "Task 13"
 note = "controller ruling: full parity; the canvas site (another class ascendancy start clicked) must ask as PoB does; today ported app/src/ui/tree/toolbar.rs class change confirm (Connect path / Reset); the canvas site (another class ascendancy node clicked, PassiveTreeView:474) errors in the glue and SP2 routes it through SelectClass"
 
 [popups."CompareBuySimilar:531"]
-gap = "Task 10"
+ported = "app/src/engine/glue/popups.lua Buy Similar session (openPopup, R10)"
 note = "Buy similar popup (R10)"
 
 [popups."CompareTab:1566"]

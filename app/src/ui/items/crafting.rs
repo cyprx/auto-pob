@@ -24,7 +24,8 @@ pub fn opener_label(kind: &PopupKind) -> Option<String> {
         PopupKind::Craft
         | PopupKind::EditText
         | PopupKind::NodeReplacement { .. }
-        | PopupKind::Options => return None,
+        | PopupKind::Options
+        | PopupKind::BuySimilar { .. } => return None,
     })
 }
 

@@ -11,10 +11,10 @@ use crate::pob_files::DownloadProgress;
 use super::commands::{Command, ControlTooltipQuery, GemTooltipQuery, ItemTooltipQuery};
 use super::views::{
     AccountView, BreakdownView, BuildBrowseView, BuildListView, BuildView, CalcsView, CellRef,
-    CompareView, ConfigView, ControlTooltipView, DisplayItemView, GemSearchView, GemTooltipView,
-    GroupTooltipView, ItemDbView, ItemText, ItemTooltipView, ItemsView, NodePower, NodeTooltip,
-    NotesView, PopupView, PowerReport, RequestsView, SettingsView, ShareView, SkillsView,
-    SocketGroupText, StatsView, TreeLayout, TreeState,
+    CompareView, ConfigView, ControlTooltipView, DisplayItemView, ExternalUrl, GemSearchView,
+    GemTooltipView, GroupTooltipView, ItemDbView, ItemText, ItemTooltipView, ItemsView, NodePower,
+    NodeTooltip, NotesView, PopupView, PowerReport, RequestsView, SettingsView, ShareView,
+    SkillsView, SocketGroupText, StatsView, TreeLayout, TreeState,
 };
 use pob_runtime::net::Waker;
 
@@ -62,6 +62,9 @@ pub enum Snapshot {
     Compare(Option<Arc<CompareView>>),
     /// The builds of one folder, answering `BrowseBuilds`; sent with or without a build
     BuildBrowse(Arc<BuildBrowseView>),
+    /// A trade link a popup press made (R20), tagged with that press's own seq: the UI opens
+    /// and copies it for its own click only
+    ExternalUrl(Arc<ExternalUrl>),
 }
 
 /// Long-running work the engine does between commands.
@@ -173,6 +176,9 @@ pub struct Affected {
     /// The builds of this folder were asked for (`BrowseBuilds`); the latest request wins.
     /// List-safe
     pub browse: Option<String>,
+    /// The trade link this command's press made (R20). The loop sends it at once, with the
+    /// command's own seq, so it is never a view of the batch
+    pub external_url: Option<ExternalUrl>,
 }
 
 impl Affected {
@@ -211,6 +217,7 @@ impl Affected {
         account: true,
         compare: true,
         browse: None,
+        external_url: None,
     };
 
     /// Only views that need no build are asked for: the build list, the requests, the settings
@@ -275,6 +282,9 @@ impl Affected {
         self.compare |= other.compare;
         if other.browse.is_some() {
             self.browse = other.browse;
+        }
+        if other.external_url.is_some() {
+            self.external_url = other.external_url;
         }
     }
 }
@@ -638,6 +648,13 @@ pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send
     if flags.account {
         emit(seq, send, backend.account_view(), Snapshot::Account);
     }
+    // the loop sends a command's link itself; a caller that hands one over gets it sent here
+    if let Some(url) = &flags.external_url {
+        send(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::ExternalUrl(Arc::new(url.clone())),
+        });
+    }
     // "no comparison" is an answer too: a build change drops them
     if flags.compare {
         match backend.compare_view() {
@@ -774,7 +791,16 @@ fn run_loop_with_delay(
                 break;
             }
             match backend.apply(command, send) {
-                Ok(a) => affected.merge(a),
+                Ok(mut a) => {
+                    // the link answers this press, not the batch (R20)
+                    if let Some(url) = a.external_url.take() {
+                        send(Event::Snapshot {
+                            seq,
+                            snapshot: Snapshot::ExternalUrl(Arc::new(url)),
+                        });
+                    }
+                    affected.merge(a)
+                }
                 Err(e) => {
                     send(Event::Error {
                         seq,
@@ -935,6 +961,35 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn external_url_carries_the_press_seq() {
+        // the link answers its own press, even with a later command in the same batch (R20)
+        let (mut fake, _log) = Fake::new();
+        let events = run_queued(
+            &mut fake,
+            vec![
+                Command::PressPopupButton {
+                    name: "search".into(),
+                },
+                set_config(),
+            ],
+        );
+        let links: Vec<_> = snapshots(&events)
+            .into_iter()
+            .filter_map(|(seq, s)| match s {
+                Snapshot::ExternalUrl(link) => Some((seq, link.url.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(links, [(1, crate::engine::fake::FAKE_TRADE_URL.to_owned())]);
+        // the batch's views carry its last seq
+        assert!(
+            snapshots(&events)
+                .iter()
+                .any(|(seq, s)| *seq == 2 && matches!(s, Snapshot::Calcs(_)))
+        );
     }
 
     #[test]

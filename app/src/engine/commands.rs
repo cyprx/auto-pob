@@ -702,6 +702,13 @@ pub enum Command {
     SetOverrides {
         values: BTreeMap<String, String>,
     },
+    /// The app's trade realm ("PC", "PS4" or "Xbox") and league, from `auto-pob.toml` (R10,
+    /// R17): the trade windows take them instead of PoB's league fetch. Kept in the glue,
+    /// needs no build, answers nothing. Sent after `Ready` and after each Options Save.
+    SetTradeDefaults {
+        realm: String,
+        league: String,
+    },
     /// A query: the tooltip of a popup entry or button, an affix entry or a DB item (R6); the
     /// latest one in a batch is answered, as a `ControlTooltip`.
     ControlTooltip(ControlTooltipQuery),
@@ -890,6 +897,22 @@ pub enum PopupKind {
     },
     /// PoB's Options window, run as a main-owned session (R13, R19): it needs no build
     Options,
+    /// PoB's "Buy Similar" window (`CompareBuySimilar.openPopup`, R10), a build-owned session;
+    /// its realm and league are the app's trade defaults (`SetTradeDefaults`)
+    BuySimilar {
+        source: BuySource,
+    },
+}
+
+/// Where a "Buy similar" search starts from (R10): PoB's own three entry points
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BuySource {
+    /// The display panel's "Buy similar" button
+    DisplayItem,
+    /// A slot's context menu, with the slot's item
+    Slot(String),
+    /// The Compare tab's Items row: the comparison's item in this slot (`CompareItemRow.slot`)
+    CompareSlot(String),
 }
 
 /// What a popup control is set to.

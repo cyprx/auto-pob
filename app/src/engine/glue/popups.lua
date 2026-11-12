@@ -154,6 +154,129 @@ function glue.popup_is_options()
 	return session ~= nil and session.kind == "Options"
 end
 
+-- ---- Trade links (R10, R20) ----
+
+-- The app's trade realm and league (`SetTradeDefaults`): what PoB's league fetch would have
+-- offered, since that fetch is refused
+local trade = { realm = "PC", league = "Standard" }
+
+function glue.trade_defaults(realm, league)
+	trade.realm = realm
+	trade.league = league
+end
+
+-- PoB's leagues that every realm has, in the order its fetch callback lists them
+-- (CompareBuySimilar.lua:333-336)
+local FIXED_LEAGUES = { "Standard", "Hardcore", "Ruthless", "Hardcore Ruthless" }
+
+-- The league list PoB's fetch would build from the app's league, and that league's index. A
+-- blank league is Standard.
+function glue.trade_leagues()
+	local league = trade.league
+	if league == nil or league == "" then
+		league = "Standard"
+	end
+	local list = {}
+	if not isValueInArray(FIXED_LEAGUES, league) then
+		table.insert(list, league)
+	end
+	for _, name in ipairs(FIXED_LEAGUES) do
+		table.insert(list, name)
+	end
+	return list, isValueInArray(list, league)
+end
+
+function glue.trade_realm()
+	return trade.realm
+end
+
+local TRADE_URL = "^https://www%.pathofexile%.com/trade/search/"
+
+-- Runs `fn` with PoB's `OpenURL` recording a trade search link, and returns the last one. Any
+-- other link is dropped; nothing is opened (the engine never opens a browser, R20).
+function glue.capture_url(fn)
+	local saved = OpenURL
+	local url
+	OpenURL = function(link)
+		if type(link) == "string" and link:match(TRADE_URL) then
+			url = link
+		end
+	end
+	local ok, err = pcall(fn)
+	OpenURL = saved
+	if not ok then
+		error(err, 0)
+	end
+	return url
+end
+
+-- Runs `fn` with every subscript launch refused, as inside `Build:Init` (R4): the trade
+-- windows' league fetch never reaches the network
+local function no_launches(fn)
+	__net_in_init(true)
+	local ok, err = pcall(fn)
+	__net_in_init(false)
+	if not ok then
+		error(err, 0)
+	end
+	return err
+end
+
+-- `CompareBuySimilar`, loaded on first use and kept: its top level builds the trade stat table
+-- (about 130 ms). It is our own instance, so its remembered realm and league are ours (R10).
+local buy_similar
+
+local function buy_module()
+	if not buy_similar then
+		buy_similar = LoadModule("Classes/CompareBuySimilar")
+	end
+	return buy_similar
+end
+
+-- The item and slot name PoB passes to `openPopup` for a `BuySource`
+local function buy_target(source)
+	local tab = items_tab()
+	if source == "DisplayItem" then
+		-- the panel's button (ItemsTab.lua:342-350)
+		local control = tab.controls.displayItemBuySimilar
+		if not (tab.displayItem and control:IsShown()) then
+			error("PoB doesn't offer that here", 0)
+		end
+		return tab.displayItem, tab:GetComparisonSlotNameForItem(tab.displayItem)
+	elseif type(source) == "table" and source.Slot then
+		local slot = tab.slots[source.Slot]
+		local item = slot and slot:IsShown() and tab.items[slot.selItemId]
+		if not item then
+			error("PoB doesn't offer that here", 0)
+		end
+		return item, source.Slot
+	elseif type(source) == "table" and source.CompareSlot then
+		return glue.compare_buy_item(source.CompareSlot), source.CompareSlot
+	end
+	error("PoB doesn't offer that here", 0)
+end
+
+-- The leagues PoB's fetch would have set (its callback, CompareBuySimilar.lua:323-339), from
+-- the app's league; the pick is PoB's own selection callback, which rebuilds the URL. The list
+-- starts as "Loading..." at index 1, so a `SetSel` to index 1 would run nothing.
+local function buy_leagues(popup)
+	local drop = popup.controls.leagueDrop
+	local list, index = glue.trade_leagues()
+	drop:SetList(list)
+	drop.selIndex = index
+	drop.selFunc(index, list[index])
+end
+
+-- The app's realm, picked as the user would; a change refetches the leagues (refused)
+local function buy_realm(popup)
+	local drop = popup.controls.realmDrop
+	drop:SetSel(isValueInArray(drop.list, trade.realm) or 1)
+end
+
+local function is_trade(s)
+	return s ~= nil and type(s.kind) == "table" and s.kind.BuySimilar ~= nil
+end
+
 -- ---- Opening ----
 
 -- the panel's own button for each opener (R3)
@@ -233,6 +356,31 @@ function glue.popup_open(kind, arg)
 			error("PoB didn't open that window", 0)
 		end
 		session = { popup = top, kind = "Options", owner = "main" }
+		return
+	end
+	if kind == "buy_similar" then
+		glue.popup_cancel_options()
+		local item, slot_name = buy_target(arg)
+		local module = buy_module()
+		local popups = main().popups
+		local depth = #popups
+		local ok, err = pcall(no_launches, function()
+			module.openPopup(item, slot_name, pob.build)
+			if #popups > depth then
+				buy_realm(popups[1])
+				buy_leagues(popups[1])
+			end
+		end)
+		local count = #popups - depth
+		local top = popups[1]
+		close_above(depth)
+		if not ok then
+			error(err, 0)
+		end
+		if count == 0 then
+			error("PoB didn't open that window", 0)
+		end
+		session = { popup = top, kind = { BuySimilar = { source = arg } }, owner = "build", build = pob.build }
 		return
 	end
 	if kind == "node_replacement" then
@@ -507,10 +655,21 @@ end
 -- Sets a control as the user would; see `glue.set_control`.
 function glue.popup_set(name, kind, value, label)
 	require_session()
+	local trading = is_trade(session)
 	with_session(function()
 		local control, control_kind = find(name)
 		require_usable(control)
-		glue.set_control(control, control_kind, kind, value, label)
+		if not trading then
+			glue.set_control(control, control_kind, kind, value, label)
+			return
+		end
+		no_launches(function()
+			glue.set_control(control, control_kind, kind, value, label)
+			-- a realm pick refetches the leagues, which leaves "Loading..." (R10)
+			if name == "realmDrop" then
+				buy_leagues(session.popup)
+			end
+		end)
 	end)
 end
 
@@ -520,14 +679,23 @@ function glue.popup_press(name)
 	require_session()
 	local flag_before = pob.build.buildFlag and true or false
 	local options = session.kind == "Options"
+	local trading = is_trade(session)
 	session.pressing = true
+	local url
 	local ok, ended = pcall(with_session, function()
 		local control, kind = find(name)
 		if kind ~= "Button" then
 			error("no such control", 0)
 		end
 		require_usable(control)
-		control.onClick()
+		if trading then
+			-- the user's own press: a trade link it opens goes to the UI (R20)
+			url = no_launches(function()
+				return glue.capture_url(control.onClick)
+			end)
+		else
+			control.onClick()
+		end
 	end)
 	if session then
 		session.pressing = nil
@@ -539,7 +707,7 @@ function glue.popup_press(name)
 		-- a Cancel put the shared values back over an override
 		glue.settings_reapply()
 	end
-	return { ended = ended, build_flag = (pob.build.buildFlag and not flag_before) and true or false }
+	return { ended = ended, build_flag = (pob.build.buildFlag and not flag_before) and true or false, url = url }
 end
 
 -- Presses Options' Cancel (which restores the values the window changed as it went)

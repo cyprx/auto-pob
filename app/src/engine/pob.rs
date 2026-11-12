@@ -10,11 +10,11 @@ use super::net::{Dispatch, NetHandle};
 use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Engine, Event};
 use super::views::{
     AccountView, BreakdownView, BuildBrowseView, BuildListView, BuildView, CalcsView, CellRef,
-    CompareView, ConfigView, ControlTooltipView, DisplayItemView, GemRow, GemSearchView,
-    GemTooltipView, GroupTooltipView, ItemDbView, ItemText, ItemTooltip, ItemTooltipView,
-    ItemsView, ModLineList, NodePower, NodeTooltip, NotesView, PopupView, PowerReport,
-    RequestsView, SettingsView, ShareView, SkillsView, SocketGroupText, StatsView, TooltipLine,
-    TreeLayout, TreeState,
+    CompareView, ConfigView, ControlTooltipView, DisplayItemView, ExternalUrl, GemRow,
+    GemSearchView, GemTooltipView, GroupTooltipView, ItemDbView, ItemText, ItemTooltip,
+    ItemTooltipView, ItemsView, ModLineList, NodePower, NodeTooltip, NotesView, PopupView,
+    PowerReport, RequestsView, SettingsView, ShareView, SkillsView, SocketGroupText, StatsView,
+    TooltipLine, TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -575,6 +575,7 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::ClosePopup
             // the app's own values; they change neither the item nor the build (R12)
             | Command::SetOverrides { .. }
+            | Command::SetTradeDefaults { .. }
             | Command::BrowseBuilds { .. }
             | Command::ControlTooltip(_)
             | Command::SetItemDb(_)
@@ -635,6 +636,9 @@ fn part_args(part: &CharacterPart) -> (&'static str, bool, bool, bool) {
 #[derive(serde::Deserialize)]
 struct Pressed {
     build_flag: bool,
+    /// The trade link the press opened, if any (R20)
+    #[serde(default)]
+    url: Option<String>,
 }
 
 /// A popup session command changed the popup only (a press also flags the display item).
@@ -1620,6 +1624,11 @@ impl PobBackend {
                     PopupKind::AddCrucible => ("add_crucible", 0),
                     PopupKind::NodeReplacement { node } => ("node_replacement", i64::from(node)),
                     PopupKind::Options => ("options", 0),
+                    PopupKind::BuySimilar { source } => {
+                        let source = self.lua.to_value(&source).map_err(|e| anyhow!("{e}"))?;
+                        self.call::<_, ()>("popup_open", ("buy_similar", source))?;
+                        return Ok(popup_changed());
+                    }
                 };
                 // Enchant's flag is a boolean for the glue
                 if name == "enchant" {
@@ -1667,6 +1676,8 @@ impl PobBackend {
                 affected.display_item = true;
                 // Options' Save changes the settings and may hand back overrides (R12)
                 affected.settings = true;
+                // a trade search the press opened (R20)
+                affected.external_url = pressed.url.map(|url| ExternalUrl { url });
                 // a popup PoB closed ends the session; the view says so by being empty
                 Ok(affected)
             }
@@ -1693,6 +1704,10 @@ impl PobBackend {
                 control_tooltip: Some(query),
                 ..Affected::default()
             }),
+            Command::SetTradeDefaults { realm, league } => {
+                self.call::<_, ()>("trade_defaults", (realm, league))?;
+                Ok(Affected::default())
+            }
             Command::Undo(Tab::Items) => {
                 self.call::<_, ()>("items_undo", ())?;
                 self.items_edited()
@@ -2218,6 +2233,7 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::BuySource;
 
     #[test]
     fn queries_do_not_end_the_popup_session() {
@@ -2253,6 +2269,13 @@ mod tests {
             Command::SetOverrides {
                 values: Default::default(),
             },
+            Command::SetTradeDefaults {
+                realm: "PC".into(),
+                league: "Standard".into(),
+            },
+            Command::OpenPopup(PopupKind::BuySimilar {
+                source: BuySource::DisplayItem,
+            }),
             Command::OpenPopup(PopupKind::NodeReplacement { node: 1 }),
             Command::SetPopupControl {
                 name: "rarity".into(),

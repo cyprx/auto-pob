@@ -112,6 +112,8 @@ pub struct AutoPobApp {
     popup: PopupWindow,
     /// The tab that opened the popup: leaving it closes the window
     popup_tab: Option<BuildTab>,
+    /// The trade link a popup press asked for: opened and copied for that press only (R20)
+    trade_link: popup::TradeLink,
     /// The Options window, which any screen can open and a build change doesn't end (R19)
     options: OptionsUi,
     /// auto-pob.toml as it is on disk, and where it goes (None: nowhere, as in the tests)
@@ -190,6 +192,7 @@ impl AutoPobApp {
             items: ItemsUi::default(),
             popup: PopupWindow::default(),
             popup_tab: None,
+            trade_link: popup::TradeLink::default(),
             options: OptionsUi::default(),
             settings: AppSettings::default(),
             config_path: None,
@@ -286,6 +289,15 @@ impl AutoPobApp {
         self.send(Command::SetOverrides { values });
     }
 
+    /// The trade realm and league go to the engine, for PoB's trade windows (R10). Nothing
+    /// answers it, so the UI doesn't wait.
+    fn send_trade_defaults(&mut self) {
+        self.engine.send(Command::SetTradeDefaults {
+            realm: self.settings.trade_realm.clone(),
+            league: self.settings.trade_league.clone(),
+        });
+    }
+
     /// Writes `settings` to `auto-pob.toml`. A damaged file moved aside is told to the user;
     /// a failure is returned.
     fn write_settings(&mut self, settings: &AppSettings) -> Result<(), String> {
@@ -326,6 +338,7 @@ impl AutoPobApp {
                 self.options.commit(&next);
                 self.settings = next;
                 self.send_overrides_always();
+                self.send_trade_defaults();
             }
             Err(error) => {
                 // not saved: the old settings stay, the draft comes back in a reopened window
@@ -425,6 +438,7 @@ impl AutoPobApp {
         )
         .then(|| command.clone());
         let is_close = matches!(command, Command::ClosePopup);
+        let is_press = matches!(command, Command::PressPopupButton { .. });
         let is_open = matches!(command, Command::OpenPopup(_));
         let is_options = matches!(command, Command::OpenPopup(PopupKind::Options));
         let seq = self.engine.send(command);
@@ -436,6 +450,9 @@ impl AutoPobApp {
         if is_close {
             self.popup.close_sent(seq);
             self.options.window.close_sent(seq);
+        }
+        if is_press {
+            self.trade_link.pressed(seq);
         }
         self.last_sent = seq;
         if let Some(command) = echo {
@@ -485,6 +502,7 @@ impl AutoPobApp {
             Event::Ready => {
                 self.ready = true;
                 self.send_overrides();
+                self.send_trade_defaults();
             }
             Event::StartupFailed { message } => self.startup_error = Some(message),
             Event::Snapshot { seq, snapshot } => {
@@ -554,6 +572,7 @@ impl AutoPobApp {
                     Snapshot::Share(_) | Snapshot::ShareCode(_) | Snapshot::Account(_) => {}
                     // the Compare tab took it above
                     Snapshot::Compare(_) => {}
+                    Snapshot::ExternalUrl(link) => self.trade_link.on_link(seq, &link.url),
                     // power results of the build being left
                     Snapshot::NodePower(_) | Snapshot::PowerReport(_)
                         if self.entering.is_some() => {}
@@ -919,6 +938,11 @@ impl AutoPobApp {
         }
         if let Some(url) = self.import_ui.take_open_url() {
             ctx.open_url(egui::OpenUrl::new_tab(url));
+        }
+        // the user's own press asked for it; PoB copies it too (R20)
+        if let Some(url) = self.trade_link.take() {
+            ctx.open_url(egui::OpenUrl::new_tab(url.clone()));
+            ctx.copy_text(url);
         }
         self.ask_about_startup_link();
         if let Some(rx) = &self.release_rx
@@ -1702,6 +1726,10 @@ mod options_tests;
 #[cfg(test)]
 #[path = "app_compare_tests.rs"]
 mod compare_tests;
+
+#[cfg(test)]
+#[path = "app_trade_tests.rs"]
+mod trade_tests;
 
 #[cfg(test)]
 mod tests {

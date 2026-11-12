@@ -584,6 +584,22 @@ function glue.compare_copy_item(slot, andUse)
 	error("no such slot", 0)
 end
 
+-- The comparison's item on an Items row, for its "Buy" button: PoB passes it with the row's
+-- slot (CompareTab.lua:3807-3808, 3949-3951). A row without one isn't offered.
+function glue.compare_buy_item(slot)
+	local tab = compare_tab()
+	local entry = active_entry(tab)
+	for _, row in ipairs(item_slots(tab, entry)) do
+		if row.slot == slot then
+			if not row.cItem then
+				error(NOT_OFFERED, 0)
+			end
+			return row.cItem
+		end
+	end
+	error("no such slot", 0)
+end
+
 -- The Config view's "Copy Config from Compare Build", then an undo state of ours (R8)
 function glue.compare_copy_config()
 	local tab = compare_tab()

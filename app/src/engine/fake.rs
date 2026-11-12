@@ -51,6 +51,9 @@ pub struct Log {
     pub applies: usize,
 }
 
+/// The link a fake trade window's `search` press answers
+pub const FAKE_TRADE_URL: &str = "https://www.pathofexile.com/trade/search/Standard?q=fake";
+
 /// One scripted background step: what it affects, or the error it fails with.
 pub type Step = Result<Affected, String>;
 
@@ -203,6 +206,15 @@ impl Fake {
                     ..Affected::default()
                 })
             }
+            // a press answers with the popup, as the real engine's does; a trade window's
+            // search also with its link (R20)
+            Command::PressPopupButton { name } => Ok(Affected {
+                popup: true,
+                external_url: (name == "search").then(|| crate::engine::ExternalUrl {
+                    url: FAKE_TRADE_URL.into(),
+                }),
+                ..Affected::default()
+            }),
             // the real engine answers with the settings (R12)
             Command::SetOverrides { .. } => Ok(Affected {
                 settings: true,

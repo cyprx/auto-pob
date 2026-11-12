@@ -45,6 +45,8 @@ mod settings;
 mod skills;
 #[path = "gate/tattoos.rs"]
 mod tattoos;
+#[path = "gate/trade.rs"]
+mod trade;
 
 /// PoB loads files relative to the process working directory, so only one test may run it.
 static CWD: Mutex<()> = Mutex::new(());

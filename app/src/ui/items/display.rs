@@ -3,7 +3,7 @@
 use super::crafting::{self, CraftingState};
 use super::text_window::{self, Outcome, TextWindow};
 use crate::engine::views::{DisplayItemView, DropList};
-use crate::engine::{Command, SocketColour};
+use crate::engine::{BuySource, Command, PopupKind, SocketColour};
 use crate::ui::tree::Rects;
 use crate::widgets::{EditBox, EditBoxOptions, item_tooltip_ui_with, pob_text};
 use eframe::egui;
@@ -198,6 +198,15 @@ fn panel(
             // the item is going: an edit still being typed must not follow the cancel
             state.discard_pending();
             out.push(Command::CancelDisplayItem { if_id: None });
+        }
+        // PoB's trade search window for the item (R10); the app sends a box still being typed
+        // in before any window opens
+        let buy = ui.button("Buy similar");
+        state.rects.note(&buy, || "buy_similar".into());
+        if buy.clicked() {
+            out.push(Command::OpenPopup(PopupKind::BuySimilar {
+                source: BuySource::DisplayItem,
+            }));
         }
     });
 

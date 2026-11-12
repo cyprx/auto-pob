@@ -1,11 +1,11 @@
 //! The Items view: PoB's slot rows for both builds, each item with its tooltip on hover, PoB's
-//! difference label, and its Copy and Equip buttons (R8). In PoB's expanded mode each row shows
-//! both items' tooltips inline, asked for one at a time.
+//! difference label, and its Buy (R10), Copy and Equip buttons (R8). In PoB's expanded mode
+//! each row shows both items' tooltips inline, asked for one at a time.
 
 use super::{CompareOutput, CompareUi};
-use crate::engine::Command;
 use crate::engine::ItemTooltipQuery;
 use crate::engine::views::{CompareItemRow, CompareView, ItemTooltipView};
+use crate::engine::{BuySource, Command, PopupKind};
 use crate::widgets::{item_tooltip_ui, pob_text};
 use eframe::egui;
 use std::collections::{HashMap, HashSet};
@@ -225,6 +225,14 @@ fn show_row(
         }
         // a double click while the engine is behind would copy twice
         let busy = tab.busy;
+        // PoB's Buy, first of the row's buttons: the trade search for their item (R10)
+        let buy = ui.button("Buy");
+        tab.rects.note(&buy, || format!("buy:{}", row.slot));
+        if buy.clicked() {
+            out.commands.push(Command::OpenPopup(PopupKind::BuySimilar {
+                source: BuySource::CompareSlot(row.slot.clone()),
+            }));
+        }
         let copy = ui.add_enabled(!busy, egui::Button::new("Copy"));
         tab.rects.note(&copy, || format!("copy:{}", row.slot));
         if copy.clicked() {

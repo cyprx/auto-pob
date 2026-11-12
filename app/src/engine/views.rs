@@ -1774,6 +1774,13 @@ pub struct FinishedRequest {
     pub new_build: bool,
 }
 
+/// A trade search link PoB opened during the user's own press (R20). The UI opens it in the
+/// browser and copies it; the engine never does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalUrl {
+    pub url: String,
+}
+
 /// The Import/Export tab's build sharing: the sites Share offers, the last link it made, and
 /// PoB's import box (R16, R17).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

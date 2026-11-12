@@ -1133,6 +1133,66 @@ fn pinned_files() -> BTreeMap<PathBuf, (u64, std::time::SystemTime)> {
     out
 }
 
+/// The timeless LUT caches in the pinned PoB folder, by name: `pinned_files` leaves them out,
+/// and none may appear there (the searches run in a folder of their own)
+fn pinned_bins() -> Vec<String> {
+    let dir = pob_dir().join("Data/TimelessJewelData");
+    let mut bins: Vec<String> = fs::read_dir(&dir)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().is_some_and(|e| e == "bin"))
+                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    bins.sort();
+    bins
+}
+
+/// What the user folder holds: every folder (an empty one too) and every file with its bytes
+/// and modification time, so a write of the same bytes shows as well
+#[derive(Debug, Clone, PartialEq)]
+enum Entry {
+    Folder,
+    File(Vec<u8>, std::time::SystemTime),
+}
+
+fn quiet_snapshot(dir: &std::path::Path) -> BTreeMap<PathBuf, Entry> {
+    fn walk(dir: &std::path::Path, out: &mut BTreeMap<PathBuf, Entry>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for path in entries.filter_map(|e| e.ok().map(|e| e.path())) {
+            let meta = fs::symlink_metadata(&path).unwrap();
+            if meta.is_dir() {
+                out.insert(path.clone(), Entry::Folder);
+                walk(&path, out);
+            } else {
+                out.insert(
+                    path.clone(),
+                    Entry::File(fs::read(&path).unwrap(), meta.modified().unwrap()),
+                );
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    walk(dir, &mut out);
+    out
+}
+
+/// The paths whose entry differs between two snapshots
+fn changed_paths(
+    a: &BTreeMap<PathBuf, Entry>,
+    b: &BTreeMap<PathBuf, Entry>,
+) -> std::collections::BTreeSet<PathBuf> {
+    a.keys()
+        .chain(b.keys())
+        .filter(|k| a.get(*k) != b.get(*k))
+        .cloned()
+        .collect()
+}
+
 /// The test's PoB folder: its own files (not the links into the pinned one) with their bytes,
 /// and the LUT caches PoB wrote, by name
 fn farm_files(farm: &std::path::Path) -> (BTreeMap<PathBuf, Vec<u8>>, Vec<String>) {
@@ -1175,7 +1235,7 @@ struct Quiet {
     backend: auto_pob::engine::pob::PobBackend,
     user: PathBuf,
     pob: PathBuf,
-    files: BTreeMap<PathBuf, Vec<u8>>,
+    files: BTreeMap<PathBuf, Entry>,
 }
 
 impl Drop for Quiet {
@@ -1216,17 +1276,11 @@ impl Quiet {
         out
     }
 
-    /// The user folder against the last allowed write: no file added, removed or changed
+    /// The user folder against the last allowed write: no file or folder added, removed or
+    /// changed, and no file written again with the same bytes
     fn check(&self, what: &str) {
-        let now = super::snapshot_dir(&self.user);
-        if now != self.files {
-            let changed: std::collections::BTreeSet<&PathBuf> = now
-                .keys()
-                .chain(self.files.keys())
-                .filter(|k| now.get(*k) != self.files.get(*k))
-                .collect();
-            panic!("{what} wrote {changed:?}");
-        }
+        let changed = changed_paths(&quiet_snapshot(&self.user), &self.files);
+        assert!(changed.is_empty(), "{what} wrote {changed:?}");
     }
 
     /// A command that must write nothing; it may change the build in memory
@@ -1239,18 +1293,18 @@ impl Quiet {
         affected
     }
 
-    /// A command the user invoked to write a build file (SP2's saves, R16's list commands):
-    /// `Settings.xml` stays byte-identical (R34)
-    fn replay(&mut self, command: Command) {
+    /// A command the user invoked to write a build file (SP2's saves, R16's list commands): it
+    /// changes exactly `paths` (relative to the Builds folder), and `Settings.xml` stays as it
+    /// was (R34)
+    fn replay(&mut self, command: Command, paths: &[&str]) {
         let what = format!("{command:?}");
-        let before = fs::read(self.settings()).unwrap();
         self.apply(command)
             .unwrap_or_else(|e| panic!("{what}: {e:#}"));
-        assert!(
-            fs::read(self.settings()).unwrap() == before,
-            "{what} wrote Settings.xml"
-        );
-        self.files = super::snapshot_dir(&self.user);
+        let now = quiet_snapshot(&self.user);
+        let want: std::collections::BTreeSet<PathBuf> =
+            paths.iter().map(|p| self.builds().join(p)).collect();
+        assert_eq!(changed_paths(&now, &self.files), want, "{what}");
+        self.files = now;
     }
 
     /// One of R29's writers: `Settings.xml` is written, nothing else
@@ -1259,18 +1313,13 @@ impl Quiet {
         let affected = self
             .apply(command)
             .unwrap_or_else(|e| panic!("{what}: {e:#}"));
-        let now = super::snapshot_dir(&self.user);
+        let now = quiet_snapshot(&self.user);
         let settings = self.settings();
-        assert_ne!(
-            now.get(&settings),
-            self.files.get(&settings),
-            "{what} saved nothing"
+        assert_eq!(
+            changed_paths(&now, &self.files),
+            [settings].into(),
+            "{what}: Settings.xml, and only it"
         );
-        let mut others = now.clone();
-        let mut before = self.files.clone();
-        others.remove(&settings);
-        before.remove(&settings);
-        assert!(others == before, "{what} wrote more than Settings.xml");
         self.files = now;
         affected
     }
@@ -1365,6 +1414,7 @@ fn no_silent_writes_longtail() {
     let _guard = lock();
     let started = std::time::Instant::now();
     let pinned = pinned_files();
+    let pinned_bins_before = pinned_bins();
     // the engine has no path to auto-pob.toml: this guards against one appearing
     let config = auto_pob::settings::config_path();
     let config_before = fs::read(&config).ok();
@@ -1401,7 +1451,7 @@ fn no_silent_writes_longtail() {
         ),
     )
     .unwrap();
-    let seeded = super::snapshot_dir(&user);
+    let seeded = quiet_snapshot(&user);
     let backend = PobBackend::start_with(Game::Poe1, &pob, &user, canned(&canned_web()))
         .expect("starting PoB");
     let mut s = Quiet {
@@ -1941,33 +1991,58 @@ fn no_silent_writes_longtail() {
     s.backend.breakdown_view(&cell).unwrap();
     s.views("SP2-SP6 commands");
     // the user's own writes: build files change, Settings.xml doesn't
-    s.replay(Command::Save);
-    s.replay(Command::SaveAs {
-        folder: "".into(),
-        name: "quiet-copy".into(),
-        overwrite: false,
-    });
+    let open = s.backend.build_view().unwrap().path.expect("a saved build");
+    let open = open
+        .strip_prefix(s.builds())
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    s.replay(Command::Save, &[&open]);
+    s.replay(
+        Command::SaveAs {
+            folder: "".into(),
+            name: "quiet-copy".into(),
+            overwrite: false,
+        },
+        &["quiet-copy.xml"],
+    );
     s.quiet(Command::NewBuild);
     s.quiet(Command::ListBuilds { folder: "".into() });
-    s.replay(Command::NewFolder {
-        name: "quiet".into(),
-    });
-    s.replay(Command::CopyBuild {
-        path: s.builds().join("dot.xml"),
-        name: "dot2".into(),
-    });
-    s.replay(Command::RenameBuild {
-        path: s.builds().join("dot2.xml"),
-        name: "dot3".into(),
-    });
-    s.replay(Command::MoveBuild {
-        path: s.builds().join("dot3.xml"),
-        folder: "quiet/".into(),
-    });
-    s.replay(Command::DeleteBuild {
-        path: s.builds().join("quiet/dot3.xml"),
-        kind: DeleteKind::Build,
-    });
+    s.replay(
+        Command::NewFolder {
+            name: "quiet".into(),
+        },
+        &["quiet"],
+    );
+    s.replay(
+        Command::CopyBuild {
+            path: s.builds().join("dot.xml"),
+            name: "dot2".into(),
+        },
+        &["dot2.xml"],
+    );
+    s.replay(
+        Command::RenameBuild {
+            path: s.builds().join("dot2.xml"),
+            name: "dot3".into(),
+        },
+        &["dot2.xml", "dot3.xml"],
+    );
+    s.replay(
+        Command::MoveBuild {
+            path: s.builds().join("dot3.xml"),
+            folder: "quiet/".into(),
+        },
+        &["dot3.xml", "quiet/dot3.xml"],
+    );
+    s.replay(
+        Command::DeleteBuild {
+            path: s.builds().join("quiet/dot3.xml"),
+            kind: DeleteKind::Build,
+        },
+        &["quiet/dot3.xml"],
+    );
     s.check("the build list's own writes");
     // a share code imports as a new build in memory, with no file until it is saved
     s.quiet(Command::ImportShareCode { code: attack_code });
@@ -2005,6 +2080,14 @@ fn no_silent_writes_longtail() {
         s.writer(command);
     }
 
+    // ---- PoB's exit save (engine M-5): Settings.xml only ----
+    s.backend.shutdown();
+    assert_eq!(
+        changed_paths(&quiet_snapshot(&s.user), &s.files),
+        [s.settings()].into(),
+        "the exit save"
+    );
+
     // ---- nothing reached the network, the pinned folder or auto-pob.toml ----
     // Buy similar's league fetch, refused at each of its three opens (R10); nothing else
     assert_eq!(
@@ -2021,6 +2104,11 @@ fn no_silent_writes_longtail() {
     );
     assert!(!bins.is_empty(), "the search read no LUT");
     assert!(pinned_files() == pinned, "the pinned PoB folder changed");
+    assert_eq!(
+        pinned_bins(),
+        pinned_bins_before,
+        "a LUT cache was written into the pinned PoB folder"
+    );
     assert_eq!(
         fs::read(&config).ok(),
         config_before,

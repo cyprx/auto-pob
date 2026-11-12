@@ -159,6 +159,16 @@ pub struct ConfigUi {
 }
 
 impl ConfigUi {
+    /// Forgets the build's state, as for another build: PoB makes a new ConfigTab for each.
+    /// The custom-modifier boxes keep the heights their grips left them.
+    pub fn reset(&mut self) {
+        let heights = std::mem::take(&mut self.heights);
+        *self = Self {
+            heights,
+            ..Self::default()
+        };
+    }
+
     #[cfg(test)]
     fn note(&mut self, key: String, response: &egui::Response) {
         self.rects.insert(key, response.rect);
@@ -364,10 +374,10 @@ impl ConfigUi {
         let copy = ui.button("Copy");
         self.note("set_copy".into(), &copy);
         if copy.clicked() {
-            // the manager's selected row, else the current set
+            // the open manager's selected row, else the current set
             let id = self
                 .order_selected
-                .filter(|id| view.sets.iter().any(|s| s.id == *id))
+                .filter(|id| self.ordering && view.sets.iter().any(|s| s.id == *id))
                 .unwrap_or(view.active_set);
             let title = view
                 .sets
@@ -384,10 +394,8 @@ impl ConfigUi {
         self.note("set_order".into(), &order);
         if order.clicked() {
             self.ordering = !self.ordering;
-            // the list opens on the current set
-            if self.ordering {
-                self.order_selected = Some(view.active_set);
-            }
+            // the list opens on the current set, and its selection goes with it
+            self.order_selected = self.ordering.then_some(view.active_set);
         }
     }
 
@@ -501,6 +509,8 @@ impl ConfigUi {
             });
         if !open {
             self.ordering = false;
+            self.order_selected = None;
+            self.order_focused = false;
         }
     }
 
@@ -1193,6 +1203,24 @@ mod tests {
         key(&mut h, egui::Key::F2);
         h.frame(vec![]);
         assert!(matches!(h.ui.set_edit, Some(SetEdit::Rename { id: 1, .. })));
+    }
+
+    /// PoB's Copy belongs to the manager's list: its selected row counts only while the
+    /// window is open
+    #[test]
+    fn copy_takes_the_managers_row_only_while_it_is_open() {
+        let mut h = Harness::new();
+        h.click("set_order");
+        h.frame(vec![]);
+        h.click("order_row:1");
+        h.click("set_copy");
+        assert!(matches!(h.ui.set_edit, Some(SetEdit::Copy { id: 2, .. })));
+        h.ui.set_edit = None;
+        // closed, Copy copies the current set
+        h.click("set_order");
+        h.frame(vec![]);
+        h.click("set_copy");
+        assert!(matches!(h.ui.set_edit, Some(SetEdit::Copy { id: 1, .. })));
     }
 
     /// Delete in the manager asks about its selected set, which is what Delete then removes

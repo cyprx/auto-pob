@@ -135,6 +135,45 @@ fn ctrl_w_while_typing_closes_and_edits_nothing() {
 }
 
 #[test]
+fn esc_closes_the_tree_windows_top_first() {
+    // every PoB popup closes on Esc (PopupDialog.lua:72-77); a question over the manager is
+    // the top popup, and its selected box takes the first Esc (EditControl.lua:505)
+    let (mut app, ctx) = tree_app();
+    frame(&mut app, &ctx, ctrl(Key::M));
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![]);
+    assert!(app.tree.spec_manager_open());
+    click(&mut app, &ctx, "spec_manager_new");
+    frame(&mut app, &ctx, vec![]);
+    click(&mut app, &ctx, "spec_new_name");
+    frame(&mut app, &ctx, vec![Event::Text("Leveling".into())]);
+    assert!(ctx.text_edit_focused(), "no name box");
+    frame(&mut app, &ctx, plain(Key::Escape));
+    frame(&mut app, &ctx, vec![]);
+    assert!(app.tree.has_question(), "the first Esc closed the question");
+    frame(&mut app, &ctx, plain(Key::Escape));
+    frame(&mut app, &ctx, vec![]);
+    assert!(!app.tree.has_question(), "Esc left the question open");
+    assert!(app.tree.spec_manager_open(), "Esc closed the manager too");
+    frame(&mut app, &ctx, plain(Key::Escape));
+    frame(&mut app, &ctx, vec![]);
+    assert!(!app.tree.spec_manager_open(), "Esc left the manager open");
+}
+
+#[test]
+fn esc_cancels_the_unsaved_prompt() {
+    let (mut app, ctx) = notes_app();
+    app.notes.type_for_test("my notes", 0.0);
+    app.request(Pending::BackToList);
+    frame(&mut app, &ctx, vec![]);
+    assert_eq!(app.prompt, Some(Pending::BackToList));
+    frame(&mut app, &ctx, plain(Key::Escape));
+    frame(&mut app, &ctx, vec![]);
+    assert_eq!(app.prompt, None);
+    assert_eq!(app.screen, Screen::Build);
+}
+
+#[test]
 fn ctrl_f_focuses_the_tab_search() {
     let (mut app, ctx) = tree_app();
     assert!(!ctx.text_edit_focused());

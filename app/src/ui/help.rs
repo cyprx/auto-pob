@@ -180,7 +180,7 @@ impl HelpUi {
         let mut download = false;
         let default = ctx.global_style().visuals.text_color();
         // PoB's popup closes on Esc, never on an outside click (PopupDialog.lua:68-77)
-        let window = egui::Id::new("help_window");
+        let window = egui::Id::unique("help_window");
         let mut close = crate::widgets::escape::escape(ctx, window);
         egui::Modal::new(egui::Id::unique("help_window")).show(ctx, |ui| {
             ui.set_width(780.0);

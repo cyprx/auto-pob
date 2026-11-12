@@ -294,7 +294,9 @@ impl SkillsUi {
                 .groups
                 .get(group)
                 .map_or(String::new(), |g| g.label.clone());
-            let mut choice = None;
+            // Esc is PoB's Cancel (PopupDialog.lua:72-77)
+            let window = egui::Id::unique("skills_delete");
+            let mut choice = crate::widgets::escape::escape(ctx, window).then_some(false);
             egui::Window::new("Delete socket group")
                 .collapsible(false)
                 .resizable(false)
@@ -312,6 +314,7 @@ impl SkillsUi {
                         }
                     });
                 });
+            crate::widgets::escape::note(ctx, window);
             if choice == Some(true) {
                 self.delete_group(group, out);
             }
@@ -320,7 +323,9 @@ impl SkillsUi {
             }
         }
         if self.confirm_delete_all {
-            let mut choice = None;
+            // Esc is PoB's Cancel (PopupDialog.lua:72-77)
+            let window = egui::Id::unique("skills_delete_all");
+            let mut choice = crate::widgets::escape::escape(ctx, window).then_some(false);
             egui::Window::new("Delete all socket groups")
                 .collapsible(false)
                 .resizable(false)
@@ -338,6 +343,7 @@ impl SkillsUi {
                         }
                     });
                 });
+            crate::widgets::escape::note(ctx, window);
             if choice == Some(true) {
                 self.selected = 0;
                 out.commands.push(Command::DeleteAllSocketGroups);

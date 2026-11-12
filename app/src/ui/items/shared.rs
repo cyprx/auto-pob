@@ -187,7 +187,9 @@ impl ItemsUi {
             self.confirm_shared_delete = None;
             return;
         };
-        let mut choice = None;
+        // Esc is PoB's Cancel (PopupDialog.lua:72-77)
+        let window = egui::Id::unique("items_shared_delete");
+        let mut choice = crate::widgets::escape::escape(ctx, window).then_some(false);
         egui::Window::new("Delete Item")
             .collapsible(false)
             .resizable(false)
@@ -208,6 +210,7 @@ impl ItemsUi {
                     }
                 });
             });
+        crate::widgets::escape::note(ctx, window);
         if choice == Some(true) {
             out.commands.push(Command::DeleteSharedItem { index });
             self.shared_selected = None;

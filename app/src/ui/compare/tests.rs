@@ -943,3 +943,21 @@ fn buttons_wait_while_the_engine_is_behind() {
         ["CopyCompareConfig"]
     );
 }
+
+#[test]
+fn a_load_window_leaves_its_box_on_esc_first_then_closes() {
+    // PopupDialog.lua:68-77: the selected box takes the first Esc (EditControl.lua:505)
+    let mut h = Harness::new(Some(sample()));
+    h.click("load");
+    h.click("load:code");
+    assert!(h.ui.has_dialog());
+    h.frame(vec![]);
+    h.click("dialog_text");
+    h.type_text("eNrtWk1z");
+    h.key(Key::Escape);
+    h.frame(vec![]);
+    assert!(h.ui.has_dialog(), "the first Esc closed it");
+    h.key(Key::Escape);
+    h.frame(vec![]);
+    assert!(!h.ui.has_dialog(), "the second Esc left it open");
+}

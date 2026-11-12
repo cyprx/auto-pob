@@ -443,7 +443,12 @@ impl ConfigUi {
                 }
             }
         }
-        let mut open = true;
+        // Esc closes it, as PoB's popup (PopupDialog.lua:72-77), once a box is left; a
+        // question it asked takes Esc first
+        let window = egui::Id::unique("config_set_manager");
+        let mut open = self.set_edit.is_some()
+            || self.confirm_delete.is_some()
+            || !crate::widgets::escape::escape(ctx, window);
         egui::Window::new("Manage Config Sets")
             .open(&mut open)
             .collapsible(false)
@@ -507,6 +512,7 @@ impl ConfigUi {
                     commands.push(Command::MoveConfigSet { from, to });
                 }
             });
+        crate::widgets::escape::note(ctx, window);
         if !open {
             self.ordering = false;
             self.order_selected = None;
@@ -1221,6 +1227,18 @@ mod tests {
         h.frame(vec![]);
         h.click("set_copy");
         assert!(matches!(h.ui.set_edit, Some(SetEdit::Copy { id: 1, .. })));
+    }
+
+    /// Esc closes the manager, as PoB's popup (PopupDialog.lua:72-77)
+    #[test]
+    fn esc_closes_the_config_manager() {
+        let mut h = Harness::new();
+        h.click("set_order");
+        h.frame(vec![]);
+        assert!(h.ui.ordering);
+        key(&mut h, egui::Key::Escape);
+        h.frame(vec![]);
+        assert!(!h.ui.ordering, "Esc left it open");
     }
 
     /// Delete in the manager asks about its selected set, which is what Delete then removes

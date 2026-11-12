@@ -39,7 +39,7 @@ pub fn show(ctx: &egui::Context, window: &mut TextWindow, rects: &mut Rects) -> 
     let mut open = true;
     // PoB's popup closes on Escape (it has no escape control, PopupDialog.lua:72-77), but a
     // selected box takes the first Esc, and an outside click does nothing
-    let escape_id = egui::Id::new("items_text_window");
+    let escape_id = egui::Id::unique("items_text_window");
     if crate::widgets::escape::escape(ctx, escape_id) {
         open = false;
     }

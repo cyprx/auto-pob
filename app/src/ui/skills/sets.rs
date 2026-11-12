@@ -104,6 +104,17 @@ impl SkillsUi {
             return;
         }
         let mut open = true;
+        // Esc closes it as PoB's popup (PopupDialog.lua:72-77), once a box is left; a
+        // question it asked takes Esc first, as PoB's popup over it would
+        let window = egui::Id::unique("skills_sets");
+        if crate::widgets::escape::escape(ctx, window) {
+            if self.sets.naming.is_some() || self.sets.confirm_delete.is_some() {
+                self.sets.naming = None;
+                self.sets.confirm_delete = None;
+            } else {
+                open = false;
+            }
+        }
         egui::Window::new("Skill sets")
             .open(&mut open)
             .collapsible(false)
@@ -271,6 +282,7 @@ impl SkillsUi {
                     });
                 }
             });
+        crate::widgets::escape::note(ctx, window);
         if !open {
             self.sets.close();
         }

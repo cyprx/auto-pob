@@ -1837,7 +1837,9 @@ impl AutoPobApp {
         let Some(confirm) = &self.confirm else {
             return;
         };
-        let mut choice = None;
+        // Esc answers No, as PoB's confirm popup (PopupDialog.lua:72-77)
+        let window = egui::Id::unique("app_confirm");
+        let mut choice = crate::widgets::escape::escape(ctx, window).then_some(false);
         // modal: the screen behind can't be used while the question is open, so the answer
         // is about the state the question was asked in
         egui::Modal::new(self.confirm_id).show(ctx, |ui| {
@@ -1858,6 +1860,7 @@ impl AutoPobApp {
                 });
             }
         });
+        crate::widgets::escape::note(ctx, window);
         if let Some(yes) = choice {
             self.answer_confirm(yes);
         }
@@ -1900,7 +1903,10 @@ impl AutoPobApp {
         let Some(pending) = self.prompt.clone() else {
             return;
         };
-        let mut choice = None;
+        // Esc is the Cancel (PopupDialog.lua:72-77)
+        let window = egui::Id::unique("app_unsaved");
+        let mut choice =
+            crate::widgets::escape::escape(ctx, window).then_some(PromptChoice::Cancel);
         egui::Window::new("Unsaved changes")
             .collapsible(false)
             .resizable(false)
@@ -1923,6 +1929,7 @@ impl AutoPobApp {
                     }
                 });
             });
+        crate::widgets::escape::note(ctx, window);
         let Some(choice) = choice else {
             return;
         };
@@ -1955,7 +1962,9 @@ impl AutoPobApp {
         };
         let mut submit = false;
         let mut overwrite = false;
-        let mut cancel = false;
+        // Esc is the Cancel, once the name box is left (PopupDialog.lua:72-77)
+        let window = egui::Id::unique("app_save_as");
+        let mut cancel = !dialog.waiting && crate::widgets::escape::escape(ctx, window);
         let mut picker_out = None;
         let list = self.list.clone();
         egui::Window::new("Save as")
@@ -2004,6 +2013,7 @@ impl AutoPobApp {
                     }
                 });
             });
+        crate::widgets::escape::note(ctx, window);
         if let Some(out) = picker_out {
             self.on_picker(out);
         }
@@ -2052,7 +2062,9 @@ impl AutoPobApp {
             return;
         };
         let mut import = false;
-        let mut cancel = false;
+        // Esc is the Cancel, once the code box is left (PopupDialog.lua:72-77)
+        let window = egui::Id::unique("app_import_code");
+        let mut cancel = crate::widgets::escape::escape(ctx, window);
         egui::Window::new("Import code")
             .collapsible(false)
             .resizable(false)
@@ -2076,6 +2088,7 @@ impl AutoPobApp {
                     }
                 });
             });
+        crate::widgets::escape::note(ctx, window);
         if import {
             let code = std::mem::take(text);
             self.import = None;

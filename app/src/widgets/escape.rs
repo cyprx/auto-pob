@@ -52,7 +52,7 @@ mod tests {
 
     /// One frame of a window with a box; returns whether Esc closed it
     fn frame(ctx: &egui::Context, text: &mut String, focus: bool, events: Vec<Event>) -> bool {
-        let id = egui::Id::new("window");
+        let id = egui::Id::unique("window");
         let mut closed = false;
         ctx.run_ui(
             RawInput {

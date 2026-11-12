@@ -100,6 +100,11 @@ impl Toolbar {
     }
 
     #[cfg(test)]
+    pub(super) fn has_question(&self) -> bool {
+        self.dialog.is_some()
+    }
+
+    #[cfg(test)]
     pub(super) fn class_question(&self) -> bool {
         self.class_dialog.is_some()
     }
@@ -752,7 +757,9 @@ impl Toolbar {
             return;
         };
         let (id, name) = (*id, name.clone());
-        let mut close = false;
+        // Esc cancels it, as every PoB popup (PopupDialog.lua:72-77)
+        let window = egui::Id::unique("tree_class_dialog");
+        let mut close = crate::widgets::escape::escape(ctx, window);
         egui::Window::new("Change class")
             .collapsible(false)
             .resizable(false)
@@ -774,6 +781,7 @@ impl Toolbar {
                     close |= ui.button("Cancel").clicked();
                 });
             });
+        crate::widgets::escape::note(ctx, window);
         if close {
             self.class_dialog = None;
         }
@@ -823,7 +831,10 @@ impl Toolbar {
         }
         selected = selected.min(n - 1);
         let asking = self.dialog.is_some();
-        let mut open = true;
+        // Esc closes it, once its list has the key (PopupDialog.lua:72-77); a question it
+        // asked takes Esc first
+        let window = egui::Id::unique("tree_manager");
+        let mut open = asking || !crate::widgets::escape::escape(ctx, window);
         let mut done = false;
         let mut next = None;
         // the keys wait for a question or a text field (ControlHost.lua:39-42)
@@ -920,6 +931,7 @@ impl Toolbar {
                     done = button(ui, rects, "spec_manager_done", "Done", true);
                 });
             });
+        crate::widgets::escape::note(ctx, window);
         self.manager = (open && !done).then_some(selected);
         if self.manager.is_some()
             && let Some(dialog) = next
@@ -939,7 +951,9 @@ impl Toolbar {
         let Some(dialog) = &mut self.dialog else {
             return;
         };
-        let mut close = false;
+        // Esc cancels the question once its box is left (PopupDialog.lua:72-77)
+        let window = egui::Id::unique("tree_dialog");
+        let mut close = crate::widgets::escape::escape(ctx, window);
         let title = match dialog {
             Dialog::NewSpec(_) => "New tree",
             Dialog::RenameSpec { .. } => "Rename tree",
@@ -958,6 +972,7 @@ impl Toolbar {
             .show(ctx, |ui| match dialog {
                 Dialog::NewSpec(name) => {
                     let field = ui.add(egui::TextEdit::singleline(name).hint_text("Title"));
+                    rects.note(&field, || "spec_new_name".into());
                     let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     ui.horizontal(|ui| {
                         let valid = !name.trim().is_empty();
@@ -1118,6 +1133,7 @@ impl Toolbar {
                     });
                 }
             });
+        crate::widgets::escape::note(ctx, window);
         if close {
             self.dialog = None;
         }

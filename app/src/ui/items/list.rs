@@ -328,7 +328,9 @@ impl ItemsUi {
     /// The confirms for Delete and Delete all.
     pub(super) fn dialogs(&mut self, ctx: &egui::Context, out: &mut ItemsOutput) {
         if let Some((id, text)) = self.confirm_delete.clone() {
-            let mut choice = None;
+            // Esc is PoB's Cancel (PopupDialog.lua:72-77)
+            let window = egui::Id::unique("items_delete");
+            let mut choice = crate::widgets::escape::escape(ctx, window).then_some(false);
             egui::Window::new("Delete Item")
                 .collapsible(false)
                 .resizable(false)
@@ -346,6 +348,7 @@ impl ItemsUi {
                         }
                     });
                 });
+            crate::widgets::escape::note(ctx, window);
             if choice == Some(true) {
                 out.commands.push(Command::DeleteItem {
                     id,
@@ -357,7 +360,9 @@ impl ItemsUi {
             }
         }
         if self.confirm_delete_all {
-            let mut choice = None;
+            // Esc is PoB's Cancel (PopupDialog.lua:72-77)
+            let window = egui::Id::unique("items_delete_all");
+            let mut choice = crate::widgets::escape::escape(ctx, window).then_some(false);
             egui::Window::new("Delete All")
                 .collapsible(false)
                 .resizable(false)
@@ -375,6 +380,7 @@ impl ItemsUi {
                         }
                     });
                 });
+            crate::widgets::escape::note(ctx, window);
             if choice == Some(true) {
                 out.commands.push(Command::DeleteAllItems);
             }

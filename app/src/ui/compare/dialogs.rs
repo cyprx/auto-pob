@@ -28,6 +28,9 @@ impl CompareUi {
         let Some(mut dialog) = self.dialog.take() else {
             return;
         };
+        // Esc closes it once its box is left, as every PoB popup (PopupDialog.lua:72-77)
+        let window = egui::Id::unique("compare_dialog");
+        let escaped = crate::widgets::escape::escape(ctx, window);
         let mut keep = true;
         let title = match &dialog {
             Dialog::Saved { .. } => "Compare with a saved build".to_owned(),
@@ -74,6 +77,8 @@ impl CompareUi {
                     });
                 }
             });
+        crate::widgets::escape::note(ctx, window);
+        keep &= !escaped;
         // a window opened while this one drew (none can) would win
         if keep && self.dialog.is_none() {
             self.dialog = Some(dialog);

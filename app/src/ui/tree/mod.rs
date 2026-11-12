@@ -224,6 +224,12 @@ impl TreeTab {
         self.toolbar.has_dialog()
     }
 
+    /// One of the tree's questions (New, Rename, Delete, ...) is up
+    #[cfg(test)]
+    pub(crate) fn has_question(&self) -> bool {
+        self.toolbar.has_question()
+    }
+
     /// PoB's Class Change question is up
     #[cfg(test)]
     pub(crate) fn class_question(&self) -> bool {

@@ -581,6 +581,29 @@ fn last_item_set_cannot_be_deleted() {
 }
 
 #[test]
+fn esc_answers_the_sets_question_first_then_closes_the_window() {
+    // PoB's question is a popup over the manager's: Esc closes the top one
+    // (PopupDialog.lua:72-77)
+    let mut h = Harness::new(sample());
+    h.click("manage");
+    h.frame(vec![]);
+    h.click("sets_row_1");
+    h.click("sets_delete");
+    assert!(h.ui.rects.map.contains_key("sets_confirm_delete"));
+    h.ui.rects.map.clear();
+    let o = h.key(Key::Escape, Modifiers::NONE);
+    assert!(o.commands.is_empty(), "{:?}", o.commands);
+    h.frame(vec![]);
+    assert!(
+        h.ui.has_dialog(),
+        "Esc closed the window under the question"
+    );
+    assert!(!h.ui.rects.map.contains_key("sets_confirm_delete"));
+    h.key(Key::Escape, Modifiers::NONE);
+    assert!(!h.ui.has_dialog(), "Esc left the window open");
+}
+
+#[test]
 fn deleting_a_set_asks_first() {
     let mut h = Harness::new(sample());
     h.click("manage");

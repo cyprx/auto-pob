@@ -3100,4 +3100,30 @@ mod tests {
             .unwrap();
         let _ = std::fs::remove_dir_all(&user);
     }
+
+    /// A start on the build list leaves PoB's stat descriptions unloaded, as PoB does: the
+    /// Compare glue loads TradeHelpers (which requires them) on first use, not at start.
+    /// Changes the working directory, so run with `--ignored --test-threads=1`.
+    #[test]
+    #[ignore = "needs the pinned PoB install"]
+    fn list_start_skips_stat_descriptions() {
+        let user = std::env::temp_dir().join(format!("auto-pob-user-list-{}", std::process::id()));
+        // without a Settings.xml PoB starts on a new build (Main.lua:84); this one says the list
+        let settings = user.join("Path of Building");
+        std::fs::create_dir_all(&settings).unwrap();
+        std::fs::write(
+            settings.join("Settings.xml"),
+            "<PathOfBuilding>\n\t<Mode mode=\"LIST\"/>\n</PathOfBuilding>\n",
+        )
+        .unwrap();
+        let backend = PobBackend::start(Game::Poe1, &pinned_dir(), &user).unwrap();
+        assert!(backend.on_list);
+        let loaded: bool = backend
+            .lua
+            .load(r#"return package.loaded["Data.StatDescriptions.stat_descriptions"] ~= nil"#)
+            .eval()
+            .unwrap();
+        assert!(!loaded, "stat descriptions were loaded at start");
+        let _ = std::fs::remove_dir_all(&user);
+    }
 }

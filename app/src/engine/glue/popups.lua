@@ -901,6 +901,11 @@ function glue.popup_press(name)
 	local flag_before = pob.build.buildFlag and true or false
 	refuse_while_searching(name)
 	local options = session.kind == "Options"
+	-- Options' Save writes Settings.xml: it is refused, with the window and its edits left
+	-- open, when the write would lose another program's changes or never happen (I-1)
+	if options and name == "save" then
+		glue.settings_check_writable("save Options")
+	end
 	local trading = is_trade(session)
 	local timeless = is_timeless(session)
 	session.pressing = true

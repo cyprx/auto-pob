@@ -160,6 +160,30 @@ function glue.settings_changed_outside()
 	return file_bytes() ~= known_bytes
 end
 
+-- Refuses a write the user asked for (a shared item edit, the build sort, Options' Save) when
+-- it would lose something or never happen: another program (classic PoB) wrote the file since
+-- we last read or wrote it (I-2 ruling), or PoB couldn't read it at start, which makes its
+-- `SaveSettings` a silent no-op (Main.lua:702-704). `what` ends the notice.
+function glue.settings_check_writable(what)
+	if main().errorReadingSettings then
+		error("Settings.xml couldn't be read when auto-pob started; restart auto-pob to " .. what, 0)
+	end
+	if glue.settings_changed_outside() then
+		error("Settings.xml was changed by another program; restart auto-pob to " .. what, 0)
+	end
+end
+
+-- Raises why a `main:SaveSettings()` that returned `failed` didn't write: PoB shows the reason
+-- in a prompt and returns true (Main.lua:719-722, 776-779), and the reason belongs to the
+-- command that saved, not to the next frame
+function glue.settings_save_failed(failed)
+	if failed == true then
+		local prompt = pob.main.promptMsg
+		pob.main.promptMsg = nil
+		error(prompt and glue.error_reason(prompt) or "couldn't save Settings.xml", 0)
+	end
+end
+
 -- Records `shared` after PoB's `LoadSettings` and wraps `main:SaveSettings` (R12)
 function glue.settings_init()
 	known_bytes = file_bytes()
@@ -183,6 +207,9 @@ function glue.settings_init()
 				shared[spec.key] = read(spec)
 			end
 		end
+		-- a write over another program's (a token save, which can't be refused) leaves the
+		-- outside change on record, so the user's own writers stay refused until a restart
+		local outside = glue.settings_changed_outside()
 		local ok, result = pcall(function(...)
 			for key in pairs(overrides) do
 				write(BY_KEY[key], shared[key])
@@ -195,8 +222,9 @@ function glue.settings_init()
 		if not ok then
 			error(result, 0)
 		end
-		-- PoB returns true when it couldn't write (Main.lua:719-722, 776-779)
-		if result ~= true then
+		-- PoB returns true when it couldn't write (Main.lua:719-722, 776-779), and writes
+		-- nothing after a failed read (Main.lua:702-704)
+		if result ~= true and not outside and not self.errorReadingSettings then
 			known_bytes = file_bytes()
 		end
 		return result

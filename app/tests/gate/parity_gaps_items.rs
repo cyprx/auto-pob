@@ -1190,6 +1190,157 @@ fn shared_items_save_failures() {
     assert_eq!(s.open_popups(), 0);
 }
 
+/// The writers the user starts besides the shared edits (engine I-1): the build list's sort and
+/// Options' Save refuse a Settings.xml another program wrote, as a shared edit does, and a token
+/// save, which PoB makes unasked and which can't be refused, leaves that change on record so
+/// the user's writers stay refused. A sort PoB couldn't save is undone and reported.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn settings_writers_refuse_outside_changes() {
+    use super::longtail_harness::{LongtailSession, settings_folder};
+    use auto_pob::engine::{BuildSort, SharedItemSource};
+    use std::os::unix::fs::PermissionsExt;
+    let _guard = lock();
+    let mut s = LongtailSession::start("writers-outside", &|_| shared_seed(&list_mode()));
+    let path = s.settings_path();
+    let sort = |s: &mut LongtailSession| s.backend.build_list_view().unwrap().sort;
+    assert_eq!(sort(&mut s), BuildSort::Name);
+
+    // a sort PoB can't save is undone, with its reason
+    {
+        let _restore = Writable(path.clone());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let before = s.settings_bytes();
+        let error = s
+            .run(Command::SetBuildSort {
+                sort: BuildSort::Level,
+            })
+            .expect_err("an unwritable Settings.xml");
+        assert!(
+            error.to_string().contains("Settings.xml"),
+            "{error}: not the save's reason"
+        );
+        assert_eq!(sort(&mut s), BuildSort::Name, "the unsaved sort stayed");
+        assert!(s.eval::<bool>("return pob.main.main.buildSortMode == 'NAME'"));
+        assert_eq!(s.settings_bytes(), before);
+        let prompt: bool = s.eval("return pob.main.promptMsg ~= nil");
+        assert!(!prompt, "the save's prompt was left for a later command");
+    }
+
+    // classic PoB writes the file: the sort and Options' Save are refused, and its bytes stay
+    let theirs = String::from_utf8(s.settings_bytes()).unwrap().replace(
+        "showThousandsSeparators=\"false\"",
+        "showThousandsSeparators=\"true\"",
+    );
+    assert!(
+        theirs.contains("showThousandsSeparators=\"true\""),
+        "{theirs}"
+    );
+    std::fs::write(&path, &theirs).unwrap();
+    let error = s
+        .run(Command::SetBuildSort {
+            sort: BuildSort::Level,
+        })
+        .expect_err("an outside write");
+    assert_eq!(
+        error.to_string(),
+        "Settings.xml was changed by another program; restart auto-pob to change the build sort"
+    );
+    assert_eq!(
+        sort(&mut s),
+        BuildSort::Name,
+        "the refused sort was applied"
+    );
+    assert_eq!(
+        s.settings_bytes(),
+        theirs.as_bytes(),
+        "Settings.xml was written"
+    );
+
+    s.run(Command::OpenPopup(PopupKind::Options)).unwrap();
+    s.run(Command::SetPopupControl {
+        name: "showAnimations".into(),
+        value: PopupInput::Check(false),
+    })
+    .unwrap();
+    let edited = s.popup().expect("the Options window");
+    let error = s
+        .run(Command::PressPopupButton {
+            name: "save".into(),
+        })
+        .expect_err("an outside write");
+    assert_eq!(
+        error.to_string(),
+        "Settings.xml was changed by another program; restart auto-pob to save Options"
+    );
+    assert_eq!(
+        s.settings_bytes(),
+        theirs.as_bytes(),
+        "Settings.xml was written"
+    );
+    assert_eq!(
+        s.popup(),
+        Some(edited),
+        "the window and its edits stay for the user"
+    );
+    assert_eq!(s.open_popups(), 0);
+    s.run(Command::ClosePopup).unwrap();
+
+    // a token save PoB makes unasked still writes, but doesn't take the file for ours
+    s.eval::<()>("pob.main.main.lastToken = 'token'; pob.main.main:SaveSettings()");
+    assert_ne!(
+        s.settings_bytes(),
+        theirs.as_bytes(),
+        "the token save wrote"
+    );
+    let error = s
+        .run(Command::SetBuildSort {
+            sort: BuildSort::Level,
+        })
+        .expect_err("the outside write is still on record");
+    assert!(error.to_string().contains("another program"), "{error}");
+    drop(s);
+
+    // PoB couldn't read the file at start: its saves would be silent no-ops, so ours refuse
+    let mut s = LongtailSession::start_unreadable("writers-unread");
+    assert!(s.eval::<bool>("return pob.main.main.errorReadingSettings == true"));
+    let xml = fixtures_dir().join("attack.xml");
+    let dest = settings_folder(&s.user).join("Builds/attack.xml");
+    std::fs::copy(&xml, &dest).unwrap();
+    let unread = snapshot_dir(&s.user);
+    let refused = "Settings.xml couldn't be read when auto-pob started; restart auto-pob to ";
+    let error = s
+        .run(Command::SetBuildSort {
+            sort: BuildSort::Level,
+        })
+        .expect_err("an unread Settings.xml");
+    assert_eq!(error.to_string(), format!("{refused}change the build sort"));
+    s.run(Command::OpenPopup(PopupKind::Options)).unwrap();
+    let error = s
+        .run(Command::PressPopupButton {
+            name: "save".into(),
+        })
+        .expect_err("an unread Settings.xml");
+    assert_eq!(error.to_string(), format!("{refused}save Options"));
+    s.run(Command::ClosePopup).unwrap();
+    s.run(Command::OpenBuild { path: dest }).unwrap();
+    let id = s.backend.items_view().unwrap().items[0].id;
+    let view = s.backend.items_view().unwrap();
+    let error = s
+        .run(Command::AddSharedItem {
+            source: SharedItemSource::Item { id },
+            index: 0,
+        })
+        .expect_err("an unread Settings.xml");
+    assert_eq!(error.to_string(), format!("{refused}edit shared items"));
+    assert_eq!(
+        s.backend.items_view().unwrap(),
+        view,
+        "the refusal changed something"
+    );
+    assert_eq!(snapshot_dir(&s.user), unread, "something was written");
+}
+
 /// An Animate Guardian build: its minion uses an item set, which the sidebar's minion dropdown
 /// lists (Build.lua:1610-1620)
 fn guardian_xml() -> String {

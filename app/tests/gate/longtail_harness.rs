@@ -56,11 +56,27 @@ impl LongtailSession {
     /// Starts PoB with the text `settings` makes as the user folder's `Settings.xml`; it is
     /// given the user folder, to make the folders the settings name.
     pub(crate) fn start(test: &str, settings: &dyn Fn(&Path) -> String) -> LongtailSession {
+        Self::start_in(test, &|user| {
+            fs::write(settings_folder(user).join("Settings.xml"), settings(user)).unwrap();
+        })
+    }
+
+    /// Starts PoB over a `Settings.xml` it can open but not read (a folder of that name), as a
+    /// file a cloud drive hasn't downloaded reads: PoB sets `errorReadingSettings` and shows its
+    /// cloud error (Main.lua:486-490)
+    pub(crate) fn start_unreadable(test: &str) -> LongtailSession {
+        Self::start_in(test, &|user| {
+            fs::create_dir_all(settings_folder(user).join("Settings.xml")).unwrap();
+        })
+    }
+
+    /// Starts PoB after `seed` made the user folder's settings
+    fn start_in(test: &str, seed: &dyn Fn(&Path)) -> LongtailSession {
         let user = std::env::temp_dir().join(format!("auto-pob-lt-{test}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&user);
         let folder = settings_folder(&user);
         fs::create_dir_all(folder.join("Builds")).unwrap();
-        fs::write(folder.join("Settings.xml"), settings(&user)).unwrap();
+        seed(&user);
         let pob = pob_farm(test);
         // the canned web has no routes: a request nobody meant to make fails
         let net = canned(&canned_web());

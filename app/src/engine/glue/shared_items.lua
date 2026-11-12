@@ -107,13 +107,7 @@ local function save()
 	if not ok then
 		error(failed, 0)
 	end
-	-- PoB shows why in a prompt and returns true (Main.lua:719-722, 776-779): the reason
-	-- belongs to this command, not to the next frame
-	if failed == true then
-		local prompt = pob.main.promptMsg
-		pob.main.promptMsg = nil
-		error(prompt and glue.error_reason(prompt) or "couldn't save Settings.xml", 0)
-	end
+	glue.settings_save_failed(failed)
 end
 
 -- The shared lists, to be put back when an edit can't be saved: the controls hold the same
@@ -144,12 +138,11 @@ local function snapshot()
 end
 
 -- Runs `fn` with PoB's popups closed afterwards, then saves when the lists changed. A file
--- another program wrote since we last read or wrote it is not overwritten (I-2 ruling), and an
--- edit that can't be saved is undone: nothing reports a change the file doesn't hold.
+-- another program wrote since we last read or wrote it is not overwritten (I-2 ruling), one PoB
+-- couldn't read is not reported as saved, and an edit that can't be saved is undone: nothing
+-- reports a change the file doesn't hold.
 local function edit(fn)
-	if glue.settings_changed_outside() then
-		error("Settings.xml was changed by another program; restart auto-pob to edit shared items", 0)
-	end
+	glue.settings_check_writable("edit shared items")
 	local function shape()
 		local parts = {}
 		for _, item in ipairs(main().sharedItemList) do

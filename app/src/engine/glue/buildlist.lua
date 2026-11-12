@@ -318,9 +318,20 @@ function glue.set_build_sort(sortMode)
 	if main().buildSortMode == sortMode then
 		return
 	end
+	-- PoB saves it at exit (Main.lua:338-339); here the change is saved at once (R16), and a
+	-- file another program wrote is not overwritten (I-2 ruling)
+	glue.settings_check_writable("change the build sort")
+	local before = mode.controls.sort.selIndex
 	mode.controls.sort:SetSel(index)
-	-- PoB saves it at exit, which this app never runs (R16)
-	main():SaveSettings()
+	local ok, failed = pcall(main().SaveSettings, main())
+	if not ok or failed == true then
+		-- the sort the file doesn't hold is undone, with the list's order
+		mode.controls.sort:SetSel(before)
+		if not ok then
+			error(failed, 0)
+		end
+		glue.settings_save_failed(failed)
+	end
 end
 
 function glue.set_build_filter(text)

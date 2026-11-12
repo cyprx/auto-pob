@@ -1,9 +1,10 @@
-//! The Config view: the options the two builds set differently, PoB's search box over their
-//! labels, our own config set, and "Copy Config from Compare Build" (R8).
+//! The Config view: PoB's rows (per section, the options the two builds set differently, then
+//! the ones they set alike that PoB lists), PoB's search box over their labels, "Show All
+//! Configurations", our own config set, and "Copy Config from Compare Build" (R8).
 
 use super::{CompareOutput, CompareUi};
-use crate::engine::Command;
 use crate::engine::views::{CompareConfigRow, CompareView};
+use crate::engine::{Command, PopupInput};
 use crate::widgets::pob_text;
 use eframe::egui;
 
@@ -20,13 +21,33 @@ pub(super) fn show(
     out: &mut CompareOutput,
 ) {
     let default = ui.visuals().text_color();
+    let weak = ui.visuals().weak_text_color();
     ui.horizontal_wrapped(|ui| {
-        let copy = ui.button("Copy Config from Compare Build").on_hover_text(
-            "Sets this build's options to the comparison's (one Undo on the Config tab)",
-        );
+        let copy = ui
+            .add_enabled(
+                !tab.busy,
+                egui::Button::new("Copy Config from Compare Build"),
+            )
+            .on_hover_text(
+                "Sets this build's options to the comparison's (one Undo on the Config tab)",
+            );
         tab.rects.note(&copy, || "copy_config".into());
         if copy.clicked() {
             out.commands.push(Command::CopyCompareConfig);
+        }
+        // PoB's toggle, labelled by its state; the engine presses it to the state asked for
+        if let Some(toggle) = super::control(view, "configToggleBtn").filter(|c| c.shown) {
+            let r = ui.add_enabled(
+                toggle.enabled && !tab.busy,
+                egui::Button::new(super::plain(&toggle.label)),
+            );
+            tab.rects.note(&r, || "config_toggle".into());
+            if r.clicked() {
+                out.commands.push(Command::SetCompareControl {
+                    name: toggle.name.clone(),
+                    value: PopupInput::Check(!toggle.checked),
+                });
+            }
         }
         let search = ui.add(
             egui::TextEdit::singleline(&mut tab.config_filter)
@@ -68,11 +89,11 @@ pub(super) fn show(
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if view.config.is_empty() {
-                ui.label("The builds set every option alike.");
+                ui.label("No option to show.");
                 return;
             }
             if rows.is_empty() {
-                ui.label("No differing option matches the search.");
+                ui.label("No option matches the search.");
                 return;
             }
             egui::Grid::new("compare_config_grid")
@@ -84,7 +105,9 @@ pub(super) fn show(
                     ui.strong(super::plain(&view.headers[1]));
                     ui.end_row();
                     for row in rows {
-                        let r = ui.label(pob_text(&row.label, 14.0, default));
+                        // the options set alike follow the differing ones, dimmed
+                        let colour = if row.common { weak } else { default };
+                        let r = ui.label(pob_text(&row.label, 14.0, colour));
                         tab.rects.note(&r, || format!("config_row:{}", row.var));
                         ui.label(pob_text(&row.ours, 14.0, default));
                         ui.label(pob_text(&row.theirs, 14.0, default));

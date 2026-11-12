@@ -212,3 +212,47 @@ fn a_comparison_import_never_replaces_the_build_screen() {
     settle(&mut app, &ctx);
     assert_eq!(app.tab, BuildTab::Compare);
 }
+
+#[test]
+fn undo_on_the_compare_tree_view_is_the_tree_tabs() {
+    let (mut app, ctx) = open_build();
+    inject(&mut app, Some(sample()));
+    app.tab = BuildTab::Compare;
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![]);
+    // on the Summary there is nothing to undo
+    app.undo_redo(false);
+    click(&mut app, &ctx, "sub:tree");
+    let before = app.sent_full.len();
+    let ctrl_z = Event::Key {
+        key: Key::Z,
+        physical_key: Some(Key::Z),
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::COMMAND,
+    };
+    frame(&mut app, &ctx, vec![ctrl_z]);
+    app.undo_redo(true);
+    assert_eq!(&app.sent_full[before..], ["Undo(Tree)", "Redo(Tree)"]);
+}
+
+#[test]
+fn a_comparison_pob_refuses_shows_pobs_text() {
+    let (mut app, ctx) = open_build();
+    app.tab = BuildTab::Compare;
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![]);
+    click(&mut app, &ctx, "load");
+    click(&mut app, &ctx, "load:code");
+    click(&mut app, &ctx, "dialog_text");
+    frame(&mut app, &ctx, vec![Event::Text("bad".into())]);
+    click(&mut app, &ctx, "dialog_load");
+    settle(&mut app, &ctx);
+    assert!(
+        app.notices
+            .iter()
+            .any(|n| n == "Failed to import build for comparison."),
+        "{:?}",
+        app.notices
+    );
+}

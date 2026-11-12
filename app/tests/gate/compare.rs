@@ -30,7 +30,7 @@ const TOP_BAR: [&str; 11] = [
 ];
 
 /// R6's controls of one sub-view, with the view PoB shows them in
-const VIEW_CONTROLS: [(&str, &[&str]); 2] = [
+const VIEW_CONTROLS: [(&str, &[&str]); 3] = [
     (
         "ITEMS",
         &[
@@ -39,7 +39,15 @@ const VIEW_CONTROLS: [(&str, &[&str]); 2] = [
             "itemsExpandedCheck",
         ],
     ),
-    ("TREE", &["treeOverlayCheck"]),
+    (
+        "TREE",
+        &[
+            "treeOverlayCheck",
+            "leftVersionSelect",
+            "rightVersionSelect",
+        ],
+    ),
+    ("CONFIG", &["configToggleBtn"]),
 ];
 
 /// Upstream PoB with `compare_lib.lua`, the build `name` loaded
@@ -748,19 +756,24 @@ impl Upstream {
         }
         let raw: Raw = self.json("return itemsFrame()");
         // a name as drawn: its rarity colour, the name or "(empty)", maybe the warning
-        let name = |text: &str| -> (Option<String>, bool) {
+        let name = |text: &str| -> (Option<String>, String, bool) {
             let (text, warned) = match text.strip_suffix(&raw.warning) {
                 Some(rest) => (rest, true),
                 None => (text, false),
             };
-            let bare = if let Some(rest) = text.strip_prefix("^x") {
-                &rest[6..]
+            let colour = if text.starts_with("^x") {
+                8
             } else if text.starts_with('^') {
-                &text[2..]
+                2
             } else {
-                text
+                0
             };
-            ((bare != "(empty)").then(|| bare.to_string()), warned)
+            let (colour, bare) = text.split_at(colour);
+            (
+                (bare != "(empty)").then(|| bare.to_string()),
+                colour.to_string(),
+                warned,
+            )
         };
         let mut at = 0;
         raw.rows
@@ -776,8 +789,8 @@ impl Upstream {
                     .map(|d| d.text.as_str())
                     .collect();
                 assert_eq!(raw.drawn[at + 2].height, 14.0, "{label}: no marker");
-                let (_, ours_unallocated) = name(texts[0]);
-                let (theirs, theirs_unallocated) = name(texts[2]);
+                let (ours_name, ours_colour, ours_unallocated) = name(texts[0]);
+                let (theirs, theirs_colour, theirs_unallocated) = name(texts[2]);
                 let can_copy = texts.get(3) == Some(&"^7Buy") && texts.get(4) == Some(&"^7Copy");
                 let can_equip = can_copy && texts.get(5) == Some(&"^7Equip");
                 if can_copy && !can_equip {
@@ -795,6 +808,9 @@ impl Upstream {
                     diff_label: texts[1].to_string(),
                     ours_unallocated,
                     theirs_unallocated,
+                    ours_name,
+                    ours_colour,
+                    theirs_colour,
                 }
             })
             .collect()
@@ -915,6 +931,42 @@ fn our_config_input(s: &NetSession) -> BTreeMap<String, String> {
     .pairs::<String, String>()
     .map(|p| p.unwrap())
     .collect()
+}
+
+/// Both builds' trees (`specState` in compare_lib.lua)
+#[derive(Debug, PartialEq, serde::Deserialize)]
+struct SpecState {
+    specs: Vec<(String, String)>,
+    active: u32,
+    ours: Vec<u32>,
+    theirs_version: String,
+    theirs: Vec<u32>,
+}
+
+impl Upstream {
+    fn spec_state(&self) -> SpecState {
+        self.json("return specState()")
+    }
+}
+
+fn our_spec_state(s: &NetSession) -> SpecState {
+    let table: mlua::Value = s.eval(
+        r#"local build = pob.build
+        local entry = build.compareTab:GetActiveCompare()
+        local function nodes(spec)
+            local out = {}
+            for id in pairs(spec.allocNodes) do out[#out + 1] = id end
+            table.sort(out)
+            return out
+        end
+        local specs = {}
+        for i, spec in ipairs(build.treeTab.specList) do
+            specs[i] = { spec.title or "Default", spec.treeVersion }
+        end
+        return { specs = specs, active = build.treeTab.activeSpec, ours = nodes(build.spec),
+            theirs_version = entry.spec.treeVersion, theirs = nodes(entry.spec) }"#,
+    );
+    s.backend.lua.from_value(table).unwrap()
 }
 
 /// Rows of all three views agree with upstream's, and the items are drawn in that order
@@ -1157,7 +1209,179 @@ fn compare_views_and_copies_match_pob() {
     );
     let ours = same_views(&mut s, &up, "dot, attack");
     assert!(ours.skills.iter().any(|r| r.differ));
-    assert!(!ours.config.is_empty(), "the builds' config is the same");
+    assert!(
+        ours.config.iter().any(|r| !r.common),
+        "the builds' config is the same"
+    );
+    // PoB lists the options relevant to either build after the differing ones
+    assert!(ours.config.iter().any(|r| r.common), "{:?}", ours.config);
+    let differing = |rows: &[CompareConfigRow]| rows.iter().filter(|r| !r.common).count();
+    // ---- "Show All Configurations": the options set alike, relevant or not ----
+    let toggle = |s: &mut NetSession, on: bool| {
+        let affected = run(
+            s,
+            Command::SetCompareControl {
+                name: "configToggleBtn".into(),
+                value: PopupInput::Check(on),
+            },
+        )
+        .unwrap();
+        assert!(affected.compare && !affected.build, "{affected:?}");
+    };
+    let checked = |view: &CompareView| {
+        view.controls
+            .iter()
+            .find(|c| c.name == "configToggleBtn")
+            .unwrap()
+            .checked
+    };
+    let hidden = view(&mut s);
+    assert!(!checked(&hidden));
+    toggle(&mut s, true);
+    up.call::<()>("pressConfigToggle", ());
+    let all = same_views(&mut s, &up, "all configurations");
+    assert!(checked(&all));
+    assert!(all.config.len() > hidden.config.len(), "{:?}", all.config);
+    assert_eq!(differing(&all.config), differing(&hidden.config));
+    assert_eq!(selectors_of(&all, &["configToggleBtn"]), {
+        let names = up.lua.to_value(&["configToggleBtn"]).unwrap();
+        let f: mlua::Function = up.lua.globals().get("selectorsIn").unwrap();
+        up.lua
+            .from_value::<Vec<Selector>>(f.call(("CONFIG", names)).unwrap())
+            .unwrap()
+    });
+    // asking for the state it has presses nothing
+    toggle(&mut s, true);
+    assert_eq!(view(&mut s).config, all.config);
+    toggle(&mut s, false);
+    up.call::<()>("pressConfigToggle", ());
+    assert_eq!(
+        same_views(&mut s, &up, "ineligible hidden").config,
+        hidden.config
+    );
+
+    // ---- The Tree view's version dropdowns: PoB's "Convert to Version" popup ----
+    let start = view(&mut s);
+    let left = start
+        .controls
+        .iter()
+        .find(|c| c.name == "leftVersionSelect")
+        .unwrap()
+        .clone();
+    assert!(
+        left.shown && left.enabled && left.choices.len() > 1,
+        "{left:?}"
+    );
+    let older = left.selected.checked_sub(1).unwrap_or(1);
+    let convert =
+        |theirs: bool, index: usize, label: &str, keep_copy: bool| Command::ConvertCompareTree {
+            theirs,
+            index,
+            label: label.into(),
+            keep_copy,
+        };
+    // the spec's own version opens no popup; a stale list is refused
+    assert_eq!(
+        err(
+            &mut s,
+            convert(false, left.selected, &left.choices[left.selected], false)
+        ),
+        "PoB doesn't offer that here"
+    );
+    assert_eq!(
+        err(&mut s, convert(false, older, "Nowhere", false)),
+        "the list changed; pick again"
+    );
+    assert_eq!(
+        our_spec_state(&s),
+        up.spec_state(),
+        "before the conversions"
+    );
+    // this build's tree, keeping a copy
+    let affected = run(&mut s, convert(false, older, &left.choices[older], true)).unwrap();
+    assert!(
+        affected.tree && affected.compare && affected.build,
+        "{affected:?}"
+    );
+    up.call::<()>("pressVersion", ("leftVersionSelect", older + 1, true));
+    let mine = our_spec_state(&s);
+    assert_eq!(mine, up.spec_state(), "ours converted");
+    assert_eq!(mine.specs.len(), 2, "no copy kept: {:?}", mine.specs);
+    same_summary(&mut s, &up, "ours converted");
+    // the dropdown follows the active spec's version, as PoB's draw sets it
+    let other = mine
+        .specs
+        .iter()
+        .position(|(_, version)| *version != mine.specs[mine.active as usize - 1].1)
+        .expect("a spec of the old version");
+    run(&mut s, Command::SelectSpec { index: other }).unwrap();
+    up.eval::<()>(&format!(
+        "runCallback('OnFrame') build.treeTab.controls.specSelect:SetSel({}) runCallback('OnFrame')",
+        other + 1
+    ));
+    assert_eq!(our_spec_state(&s), up.spec_state(), "the old spec again");
+    let versions = |up: &Upstream| {
+        up.view_selectors()
+            .into_iter()
+            .filter(|c| c.name.ends_with("VersionSelect"))
+            .collect::<Vec<_>>()
+    };
+    let back = view(&mut s);
+    let ours_versions = selectors_of(&back, &["leftVersionSelect", "rightVersionSelect"]);
+    assert_eq!(
+        ours_versions,
+        versions(&up),
+        "versions after the spec switch"
+    );
+    assert_eq!(
+        ours_versions[0].selected, left.selected,
+        "{ours_versions:?}"
+    );
+    run(
+        &mut s,
+        Command::SelectSpec {
+            index: mine.active as usize - 1,
+        },
+    )
+    .unwrap();
+    up.eval::<()>(&format!(
+        "runCallback('OnFrame') build.treeTab.controls.specSelect:SetSel({}) runCallback('OnFrame')",
+        mine.active
+    ));
+    assert_eq!(our_spec_state(&s), mine, "the converted spec again");
+    // the comparison's tree, replaced
+    let right = view(&mut s)
+        .controls
+        .iter()
+        .find(|c| c.name == "rightVersionSelect")
+        .unwrap()
+        .clone();
+    assert!(right.shown && right.enabled, "{right:?}");
+    let their_older = right.selected.checked_sub(1).unwrap_or(1);
+    let affected = run(
+        &mut s,
+        convert(true, their_older, &right.choices[their_older], false),
+    )
+    .unwrap();
+    assert!(affected.compare && !affected.build, "{affected:?}");
+    up.call::<()>(
+        "pressVersion",
+        ("rightVersionSelect", their_older + 1, false),
+    );
+    let converted_state = our_spec_state(&s);
+    assert_eq!(converted_state, up.spec_state(), "theirs converted");
+    assert_ne!(converted_state.theirs_version, mine.theirs_version);
+    same_summary(&mut s, &up, "theirs converted");
+    let converted = view(&mut s);
+    assert_eq!(
+        selectors_of(&converted, &["leftVersionSelect", "rightVersionSelect"]),
+        up.view_selectors()
+            .into_iter()
+            .filter(|c| c.name.ends_with("VersionSelect"))
+            .collect::<Vec<_>>()
+    );
+    // the copy below starts from here
+    let ours = same_views(&mut s, &up, "after the conversions");
     let start = our_config_input(&s);
     assert_eq!(start, up.config_input());
     let affected = run(&mut s, Command::CopyCompareConfig).unwrap();
@@ -1170,8 +1394,17 @@ fn compare_views_and_copies_match_pob() {
     same_summary(&mut s, &up, "config copied");
     // PoB copies the options the comparison sets; one it leaves unset stays as it was here
     let after = same_views(&mut s, &up, "after the config copy");
-    assert!(after.config.len() < ours.config.len(), "{:?}", after.config);
-    assert!(after.config.iter().all(|r| r.var != "enemyIsBoss"));
+    assert!(
+        differing(&after.config) < differing(&ours.config),
+        "{:?}",
+        after.config
+    );
+    assert!(
+        after
+            .config
+            .iter()
+            .all(|r| r.var != "enemyIsBoss" || r.common)
+    );
     run(&mut s, Command::Undo(auto_pob::engine::Tab::Config)).unwrap();
     assert_eq!(our_config_input(&s), start);
     assert_eq!(
@@ -1179,6 +1412,7 @@ fn compare_views_and_copies_match_pob() {
         ours.config,
         "the config rows after undo"
     );
+
     assert_eq!(files(&s.user), before, "a file was written");
 
     // ---- (gear, ring3): PoB's "(match)" on other texts, "Missing slot", an unallocated

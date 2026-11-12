@@ -9,11 +9,12 @@ use super::commands::{
 use super::net::{Dispatch, NetHandle};
 use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Engine, Event};
 use super::views::{
-    AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, CompareView,
-    ConfigView, ControlTooltipView, DisplayItemView, GemRow, GemSearchView, GemTooltipView,
-    GroupTooltipView, ItemDbView, ItemText, ItemTooltip, ItemTooltipView, ItemsView, ModLineList,
-    NodePower, NodeTooltip, NotesView, PopupView, PowerReport, RequestsView, SettingsView,
-    ShareView, SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout, TreeState,
+    AccountView, BreakdownView, BuildBrowseView, BuildListView, BuildView, CalcsView, CellRef,
+    CompareView, ConfigView, ControlTooltipView, DisplayItemView, GemRow, GemSearchView,
+    GemTooltipView, GroupTooltipView, ItemDbView, ItemText, ItemTooltip, ItemTooltipView,
+    ItemsView, ModLineList, NodePower, NodeTooltip, NotesView, PopupView, PowerReport,
+    RequestsView, SettingsView, ShareView, SkillsView, SocketGroupText, StatsView, TooltipLine,
+    TreeLayout, TreeState,
 };
 use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
@@ -501,7 +502,7 @@ fn compare_changed() -> Affected {
 }
 
 /// Commands that leave or replace the build (R14).
-fn leaves_build(command: &Command) -> bool {
+pub(crate) fn leaves_build(command: &Command) -> bool {
     matches!(
         command,
         Command::ListBuilds { .. }
@@ -562,6 +563,10 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
     if let Command::SetCompareControl { name, .. } = command {
         return name == PRIMARY_ITEM_SET;
     }
+    // converting the comparison's tree leaves this build alone
+    if let Command::ConvertCompareTree { theirs, .. } = command {
+        return !theirs;
+    }
     !matches!(
         command,
         Command::OpenPopup(_)
@@ -570,6 +575,7 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::ClosePopup
             // the app's own values; they change neither the item nor the build (R12)
             | Command::SetOverrides { .. }
+            | Command::BrowseBuilds { .. }
             | Command::ControlTooltip(_)
             | Command::SetItemDb(_)
             | Command::CloseItemDb
@@ -1111,6 +1117,29 @@ impl PobBackend {
                 affected.compare = true;
                 Ok(affected)
             }
+            Command::ConvertCompareTree {
+                theirs,
+                index,
+                label,
+                keep_copy,
+            } => {
+                self.call::<_, ()>(
+                    "compare_convert_tree",
+                    (theirs, index + 1, label, keep_copy),
+                )?;
+                if theirs {
+                    Ok(compare_changed())
+                } else {
+                    let mut affected = self.spec_edited(true)?;
+                    affected.compare = true;
+                    Ok(affected)
+                }
+            }
+            // read in Rust when the view is asked for: nothing changes here
+            Command::BrowseBuilds { folder } => Ok(Affected {
+                browse: Some(folder),
+                ..Affected::default()
+            }),
             Command::SetCompareOverlay { on } => {
                 self.call::<_, ()>("compare_overlay", on)?;
                 Ok(Affected {
@@ -2154,6 +2183,12 @@ impl Backend for PobBackend {
         self.view("compare_view", ())
     }
 
+    fn browse_view(&mut self, folder: &str) -> Result<BuildBrowseView> {
+        // PoB's `main.buildPath`, read only: unlike `build_root` nothing is set up
+        let root: String = self.call("build_root", ())?;
+        buildpaths::browse(&root, folder)
+    }
+
     fn set_waker(&mut self, wake: Waker) {
         self.net.set_waker(wake);
     }
@@ -2381,6 +2416,15 @@ mod tests {
             Command::SelectCompare { index: 1 },
             Command::RemoveCompare { index: 0 },
             Command::SetCompareOverlay { on: true },
+            Command::BrowseBuilds {
+                folder: "a/".into(),
+            },
+            Command::ConvertCompareTree {
+                theirs: true,
+                index: 0,
+                label: "3.28".into(),
+                keep_copy: false,
+            },
             Command::SetCompareControl {
                 name: "cmpMainSkill".into(),
                 value: PopupInput::Choice {
@@ -2408,6 +2452,12 @@ mod tests {
                 and_use: true,
             },
             Command::CopyCompareConfig,
+            Command::ConvertCompareTree {
+                theirs: false,
+                index: 0,
+                label: "3.28".into(),
+                keep_copy: true,
+            },
             Command::SetCompareControl {
                 name: PRIMARY_ITEM_SET.into(),
                 value: PopupInput::Choice {

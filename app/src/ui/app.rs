@@ -839,16 +839,25 @@ impl AutoPobApp {
         });
     }
 
+    /// The engine history Undo and Redo work on here, if any.
+    fn undo_tab(&self) -> Option<Tab> {
+        match self.tab {
+            BuildTab::Config => Some(Tab::Config),
+            BuildTab::Tree => Some(Tab::Tree),
+            BuildTab::Skills => Some(Tab::Skills),
+            BuildTab::Items => Some(Tab::Items),
+            BuildTab::Calcs => Some(Tab::Calcs),
+            // the Compare tab's Tree view edits our tree, as the Tree tab does
+            BuildTab::Compare if self.compare.tree_shown() => Some(Tab::Tree),
+            // the notes editor keeps its own history; the Compare tab's copies use the
+            // target tab's undo (R8)
+            BuildTab::Notes | BuildTab::Compare | BuildTab::Import => None,
+        }
+    }
+
     fn undo_redo(&mut self, redo: bool) {
-        let tab = match self.tab {
-            BuildTab::Config => Tab::Config,
-            BuildTab::Tree => Tab::Tree,
-            BuildTab::Skills => Tab::Skills,
-            BuildTab::Items => Tab::Items,
-            BuildTab::Calcs => Tab::Calcs,
-            // the notes editor keeps its own history
-            // the Compare tab's copies use the target tab's undo (R8)
-            BuildTab::Notes | BuildTab::Compare | BuildTab::Import => return,
+        let Some(tab) = self.undo_tab() else {
+            return;
         };
         self.send(if redo {
             Command::Redo(tab)
@@ -1143,7 +1152,7 @@ impl AutoPobApp {
                 if i.consume_key(command, egui::Key::S) {
                     action = Some(BuildAction::Save);
                 }
-                if !typing && self.tab.has_undo() {
+                if !typing && self.undo_tab().is_some() {
                     // the Shift variant first: `consume_key` ignores extra Shift
                     if i.consume_key(shift, egui::Key::Z) || i.consume_key(command, egui::Key::Y) {
                         action = action.or(Some(BuildAction::Redo));
@@ -1155,14 +1164,15 @@ impl AutoPobApp {
         }
 
         egui::Panel::top("top_bar").show(ui, |ui| {
-            let history = match self.tab {
-                BuildTab::Tree => self.tree.history(),
-                BuildTab::Skills => self.skills.history(),
-                BuildTab::Items => self.items.history(),
-                BuildTab::Calcs => self.calcs.history(),
+            let history = match self.undo_tab() {
+                Some(Tab::Tree) => self.tree.history(),
+                Some(Tab::Skills) => self.skills.history(),
+                Some(Tab::Items) => self.items.history(),
+                Some(Tab::Calcs) => self.calcs.history(),
                 _ => (view.can_undo, view.can_redo),
             };
-            action = build::top_bar(ui, &view, self.tab, history).or(action);
+            let undo = self.undo_tab().is_some();
+            action = build::top_bar(ui, &view, undo, history).or(action);
         });
         let behind = self.behind();
         self.skills.set_modal(modal);
@@ -2109,6 +2119,16 @@ mod tests {
 
         fn compare_view(&mut self) -> anyhow::Result<Option<crate::engine::CompareView>> {
             Ok(None)
+        }
+
+        fn browse_view(
+            &mut self,
+            folder: &str,
+        ) -> anyhow::Result<crate::engine::views::BuildBrowseView> {
+            Ok(crate::engine::views::BuildBrowseView {
+                folder: folder.to_owned(),
+                entries: vec![],
+            })
         }
 
         fn settings_view(&mut self) -> anyhow::Result<crate::engine::SettingsView> {

@@ -30,7 +30,15 @@ local CONTROLS = {
 	{ "compareItemSetSelect2", "ITEMS" },
 	{ "treeOverlayCheck", "TREE" },
 	{ "itemsExpandedCheck", "ITEMS" },
+	-- the Tree view's version dropdowns, which open PoB's convert popup (`compare_convert_tree`)
+	{ "leftVersionSelect", "TREE" },
+	{ "rightVersionSelect", "TREE" },
+	-- "Show All Configurations": a button PoB labels by its state; set as a check
+	{ "configToggleBtn", "CONFIG" },
 }
+
+-- PoB's config option filter (CompareTab.lua:17)
+local config_visibility = LoadModule("Modules/ConfigVisibility")
 
 local MODE_OF = {}
 for _, entry in ipairs(CONTROLS) do
@@ -82,6 +90,17 @@ local function sync(tab)
 	end
 	if entry.itemsTab and entry.itemsTab.itemSetOrderList then
 		tab:PopulateSetDropdown(entry.itemsTab, "itemSetOrderList", "itemSets", "activeItemSetId", tab.controls.compareItemSetSelect2)
+	end
+	-- the Tree view's version dropdowns follow the specs (CompareTab.lua:1973-1989)
+	for _, side in ipairs({ { tab.primaryBuild.spec, "leftVersionSelect" }, { entry.spec, "rightVersionSelect" } }) do
+		if side[1] then
+			for i, ver in ipairs(tab.treeVersionDropdownList) do
+				if ver.value == side[1].treeVersion then
+					tab.controls[side[2]].selIndex = i
+					break
+				end
+			end
+		end
 	end
 	return entry
 end
@@ -204,6 +223,20 @@ function glue.compare_set(name, kind, value, label)
 	in_mode(tab, mode or nil, function()
 		local control = tab.controls[name]
 		require_usable(control)
+		if name == "configToggleBtn" then
+			-- pressed only when PoB's state differs from the one asked for
+			if kind ~= "check" then
+				error("no such control", 0)
+			end
+			if (tab.configToggle and true or false) ~= value then
+				glue.in_popups(control.onClick)
+			end
+			return
+		end
+		if name == "leftVersionSelect" or name == "rightVersionSelect" then
+			-- a pick opens PoB's convert popup: `compare_convert_tree` answers it
+			error(NOT_OFFERED, 0)
+		end
 		local _, control_kind = glue.describe_control(name, control)
 		glue.in_popups(function()
 			glue.set_control(control, control_kind, kind, value, label)
@@ -222,6 +255,38 @@ function glue.compare_copy_tree(andUse)
 		require_usable(button)
 		glue.in_popups(button.onClick)
 	end)
+end
+
+-- PoB's version dropdown on the Tree view, this build's (`leftVersionSelect`) or the
+-- comparison's (`rightVersionSelect`): the pick opens PoB's "Convert to Version" popup
+-- (TreeTab.lua:649-666), whose "Convert" or "Copy + Convert" is pressed. `index` is 1-based.
+function glue.compare_convert_tree(theirs, index, label, keepCopy)
+	local tab = compare_tab()
+	active_entry(tab)
+	local name = theirs and "rightVersionSelect" or "leftVersionSelect"
+	in_mode(tab, "TREE", function()
+		local control = tab.controls[name]
+		require_usable(control)
+		local entry = control.list[index]
+		if entry == nil then
+			error("no such choice", 0)
+		end
+		if entry.label ~= label then
+			error("the list changed; pick again", 0)
+		end
+		glue.in_popups(function()
+			local depth = #pob.main.main.popups
+			control:SetSel(index)
+			-- the spec's own version opens nothing
+			if #pob.main.main.popups ~= depth + 1 then
+				error(NOT_OFFERED, 0)
+			end
+			local popup = pob.main.main.popups[1]
+			local button = popup.controls[keepCopy and "convertCopy" or "convert"]
+			button.onClick()
+		end)
+	end)
+	sync(tab)
 end
 
 -- Entering (`on`) or leaving the Compare tab's Tree view: PoB's sub-tab buttons when they are
@@ -369,6 +434,10 @@ local function item_rows(tab, entry)
 			diff_label = trade_helpers.getSlotDiffLabel(row.pItem, row.cItem),
 			ours_unallocated = row.pWarn,
 			theirs_unallocated = row.cWarn,
+			-- the names are drawn in their rarity's colour (TradeHelpers.lua:470-471)
+			ours_name = row.pItem and row.pItem.name or nil,
+			ours_colour = trade_helpers.getRarityColor(row.pItem),
+			theirs_colour = trade_helpers.getRarityColor(row.cItem),
 		}
 	end
 	return out
@@ -426,9 +495,12 @@ local function skill_rows(tab, entry)
 	return out
 end
 
--- The config options the builds set differently (CompareTab.lua:2098-2104), with PoB's
--- `FormatConfigValue` texts, from the sections `RebuildConfigControls` keeps, rebuilt when the
--- Config view would rebuild them (CompareTab.lua:2025-2029)
+-- The Config view's rows as `LayoutConfigView` lists them (CompareTab.lua:2100-2136): per
+-- section, the options the builds set differently, then the ones they set alike that are
+-- relevant to either build (all of them, but PoB's excluded ones, with "Show All
+-- Configurations" on). Values are PoB's `FormatConfigValue` texts. The sections are the ones
+-- `RebuildConfigControls` keeps, rebuilt when the Config view would rebuild them
+-- (CompareTab.lua:2025-2029). PoB's search box is ours (the UI filters the labels).
 local function config_rows(tab, entry)
 	if tab.configCompareId ~= tab.activeCompareIndex or tab.configNeedsRebuild then
 		tab:RebuildConfigControls(entry)
@@ -438,19 +510,34 @@ local function config_rows(tab, entry)
 	local pInput = tab.primaryBuild.configTab.input or {}
 	local cInput = entry.configTab.input or {}
 	local out = {}
+	local function row(varData, common)
+		local var = varData.var
+		out[#out + 1] = {
+			var = var,
+			label = varData.label or var,
+			ours = tab:FormatConfigValue(varData, pInput[var]),
+			theirs = tab:FormatConfigValue(varData, cInput[var]),
+			common = common,
+		}
+	end
 	for _, section in ipairs(tab.configSections) do
+		local commons = {}
 		for _, info in ipairs(section.items) do
 			local varData = info.varData
 			local var = varData.var
 			local pVal, cVal = tab:NormalizeConfigVals(varData, pInput[var], cInput[var])
 			if tostring(pVal) ~= tostring(cVal) then
-				out[#out + 1] = {
-					var = var,
-					label = varData.label or var,
-					ours = tab:FormatConfigValue(varData, pInput[var]),
-					theirs = tab:FormatConfigValue(varData, cInput[var]),
-				}
+				row(varData, false)
+			else
+				local relevant = config_visibility.isRelevantForBuild(varData, tab.primaryBuild)
+					or config_visibility.isRelevantForBuild(varData, entry)
+				if relevant or (tab.configToggle and not config_visibility.isShowAllExcluded(varData)) then
+					commons[#commons + 1] = varData
+				end
 			end
+		end
+		for _, varData in ipairs(commons) do
+			row(varData, true)
 		end
 	end
 	return out
@@ -527,7 +614,11 @@ function glue.compare_view()
 	for _, spec in ipairs(CONTROLS) do
 		local name, mode = spec[1], spec[2]
 		in_mode(tab, mode, function()
-			controls[#controls + 1] = (glue.describe_control(name, tab.controls[name]))
+			local view = glue.describe_control(name, tab.controls[name])
+			if name == "configToggleBtn" then
+				view.checked = tab.configToggle and true or false
+			end
+			controls[#controls + 1] = view
 		end)
 	end
 	local rows, headers = summary(tab, entry)

@@ -12,12 +12,12 @@ use super::commands::{
 use super::pob::{CancelScope, cancels_requests, ends_item_db, ends_popup_session};
 use super::run::{Affected, Backend, BackgroundTask, DbSnapshot, Event};
 use super::views::{
-    AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, CompareView,
-    ConfigView, ControlTooltipView, DisplayItemView, DropList, GemSearchView, GemTooltipView,
-    GroupTooltipView, ItemDbView, ItemText, ItemTooltip, ItemTooltipView, ItemsView, NodePower,
-    NodeTooltip, NotesView, PendingRequest, Points, PopupView, PowerReport, RequestsView,
-    SettingsView, ShareView, SkillsView, SocketGroupText, StatsView, TooltipLine, TreeLayout,
-    TreeState,
+    AccountView, BreakdownView, BuildBrowseView, BuildListView, BuildView, CalcsView, CellRef,
+    CompareView, ConfigView, ControlTooltipView, DisplayItemView, DropList, GemSearchView,
+    GemTooltipView, GroupTooltipView, ItemDbView, ItemText, ItemTooltip, ItemTooltipView,
+    ItemsView, NodePower, NodeTooltip, NotesView, PendingRequest, Points, PopupView, PowerReport,
+    RequestsView, SettingsView, ShareView, SkillsView, SocketGroupText, StatsView, TooltipLine,
+    TreeLayout, TreeState,
 };
 
 #[derive(Default, Debug)]
@@ -257,6 +257,14 @@ impl Fake {
                 share_code: true,
                 ..Affected::default()
             }),
+            Command::BrowseBuilds { folder } => Ok(Affected {
+                browse: Some(folder),
+                ..Affected::default()
+            }),
+            // PoB's text for a code it can't load (CompareTab.lua:1256-1260)
+            Command::LoadCompare {
+                source: crate::engine::CompareSource::Code(code),
+            } if code == "bad" => anyhow::bail!("Failed to import build for comparison."),
             Command::LoadCompare { .. }
             | Command::SelectCompare { .. }
             | Command::RemoveCompare { .. }
@@ -666,6 +674,16 @@ impl Backend for Fake {
     fn compare_view(&mut self) -> anyhow::Result<Option<CompareView>> {
         self.log.lock().unwrap().compare_views += 1;
         Ok(None)
+    }
+
+    fn browse_view(&mut self, folder: &str) -> anyhow::Result<BuildBrowseView> {
+        Ok(BuildBrowseView {
+            folder: folder.to_owned(),
+            entries: vec![crate::engine::views::BuildBrowseEntry {
+                name: format!("{folder}fake"),
+                path: format!("/b/{folder}fake.xml").into(),
+            }],
+        })
     }
 
     fn share_code(&mut self) -> anyhow::Result<String> {

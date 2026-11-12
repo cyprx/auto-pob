@@ -230,6 +230,47 @@ pub(crate) fn folder_tree(root: &str) -> Vec<crate::engine::views::FolderNode> {
     out
 }
 
+/// The build files directly in `folder` below `root`, for the Compare tab's picker: regular
+/// `.xml` files only (a link is never followed, nor a folder spelled through one), in name
+/// order, each in PoB's spelling. Reads the disk and nothing else.
+pub(crate) fn browse(root: &str, folder: &str) -> Result<crate::engine::views::BuildBrowseView> {
+    use crate::engine::views::{BuildBrowseEntry, BuildBrowseView};
+    let rel = self::folder(root, folder, true, true)?;
+    let dir = real_root(&root_dir(root))?.join(&rel);
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(&dir).map_err(|_| anyhow!("no such folder"))? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Ok(meta) = fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        let Some(file) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Some(name) = file.strip_suffix(".xml") else {
+            continue;
+        };
+        if !meta.file_type().is_file() || name.is_empty() {
+            continue;
+        }
+        entries.push(BuildBrowseEntry {
+            name: name.to_owned(),
+            path: PathBuf::from(format!("{}{rel}{file}", root_dir(root))),
+        });
+    }
+    entries.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    Ok(BuildBrowseView {
+        folder: rel,
+        entries,
+    })
+}
+
 /// Refuses a move that PoB's `GetDestName` would turn into a replacement. It tries `name`,
 /// `name[2]`, `name[3]` and so on while `io.open` succeeds (a readable file or a folder) and
 /// takes the first it can't open; `os.rename` then replaces whatever is there, a link or an
@@ -508,6 +549,43 @@ mod tests {
         assert_eq!(refusal(entry(&root, &sub, true)), OUTSIDE);
         // rename and delete don't follow it
         assert!(entry(&root, &sub, false).is_ok());
+    }
+
+    #[test]
+    fn browsing_lists_build_files_only_and_never_leaves_the_folder() {
+        let tree = Tree::new("browse");
+        let root = tree.root();
+        fs::write(tree.0.join("Builds/B second.xml"), "b").unwrap();
+        fs::write(tree.0.join("Builds/notes.txt"), "n").unwrap();
+        fs::create_dir_all(tree.0.join("Builds/dir.xml")).unwrap();
+        symlink(
+            tree.0.join("outside/s.xml"),
+            tree.0.join("Builds/linked.xml"),
+        )
+        .unwrap();
+        symlink(tree.0.join("outside"), tree.0.join("Builds/escape")).unwrap();
+        let top = browse(&root, "").unwrap();
+        assert_eq!(top.folder, "");
+        let names: Vec<_> = top.entries.iter().map(|e| e.name.as_str()).collect();
+        // no folder, link or other file; name order ignoring case
+        assert_eq!(names, ["a", "B second"]);
+        assert_eq!(top.entries[0].path, PathBuf::from(format!("{root}a.xml")));
+        let sub = browse(&root, "sub").unwrap();
+        assert_eq!(sub.folder, "sub/");
+        assert_eq!(
+            sub.entries[0].path,
+            PathBuf::from(format!("{root}sub/b.xml"))
+        );
+        for bad in ["..", "../outside", "/tmp", "escape", "escape/"] {
+            let e = browse(&root, bad).expect_err(bad).to_string();
+            assert_eq!(e, OUTSIDE, "{bad}");
+        }
+        assert_eq!(
+            browse(&root, "none").expect_err("missing").to_string(),
+            "no such folder"
+        );
+        // nothing was written or moved
+        assert!(tree.0.join("Builds/a.xml").exists() && tree.0.join("outside/s.xml").exists());
     }
 
     #[test]

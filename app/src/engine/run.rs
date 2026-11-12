@@ -10,8 +10,8 @@ use crate::pob_files::DownloadProgress;
 
 use super::commands::{Command, ControlTooltipQuery, GemTooltipQuery, ItemTooltipQuery};
 use super::views::{
-    AccountView, BreakdownView, BuildListView, BuildView, CalcsView, CellRef, CompareView,
-    ConfigView, ControlTooltipView, DisplayItemView, GemSearchView, GemTooltipView,
+    AccountView, BreakdownView, BuildBrowseView, BuildListView, BuildView, CalcsView, CellRef,
+    CompareView, ConfigView, ControlTooltipView, DisplayItemView, GemSearchView, GemTooltipView,
     GroupTooltipView, ItemDbView, ItemText, ItemTooltipView, ItemsView, NodePower, NodeTooltip,
     NotesView, PopupView, PowerReport, RequestsView, SettingsView, ShareView, SkillsView,
     SocketGroupText, StatsView, TreeLayout, TreeState,
@@ -60,6 +60,8 @@ pub enum Snapshot {
     Account(Arc<AccountView>),
     /// The Compare tab; `None` with no comparison loaded (R4, R5)
     Compare(Option<Arc<CompareView>>),
+    /// The builds of one folder, answering `BrowseBuilds`; sent with or without a build
+    BuildBrowse(Arc<BuildBrowseView>),
 }
 
 /// Long-running work the engine does between commands.
@@ -168,6 +170,9 @@ pub struct Affected {
     /// The Compare tab changed: its comparisons, or this build's stats it is diffed against
     /// (R4); build-only
     pub compare: bool,
+    /// The builds of this folder were asked for (`BrowseBuilds`); the latest request wins.
+    /// List-safe
+    pub browse: Option<String>,
 }
 
 impl Affected {
@@ -205,6 +210,7 @@ impl Affected {
         share_code: false,
         account: true,
         compare: true,
+        browse: None,
     };
 
     /// Only views that need no build are asked for: the build list, the requests, the settings
@@ -220,6 +226,7 @@ impl Affected {
             requests: self.requests,
             settings: self.settings,
             popup: self.popup,
+            browse: self.browse.clone(),
             ..Affected::default()
         }
     }
@@ -266,6 +273,9 @@ impl Affected {
         self.share_code |= other.share_code;
         self.account |= other.account;
         self.compare |= other.compare;
+        if other.browse.is_some() {
+            self.browse = other.browse;
+        }
     }
 }
 
@@ -348,6 +358,8 @@ pub trait Backend {
     fn account_view(&mut self) -> anyhow::Result<AccountView>;
     /// The Compare tab; `None` with no comparison loaded (R4)
     fn compare_view(&mut self) -> anyhow::Result<Option<CompareView>>;
+    /// The builds in `folder` below the Builds folder; reads the disk only, changes nothing
+    fn browse_view(&mut self, folder: &str) -> anyhow::Result<BuildBrowseView>;
     /// Hands back the memory the last busy stretch left behind. The loop calls it once it has
     /// been idle for a while after work, never between a background job's steps.
     fn release_memory(&mut self);
@@ -411,6 +423,14 @@ pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send
     }
     if flags.settings {
         emit(seq, send, backend.settings_view(), Snapshot::Settings);
+    }
+    if let Some(folder) = &flags.browse {
+        emit(
+            seq,
+            send,
+            backend.browse_view(folder),
+            Snapshot::BuildBrowse,
+        );
     }
     if flags.stats {
         emit(seq, send, backend.stats_view(), Snapshot::Stats);
@@ -2279,6 +2299,43 @@ mod tests {
             assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
         }
         const { assert!(Affected::ALL_VIEWS.compare) };
+    }
+
+    #[test]
+    fn browsing_builds_answers_only_its_view_with_or_without_a_build() {
+        for loaded in [true, false] {
+            let (mut fake, log) = Fake::new();
+            fake.build_loaded = loaded;
+            let events = run_queued(
+                &mut fake,
+                vec![Command::BrowseBuilds {
+                    folder: "sub/".into(),
+                }],
+            );
+            let snapshots: Vec<&Snapshot> = events
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Snapshot { snapshot, .. } => Some(snapshot),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                matches!(snapshots.as_slice(), [Snapshot::BuildBrowse(view)] if view.folder == "sub/"),
+                "{events:?}"
+            );
+            assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
+            // no request cancelled, nothing else applied
+            assert_eq!(
+                log.lock().unwrap().requests,
+                ["apply BrowseBuilds { folder: \"sub/\" }"]
+            );
+        }
+        let browse = Command::BrowseBuilds { folder: "".into() };
+        assert_eq!(crate::engine::pob::cancels_requests(&browse), None);
+        assert!(!crate::engine::pob::ends_popup_session(&browse));
+        assert!(!crate::engine::pob::ends_item_db(&browse));
+        // unlike `ListBuilds`, which leaves the build
+        assert!(!crate::engine::pob::leaves_build(&browse));
     }
 
     #[test]

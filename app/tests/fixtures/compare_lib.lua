@@ -281,17 +281,55 @@ function configFrame()
 	local rows = {}
 	for _, section in ipairs(tab.configSectionLayout) do
 		for _, row in ipairs(section.rows) do
-			if row.isDiff then
-				local varData = row.ctrlInfo.varData
-				rows[#rows + 1] = {
-					var = varData.var, label = varData.label or varData.var,
-					ours = tab:FormatConfigValue(varData, pInput[varData.var]),
-					theirs = tab:FormatConfigValue(varData, cInput[varData.var]),
-				}
-			end
+			local varData = row.ctrlInfo.varData
+			rows[#rows + 1] = {
+				var = varData.var, label = varData.label or varData.var,
+				ours = tab:FormatConfigValue(varData, pInput[varData.var]),
+				theirs = tab:FormatConfigValue(varData, cInput[varData.var]),
+				common = not row.isDiff,
+			}
 		end
 	end
 	return rows
+end
+
+-- "Show All Configurations" / "Hide Ineligible Configurations"
+function pressConfigToggle()
+	press("CONFIG", function(controls)
+		assert(controls.configToggleBtn:IsShown(), "the toggle is not offered")
+		controls.configToggleBtn.onClick()
+	end)
+end
+
+-- A Tree view version dropdown (1-based), then the convert popup's button
+function pressVersion(name, index, keepCopy)
+	press("TREE", function(controls)
+		local control = controls[name]
+		assert(control:IsShown() and control:IsEnabled(), name .. " is not offered")
+		control:SetSel(index)
+		assert(#main.popups == 1, "no convert popup")
+		main.popups[1].controls[keepCopy and "convertCopy" or "convert"].onClick()
+	end)
+end
+
+-- Both builds' trees: this build's specs (title, version) and active one, the comparison's
+-- version, and each active spec's allocated nodes
+function specState()
+	local entry = build.compareTab:GetActiveCompare()
+	local function nodes(spec)
+		local out = {}
+		for id in pairs(spec.allocNodes) do out[#out + 1] = id end
+		table.sort(out)
+		return out
+	end
+	local specs = {}
+	for i, spec in ipairs(build.treeTab.specList) do
+		specs[i] = { spec.title or "Default", spec.treeVersion }
+	end
+	return {
+		specs = specs, active = build.treeTab.activeSpec, ours = nodes(build.spec),
+		theirs_version = entry.spec.treeVersion, theirs = nodes(entry.spec),
+	}
 end
 
 local function dumpTooltip(tt)

@@ -1,8 +1,9 @@
 use super::*;
 use crate::engine::views::{
-    BuildListEntry, BuildView, CompareConfigRow, CompareItemRow, CompareRow, CompareSkillRow,
-    ConfigSet, PopupControlKind,
+    BuildBrowseEntry, BuildBrowseView, BuildView, CompareConfigRow, CompareItemRow, CompareRow,
+    CompareSkillRow, ConfigSet, PopupControlKind,
 };
+use crate::theme;
 use eframe::egui::{Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 
 fn control(name: &str, kind: PopupControlKind) -> PopupControl {
@@ -35,12 +36,13 @@ fn dropdown(name: &str, choices: &[&str]) -> PopupControl {
     }
 }
 
-/// One Items row; every test builds its rows here, as the struct may grow
+/// One Items row; every test builds its rows here, as the struct may grow. `diff_label` is
+/// whatever the engine sends: the UI draws it as it is.
 pub(super) fn item_row(
     slot: &str,
     ours: Option<u32>,
     theirs: Option<&str>,
-    differ: bool,
+    diff_label: &str,
     can_copy: bool,
 ) -> CompareItemRow {
     CompareItemRow {
@@ -48,17 +50,12 @@ pub(super) fn item_row(
         label: slot.into(),
         ours,
         theirs: theirs.map(str::to_owned),
-        differ,
+        differ: true,
         can_copy,
         can_equip: can_copy,
-        diff_label: match (ours.is_some(), theirs.is_some()) {
-            (false, false) => "^8(both empty)",
-            (false, true) => "^xDD0022(missing)",
-            (true, false) => "^x80A080(extra)",
-            (true, true) if differ => "^xFF9922(different)",
-            (true, true) => "^x33FF77(match)",
-        }
-        .into(),
+        diff_label: diff_label.into(),
+        ours_colour: "^7".into(),
+        theirs_colour: "^7".into(),
         ..CompareItemRow::default()
     }
 }
@@ -92,6 +89,22 @@ pub(crate) fn sample() -> CompareView {
             dropdown("primaryItemSetSelect", &["Default", "Swap"]),
             dropdown("compareItemSetSelect2", &["Theirs"]),
             overlay,
+            PopupControl {
+                label: "Expanded mode".into(),
+                ..control(EXPANDED_CHECK, PopupControlKind::Check)
+            },
+            PopupControl {
+                selected: 2,
+                ..dropdown("leftVersionSelect", &["3.25", "3.26", "3.27"])
+            },
+            PopupControl {
+                selected: 1,
+                ..dropdown("rightVersionSelect", &["3.25", "3.26", "3.27"])
+            },
+            PopupControl {
+                label: "Show All Configurations".into(),
+                ..control("configToggleBtn", PopupControlKind::Button)
+            },
         ],
         summary: vec![
             row("Life", "^x33FF77+100", Some(true)),
@@ -99,17 +112,41 @@ pub(crate) fn sample() -> CompareView {
             row("Armour", "", None),
         ],
         items: vec![
-            item_row("Body Armour", Some(2), Some("Tabula Rasa"), true, true),
+            CompareItemRow {
+                theirs_colour: "^xAF6025".into(),
+                ..item_row(
+                    "Body Armour",
+                    Some(2),
+                    Some("Tabula Rasa"),
+                    "^xFF9922(different)",
+                    true,
+                )
+            },
             CompareItemRow {
                 can_equip: false,
-                ..item_row("Ring 3", None, Some("Ming's Heart"), true, true)
+                ..item_row(
+                    "Ring 3",
+                    None,
+                    Some("Ming's Heart"),
+                    "^xDD0022(missing)",
+                    true,
+                )
             },
-            item_row("Ring 1", Some(1), None, true, false),
-            item_row("Jewel 61834", None, None, false, false),
+            item_row("Ring 1", Some(1), None, "^x80A080(extra)", false),
+            item_row("Jewel 61834", None, None, "^8(both empty)", false),
             CompareItemRow {
                 diff_label: "^x33FF77(match)".into(),
                 ours_unallocated: true,
-                ..item_row("Jewel 100", Some(4), Some("Prismatic Jewel"), true, true)
+                ours_name: Some("Cobalt Jewel".into()),
+                ours_colour: "^x8888FF".into(),
+                theirs_colour: "^xFFFF77".into(),
+                ..item_row(
+                    "Jewel 100",
+                    Some(4),
+                    Some("Prismatic Jewel"),
+                    "^x33FF77(match)",
+                    true,
+                )
             },
         ],
         skills: vec![CompareSkillRow {
@@ -125,12 +162,21 @@ pub(crate) fn sample() -> CompareView {
                 label: "Do you use Power Charges?".into(),
                 ours: "Yes".into(),
                 theirs: "No".into(),
+                common: false,
             },
             CompareConfigRow {
                 var: "enemyIsBoss".into(),
                 label: "Is the enemy a Boss?".into(),
                 ours: "None".into(),
                 theirs: "Pinnacle".into(),
+                common: false,
+            },
+            CompareConfigRow {
+                var: "bandit".into(),
+                label: "Bandit quest:".into(),
+                ours: "Kill all".into(),
+                theirs: "Kill all".into(),
+                common: true,
             },
         ],
         switched: false,
@@ -139,6 +185,8 @@ pub(crate) fn sample() -> CompareView {
 
 struct Harness {
     ui: CompareUi,
+    /// What `show` is told: the engine is behind
+    busy: bool,
     ctx: egui::Context,
     time: f64,
     /// The galleys drawn in the latest frame
@@ -155,6 +203,7 @@ impl Harness {
         ui.on_snapshot(&Snapshot::Compare(view.map(Arc::new)));
         let mut h = Self {
             ui,
+            busy: false,
             ctx: egui::Context::default(),
             time: 1.0,
             texts: vec![],
@@ -176,7 +225,7 @@ impl Harness {
         let mut out = CompareOutput::default();
         let output = self.ctx.run_ui(input, |ui| {
             // egui may run a frame twice; each pass's output counts
-            let pass = self.ui.show(ui, false);
+            let pass = self.ui.show(ui, self.busy);
             out.commands.extend(pass.commands);
             out.queries.extend(pass.queries);
             out.tree |= pass.tree;
@@ -194,8 +243,13 @@ impl Harness {
     }
 
     fn click(&mut self, key: &str) -> CompareOutput {
+        // a window takes its new size a frame late: let it settle before aiming
+        let settle = self.frame(vec![]);
         let pos = self.ui.rect(key).center();
-        self.click_at(pos)
+        let mut out = self.click_at(pos);
+        out.commands.splice(0..0, settle.commands);
+        out.queries.splice(0..0, settle.queries);
+        out
     }
 
     fn click_at(&mut self, pos: Pos2) -> CompareOutput {
@@ -251,6 +305,13 @@ impl Harness {
         })
     }
 
+    /// The colour of the last section of the drawn text `text`
+    fn last_colour_of(&self, text: &str) -> Option<egui::Color32> {
+        self.texts.iter().find_map(|g| {
+            (g.job.text == text).then(|| g.job.sections.last().map(|s| s.format.color))?
+        })
+    }
+
     fn drew(&self, text: &str) -> bool {
         self.texts.iter().any(|g| g.job.text == text)
     }
@@ -292,33 +353,73 @@ fn compare_tab_hidden_until_a_build_is_open() {
 #[test]
 fn load_menu_sends_each_source() {
     let mut h = Harness::new(None);
-    let entry = |name: &str, is_folder| BuildListEntry {
-        name: name.into(),
-        is_folder,
-        path: format!("/b/{name}.xml").into(),
-        folder: String::new(),
-        class: None,
-        ascendancy: None,
-        level: None,
-        delete_prompt: String::new(),
+    let folder = |path: &str| crate::engine::views::FolderNode {
+        path: path.into(),
+        modified: 1,
+        empty: false,
     };
     h.ui.on_snapshot(&Snapshot::BuildList(Arc::new(BuildListView {
         folder: String::new(),
-        entries: vec![entry("sub", true), entry("dot", false)],
+        tree: vec![folder("sub/"), folder("sub/deep/"), folder("zz/")],
         ..BuildListView::default()
     })));
-    // a saved build: the list's builds, not its folders
+    let browse = |folder: &str, names: &[&str]| {
+        Snapshot::BuildBrowse(Arc::new(BuildBrowseView {
+            folder: folder.into(),
+            entries: names
+                .iter()
+                .map(|n| BuildBrowseEntry {
+                    name: n.to_string(),
+                    path: format!("/b/{folder}{n}.xml").into(),
+                })
+                .collect(),
+        }))
+    };
+    // a saved build: the engine lists the folder's builds, the build list its folders
     h.click("load");
     let out = h.click("load:saved");
     assert!(out.commands.is_empty());
+    assert_eq!(debug(&out.queries), ["BrowseBuilds { folder: \"\" }"]);
     assert!(h.ui.has_dialog());
-    assert!(!h.ui.has_rect("saved:0"), "a folder is listed");
+    h.ui.on_snapshot(&browse("", &["dot"]));
+    h.frame(vec![]);
+    assert!(h.ui.has_rect("folder:sub") && h.ui.has_rect("folder:zz"));
+    assert!(
+        !h.ui.has_rect("folder:deep") && !h.ui.has_rect("folder:sub/deep"),
+        "a folder of another level"
+    );
+    // into a folder, and back up
+    let out = h.click("folder:sub");
+    assert_eq!(debug(&out.queries), ["BrowseBuilds { folder: \"sub/\" }"]);
+    assert!(h.ui.has_rect("folder:deep") && !h.ui.has_rect("saved:0"));
+    // an answer for another folder is not shown here
+    h.ui.on_snapshot(&browse("", &["dot"]));
+    h.frame(vec![]);
+    assert!(!h.ui.has_rect("saved:0"));
+    h.ui.on_snapshot(&browse("sub/", &["alpha", "beta"]));
+    // the window takes its new size in the next frame
+    h.frame(vec![]);
+    h.frame(vec![]);
     let out = h.click("saved:1");
+    assert_eq!(
+        debug(&out.commands),
+        ["LoadCompare { source: File(\"/b/sub/beta.xml\") }"]
+    );
+    assert!(!h.ui.has_dialog());
+    h.click("load");
+    h.click("load:saved");
+    h.ui.on_snapshot(&browse("", &["dot"]));
+    h.frame(vec![]);
+    h.frame(vec![]);
+    h.click("folder:sub");
+    let out = h.click("crumb:0");
+    assert_eq!(debug(&out.queries), ["BrowseBuilds { folder: \"\" }"]);
+    h.frame(vec![]);
+    let out = h.click("saved:0");
     assert_eq!(
         debug(&out.commands),
         ["LoadCompare { source: File(\"/b/dot.xml\") }"]
     );
-    assert!(!h.ui.has_dialog());
 
     // a code
     h.click("load");
@@ -443,11 +544,31 @@ fn copy_item_sends_slot_and_use() {
         Arc::new(crate::ui::items::tests::sample()),
     ));
     h.click("sub:items");
-    // PoB's difference labels
-    for label in ["(different)", "(missing)", "(extra)", "(both empty)"] {
-        assert!(h.drew(label), "{label}");
+    // PoB's difference labels, in the colours the engine's codes give them
+    let colour = |code: &str| crate::widgets::pob_colour(code, egui::Color32::WHITE);
+    for (label, code) in [
+        ("(different)", "^xFF9922"),
+        ("(missing)", "^xDD0022"),
+        ("(extra)", "^x80A080"),
+        ("(match)", "^x33FF77"),
+    ] {
+        assert_eq!(h.colour_of(label), Some(colour(code)), "{label}");
     }
-    assert!(h.drew("Kaom's Heart") && h.drew("Tabula Rasa"));
+    assert!(h.drew("(both empty)"));
+    // names in their rarity's colour: ours from the Items view when the row has none
+    assert!(h.drew("Kaom's Heart"));
+    assert_eq!(h.colour_of("Tabula Rasa"), Some(colour("^xAF6025")));
+    assert_eq!(h.colour_of("Ming's Heart"), Some(colour("^7")));
+    assert_eq!(
+        h.colour_of("Cobalt Jewel  (tree missing allocated node)"),
+        Some(colour("^x8888FF"))
+    );
+    assert_eq!(
+        h.last_colour_of("Cobalt Jewel  (tree missing allocated node)"),
+        Some(colour("^xFF9922"))
+    );
+    assert_eq!(h.colour_of("Prismatic Jewel"), Some(colour("^xFFFF77")));
+    assert_eq!(h.colour_of("Missing slot"), Some(colour("^xBBBBBB")));
     let out = h.click("copy:Body Armour");
     assert_eq!(
         debug(&out.commands),
@@ -470,7 +591,6 @@ fn copy_item_sends_slot_and_use() {
     // PoB's marker comes from the engine, not from `differ`; an unallocated socket is flagged
     // as PoB does
     assert!(h.drew("(match)"));
-    assert!(h.drew("Prismatic Jewel  (tree missing allocated node)"));
     // hovers ask for ours and theirs, and show the answer
     let out = h.hover("theirs:Body Armour");
     let theirs = ItemTooltipQuery {
@@ -593,4 +713,207 @@ fn switched_is_taken_once() {
     assert!(!ui.take_switched());
     ui.on_snapshot(&Snapshot::Compare(Some(Arc::new(sample()))));
     assert!(!ui.take_switched());
+}
+
+fn tooltip_reply(query: &ItemTooltipQuery, text: &str) -> Snapshot {
+    Snapshot::ItemTooltip(Arc::new(ItemTooltipView {
+        query: query.clone(),
+        tooltip: crate::engine::views::ItemTooltip {
+            lines: vec![crate::engine::views::ItemTooltipLine::Line {
+                size: 14,
+                text: format!("^7{text}"),
+                font: None,
+                center: false,
+                background: None,
+                mod_line: None,
+            }],
+            ..Default::default()
+        },
+    }))
+}
+
+#[test]
+fn expanded_mode_shows_both_tooltips_inline_one_question_at_a_time() {
+    let mut h = Harness::new(Some(sample()));
+    h.click("sub:items");
+    // PoB's box, sent as a check
+    let out = h.click(EXPANDED_CHECK);
+    assert_eq!(
+        debug(&out.commands),
+        ["SetCompareControl { name: \"itemsExpandedCheck\", value: Check(true) }"]
+    );
+    let mut view = sample();
+    view.controls
+        .iter_mut()
+        .find(|c| c.name == EXPANDED_CHECK)
+        .unwrap()
+        .checked = true;
+    h.ui.on_snapshot(&Snapshot::Compare(Some(Arc::new(view.clone()))));
+    let q = |id, slot: &str, theirs| ItemTooltipQuery {
+        id,
+        slot: Some(slot.into()),
+        theirs,
+    };
+    // the rows' items in order, ours then theirs, each asked once the last is answered
+    let expected = [
+        q(2, "Body Armour", false),
+        q(0, "Body Armour", true),
+        q(0, "Ring 3", true),
+        q(1, "Ring 1", false),
+        q(4, "Jewel 100", false),
+        q(0, "Jewel 100", true),
+    ];
+    for (i, query) in expected.iter().enumerate() {
+        let out = h.frame(vec![]);
+        assert_eq!(
+            debug(&out.queries),
+            debug(&[Command::ItemTooltip(query.clone())]),
+            "question {i}"
+        );
+        // nothing more until it is answered
+        assert!(h.frame(vec![]).queries.is_empty(), "question {i} twice");
+        h.ui.on_snapshot(&tooltip_reply(query, &format!("card {i}")));
+    }
+    let out = h.frame(vec![]);
+    assert!(out.queries.is_empty(), "{:?}", out.queries);
+    h.frame(vec![]);
+    assert!(
+        h.drew("card 0") && h.drew("card 5"),
+        "the cards aren't inline"
+    );
+    assert!(h.ui.expanded.has_card(&expected[3]));
+    // the buttons stay
+    let out = h.click("equip:Body Armour");
+    assert_eq!(
+        debug(&out.commands),
+        ["CopyCompareItem { slot: \"Body Armour\", and_use: true }"]
+    );
+    // a new view asks again
+    let mut changed = view;
+    changed.items.pop();
+    h.ui.on_snapshot(&Snapshot::Compare(Some(Arc::new(changed))));
+    assert!(!h.ui.expanded.has_card(&expected[0]));
+    let out = h.frame(vec![]);
+    assert_eq!(
+        debug(&out.queries),
+        debug(&[Command::ItemTooltip(expected[0].clone())])
+    );
+    // an item the engine never answers for is given up on
+    h.time += 3.0;
+    let out = h.frame(vec![]);
+    assert_eq!(
+        debug(&out.queries),
+        debug(&[Command::ItemTooltip(expected[1].clone())])
+    );
+}
+
+#[test]
+fn version_pick_asks_as_pob_then_converts() {
+    let mut h = Harness::new(Some(sample()));
+    h.click("sub:tree");
+    assert!(h.drew("Our tree version:") && h.drew("Their tree version:"));
+    h.click("leftVersionSelect");
+    let out = h.click("leftVersionSelect_0");
+    assert!(out.commands.is_empty(), "converted before asking");
+    assert!(h.ui.has_dialog());
+    assert!(h.drew("Convert to Version 3.25"));
+    let out = h.click("convert_copy");
+    assert_eq!(
+        debug(&out.commands),
+        ["ConvertCompareTree { theirs: false, index: 0, label: \"3.25\", keep_copy: true }"]
+    );
+    assert!(!h.ui.has_dialog());
+    // theirs, replaced
+    h.click("rightVersionSelect");
+    h.click("rightVersionSelect_2");
+    let out = h.click("convert");
+    assert_eq!(
+        debug(&out.commands),
+        ["ConvertCompareTree { theirs: true, index: 2, label: \"3.27\", keep_copy: false }"]
+    );
+    // Cancel converts nothing
+    h.click("rightVersionSelect");
+    h.click("rightVersionSelect_0");
+    let out = h.click("convert_cancel");
+    assert!(out.commands.is_empty());
+    assert!(!h.ui.has_dialog());
+}
+
+#[test]
+fn config_toggle_sends_the_other_state_and_common_rows_are_dimmed() {
+    let mut h = Harness::new(Some(sample()));
+    h.click("sub:config");
+    assert!(h.drew("Show All Configurations"));
+    let out = h.click("config_toggle");
+    assert_eq!(
+        debug(&out.commands),
+        ["SetCompareControl { name: \"configToggleBtn\", value: Check(true) }"]
+    );
+    let default = h.colour_of("Is the enemy a Boss?").unwrap();
+    let common = h.colour_of("Bandit quest:").unwrap();
+    assert_ne!(default, common, "a common row isn't told apart");
+    let mut view = sample();
+    let toggle = view
+        .controls
+        .iter_mut()
+        .find(|c| c.name == "configToggleBtn")
+        .unwrap();
+    toggle.checked = true;
+    toggle.label = "Hide Ineligible Configurations".into();
+    h.ui.on_snapshot(&Snapshot::Compare(Some(Arc::new(view))));
+    h.frame(vec![]);
+    let out = h.click("config_toggle");
+    assert_eq!(
+        debug(&out.commands),
+        ["SetCompareControl { name: \"configToggleBtn\", value: Check(false) }"]
+    );
+}
+
+#[test]
+fn items_view_offers_our_tree_set() {
+    let mut h = Harness::new(Some(sample()));
+    let mut state = crate::engine::fake::empty_tree_state();
+    state.specs = vec![
+        crate::engine::views::SpecEntry {
+            title: "Default".into(),
+            version: "3_27".into(),
+            points: 10,
+        },
+        crate::engine::views::SpecEntry {
+            title: "Late".into(),
+            version: "3_27".into(),
+            points: 90,
+        },
+    ];
+    h.ui.on_snapshot(&Snapshot::Tree(Arc::new(state)));
+    h.click("sub:items");
+    h.click("our_spec");
+    let out = h.click("our_spec:1");
+    assert_eq!(debug(&out.commands), ["SelectSpec { index: 1 }"]);
+}
+
+#[test]
+fn buttons_wait_while_the_engine_is_behind() {
+    let mut h = Harness::new(Some(sample()));
+    h.busy = true;
+    let mut sent = Vec::new();
+    sent.extend(h.click("remove").commands);
+    h.click("sub:items");
+    for key in ["copy:Body Armour", "equip:Body Armour"] {
+        sent.extend(h.click(key).commands);
+    }
+    h.click("sub:tree");
+    for key in ["copy_tree", "copy_tree_use"] {
+        sent.extend(h.click(key).commands);
+    }
+    h.click("sub:config");
+    sent.extend(h.click("copy_config").commands);
+    assert!(sent.is_empty(), "{sent:?}");
+    // and work once it caught up
+    h.busy = false;
+    h.frame(vec![]);
+    assert_eq!(
+        debug(&h.click("copy_config").commands),
+        ["CopyCompareConfig"]
+    );
 }

@@ -4,6 +4,7 @@
 //! the target tab's (R8).
 
 mod config;
+mod dialogs;
 mod items;
 mod skills;
 mod summary;
@@ -12,10 +13,11 @@ pub(crate) mod tests;
 
 use super::popup::PopupWindow;
 use super::tree::Rects;
-use crate::engine::views::{BuildListView, CompareView, ConfigView, ItemTooltipView, PopupControl};
-use crate::engine::{Command, CompareSource, ImportMode, ItemTooltipQuery, PopupInput, Snapshot};
-use crate::theme;
-use crate::widgets::item_tooltip_ui;
+use crate::engine::views::{
+    BuildBrowseView, BuildListView, CompareView, ConfigView, ItemTooltipView, PopupControl,
+};
+use crate::engine::{Command, ItemTooltipQuery, PopupInput, Snapshot};
+use crate::widgets::{item_tooltip_ui, search_combo_ui};
 use eframe::egui;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -47,10 +49,18 @@ pub struct CompareOutput {
 /// The "Load build…" menu's windows (PoB's "Import Comparison Build" popup)
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Dialog {
-    /// A build from the build list
-    Saved,
+    /// A build file, from this folder below the Builds folder
+    Saved {
+        folder: String,
+    },
     Code(String),
     Link(String),
+    /// PoB's "Convert to Version" popup, opened by a pick in a Tree view version dropdown
+    Convert {
+        theirs: bool,
+        index: usize,
+        label: String,
+    },
 }
 
 /// PoB's top-bar selectors, with their captions (`compare*Label`, `cmpSkillLabel` and so on),
@@ -71,9 +81,17 @@ const SKILL_SELECTORS: [(&str, &str); 7] = [
     ("cmpMinionSkill", ""),
 ];
 /// The Items view's own selectors
-const ITEM_SELECTORS: [(&str, &str); 2] = [
+const ITEM_SELECTORS: [(&str, &str); 3] = [
     ("primaryItemSetSelect", "Item set:"),
     ("compareItemSetSelect2", "Their item set:"),
+    ("itemsExpandedCheck", ""),
+];
+/// PoB's "Expanded mode" box: the Items view shows both items' tooltips inline
+const EXPANDED_CHECK: &str = "itemsExpandedCheck";
+/// The Tree view's version dropdowns, ours and theirs
+const VERSION_SELECTS: [(&str, &str, bool); 2] = [
+    ("leftVersionSelect", "Our tree version:", false),
+    ("rightVersionSelect", "Their tree version:", true),
 ];
 /// PoB's "Overlay comparison" box: side by side is not drawn here (R7 fallback)
 const OVERLAY_CHECK: &str = "treeOverlayCheck";
@@ -150,7 +168,15 @@ pub struct CompareUi {
     config_filter: String,
     /// The open build has a file: PoB offers a link comparison only then
     has_file: bool,
+    /// The builds of the folder the saved-build picker shows
+    browse: Option<Arc<BuildBrowseView>>,
+    /// Our tree sets' titles and the active one (PoB's `primaryTreeSetSelect` on Items)
+    our_specs: Option<(Vec<String>, usize)>,
+    /// The engine hasn't caught up: buttons that act on a view wait for the next one
+    busy: bool,
     tip: ItemTip,
+    /// The Items view's inline tooltips in expanded mode
+    expanded: items::Expanded,
     /// PoB switched to its Compare tab and the app hasn't followed yet
     switched: bool,
     pub(crate) rects: Rects,
@@ -211,6 +237,7 @@ impl CompareUi {
                 if self.view.as_deref() != Some(&**view) {
                     // what the engine says about an item may have changed
                     self.tip = ItemTip::default();
+                    self.expanded.reset();
                 }
                 self.view = Some(view.clone());
             }
@@ -219,20 +246,30 @@ impl CompareUi {
                 self.view = None;
                 self.sub = SubTab::Summary;
                 self.tip = ItemTip::default();
+                self.expanded.reset();
                 self.renderer.reset();
                 self.config_filter.clear();
             }
             Snapshot::Build(view) => self.has_file = view.path.is_some(),
             Snapshot::BuildList(view) => self.list = Some(view.clone()),
             Snapshot::Config(view) => self.config = Some(view.clone()),
+            Snapshot::BuildBrowse(view) => self.browse = Some(view.clone()),
+            Snapshot::Tree(state) => {
+                let titles = state.specs.iter().map(|s| s.title.clone()).collect();
+                self.our_specs = Some((titles, state.active_spec));
+            }
             Snapshot::Items(view) => {
+                self.expanded.reset();
                 self.item_names = view
                     .items
                     .iter()
                     .map(|e| (e.id, format!("{}{}", e.colour, e.name)))
                     .collect();
             }
-            Snapshot::ItemTooltip(view) => self.tip.on_reply(view),
+            Snapshot::ItemTooltip(view) => {
+                self.tip.on_reply(view);
+                self.expanded.on_reply(view);
+            }
             _ => {}
         }
     }
@@ -241,6 +278,7 @@ impl CompareUi {
     pub fn show(&mut self, ui: &mut egui::Ui, busy: bool) -> CompareOutput {
         let mut out = CompareOutput::default();
         let now = ui.input(|i| i.time);
+        self.busy = busy;
         self.header(ui, &mut out);
         if let Some(view) = self.view.clone() {
             self.selectors(ui, &view, busy, &mut out);
@@ -272,6 +310,9 @@ impl CompareUi {
         if let Some(query) = self.tip.end_frame(ui.ctx(), now) {
             out.queries.push(query);
         }
+        if let Some(query) = self.expanded.next_query(now) {
+            out.queries.push(query);
+        }
         out
     }
 
@@ -282,6 +323,7 @@ impl CompareUi {
                 ui.label("Compare with:");
                 let active = view.entries.get(view.active).map_or("", String::as_str);
                 let rects = &mut self.rects;
+                let busy = self.busy;
                 let combo = egui::ComboBox::from_id_salt("compare_entries")
                     .selected_text(plain(active))
                     .width(250.0)
@@ -289,7 +331,7 @@ impl CompareUi {
                         for (i, entry) in view.entries.iter().enumerate() {
                             let item = ui.selectable_label(i == view.active, plain(entry));
                             rects.note(&item, || format!("entry:{i}"));
-                            if item.clicked() && i != view.active {
+                            if item.clicked() && i != view.active && !busy {
                                 out.commands.push(Command::SelectCompare { index: i });
                             }
                         }
@@ -303,7 +345,9 @@ impl CompareUi {
                 let saved = ui.button("From a saved build…");
                 rects.note(&saved, || "load:saved".into());
                 if saved.clicked() {
-                    open = Some(Dialog::Saved);
+                    open = Some(Dialog::Saved {
+                        folder: String::new(),
+                    });
                 }
                 let code = ui.button("From a code…");
                 rects.note(&code, || "load:code".into());
@@ -322,11 +366,16 @@ impl CompareUi {
             });
             self.rects.note(&menu.response, || "load".into());
             if let Some(dialog) = open {
+                if let Dialog::Saved { folder } = &dialog {
+                    out.queries.push(Command::BrowseBuilds {
+                        folder: folder.clone(),
+                    });
+                }
                 self.dialog = Some(dialog);
                 ui.close();
             }
             if let Some(view) = &self.view {
-                let remove = ui.button("Remove");
+                let remove = ui.add_enabled(!self.busy, egui::Button::new("Remove"));
                 self.rects.note(&remove, || "remove".into());
                 if remove.clicked() {
                     out.commands
@@ -360,7 +409,28 @@ impl CompareUi {
     ) {
         ui.horizontal_wrapped(|ui| {
             self.draw_controls(ui, view, &ITEM_SELECTORS, busy, out);
+            // PoB's `primaryTreeSetSelect`: our tree sets, as the Tree tab's own selector
+            if let Some((titles, active)) = self.our_specs.clone() {
+                ui.label("Tree set:");
+                let id = ui.make_persistent_id("compare_our_tree_set");
+                let rects = &mut self.rects;
+                let (r, picked) =
+                    search_combo_ui(ui, id, &titles, active, Some(200.0), &mut |i, e| {
+                        rects.note(e, || format!("our_spec:{i}"));
+                    });
+                self.rects.note(&r, || "our_spec".into());
+                if let Some(index) = picked
+                    && !busy
+                {
+                    out.commands.push(Command::SelectSpec { index });
+                }
+            }
         });
+    }
+
+    /// Expanded mode is on (PoB's `itemsExpandedCheck`)
+    fn expanded_on(view: &CompareView) -> bool {
+        control(view, EXPANDED_CHECK).is_some_and(|c| c.shown && c.checked)
     }
 
     /// Draws the named controls PoB shows, each after its caption.
@@ -414,11 +484,41 @@ impl CompareUi {
                 self.rects.note(&r, || "overlay".into());
                 ui.separator();
             }
+            for (name, caption, theirs) in VERSION_SELECTS {
+                let Some(select) = control(view, name).filter(|c| c.shown) else {
+                    continue;
+                };
+                ui.label(caption);
+                let id = ui.make_persistent_id(("compare_version", name));
+                let rects = &mut self.rects;
+                let mut picked = None;
+                ui.add_enabled_ui(select.enabled && !self.busy, |ui| {
+                    let (r, pick) = search_combo_ui(
+                        ui,
+                        id,
+                        &select.choices,
+                        select.selected,
+                        Some(100.0),
+                        &mut |i, e| rects.note(e, || format!("{name}_{i}")),
+                    );
+                    rects.note(&r, || name.to_owned());
+                    picked = pick;
+                });
+                // PoB asks first, in its "Convert to Version" popup
+                if let Some(index) = picked {
+                    self.dialog = Some(Dialog::Convert {
+                        theirs,
+                        index,
+                        label: select.choices[index].clone(),
+                    });
+                }
+                ui.separator();
+            }
             for (and_use, label, key) in [
                 (false, "Copy tree", "copy_tree"),
                 (true, "Copy and use", "copy_tree_use"),
             ] {
-                let r = ui.button(label).on_hover_text(
+                let r = ui.add_enabled(!self.busy, egui::Button::new(label)).on_hover_text(
                     "Adds the comparison's tree to this build's trees, as \"<title> (Compared)\"",
                 );
                 self.rects.note(&r, || key.into());
@@ -428,104 +528,6 @@ impl CompareUi {
             }
         });
         out.tree = true;
-    }
-
-    fn dialogs(&mut self, ctx: &egui::Context, out: &mut CompareOutput) {
-        let Some(dialog) = &mut self.dialog else {
-            return;
-        };
-        let mut close = false;
-        let mut load = None;
-        let rects = &mut self.rects;
-        let list = self.list.clone();
-        let title = match dialog {
-            Dialog::Saved => "Compare with a saved build",
-            Dialog::Code(_) => "Compare with a build code",
-            Dialog::Link(_) => "Compare with a build link",
-        };
-        egui::Window::new(title)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| match dialog {
-                Dialog::Saved => {
-                    let Some(list) = &list else {
-                        ui.spinner();
-                        return;
-                    };
-                    let folder = if list.folder.is_empty() {
-                        "Builds".to_owned()
-                    } else {
-                        format!("Builds/{}", list.folder)
-                    };
-                    ui.label(format!("Builds in {folder}:"));
-                    egui::ScrollArea::vertical()
-                        .max_height(320.0)
-                        .show(ui, |ui| {
-                            for (i, entry) in list
-                                .entries
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, e)| !e.is_folder)
-                            {
-                                let r = ui.selectable_label(false, &entry.name);
-                                rects.note(&r, || format!("saved:{i}"));
-                                if r.clicked() {
-                                    load = Some(Command::LoadCompare {
-                                        source: CompareSource::File(entry.path.clone()),
-                                    });
-                                }
-                            }
-                        });
-                    if ui.button("Cancel").clicked() {
-                        close = true;
-                    }
-                }
-                Dialog::Code(text) | Dialog::Link(text) => {
-                    let is_code = title.ends_with("code");
-                    if is_code {
-                        ui.label("Paste a PoB share code:");
-                        let r = ui.add(
-                            egui::TextEdit::multiline(text)
-                                .desired_rows(4)
-                                .desired_width(400.0),
-                        );
-                        rects.note(&r, || "dialog_text".into());
-                    } else {
-                        ui.label("Paste a build link:");
-                        let r = ui.add(egui::TextEdit::singleline(text).desired_width(400.0));
-                        rects.note(&r, || "dialog_text".into());
-                    }
-                    ui.horizontal(|ui| {
-                        let go =
-                            ui.add_enabled(!text.trim().is_empty(), theme::primary_button("Load"));
-                        rects.note(&go, || "dialog_load".into());
-                        if go.clicked() {
-                            let text = text.trim().to_owned();
-                            load = Some(if is_code {
-                                Command::LoadCompare {
-                                    source: CompareSource::Code(text),
-                                }
-                            } else {
-                                Command::ImportFromUrl {
-                                    url: text,
-                                    mode: ImportMode::Comparison,
-                                }
-                            });
-                        }
-                        if ui.button("Cancel").clicked() {
-                            close = true;
-                        }
-                    });
-                }
-            });
-        if let Some(command) = load {
-            out.commands.push(command);
-            close = true;
-        }
-        if close {
-            self.dialog = None;
-        }
     }
 
     #[cfg(test)]

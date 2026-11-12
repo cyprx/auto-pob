@@ -759,6 +759,22 @@ pub enum Command {
     SetCompareOverlay {
         on: bool,
     },
+    /// PoB's tree version dropdowns on the Compare tab's Tree view: `leftVersionSelect` (this
+    /// build's tree) or, with `theirs`, `rightVersionSelect` (the comparison's). The pick
+    /// opens PoB's "Convert to Version" popup, whose "Convert" (`keep_copy: false`) or
+    /// "Copy + Convert" is pressed. `index` is 0-based in the control's choices.
+    ConvertCompareTree {
+        theirs: bool,
+        index: usize,
+        label: String,
+        keep_copy: bool,
+    },
+    /// A query: the builds in `folder` (below the Builds folder, "" or "a/b/"), for the Compare
+    /// tab's saved-build picker. Read in Rust, no links followed, nothing outside the Builds
+    /// folder; unlike `ListBuilds` it doesn't leave the build or change anything.
+    BrowseBuilds {
+        folder: String,
+    },
 
     Undo(Tab),
     Redo(Tab),

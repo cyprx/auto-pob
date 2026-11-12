@@ -661,8 +661,7 @@ ported = "app/src/ui/compare/config.rs search box over the option labels"
 note = "part of compare.configSearchEdit"
 
 [controls."compare.configToggleBtn"]
-gap = "Task 9"
-note = "the engine sends only differing options, not the relevant/all common ones the toggle shows; listed in the Task 9 report"
+ported = "app/src/ui/compare/config.rs toggle button (SetCompareControl check); the engine lists PoB's common rows (CompareConfigRow.common), gate compare_views_and_copies_match_pob"
 
 [controls."compare.copyConfigBtn"]
 ported = "app/src/ui/compare/config.rs 'Copy Config from Compare Build' (CopyCompareConfig)"
@@ -681,8 +680,7 @@ ported = "app/src/ui/compare/mod.rs header 'Load build…' menu (LoadCompare, Im
 note = "entries, load and remove (R5)"
 
 [controls."compare.itemsExpandedCheck"]
-gap = "Task 9"
-note = "no engine view of PoB's expanded item cards (DrawItemExpanded); listed in the Task 9 report"
+ported = "app/src/ui/compare/items.rs expanded mode: both items' tooltips inline per row (PoB's DrawItemExpanded cards), the box sent as SetCompareControl"
 
 [controls."compare.itemsHScrollBar"]
 ported = "app/src/ui/compare/items.rs ScrollArea"
@@ -717,12 +715,11 @@ ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
 note = "part of compare.leftTreeSearch"
 
 [controls."compare.leftVersionSelect"]
-gap = "Task 9"
-note = "no engine command to convert our tree to an arbitrary version from the Compare tab; listed in the Task 9 report"
+ported = "app/src/ui/compare/mod.rs Tree view version dropdown, PoB's Convert to Version popup as a window; ConvertCompareTree presses it (glue compare_convert_tree), gate compare_views_and_copies_match_pob"
 
 [controls."compare.leftVersionSelect.scrollBar"]
-gap = "Task 9"
-note = "no engine command to convert our tree to an arbitrary version from the Compare tab; listed in the Task 9 report"
+ported = "app/src/ui/compare/mod.rs Tree view version dropdown, PoB's Convert to Version popup as a window; ConvertCompareTree presses it (glue compare_convert_tree), gate compare_views_and_copies_match_pob"
+note = "part of compare.leftVersionSelect"
 
 [controls."compare.overlayTreeSearch"]
 ported = "app/src/ui/tree/mod.rs show_compare search box (SetTreeSearch)"
@@ -753,16 +750,13 @@ ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareCont
 note = "part of compare.primaryItemSetSelect"
 
 [controls."compare.primaryTreeSetLabel"]
-ported = "app/src/ui/tree/mod.rs show_compare 'Tree set:' caption on the Compare Tree view"
-note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list"
+ported = "app/src/ui/compare/mod.rs Items view 'Tree set:' caption"
 
 [controls."compare.primaryTreeSetSelect"]
-ported = "app/src/ui/tree/mod.rs show_compare our tree set combo (SelectSpec) on the Compare Tree view; PoB repeats it on Items"
-note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; switches our own tree set from the Compare tab"
+ported = "app/src/ui/compare/mod.rs Items view our tree set combo (SelectSpec), as PoB's on Items; also on the Tree view (tree/mod.rs show_compare)"
 
 [controls."compare.primaryTreeSetSelect.scrollBar"]
-ported = "app/src/ui/tree/mod.rs show_compare our tree set combo (SelectSpec) on the Compare Tree view; PoB repeats it on Items"
-note = "part of compare.primaryTreeSetSelect"
+ported = "app/src/ui/compare/mod.rs Items view our tree set combo (SelectSpec), as PoB's on Items; also on the Tree view (tree/mod.rs show_compare)"
 
 [controls."compare.primCalcsMainSkill"]
 ruled_out = "R9"
@@ -893,12 +887,11 @@ ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
 note = "part of compare.rightTreeSearch"
 
 [controls."compare.rightVersionSelect"]
-gap = "Task 9"
-note = "no engine command to convert the comparison's tree version; listed in the Task 9 report"
+ported = "app/src/ui/compare/mod.rs Tree view version dropdown, PoB's Convert to Version popup as a window; ConvertCompareTree presses it (glue compare_convert_tree), gate compare_views_and_copies_match_pob"
 
 [controls."compare.rightVersionSelect.scrollBar"]
-gap = "Task 9"
-note = "no engine command to convert the comparison's tree version; listed in the Task 9 report"
+ported = "app/src/ui/compare/mod.rs Tree view version dropdown, PoB's Convert to Version popup as a window; ConvertCompareTree presses it (glue compare_convert_tree), gate compare_views_and_copies_match_pob"
+note = "part of compare.rightVersionSelect"
 
 [controls."compare.skillsHScrollBar"]
 ported = "app/src/ui/compare/skills.rs ScrollArea"
@@ -2961,15 +2954,15 @@ gap = "Task 10"
 note = "Buy similar popup (R10)"
 
 [popups."CompareTab:1566"]
-ported = "app/src/ui/app.rs on_error shows the engine's PoB failure text as a notice"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB failure text as a notice (app_compare_tests a_comparison_pob_refuses_shows_pobs_text; gate compare_summary_matches_pob checks the engine texts)"
 note = "comparison load failure text (R5)"
 
 [popups."CompareTab:1572"]
-ported = "app/src/ui/app.rs on_error shows the engine's PoB failure text as a notice"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB failure text as a notice (app_compare_tests a_comparison_pob_refuses_shows_pobs_text; gate compare_summary_matches_pob checks the engine texts)"
 note = "comparison load failure text (R5)"
 
 [popups."CompareTab:1578"]
-ported = "app/src/ui/app.rs on_error shows the engine's PoB failure text as a notice"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB failure text as a notice (app_compare_tests a_comparison_pob_refuses_shows_pobs_text; gate compare_summary_matches_pob checks the engine texts)"
 note = "comparison load failure text (R5)"
 
 [popups."Confirm Delete"]
@@ -3046,7 +3039,7 @@ ported = "app/src/ui/import.rs share error"
 note = "PoB's Error creating link text (SP6)"
 
 [popups."ImportTab:660"]
-ported = "app/src/ui/app.rs on_error shows the engine's PoB failure text as a notice"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB failure text as a notice (app_compare_tests a_comparison_pob_refuses_shows_pobs_text; gate network::build_sites_match_pob checks the engine text)"
 note = "Import as comparison failure text (R5)"
 
 [popups."ItemsTab:3340"]

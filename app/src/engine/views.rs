@@ -1079,6 +1079,9 @@ mod tests {
                     diff_label: "^xFFFF77(different)".into(),
                     ours_unallocated: false,
                     theirs_unallocated: true,
+                    ours_name: Some("Doom Loop".into()),
+                    ours_colour: "^xFFFF77".into(),
+                    theirs_colour: "^xAF6025".into(),
                 },
                 CompareItemRow {
                     slot: "Ring 2".into(),
@@ -1091,6 +1094,9 @@ mod tests {
                     diff_label: "^8(both empty)".into(),
                     ours_unallocated: false,
                     theirs_unallocated: false,
+                    ours_name: None,
+                    ours_colour: "^7".into(),
+                    theirs_colour: "^7".into(),
                 },
             ],
             skills: vec![CompareSkillRow {
@@ -1105,6 +1111,7 @@ mod tests {
                 label: "Do you use Power Charges?".into(),
                 ours: "^x33FF77Yes".into(),
                 theirs: "^8(not set)".into(),
+                common: true,
             }],
             switched: true,
         };
@@ -1129,15 +1136,17 @@ mod tests {
                 { slot = "Body Armour", label = "Body Armour", ours = 3, theirs = "Kaom's Heart",
                   differ = true, can_copy = true, can_equip = true,
                   diff_label = "^xFFFF77(different)", ours_unallocated = false,
-                  theirs_unallocated = true },
+                  theirs_unallocated = true, ours_name = "Doom Loop", ours_colour = "^xFFFF77",
+                  theirs_colour = "^xAF6025" },
                 { slot = "Ring 2", label = "Ring 2", differ = false, can_copy = false,
                   can_equip = false, diff_label = "^8(both empty)", ours_unallocated = false,
-                  theirs_unallocated = false },
+                  theirs_unallocated = false, ours_colour = "^7", theirs_colour = "^7" },
               },
               skills = { { label = "^7Boneshatter", ours = { "^x08F2FFBoneshatter^7 20/0" },
                 theirs = {}, differ = true } },
               config = { { var = "usePowerCharges", label = "Do you use Power Charges?",
-                ours = "^x33FF77Yes", theirs = "^8(not set)" } }, switched = true }"#,
+                ours = "^x33FF77Yes", theirs = "^8(not set)", common = true } },
+              switched = true }"#,
         );
         assert_eq!(from_lua, view);
     }
@@ -1471,6 +1480,14 @@ pub struct CompareItemRow {
     /// The same for the comparison's jewel
     #[serde(default)]
     pub theirs_unallocated: bool,
+    /// This build's item name, as PoB draws it in the row
+    #[serde(default)]
+    pub ours_name: Option<String>,
+    /// PoB's rarity colour code for each side's name (`getRarityColor`; "^7" for none)
+    #[serde(default)]
+    pub ours_colour: String,
+    #[serde(default)]
+    pub theirs_colour: String,
 }
 
 /// One pair of socket groups of the Compare tab's Skills view, matched as PoB's view matches
@@ -1496,6 +1513,25 @@ pub struct CompareConfigRow {
     pub label: String,
     pub ours: String,
     pub theirs: String,
+    /// The builds set it alike: PoB lists it after its section's differing options when it
+    /// is relevant to either build, or with "Show All Configurations" on
+    #[serde(default)]
+    pub common: bool,
+}
+
+/// The builds in one folder of the Builds folder (`BrowseBuilds`), by name
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BuildBrowseView {
+    /// Below the Builds folder, with a closing slash ("" for the Builds folder itself)
+    pub folder: String,
+    /// The build files, `name` without ".xml"
+    pub entries: Vec<BuildBrowseEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BuildBrowseEntry {
+    pub name: String,
+    pub path: PathBuf,
 }
 
 /// The open popup, whatever it is: PoB's controls as data (R5).

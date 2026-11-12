@@ -42,11 +42,12 @@ impl BuildTab {
     }
 }
 
-/// `history`: whether the tab's undo and redo have anything to do.
+/// `undo`: the tab has an engine history here; `history`: whether its undo and redo have
+/// anything to do.
 pub fn top_bar(
     ui: &mut egui::Ui,
     view: &BuildView,
-    tab: BuildTab,
+    undo: bool,
     history: (bool, bool),
 ) -> Option<BuildAction> {
     let mut action = None;
@@ -65,7 +66,6 @@ pub fn top_bar(
             action = Some(BuildAction::SaveAs);
         }
         ui.separator();
-        let undo = tab.has_undo();
         if ui
             .add_enabled(undo && history.0, egui::Button::new("Undo"))
             .clicked()

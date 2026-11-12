@@ -314,6 +314,10 @@ impl Fake {
                 tree: true,
                 ..Affected::default()
             }),
+            Command::Help => Ok(Affected {
+                help: true,
+                ..Affected::default()
+            }),
             _ => Ok(Affected::default()),
         }
     }
@@ -741,6 +745,16 @@ impl Backend for Fake {
         if let Some(on_release) = &mut self.on_release {
             on_release(releases);
         }
+    }
+
+    fn help_view(&mut self) -> anyhow::Result<crate::engine::HelpView> {
+        Ok(crate::engine::HelpView {
+            sections: vec![crate::engine::HelpSection {
+                title: "Help File Introduction".into(),
+                lines: vec!["^7This file contains a list of shortcuts".into()],
+            }],
+            header: vec![],
+        })
     }
 }
 

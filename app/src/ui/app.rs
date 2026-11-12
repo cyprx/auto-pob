@@ -1907,6 +1907,10 @@ mod tests {
                         ..Affected::default()
                     })
                 }
+                Command::Help => Ok(Affected {
+                    help: true,
+                    ..Affected::default()
+                }),
                 _ => Ok(Affected::default()),
             }
         }
@@ -2210,6 +2214,35 @@ mod tests {
         }
         fn requests_view(&mut self) -> anyhow::Result<crate::engine::RequestsView> {
             Ok(crate::engine::RequestsView::default())
+        }
+        fn help_view(&mut self) -> anyhow::Result<crate::engine::HelpView> {
+            Ok(fake_help())
+        }
+    }
+
+    /// PoB's help.txt section titles, with a line each
+    fn fake_help() -> crate::engine::HelpView {
+        let titles = [
+            "Help File Introduction",
+            "Contents",
+            "FAQ",
+            "Hotkeys",
+            "Other Notable Things",
+            "Timeless Jewels",
+            "Loadouts",
+            "Party Tab",
+            "Skills Tab",
+            "Items Tab",
+        ];
+        crate::engine::HelpView {
+            sections: titles
+                .iter()
+                .map(|t| crate::engine::HelpSection {
+                    title: (*t).into(),
+                    lines: vec![format!("^7About {t}"), "^7Ctrl+1\t^7Tree tab".into()],
+                })
+                .collect(),
+            header: vec!["^7Path of Building Community Fork v2.67.2".into()],
         }
     }
 

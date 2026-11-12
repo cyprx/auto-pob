@@ -9,6 +9,7 @@ use std::time::Duration;
 use crate::pob_files::DownloadProgress;
 
 use super::commands::{Command, ControlTooltipQuery, GemTooltipQuery, ItemTooltipQuery};
+use super::views::HelpView;
 use super::views::{
     AccountView, BreakdownView, BuildBrowseView, BuildListView, BuildView, CalcsView, CellRef,
     CompareView, ConfigView, ControlTooltipView, DisplayItemView, ExternalUrl, GemSearchView,
@@ -65,6 +66,8 @@ pub enum Snapshot {
     /// A trade link a popup press made (R20), tagged with that press's own seq: the UI opens
     /// and copies it for its own click only
     ExternalUrl(Arc<ExternalUrl>),
+    /// PoB's help, answering `Help`; sent with or without a build
+    Help(Arc<HelpView>),
 }
 
 /// Long-running work the engine does between commands.
@@ -181,6 +184,8 @@ pub struct Affected {
     /// The trade link this command's press made (R20). The loop sends it at once, with the
     /// command's own seq, so it is never a view of the batch
     pub external_url: Option<ExternalUrl>,
+    /// PoB's help was asked for (`Help`); list-safe
+    pub help: bool,
 }
 
 impl Affected {
@@ -220,6 +225,7 @@ impl Affected {
         compare: true,
         browse: None,
         external_url: None,
+        help: false,
     };
 
     /// Only views that need no build are asked for: the build list, the requests, the settings
@@ -236,6 +242,7 @@ impl Affected {
             settings: self.settings,
             popup: self.popup,
             browse: self.browse.clone(),
+            help: self.help,
             ..Affected::default()
         }
     }
@@ -288,6 +295,7 @@ impl Affected {
         if other.external_url.is_some() {
             self.external_url = other.external_url;
         }
+        self.help |= other.help;
     }
 }
 
@@ -382,6 +390,8 @@ pub trait Backend {
     /// Gives the backend a way to wake the loop from other threads (R9). Called once, after
     /// `start`.
     fn set_waker(&mut self, _wake: Waker) {}
+    /// PoB's help as its About window lists it; needs no build, changes nothing
+    fn help_view(&mut self) -> anyhow::Result<HelpView>;
 }
 
 /// Sends the snapshots `flags` asks for, as the loop does after a command or a background
@@ -443,6 +453,9 @@ pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send
             backend.browse_view(folder),
             Snapshot::BuildBrowse,
         );
+    }
+    if flags.help {
+        emit(seq, send, backend.help_view(), Snapshot::Help);
     }
     if flags.stats {
         emit(seq, send, backend.stats_view(), Snapshot::Stats);
@@ -2399,6 +2412,32 @@ mod tests {
         assert!(!crate::engine::pob::ends_item_db(&browse));
         // unlike `ListBuilds`, which leaves the build
         assert!(!crate::engine::pob::leaves_build(&browse));
+    }
+
+    #[test]
+    fn help_answers_only_its_view_with_or_without_a_build() {
+        for loaded in [true, false] {
+            let (mut fake, log) = Fake::new();
+            fake.build_loaded = loaded;
+            let events = run_queued(&mut fake, vec![Command::Help]);
+            let snapshots: Vec<&Snapshot> = events
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Snapshot { snapshot, .. } => Some(snapshot),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                matches!(snapshots.as_slice(), [Snapshot::Help(view)] if view.sections.len() == 1),
+                "{events:?}"
+            );
+            assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
+            assert_eq!(log.lock().unwrap().requests, ["apply Help"]);
+        }
+        assert_eq!(crate::engine::pob::cancels_requests(&Command::Help), None);
+        assert!(!crate::engine::pob::ends_popup_session(&Command::Help));
+        assert!(!crate::engine::pob::ends_item_db(&Command::Help));
+        assert!(!crate::engine::pob::leaves_build(&Command::Help));
     }
 
     #[test]

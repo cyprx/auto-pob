@@ -1999,3 +1999,24 @@ pub struct CharacterEntry {
     pub level: u32,
     pub league: String,
 }
+
+/// PoB's help (`help.txt`) as its About window shows it (`main:OpenAboutPopup`,
+/// Main.lua:1336-1440), answering `Help`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct HelpView {
+    /// In the file's order; the first is opened by default
+    pub sections: Vec<HelpSection>,
+    /// The window's labels above the list: PoB's version, "Based on Openarl's Path of
+    /// Building" and the GitHub page, with PoB's colour codes
+    #[serde(default)]
+    pub header: Vec<String>,
+}
+
+/// One `---[Title]` section of `help.txt`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct HelpSection {
+    pub title: String,
+    /// The rows under the title, with PoB's colour codes. A row of two columns (a key and
+    /// what it does) holds a tab between them.
+    pub lines: Vec<String>,
+}

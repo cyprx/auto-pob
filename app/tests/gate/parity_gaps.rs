@@ -612,3 +612,161 @@ fn spectre_and_top_bar_match_pob() {
     ours.open(&spectre, "spectre again");
     assert!(ours.popup().is_none(), "the library outlived its build");
 }
+
+// ---- Task 14: the Help window ----
+
+/// Upstream's About window, section by section: `OpenAboutPopup(i)` scrolls its list to
+/// section `i` (Main.lua:1434-1436), so each section starts at the row the scroll offset
+/// names. Asking for one past the last falls back to the first (Main.lua:1407-1416). Each
+/// section: its title row and the cells of the rows under it, up to the next section.
+const UPSTREAM_HELP: &str = r#"
+local main = launch.main
+local function open(i)
+    main:OpenAboutPopup(i)
+    local p = main.popups[1]
+    local list, offset = p.controls.changelog.list, p.controls.changelog.controls.scrollBar.offset
+    local labels = { p.controls.version.label, p.controls.forum.label, p.controls.github.label }
+    main:ClosePopup()
+    -- textSize (Main.lua:1337): a row is 16 high in the offsets
+    return list, offset / 16, labels
+end
+local list, first, labels = open(1)
+local starts = { first }
+while true do
+    local _, start = open(#starts + 1)
+    if start == first then break end
+    starts[#starts + 1] = start
+end
+local sections = {}
+for k, start in ipairs(starts) do
+    local stop = starts[k + 1] or #list
+    local rows = {}
+    for r = start + 2, stop do
+        local row = list[r]
+        if row[1] then
+            local cells = { row[1] }
+            if row[2] then cells[2] = row[2] end
+            rows[#rows + 1] = cells
+        end
+    end
+    sections[k] = { title = list[start + 1][1], rows = rows }
+end
+return { sections = sections, header = labels, popups = #main.popups }
+"#;
+
+#[derive(Debug, serde::Deserialize)]
+struct UpHelp {
+    sections: Vec<UpSection>,
+    header: Vec<String>,
+    popups: usize,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct UpSection {
+    title: String,
+    rows: Vec<Vec<String>>,
+}
+
+/// The help.txt fixture is PoB 2.67.2's own: PoB's updater takes a file whose sha1, with
+/// CRLF line ends, is the manifest's (UpdateCheck.lua:191)
+fn check_help_fixture(lua: &mlua::Lua, text: &str) {
+    let manifest = fs::read_to_string(pob_dir().join("manifest.xml")).unwrap();
+    let line = manifest
+        .lines()
+        .find(|l| l.contains("name=\"help.txt\""))
+        .expect("help.txt isn't in the manifest");
+    let want = line
+        .split("sha1=\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap();
+    lua.globals().set("HELP_TEXT", text).unwrap();
+    let got: String = lua
+        .load(r#"return require("sha1")((HELP_TEXT:gsub("\n", "\r\n")))"#)
+        .eval()
+        .unwrap();
+    assert_eq!(got, want, "the help.txt fixture isn't PoB's");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn help_matches_pob() {
+    use super::longtail_harness::LongtailSession;
+    use auto_pob::engine::{Event, Snapshot, send_snapshots};
+    let _guard = lock();
+    let mut s = LongtailSession::start("help", &|_| {
+        "<PathOfBuilding>\n\t<Misc showThousandsSeparators=\"false\"/>\n</PathOfBuilding>\n".into()
+    });
+
+    // the pinned folder has no help.txt (pob_files didn't extract it before Task 14)
+    let err = s.run(Command::Help).and_then(|_| s.backend.help_view());
+    assert_eq!(
+        err.unwrap_err().to_string(),
+        "PoB's help file (help.txt) isn't installed"
+    );
+    assert_eq!(s.open_popups(), 0);
+
+    // the farm is ours: the file goes next to PoB's own, never into the pinned folder
+    let text = fs::read_to_string(super::fixtures_dir().join("help.txt")).unwrap();
+    fs::write(s.pob.join("help.txt"), &text).unwrap();
+    let up = upstream_lua(&s.pob).expect("starting upstream PoB");
+    check_help_fixture(&up, &text);
+    // as our engine runs it (bootstrap.lua:181-194): help.txt from PoB's folder, no DEV[] rows
+    up.load("launch.devMode = false").exec().unwrap();
+    let value: mlua::Value = up.load(UPSTREAM_HELP).eval().expect("upstream help");
+    let theirs: UpHelp = up.from_value(value).unwrap();
+    assert_eq!(theirs.popups, 0);
+
+    // the query is list-safe: it is answered whatever is open, through the loop's own path
+    let affected = s.run(Command::Help).unwrap();
+    assert!(affected.help);
+    let events = std::cell::RefCell::new(Vec::new());
+    send_snapshots(&mut s.backend, 1, affected, &|e| {
+        events.borrow_mut().push(e)
+    });
+    let events = events.into_inner();
+    let ours = match events.as_slice() {
+        [
+            Event::Snapshot {
+                snapshot: Snapshot::Help(view),
+                ..
+            },
+        ] => view.clone(),
+        other => panic!("expected the help snapshot alone, got {other:?}"),
+    };
+    assert_eq!(s.open_popups(), 0, "the About window was left open");
+
+    assert_eq!(ours.header, theirs.header);
+    assert!(ours.header[0].contains("v2.67.2"), "{:?}", ours.header);
+    assert_eq!(ours.sections.len(), theirs.sections.len());
+    for (k, (o, t)) in ours.sections.iter().zip(&theirs.sections).enumerate() {
+        assert_eq!(t.title, format!("^7{} ({})", o.title, k + 1), "section {k}");
+        let rows: Vec<String> = t.rows.iter().map(|cells| cells.join("\t")).collect();
+        assert_eq!(o.lines, rows, "section {}", o.title);
+    }
+    let titles: Vec<&str> = ours.sections.iter().map(|s| s.title.as_str()).collect();
+    assert_eq!(titles[0], "Help File Introduction");
+    // "Help >>" opens section 7 (Build.lua:312)
+    assert_eq!(titles[6], "Loadouts");
+    assert!(titles.contains(&"Skills Tab") && titles.contains(&"Items Tab"));
+    // non-default rows: two columns, the Contents PoB numbers, and no developer rows
+    let hotkeys = &ours.sections[titles.iter().position(|t| *t == "Hotkeys").unwrap()];
+    assert!(
+        hotkeys
+            .lines
+            .contains(&"^7Ctrl + 1\t^7Jump to tree tab".to_string()),
+        "{:?}",
+        &hotkeys.lines[..6]
+    );
+    assert!(ours.sections[1].lines.contains(&"^74. Hotkeys".to_string()));
+    assert!(
+        !ours
+            .sections
+            .iter()
+            .flat_map(|s| &s.lines)
+            .any(|l| l.contains("Developer Mode")),
+        "a DEV[] row was shown"
+    );
+}

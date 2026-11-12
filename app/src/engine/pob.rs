@@ -662,6 +662,7 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::CancelRequest { .. }
             | Command::Wake
             | Command::Shutdown
+            | Command::Help
     )
 }
 
@@ -996,6 +997,11 @@ impl PobBackend {
             }
             // run_loop handles Shutdown before applying commands, and never applies Wake
             Command::Shutdown | Command::Wake => Ok(Affected::default()),
+            // read off PoB's About window when the view is asked for: nothing changes here
+            Command::Help => Ok(Affected {
+                help: true,
+                ..Affected::default()
+            }),
             Command::CancelRequest { id } => {
                 self.cancel_request(id)?;
                 self.network_affected()
@@ -2365,6 +2371,10 @@ impl Backend for PobBackend {
 
     fn set_waker(&mut self, wake: Waker) {
         self.net.set_waker(wake);
+    }
+
+    fn help_view(&mut self) -> Result<crate::engine::views::HelpView> {
+        self.view("help_view", ())
     }
 }
 

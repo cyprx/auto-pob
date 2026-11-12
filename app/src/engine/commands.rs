@@ -821,6 +821,9 @@ pub enum Command {
     /// Internal: a subscript thread woke the loop. The loop never applies it (R9).
     Wake,
     Shutdown,
+    /// A query: PoB's help, as its About window lists it (`Snapshot::Help`). It needs no build
+    /// and changes nothing.
+    Help,
 }
 
 #[derive(Debug, Clone, PartialEq)]

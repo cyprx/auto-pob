@@ -126,7 +126,10 @@ fn map_entry(relative: &Path, dest: &Path) -> Option<PathBuf> {
     if let Ok(tail) = relative.strip_prefix("runtime/lua") {
         return (!tail.as_os_str().is_empty()).then(|| dest.join("lua").join(tail));
     }
-    (relative == Path::new("manifest.xml") || relative == Path::new("LICENSE.md"))
+    // help.txt is the Help window's text (Main.lua:1360)
+    ["manifest.xml", "LICENSE.md", "help.txt"]
+        .iter()
+        .any(|name| relative == Path::new(name))
         .then(|| dest.join(relative))
 }
 
@@ -172,6 +175,8 @@ mod tests {
             ("PathOfBuilding-2.67.2/src/Classes/Item.lua", "item"),
             ("PathOfBuilding-2.67.2/runtime/lua/xml.lua", "xml"),
             ("PathOfBuilding-2.67.2/manifest.xml", "<m/>"),
+            ("PathOfBuilding-2.67.2/help.txt", "---[Help]"),
+            ("PathOfBuilding-2.67.2/changelog.txt", "VERSION[1][2]"),
             ("PathOfBuilding-2.67.2/docs/x.md", "doc"),
         ] {
             let mut h = tar::Header::new_gnu();
@@ -193,6 +198,9 @@ mod tests {
         assert!(dest.join("Classes/Item.lua").exists());
         assert!(dest.join("lua/xml.lua").exists());
         assert!(dest.join("manifest.xml").exists());
+        // the Help window reads it; the changelog isn't shown
+        assert!(dest.join("help.txt").exists());
+        assert!(!dest.join("changelog.txt").exists());
         assert!(!dest.join("docs").exists());
         assert!(!dest.join("src").exists());
     }

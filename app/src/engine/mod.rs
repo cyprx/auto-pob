@@ -41,3 +41,4 @@ pub use views::{
     SlotView, SocketGroupText, SocketGroupView, SocketView, SpecEntry, Sprite, StatRow, StatsView,
     TooltipLine, TreeLayout, TreeNode, TreeState, VariantView,
 };
+pub use views::{HelpSection, HelpView};

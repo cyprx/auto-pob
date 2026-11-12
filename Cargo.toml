@@ -56,6 +56,7 @@ profile-with-puffin = ["profiling/profile-with-puffin", "dep:puffin_http"]
 
 [workspace]
 members = [".", "app", "crates/pob-runtime"]
+default-members = ["app"]
 
 [dev-dependencies]
 zip = { version = "9.5.0", default-features = false, features = ["deflate"] }

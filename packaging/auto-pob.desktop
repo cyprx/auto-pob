@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Auto PoB
+GenericName=Path of Building
+Comment=Path of Building with a native egui interface
+Exec=auto-pob %u
+Icon=auto-pob
+Terminal=false
+Categories=Game;RolePlaying;

@@ -35,6 +35,12 @@ impl HoverTip {
         self.view = None;
     }
 
+    /// Whether the open question has its answer (for tests)
+    #[cfg(test)]
+    pub(crate) fn answered(&self) -> bool {
+        self.view.is_some()
+    }
+
     /// The question this tip has open, if any (for tests)
     #[cfg(test)]
     pub(crate) fn asked(&self) -> Option<&HoverTarget> {

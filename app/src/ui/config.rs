@@ -1001,7 +1001,17 @@ mod tests {
                 text: "^7Toggling this option will give you:".into(),
             }],
         }));
+        assert!(h.ui.hover_tip.answered(), "the answer was dropped");
         assert!(h.hover("check:buffOnslaught").is_empty(), "asked once");
+        // a stale answer to another question isn't kept
+        h.ui.forget_hover();
+        h.ui.on_hover(&Arc::new(HoverTooltipView {
+            target: HoverTarget::ConfigOption {
+                var: "other".into(),
+            },
+            lines: vec![],
+        }));
+        assert!(!h.ui.hover_tip.answered());
         // a new view of the options asks again
         h.ui.forget_hover();
         assert_eq!(

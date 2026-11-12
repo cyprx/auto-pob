@@ -735,3 +735,49 @@ fn a_hidden_box_with_a_pending_edit_is_discarded_not_sent() {
     assert!(out.commands.is_empty(), "{:?}", out.commands);
     assert!(h.popup.flush().is_none(), "nothing stays pending");
 }
+
+#[test]
+fn progress_line_and_cancel() {
+    let mut h = Harness::new(PopupView {
+        kind: PopupKind::TimelessJewel,
+        title: "Find a Timeless Jewel".into(),
+        controls: vec![
+            button("searchButton", 0.0, 0.0),
+            button("closeButton", 120.0, 0.0),
+        ],
+    });
+    // Search starts the job: its line shows at once
+    let out = h.click("btn_searchButton");
+    assert_eq!(debug(&out.commands), [press("searchButton")]);
+    assert_eq!(h.popup.search_state(), (Some(0), None));
+    h.popup.on_search_progress(40);
+    h.frame(vec![]);
+    assert_eq!(h.popup.search_state(), (Some(40), None));
+    assert!(h.has("timeless_progress"));
+    // nothing else is offered while it runs
+    let out = h.click("btn_searchButton");
+    assert!(out.commands.is_empty(), "{:?}", out.commands);
+    // Cancel stops it
+    let out = h.click("timeless_cancel");
+    assert_eq!(debug(&out.commands), ["CancelTimelessSearch"]);
+    assert_eq!(h.popup.search_state(), (None, None));
+    // a step that ran before the cancel reached the engine reports late; the engine's answer
+    // to the cancel (100) ends the line
+    h.popup.on_search_progress(40);
+    h.popup.on_search_progress(100);
+    assert_eq!(h.popup.search_state(), (None, None));
+    // a search that finishes takes its line away
+    h.click("btn_searchButton");
+    h.popup.on_search_progress(100);
+    assert_eq!(h.popup.search_state(), (None, None));
+    // a failure shows PoB's message
+    h.click("btn_searchButton");
+    h.popup.on_search_failed("boom".into());
+    h.frame(vec![]);
+    assert_eq!(h.popup.search_state(), (None, Some("boom")));
+    assert!(h.has("timeless_failed"));
+    // another window has no search line
+    let mut other = Harness::new(popup(vec![button("save", 0.0, 0.0)]));
+    other.popup.on_search_progress(40);
+    assert_eq!(other.popup.search_state(), (None, None));
+}

@@ -77,6 +77,8 @@ pub enum BackgroundTask {
     GemDps,
     /// The Anoint window's stat sort; it goes after the gem picker's, before node power (R20)
     AnointSort,
+    /// The timeless jewel search (R17); after the Anoint sort, before the item databases (R32)
+    Timeless,
     /// The item databases' load and stat sort; after the Anoint sort, before node power (R20)
     ItemDb,
     NodePower,
@@ -1833,8 +1835,13 @@ mod tests {
 
     #[test]
     fn jobs_run_in_order_gem_anoint_item_db_power() {
-        // R20: the gem picker's sort, the Anoint sort, the item database, then node power
+        // R20, R32: the gem picker's sort, the Anoint sort, the timeless search, the item
+        // database, then node power
         let (mut fake, log) = Fake::new();
+        fake.timeless_background
+            .lock()
+            .unwrap()
+            .extend((0..2).map(|_| step_affecting_gems()));
         fake.background
             .lock()
             .unwrap()
@@ -1857,13 +1864,14 @@ mod tests {
                 Command::SearchGems(gem_query("")),
                 Command::SetItemDb(db_query()),
             ],
-            8,
+            10,
         );
-        use BackgroundTask::{AnointSort, GemDps, ItemDb, NodePower};
+        use BackgroundTask::{AnointSort, GemDps, ItemDb, NodePower, Timeless};
         assert_eq!(
             log.lock().unwrap().step_tasks,
             [
-                GemDps, GemDps, AnointSort, AnointSort, ItemDb, ItemDb, NodePower, NodePower
+                GemDps, GemDps, AnointSort, AnointSort, Timeless, Timeless, ItemDb, ItemDb,
+                NodePower, NodePower
             ]
         );
     }

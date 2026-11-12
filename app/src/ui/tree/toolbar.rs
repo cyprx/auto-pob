@@ -1,8 +1,8 @@
 //! The Tree tab's toolbar and the dialogs it opens: trees, class and ascendancy, reset, search,
-//! heat map, the power report toggle and the link menu.
+//! the timeless jewel search, heat map, the power report toggle and the link menu.
 
 use super::{Rects, TreeOutput};
-use crate::engine::{Command, TreeState};
+use crate::engine::{Command, PopupKind, TreeState};
 use crate::theme;
 use eframe::egui;
 
@@ -107,6 +107,14 @@ impl Toolbar {
         });
         ui.horizontal_wrapped(|ui| {
             self.search(ui, state, rects, commands);
+            // PoB's "Find Timeless Jewel", next to the search as PoB places it (R17)
+            let timeless = ui
+                .button("Find timeless jewel\u{2026}")
+                .on_hover_text("Search the seeds of a timeless jewel for the nodes you want");
+            rects.note(&timeless, || "find_timeless".into());
+            if timeless.clicked() {
+                commands.push(Command::OpenPopup(PopupKind::TimelessJewel));
+            }
             ui.separator();
             self.heatmap(ui, state, power, rects, commands);
             ui.separator();

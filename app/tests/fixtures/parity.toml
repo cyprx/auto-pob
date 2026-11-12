@@ -2764,7 +2764,7 @@ ported = "app/src/ui/tree/toolbar.rs Compare combo"
 note = "part of tree.compareSelect"
 
 [controls."tree.findTimelessJewel"]
-gap = "Task 11"
+ported = "app/src/ui/tree/toolbar.rs Find timeless jewel button (PoB popup session, R17)"
 note = "timeless jewel search (R17)"
 
 [controls."tree.nodePowerMaxDepthCustom"]
@@ -3010,7 +3010,7 @@ ported = "app/src/ui/popup.rs session (SP5b)"
 ported = "app/src/ui/tree/toolbar.rs Link menu Copy link"
 
 [popups."Find a Timeless Jewel"]
-gap = "Task 11"
+ported = "app/src/engine/glue/timeless.lua search job over the FindTimelessJewel session (R17)"
 note = "R17"
 
 [popups."FolderListControl:84"]

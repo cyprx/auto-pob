@@ -701,6 +701,14 @@ mod tests {
         h.click_at(pos)
     }
 
+    #[test]
+    fn timeless_button_opens_the_session() {
+        let (l, s) = sample();
+        let mut h = Harness::new(l, s);
+        let out = click_key(&mut h, "find_timeless");
+        assert_eq!(debug(&out.commands), ["OpenPopup(TimelessJewel)"]);
+    }
+
     /// PoB can't undo "Remove All Tattoos", so the first click only asks (Review Focus 5).
     #[test]
     fn remove_all_tattoos_asks_first() {

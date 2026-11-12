@@ -55,7 +55,14 @@ pub struct PobBackend {
     released_lua_bytes: usize,
     /// The subscripts of PoB's requests (R4, R9)
     net: NetHandle,
+    /// A timeless search was started; whether it still runs is the glue's (R17)
+    timeless_job: bool,
+    /// How long one timeless search step runs before it yields, in milliseconds (R17)
+    pub timeless_budget_ms: u32,
 }
+
+/// R17: a timeless search step yields once this much of `GetTime()` has passed
+pub const TIMELESS_BUDGET_MS: u32 = 50;
 
 /// Runs before the bootstrap.
 const PRELUDE: &str = r##"
@@ -140,6 +147,7 @@ impl PobBackend {
             ("@glue/items.lua", include_str!("glue/items.lua")),
             ("@glue/crafting.lua", include_str!("glue/crafting.lua")),
             ("@glue/popups.lua", include_str!("glue/popups.lua")),
+            ("@glue/timeless.lua", include_str!("glue/timeless.lua")),
             ("@glue/itemdb.lua", include_str!("glue/itemdb.lua")),
             ("@glue/notes.lua", include_str!("glue/notes.lua")),
             ("@glue/net.lua", include_str!("glue/net.lua")),
@@ -174,6 +182,8 @@ impl PobBackend {
             item_db_ended: false,
             released_lua_bytes: 0,
             net,
+            timeless_job: false,
+            timeless_budget_ms: TIMELESS_BUDGET_MS,
         })
     }
 
@@ -284,6 +294,8 @@ impl PobBackend {
     fn left_build(&mut self) -> Result<Affected> {
         let mut affected = Affected::default();
         self.reset_heatmap();
+        // the session's timeless search ends with it (R17)
+        self.timeless_job = false;
         // an Options window survives a build change (R19)
         if self.call::<_, bool>("popup_end", true)? {
             affected.popup = true;
@@ -557,8 +569,9 @@ fn ends_gem_search(command: &Command) -> bool {
     )
 }
 
-/// Whether a command ends the popup session (R4). The session's own commands and the queries
-/// leave it open; anything else may change the item or the build under it.
+/// Whether a command may end the popup session (R4). The session's own commands and the
+/// queries leave it open; anything else may change the item or the build under it. The glue
+/// then decides by the session's owner (R19): a build-owned one ends only with its build.
 pub(crate) fn ends_popup_session(command: &Command) -> bool {
     if let Command::SetCompareControl { name, .. } = command {
         return name == PRIMARY_ITEM_SET;
@@ -576,6 +589,7 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             // the app's own values; they change neither the item nor the build (R12)
             | Command::SetOverrides { .. }
             | Command::SetTradeDefaults { .. }
+            | Command::CancelTimelessSearch
             | Command::BrowseBuilds { .. }
             | Command::ControlTooltip(_)
             | Command::SetItemDb(_)
@@ -639,6 +653,9 @@ struct Pressed {
     /// The trade link the press opened, if any (R20)
     #[serde(default)]
     url: Option<String>,
+    /// The press started a timeless search (R17)
+    #[serde(default)]
+    started: bool,
 }
 
 /// A popup session command changed the popup only (a press also flags the display item).
@@ -650,7 +667,7 @@ fn popup_changed() -> Affected {
 }
 
 impl PobBackend {
-    fn apply_command(&mut self, command: Command, _send: &dyn Fn(Event)) -> Result<Affected> {
+    fn apply_command(&mut self, command: Command, send: &dyn Fn(Event)) -> Result<Affected> {
         match command {
             Command::SearchGems(query) => {
                 let target = lua_target(&self.lua, query.target)?;
@@ -1624,6 +1641,7 @@ impl PobBackend {
                     PopupKind::AddCrucible => ("add_crucible", 0),
                     PopupKind::NodeReplacement { node } => ("node_replacement", i64::from(node)),
                     PopupKind::Options => ("options", 0),
+                    PopupKind::TimelessJewel => ("timeless", 0),
                     PopupKind::BuySimilar { source } => {
                         let source = self.lua.to_value(&source).map_err(|e| anyhow!("{e}"))?;
                         self.call::<_, ()>("popup_open", ("buy_similar", source))?;
@@ -1666,6 +1684,10 @@ impl PobBackend {
             }
             Command::PressPopupButton { name } => {
                 let pressed: Pressed = self.view("popup_press", name)?;
+                // the timeless window's Search started the job (R17)
+                if pressed.started {
+                    self.timeless_job = true;
+                }
                 // a tattoo sets PoB's `buildFlag`: the tree changed (R22)
                 let mut affected = if pressed.build_flag {
                     self.tree_edited()?
@@ -1704,6 +1726,18 @@ impl PobBackend {
                 control_tooltip: Some(query),
                 ..Affected::default()
             }),
+            Command::CancelTimelessSearch => {
+                self.call::<_, ()>("timeless_cancel", ())?;
+                // a step that ran before the cancel already told its progress: the search is
+                // over, and the window's progress line goes
+                if std::mem::take(&mut self.timeless_job) {
+                    send(Event::Progress {
+                        task: BackgroundTask::Timeless,
+                        percent: 100,
+                    });
+                }
+                Ok(popup_changed())
+            }
             Command::SetTradeDefaults { realm, league } => {
                 self.call::<_, ()>("trade_defaults", (realm, league))?;
                 Ok(Affected::default())
@@ -1883,6 +1917,14 @@ impl Backend for PobBackend {
         {
             return Some(BackgroundTask::AnointSort);
         }
+        // R32: after the Anoint sort, before the item databases
+        if self.timeless_job
+            && self
+                .call::<_, bool>("timeless_running", ())
+                .unwrap_or(false)
+        {
+            return Some(BackgroundTask::Timeless);
+        }
         if let Some(query) = &self.item_db
             && !self.item_db_failed
             && self
@@ -1948,6 +1990,34 @@ impl Backend for PobBackend {
                 // the window shows the rows once the builder ends
                 Ok(Affected {
                     popup: step.finished,
+                    ..Affected::default()
+                })
+            }
+            BackgroundTask::Timeless => {
+                #[derive(serde::Deserialize)]
+                struct TimelessStep {
+                    done: bool,
+                    percent: u32,
+                }
+                let step: TimelessStep = match self.view("timeless_step", self.timeless_budget_ms) {
+                    Ok(step) => step,
+                    Err(e) => {
+                        // the glue ended the job and put PoB's message in the window
+                        self.timeless_job = false;
+                        return Err(e);
+                    }
+                };
+                send(Event::Progress {
+                    task: BackgroundTask::Timeless,
+                    percent: step.percent,
+                });
+                if step.done {
+                    self.timeless_job = false;
+                }
+                // the window shows PoB's results, its list and its trade button once the
+                // search returns
+                Ok(Affected {
+                    popup: step.done,
                     ..Affected::default()
                 })
             }
@@ -2276,6 +2346,8 @@ mod tests {
             Command::OpenPopup(PopupKind::BuySimilar {
                 source: BuySource::DisplayItem,
             }),
+            Command::OpenPopup(PopupKind::TimelessJewel),
+            Command::CancelTimelessSearch,
             Command::OpenPopup(PopupKind::NodeReplacement { node: 1 }),
             Command::SetPopupControl {
                 name: "rarity".into(),

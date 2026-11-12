@@ -66,6 +66,8 @@ pub struct Fake {
     pub gem_background: Arc<Mutex<VecDeque<Step>>>,
     /// Anoint sort steps still to run; they go after the gem steps and before the power steps.
     pub anoint_background: Arc<Mutex<VecDeque<Step>>>,
+    /// Timeless search steps still to run; after the Anoint sort, before the item databases
+    pub timeless_background: Arc<Mutex<VecDeque<Step>>>,
     /// Item database steps still to run; they go after the Anoint steps, before the power steps.
     pub item_db_background: Arc<Mutex<VecDeque<Step>>>,
     /// The open gem search
@@ -115,6 +117,7 @@ impl Fake {
                 background: Arc::default(),
                 gem_background: Arc::default(),
                 anoint_background: Arc::default(),
+                timeless_background: Arc::default(),
                 item_db_background: Arc::default(),
                 item_db: None,
                 item_db_ended: false,
@@ -454,6 +457,8 @@ impl Backend for Fake {
             Some(BackgroundTask::GemDps)
         } else if !self.anoint_background.lock().unwrap().is_empty() {
             Some(BackgroundTask::AnointSort)
+        } else if !self.timeless_background.lock().unwrap().is_empty() {
+            Some(BackgroundTask::Timeless)
         } else if self.item_db.is_some() && !self.item_db_background.lock().unwrap().is_empty() {
             Some(BackgroundTask::ItemDb)
         } else if !self.background.lock().unwrap().is_empty() {
@@ -492,6 +497,7 @@ impl Backend for Fake {
             BackgroundTask::Network => unreachable!("handled above"),
             BackgroundTask::GemDps => self.gem_background.clone(),
             BackgroundTask::AnointSort => self.anoint_background.clone(),
+            BackgroundTask::Timeless => self.timeless_background.clone(),
             BackgroundTask::ItemDb => self.item_db_background.clone(),
             BackgroundTask::NodePower => self.background.clone(),
         };

@@ -15,6 +15,14 @@ local NOT_SHOWN = "PoB doesn't show that control for this item"
 -- `main` (nothing but PoB or a command; it needs no build and survives build changes).
 local session
 
+-- Ends the session; a timeless search in it ends too (R17)
+local function drop()
+	session = nil
+	if glue.timeless_cancel then
+		glue.timeless_cancel()
+	end
+end
+
 local function main()
 	return pob.main.main
 end
@@ -36,11 +44,11 @@ local function live()
 		return true
 	end
 	if session.build ~= pob.build then
-		session = nil
+		drop()
 		return false
 	end
 	if session.owner == "item" and session.item ~= pob.build.itemsTab.displayItem then
-		session = nil
+		drop()
 		return false
 	end
 	return true
@@ -90,7 +98,7 @@ local function settle(mine, depth)
 		end
 		return false
 	end
-	session = nil
+	drop()
 	return true
 end
 
@@ -115,6 +123,11 @@ function glue.popup_end(keep_main)
 	if keep_main and session ~= nil and session.owner == "main" then
 		return false
 	end
+	-- a build-owned session ends with its build only (R19): a command that keeps the build
+	-- leaves it, and a timeless search in it, running
+	if not keep_main and session ~= nil and session.owner == "build" and session.build == pob.build then
+		return false
+	end
 	-- not `live()`: the command that just ran may itself have replaced the item (R4)
 	local was = session ~= nil
 	-- an Options window that goes away unanswered is cancelled, so PoB's half-edited values
@@ -122,7 +135,7 @@ function glue.popup_end(keep_main)
 	if was and session.kind == "Options" then
 		glue.popup_cancel_options()
 	end
-	session = nil
+	drop()
 	return was
 end
 
@@ -144,7 +157,7 @@ end
 function glue.popup_cancel_for_save()
 	if glue.popup_is_options() and not glue.popup_options_pressing() then
 		glue.popup_cancel_options()
-		session = nil
+		drop()
 		lost = true
 	end
 end
@@ -260,21 +273,41 @@ end
 -- the app's league; the pick is PoB's own selection callback, which rebuilds the URL. The list
 -- starts as "Loading..." at index 1, so a `SetSel` to index 1 would run nothing.
 local function buy_leagues(popup)
-	local drop = popup.controls.leagueDrop
+	local leagues = popup.controls.leagueDrop
 	local list, index = glue.trade_leagues()
-	drop:SetList(list)
-	drop.selIndex = index
-	drop.selFunc(index, list[index])
+	leagues:SetList(list)
+	leagues.selIndex = index
+	leagues.selFunc(index, list[index])
 end
 
 -- The app's realm, picked as the user would; a change refetches the leagues (refused)
 local function buy_realm(popup)
-	local drop = popup.controls.realmDrop
-	drop:SetSel(isValueInArray(drop.list, trade.realm) or 1)
+	local realms = popup.controls.realmDrop
+	realms:SetSel(isValueInArray(realms.list, trade.realm) or 1)
 end
 
+local function is_timeless(s)
+	return s ~= nil and s.kind == "TimelessJewel"
+end
+
+-- The trade windows: Buy similar (R10) and the timeless search's trade button (R17)
 local function is_trade(s)
-	return s ~= nil and type(s.kind) == "table" and s.kind.BuySimilar ~= nil
+	return s ~= nil and (is_timeless(s) or (type(s.kind) == "table" and s.kind.BuySimilar ~= nil))
+end
+
+-- The timeless window's realms, as PoB lists them ("PC", "Sony", "Xbox"), by the app's realm
+local TIMELESS_REALM = { PC = 1, PS4 = 2, Xbox = 3 }
+
+-- The leagues PoB would have fetched for every realm, so the window never fetches (R17): its
+-- cache `tradeLeaguesList` is filled from the app's league, which is also the pick. PoB's
+-- dropdown takes a cached list as its own and wipes it on the next `SetList`, so each realm
+-- gets a copy, made again before every realm pick.
+local function timeless_leagues(tab)
+	local list, index = glue.trade_leagues()
+	for _, realm in ipairs({ "pc", "sony", "xbox" }) do
+		tab.tradeLeaguesList[realm] = copyTable(list)
+	end
+	tab.timelessJewelLeagueSelect = list[index]
 end
 
 -- ---- Opening ----
@@ -355,6 +388,7 @@ function glue.popup_open(kind, arg)
 		if count == 0 then
 			error("PoB didn't open that window", 0)
 		end
+		drop()
 		session = { popup = top, kind = "Options", owner = "main" }
 		return
 	end
@@ -380,7 +414,37 @@ function glue.popup_open(kind, arg)
 		if count == 0 then
 			error("PoB didn't open that window", 0)
 		end
+		drop()
 		session = { popup = top, kind = { BuySimilar = { source = arg } }, owner = "build", build = pob.build }
+		return
+	end
+	if kind == "timeless" then
+		glue.popup_cancel_options()
+		local tab = pob.build.treeTab
+		timeless_leagues(tab)
+		-- the window opens on PC and the app's realm is picked in it, as a user would: opened on
+		-- a remembered realm, PoB sets that realm's cached list twice, and the second `SetList`
+		-- wipes it (TreeTab.lua:2376-2384, DropDownControl.lua:524-530)
+		tab.selectedRealmIndex = 1
+		local popups = main().popups
+		local depth = #popups
+		local ok, err = pcall(no_launches, function()
+			tab:FindTimelessJewel()
+			if #popups > depth then
+				popups[1].controls.realmSelection:SetSel(TIMELESS_REALM[glue.trade_realm()] or 1)
+			end
+		end)
+		local count = #popups - depth
+		local top = popups[1]
+		close_above(depth)
+		if not ok then
+			error(err, 0)
+		end
+		if count == 0 then
+			error("PoB didn't open that window", 0)
+		end
+		drop()
+		session = { popup = top, kind = "TimelessJewel", owner = "build", build = pob.build }
 		return
 	end
 	if kind == "node_replacement" then
@@ -426,6 +490,7 @@ function glue.popup_open(kind, arg)
 	end
 	-- a failed open above left the session it found alone; this one replaces it (R4)
 	local shown = kind == "node_replacement" and { NodeReplacement = { node = arg } } or KINDS[kind](arg)
+	drop()
 	session = { popup = top, kind = shown, owner = "item", item = tab.displayItem, build = pob.build }
 end
 
@@ -652,10 +717,22 @@ function glue.describe_control(name, control)
 	return kind and control_view(name, control, kind, 0, 0), kind
 end
 
+-- While a timeless search runs, only its window's Cancel is offered: PoB's press is
+-- synchronous, so nothing else could change what the search reads
+local function refuse_while_searching(name)
+	if is_timeless(session) and glue.timeless_running() and name ~= "closeButton" then
+		error("a timeless search is already running", 0)
+	end
+end
+
 -- Sets a control as the user would; see `glue.set_control`.
 function glue.popup_set(name, kind, value, label)
 	require_session()
+	refuse_while_searching(name)
 	local trading = is_trade(session)
+	if is_timeless(session) and name == "realmSelection" then
+		timeless_leagues(pob.build.treeTab)
+	end
 	with_session(function()
 		local control, control_kind = find(name)
 		require_usable(control)
@@ -666,7 +743,7 @@ function glue.popup_set(name, kind, value, label)
 		no_launches(function()
 			glue.set_control(control, control_kind, kind, value, label)
 			-- a realm pick refetches the leagues, which leaves "Loading..." (R10)
-			if name == "realmDrop" then
+			if name == "realmDrop" and not is_timeless(session) then
 				buy_leagues(session.popup)
 			end
 		end)
@@ -678,17 +755,24 @@ end
 function glue.popup_press(name)
 	require_session()
 	local flag_before = pob.build.buildFlag and true or false
+	refuse_while_searching(name)
 	local options = session.kind == "Options"
 	local trading = is_trade(session)
+	local timeless = is_timeless(session)
 	session.pressing = true
 	local url
+	local started = false
 	local ok, ended = pcall(with_session, function()
 		local control, kind = find(name)
 		if kind ~= "Button" then
 			error("no such control", 0)
 		end
 		require_usable(control)
-		if trading then
+		if timeless and name == "searchButton" then
+			-- the search runs as a background job; the press returns at once (R17)
+			glue.timeless_start(session.popup, control)
+			started = true
+		elseif trading then
 			-- the user's own press: a trade link it opens goes to the UI (R20)
 			url = no_launches(function()
 				return glue.capture_url(control.onClick)
@@ -707,7 +791,7 @@ function glue.popup_press(name)
 		-- a Cancel put the shared values back over an override
 		glue.settings_reapply()
 	end
-	return { ended = ended, build_flag = (pob.build.buildFlag and not flag_before) and true or false, url = url }
+	return { ended = ended, build_flag = (pob.build.buildFlag and not flag_before) and true or false, url = url, started = started }
 end
 
 -- Presses Options' Cancel (which restores the values the window changed as it went)
@@ -728,7 +812,7 @@ end
 -- Cancel and Escape: PoB only closes the popup. Escape on Options is PoB's `cancel` button.
 function glue.popup_close()
 	glue.popup_cancel_options()
-	session = nil
+	drop()
 end
 
 -- The tooltip of a dropdown entry (`index`, 0-based) or of a button, as PoB would build it on

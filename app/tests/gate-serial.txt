@@ -5,3 +5,7 @@
 # them on purpose, so no other test may sign in while it runs.
 network::oauth_flow_matches_pob
 network::no_silent_writes_network
+
+# The timeless search writes PoB's LUT caches (`Data/TimelessJewelData/*.bin`, R17); it does so
+# in a folder of its own, but stays apart from the parallel batch as the plan rules (R1).
+timeless::timeless_search_matches_pob

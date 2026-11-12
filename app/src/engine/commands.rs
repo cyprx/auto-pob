@@ -702,6 +702,9 @@ pub enum Command {
     SetOverrides {
         values: BTreeMap<String, String>,
     },
+    /// Stops the running timeless search (R17). PoB's previous results stay: it replaces them
+    /// only when a search finishes. A no-op with none running.
+    CancelTimelessSearch,
     /// The app's trade realm ("PC", "PS4" or "Xbox") and league, from `auto-pob.toml` (R10,
     /// R17): the trade windows take them instead of PoB's league fetch. Kept in the glue,
     /// needs no build, answers nothing. Sent after `Ready` and after each Options Save.
@@ -902,6 +905,9 @@ pub enum PopupKind {
     BuySimilar {
         source: BuySource,
     },
+    /// The Tree tab's "Find Timeless Jewel" window (`TreeTab:FindTimelessJewel`, R17), a
+    /// build-owned session. Its `searchButton` press starts `BackgroundTask::Timeless`.
+    TimelessJewel,
 }
 
 /// Where a "Buy similar" search starts from (R10): PoB's own three entry points

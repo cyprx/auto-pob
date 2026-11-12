@@ -600,6 +600,14 @@ impl AutoPobApp {
                 message,
             } => self.popup.on_failed(message),
             Event::Progress {
+                task: BackgroundTask::Timeless,
+                percent,
+            } => self.popup.on_search_progress(percent),
+            Event::BackgroundFailed {
+                task: BackgroundTask::Timeless,
+                message,
+            } => self.popup.on_search_failed(message),
+            Event::Progress {
                 task: BackgroundTask::ItemDb,
                 percent,
             } => self.items.on_db_progress(percent),

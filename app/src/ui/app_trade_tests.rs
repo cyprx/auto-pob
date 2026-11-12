@@ -309,3 +309,31 @@ fn buy_similar_offered_on_display_slot_menu_and_compare() {
     );
     assert_eq!(opened_popups(&app, before), [compare.as_str()]);
 }
+
+#[test]
+fn timeless_progress_reaches_the_window() {
+    let (mut app, ctx, _log) = open_build();
+    app.tab = BuildTab::Tree;
+    app.send(Command::OpenPopup(PopupKind::TimelessJewel));
+    app.on_event(crate::engine::Event::Snapshot {
+        seq: app.last_sent,
+        snapshot: Snapshot::Popup(Some(Arc::new(crate::engine::PopupView {
+            kind: PopupKind::TimelessJewel,
+            title: "Find a Timeless Jewel".into(),
+            controls: vec![],
+        }))),
+    });
+    frame(&mut app, &ctx, vec![]);
+    app.on_event(crate::engine::Event::Progress {
+        task: crate::engine::BackgroundTask::Timeless,
+        percent: 40,
+    });
+    assert_eq!(app.popup.search_state(), (Some(40), None));
+    app.on_event(crate::engine::Event::BackgroundFailed {
+        task: crate::engine::BackgroundTask::Timeless,
+        message: "boom".into(),
+    });
+    assert_eq!(app.popup.search_state(), (None, Some("boom")));
+    // the tree's node power is not told
+    assert!(app.notices.is_empty(), "{:?}", app.notices);
+}

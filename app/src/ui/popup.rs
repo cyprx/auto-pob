@@ -185,6 +185,15 @@ struct SortState {
     failed: Option<String>,
 }
 
+/// The timeless window's search, which runs in the background (R17)
+#[derive(Default)]
+struct SearchState {
+    /// Running, this far along
+    percent: Option<u32>,
+    /// The last search failed with PoB's message
+    failed: Option<String>,
+}
+
 #[derive(Default)]
 pub struct PopupWindow {
     view: Option<Arc<PopupView>>,
@@ -193,6 +202,7 @@ pub struct PopupWindow {
     sliders: HashMap<String, f64>,
     tip: HoverTip,
     sort: SortState,
+    search: SearchState,
     /// A `ClosePopup` went out as this command: a view from before it is stale
     close_seq: Option<u64>,
     /// A text box had the focus when the last frame ended
@@ -290,6 +300,7 @@ impl PopupWindow {
         self.sliders.clear();
         self.tip.reset();
         self.sort = SortState::default();
+        self.search = SearchState::default();
     }
 
     /// The command that closed the window went out as `seq`.
@@ -300,6 +311,8 @@ impl PopupWindow {
     /// The engine refused something: a value shown ahead of its view is not what PoB has.
     pub fn on_error(&mut self, seq: u64) {
         self.sliders.clear();
+        // a refused Search started nothing; a running one says so with its next step
+        self.search.percent = None;
         if self.opening.is_some_and(|o| seq >= o) {
             self.opening = None;
         }
@@ -311,6 +324,27 @@ impl PopupWindow {
             self.sort.failed = None;
             self.sort.percent = Some(percent);
         }
+    }
+
+    /// The timeless search is at `percent`; at 100 it is over (R17).
+    pub fn on_search_progress(&mut self, percent: u32) {
+        if self.kind() == Some(&PopupKind::TimelessJewel) {
+            self.search.failed = None;
+            self.search.percent = (percent < 100).then_some(percent);
+        }
+    }
+
+    /// The timeless search failed with PoB's message, which the window shows (R17).
+    pub fn on_search_failed(&mut self, message: String) {
+        if self.kind() == Some(&PopupKind::TimelessJewel) {
+            self.search.percent = None;
+            self.search.failed = Some(message);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn search_state(&self) -> (Option<u32>, Option<&str>) {
+        (self.search.percent, self.search.failed.as_deref())
     }
 
     /// The Anoint stat sort failed; the list shows the error with Retry.
@@ -439,6 +473,11 @@ impl PopupWindow {
                 });
             });
             ui.separator();
+            // the timeless search runs in the background: its progress, and a way to stop it
+            if view.kind == PopupKind::TimelessJewel {
+                self.search_line(ui, &mut out);
+            }
+            let searching = self.search.percent.is_some();
             let max_height = (ctx.content_rect().height() - 140.0).max(200.0);
             // The window's size is the last frame's, so a scroll area left to shrink would
             // stay as small as the first view it held; it is given the height it needed last.
@@ -448,9 +487,12 @@ impl PopupWindow {
                 .min_scrolled_height(content_height.min(max_height))
                 .auto_shrink([true, true])
                 .show(ui, |ui| {
-                    for row in rows(&view) {
-                        self.row(ui, &view, &row, busy, &mut out, deco);
-                    }
+                    // nothing but Cancel is offered while PoB's search runs (the engine refuses)
+                    ui.add_enabled_ui(!searching, |ui| {
+                        for row in rows(&view) {
+                            self.row(ui, &view, &row, busy, &mut out, deco);
+                        }
+                    });
                 });
             content_height = shown.content_size.y;
         });
@@ -468,6 +510,29 @@ impl PopupWindow {
             out.commands.extend(self.close());
         }
         out
+    }
+
+    /// "Searching… n%" with Cancel while the timeless search runs; its failure after
+    fn search_line(&mut self, ui: &mut egui::Ui, out: &mut PopupOutput) {
+        if let Some(percent) = self.search.percent {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                let line = ui.label(format!("Searching\u{2026} {percent}%"));
+                self.rects.note(&line, || "timeless_progress".into());
+                let cancel = ui.button("Cancel search");
+                self.rects.note(&cancel, || "timeless_cancel".into());
+                if cancel.clicked() {
+                    out.commands.push(Command::CancelTimelessSearch);
+                    self.search.percent = None;
+                }
+            });
+        } else if let Some(message) = &self.search.failed {
+            let line = ui.colored_label(
+                ui.visuals().error_fg_color,
+                format!("The search failed: {message}"),
+            );
+            self.rects.note(&line, || "timeless_failed".into());
+        }
     }
 
     fn row(
@@ -537,6 +602,13 @@ impl PopupWindow {
                 self.rects.note(&response, || format!("btn_{name}"));
                 self.hint(&response, c, None);
                 if response.clicked() {
+                    // the timeless search starts in the background: its line shows at once
+                    if view.kind == PopupKind::TimelessJewel && name == "searchButton" {
+                        self.search = SearchState {
+                            percent: Some(0),
+                            failed: None,
+                        };
+                    }
                     out.commands.push(Command::PressPopupButton {
                         name: name.to_owned(),
                     });

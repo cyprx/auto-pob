@@ -45,6 +45,8 @@ mod settings;
 mod skills;
 #[path = "gate/tattoos.rs"]
 mod tattoos;
+#[path = "gate/timeless.rs"]
+mod timeless;
 #[path = "gate/trade.rs"]
 mod trade;
 

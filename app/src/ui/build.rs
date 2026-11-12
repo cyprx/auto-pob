@@ -364,7 +364,7 @@ fn loadouts(
         });
     note(ui, "loadouts", combo.response.rect);
     // the wheel and the arrows step through the loadouts themselves, not the headers and
-    // actions between them
+    // actions between them; a search's matches are noted for the loadouts alone
     let real: Vec<usize> = (0..view.loadouts.len())
         .filter(|&i| !is_loadout_marker(&view.loadouts[i]))
         .collect();
@@ -655,6 +655,22 @@ mod tests {
         sent.extend(h.click("new_loadout_save"));
         assert_eq!(sent, ["NewLoadout { name: \"L3\" }"]);
         assert!(!h.state.has_dialog());
+    }
+
+    #[test]
+    fn a_loadouts_search_steps_through_its_matches_only() {
+        // PoB steps through the drop list, which a search narrows (DropDownControl.lua:57-107);
+        // the headers and actions among the loadouts don't break that
+        let mut loadouts = view().loadouts;
+        loadouts.insert(3, "Mapping".into());
+        let mut h = Harness::new(BuildView { loadouts, ..view() });
+        h.open("loadouts");
+        h.frame(vec![Event::Text("map".into())]);
+        h.frame(vec![]);
+        assert_eq!(
+            h.key(Key::ArrowDown),
+            ["SelectLoadout { label: \"Mapping\" }"]
+        );
     }
 
     #[test]

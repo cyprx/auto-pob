@@ -29,21 +29,31 @@ pub fn search_matches(search: &str, text: &str) -> bool {
     true
 }
 
-/// Which entries of the list being drawn the search kept, in the order they were added
+/// Which choices of the list being drawn the search kept, in the order they were added: the
+/// entries the wheel and the arrows step through, not the headers and actions
 fn visible_id() -> egui::Id {
     egui::Id::NULL.with("pob_dropdown_visible")
 }
 
-/// Whether the search keeps `text`; noted for the list's stepping (DropDownControl.lua:57-107)
-fn matches(ui: &egui::Ui, text: &str) -> bool {
+/// How many entries of the list being drawn were added, choices or not
+fn added_id() -> egui::Id {
+    egui::Id::NULL.with("pob_dropdown_added")
+}
+
+/// Whether the search keeps `text`; a choice's is noted for the list's stepping
+/// (DropDownControl.lua:57-107)
+fn matches(ui: &egui::Ui, text: &str, choice: bool) -> bool {
     let search: String = ui
         .ctx()
         .data(|d| d.get_temp(current_id()))
         .unwrap_or_default();
     let keep = search_matches(&search, text);
     ui.ctx().data_mut(|d| {
-        d.get_temp_mut_or_default::<Vec<bool>>(visible_id())
-            .push(keep)
+        *d.get_temp_mut_or_default::<usize>(added_id()) += 1;
+        if choice {
+            d.get_temp_mut_or_default::<Vec<bool>>(visible_id())
+                .push(keep);
+        }
     });
     keep
 }
@@ -52,7 +62,7 @@ fn matches(ui: &egui::Ui, text: &str) -> bool {
 fn hidden(ui: &mut egui::Ui) -> egui::Response {
     let n = ui
         .ctx()
-        .data(|d| d.get_temp::<Vec<bool>>(visible_id()).map_or(0, |v| v.len()));
+        .data(|d| d.get_temp::<usize>(added_id()).unwrap_or(0));
     let rect = egui::Rect::from_min_size(ui.cursor().min, egui::Vec2::ZERO);
     ui.interact(
         rect,
@@ -71,7 +81,7 @@ fn picked(ui: &mut egui::Ui, response: egui::Response) -> egui::Response {
 /// A selectable entry
 pub fn item(ui: &mut egui::Ui, selected: bool, text: impl Into<WidgetText>) -> egui::Response {
     let text = text.into();
-    if !matches(ui, text.text()) {
+    if !matches(ui, text.text(), true) {
         return hidden(ui);
     }
     let response = ui.selectable_label(selected, text);
@@ -86,17 +96,17 @@ pub fn value<V: PartialEq>(
     text: impl Into<WidgetText>,
 ) -> egui::Response {
     let text = text.into();
-    if !matches(ui, text.text()) {
+    if !matches(ui, text.text(), true) {
         return hidden(ui);
     }
     let response = ui.selectable_value(current, selected_value, text);
     picked(ui, response)
 }
 
-/// An action entry (PoB's loadout actions)
+/// An action entry (PoB's loadout actions): searched, but not a choice the wheel steps to
 pub fn button(ui: &mut egui::Ui, text: impl Into<WidgetText>) -> egui::Response {
     let text = text.into();
-    if !matches(ui, text.text()) {
+    if !matches(ui, text.text(), false) {
         return hidden(ui);
     }
     let response = ui.button(text);
@@ -104,10 +114,10 @@ pub fn button(ui: &mut egui::Ui, text: impl Into<WidgetText>) -> egui::Response 
 }
 
 /// A header among the entries: picking it does nothing, but closes the list as any row of
-/// PoB's does (DropDownControl.lua:476-484)
+/// PoB's does (DropDownControl.lua:476-484). Not a choice the wheel steps to.
 pub fn label(ui: &mut egui::Ui, text: impl Into<WidgetText>) -> egui::Response {
     let text = text.into();
-    if !matches(ui, text.text()) {
+    if !matches(ui, text.text(), false) {
         return hidden(ui);
     }
     let response = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
@@ -187,12 +197,14 @@ impl<'a> Dropdown<'a> {
                 d.insert_temp(search_id, search.clone());
                 d.insert_temp(current_id(), search);
                 d.insert_temp(visible_id(), Vec::<bool>::new());
+                d.insert_temp(added_id(), 0usize);
             });
             let inner = add_contents(ui);
             ui.data_mut(|d| {
                 d.remove::<String>(current_id());
                 let seen = d.get_temp::<Vec<bool>>(visible_id()).unwrap_or_default();
                 d.remove::<Vec<bool>>(visible_id());
+                d.remove::<usize>(added_id());
                 // the matches the wheel and the arrows step through
                 if active {
                     d.insert_temp(button.with("visible"), seen);

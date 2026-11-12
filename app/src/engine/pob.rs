@@ -1055,6 +1055,22 @@ impl PobBackend {
                     ..Affected::default()
                 })
             }
+            Command::ConvertSpecLatest => {
+                #[derive(serde::Deserialize)]
+                struct Message {
+                    title: String,
+                    text: String,
+                }
+                let message: Option<Message> = self.view("convert_spec_latest", ())?;
+                if let Some(Message { title, text }) = message {
+                    send(Event::Message { title, text });
+                }
+                self.spec_edited(true)
+            }
+            Command::AllocNodeChangingClass { id, connect } => {
+                self.call::<_, ()>("alloc_changing_class", (id, connect))?;
+                self.tree_edited()
+            }
             Command::RemoveAccountHistory { account } => {
                 self.call::<_, ()>("remove_account_history", account)?;
                 Ok(Affected {

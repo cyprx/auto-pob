@@ -2914,8 +2914,7 @@ ported = "app/src/ui/import.rs confirm"
 note = "PoB's text"
 
 [popups."Class Change"]
-gap = "Task 13"
-note = "controller ruling: full parity; the canvas site (another class ascendancy start clicked) must ask as PoB does; today ported app/src/ui/tree/toolbar.rs class change confirm (Connect path / Reset); the canvas site (another class ascendancy node clicked, PassiveTreeView:474) errors in the glue and SP2 routes it through SelectClass"
+ported = "app/src/ui/tree/toolbar.rs class question for the class dropdown, and PoB's Class Change for a canvas click on another class's ascendancy node (AllocNodeChangingClass: Continue / Connect Path)"
 
 [popups."CompareBuySimilar:531"]
 ported = "app/src/engine/glue/popups.lua Buy Similar session (openPopup, R10)"
@@ -3143,8 +3142,7 @@ ruled_out = "R3"
 note = "unknown tree version on load: provisional with Game Version until Open check 14 runs"
 
 [popups."TreeTab:610"]
-gap = "Task 13"
-note = "the Tree Converted notice after a conversion isn't shown"
+ported = "app/src/ui/tree/toolbar.rs Convert to <latest> button (ConvertSpecLatest); PoB's Tree Converted message arrives as Event::Message and shows as a notice"
 
 [popups."TreeTab:665"]
 ported = "app/src/ui/tree/toolbar.rs Link menu Convert this tree"

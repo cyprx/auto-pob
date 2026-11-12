@@ -379,7 +379,12 @@ impl TreeTab {
         let now = ui.input(|i| i.time);
         for action in actions {
             match action {
-                CanvasAction::Alloc(id) => out.commands.push(Command::AllocNode { id }),
+                CanvasAction::Alloc(id) => match class_change_for(&layout, &state, &self.index, id)
+                {
+                    // the class's tree doesn't connect: PoB asks first (PassiveTreeView.lua:474)
+                    Some(class) => self.toolbar.ask_class_change(id, class),
+                    None => out.commands.push(Command::AllocNode { id }),
+                },
                 CanvasAction::AllocTrace(id, path) => {
                     out.commands.push(Command::AllocTracePath { id, path })
                 }
@@ -477,6 +482,24 @@ fn has_options(state: &TreeState, node: u32) -> bool {
         .mastery_options
         .iter()
         .any(|m| m.node == node && !m.options.is_empty())
+}
+
+/// The class a click on node `id` would switch to with PoB's "Class Change" question: a node of
+/// another class's ascendancy while the tree has points that don't connect to that class
+/// (`ClassChoice::needs_confirm`, PoB's own test).
+fn class_change_for(
+    layout: &TreeLayout,
+    state: &TreeState,
+    index: &HashMap<u32, usize>,
+    id: u32,
+) -> Option<String> {
+    let ascendancy = layout.nodes.get(*index.get(&id)?)?.ascendancy.as_ref()?;
+    let class = state.classes.iter().find(|c| {
+        c.ascendancies
+            .iter()
+            .any(|a| a.id != 0 && &a.ascend_id == ascendancy)
+    })?;
+    (class.id != state.class_id && class.needs_confirm).then(|| class.name.clone())
 }
 
 #[cfg(test)]
@@ -1156,5 +1179,58 @@ mod tests {
             debug(&out.commands),
             ["SetPowerReportFilter { filter: 2, masteries: true }"]
         );
+    }
+
+    #[test]
+    fn an_older_tree_offers_pobs_convert_button() {
+        let (l, s) = sample();
+        let mut state = (*s).clone();
+        state.convertible_to = Some("3_29".into());
+        let mut h = Harness::new(l, Arc::new(state));
+        h.frame(vec![]);
+        let out = press(&mut h, "spec_convert_latest");
+        assert_eq!(debug(&out.commands), ["ConvertSpecLatest"]);
+        // the newest tree has no such button
+        let mut h = heat_harness();
+        h.tab.rects.map.clear();
+        h.frame(vec![]);
+        assert!(!h.tab.rects.map.contains_key("spec_convert_latest"));
+    }
+
+    #[test]
+    fn another_class_ascendancy_click_asks_pobs_class_change() {
+        let mut necro = node(4, [600.0, 600.0], "Normal");
+        necro.ascendancy = Some("Necromancer".into());
+        let layout = layout(
+            vec![
+                node(1, [0.0, 0.0], "Normal"),
+                node(2, [600.0, 0.0], "Normal"),
+                necro,
+            ],
+            vec![(0, 1)],
+        );
+        let (_, s) = sample();
+        let mut state = (*s).clone();
+        state.classes = serde_json::from_value(serde_json::json!([
+            { "id": 0, "name": "Scion", "needs_confirm": false, "ascendancies": [] },
+            { "id": 3, "name": "Witch", "needs_confirm": true, "ascendancies": [
+                { "id": 0, "name": "None", "ascend_id": "" },
+                { "id": 3, "name": "Necromancer", "ascend_id": "Necromancer" } ] },
+        ]))
+        .unwrap();
+        let mut h = Harness::new(Arc::new(layout.clone()), Arc::new(state.clone()));
+        let out = h.click_at(h.screen_of(4));
+        assert!(out.commands.is_empty(), "{:?}", out.commands);
+        h.frame(vec![]);
+        let out = press(&mut h, "node_class_connect");
+        assert_eq!(
+            debug(&out.commands),
+            ["AllocNodeChangingClass { id: 4, connect: true }"]
+        );
+        // a tree that connects to the class switches with the click, as PoB does
+        state.classes[1].needs_confirm = false;
+        let mut h = Harness::new(Arc::new(layout), Arc::new(state));
+        let out = h.click_at(h.screen_of(4));
+        assert_eq!(debug(&out.commands), ["AllocNode { id: 4 }"]);
     }
 }

@@ -36,6 +36,8 @@ struct SpecState {
     version: String,
     #[serde(default)]
     alloc: Vec<u32>,
+    class_id: u32,
+    ascend_id: u32,
 }
 
 struct Upstream {
@@ -715,7 +717,7 @@ fn tab_gaps_version_import_notes_match_pob() {
     let older = up_versions
         .iter()
         .rev()
-        .find(|(_, v)| v.starts_with("3_2") && *v != state.version)
+        .find(|(_, v)| v.starts_with("3_2") && !v.contains("ruthless") && *v != state.version)
         .expect("an older version")
         .1
         .clone();
@@ -729,6 +731,36 @@ fn tab_gaps_version_import_notes_match_pob() {
     assert_eq!(converted.specs.len(), 3);
     assert_eq!(converted.specs[1].version, older);
     same_stats(&mut ours, &up, "converted");
+    // PoB's "Convert to <latest>" under the older tree, and its "Tree Converted" message
+    let events = std::cell::RefCell::new(Vec::new());
+    let affected = ours
+        .s
+        .backend
+        .apply(Command::ConvertSpecLatest, &|e| events.borrow_mut().push(e))
+        .expect("converting to the latest");
+    if affected.recalc {
+        ours.s.backend.recalculate().unwrap();
+    }
+    let want: BTreeMap<String, String> = up.get("upConvertLatest", ());
+    let messages: Vec<(String, String)> = events
+        .into_inner()
+        .into_iter()
+        .filter_map(|e| match e {
+            auto_pob::engine::Event::Message { title, text } => Some((title, text)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(messages, [(want["title"].clone(), want["text"].clone())]);
+    assert_eq!(want["title"], "Tree Converted");
+    assert!(want["text"].contains("has been converted to"), "{want:?}");
+    let latest = same(&ours, &up, "Convert to the latest");
+    assert_eq!(latest.specs.len(), 4);
+    assert_eq!(latest.specs[2].version, state.version);
+    let popups: usize = ours.eval("return #pob.main.main.popups");
+    assert_eq!(popups, 0);
+    // the newest tree isn't offered the button
+    let err = ours.run(Command::ConvertSpecLatest).unwrap_err();
+    assert_eq!(err.to_string(), "PoB doesn't offer that here");
 
     // ---- Import: the name box's label and Start (controller ruling), PoB's notes ----
     for text in [
@@ -814,4 +846,79 @@ fn tab_gaps_version_import_notes_match_pob() {
     let popups: usize = ours.eval("return #pob.main.main.popups");
     assert_eq!(popups, 0);
     assert_eq!(up.popups(), 0);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tab_gaps_class_change_match_pob() {
+    let _guard = lock();
+    let xml = fs::read_to_string(fixture_xml("attack")).unwrap();
+    let up = Upstream::new();
+    let mut ours = Ours::new();
+    ours.open(&xml, "attack");
+    up.load(&xml, "attack");
+    let start = same(&ours, &up, "opened");
+    assert_eq!(start.specs[0].class_id, 1, "a Marauder");
+
+    // a Necromancer node: the Marauder tree doesn't reach the Witch, so PoB asks
+    let necro: u32 = up.call("ascendancyNode", "Necromancer");
+    let ours_necro: u32 = ours.eval("return ascendancyNode('Necromancer', pob.build)");
+    assert_eq!(ours_necro, necro);
+    let class = {
+        let state = ours.s.backend.tree_state_view().unwrap();
+        state
+            .classes
+            .into_iter()
+            .find(|c| c.name == "Witch")
+            .unwrap()
+    };
+    assert!(class.needs_confirm, "our view doesn't ask for the Witch");
+    let title: Option<String> = up.call("upClickNode", (necro, "Connect Path"));
+    assert_eq!(title.as_deref(), Some("Class Change"));
+    ours.run(Command::AllocNodeChangingClass {
+        id: necro,
+        connect: true,
+    })
+    .expect("Connect Path");
+    let connected = same(&ours, &up, "Class Change, Connect Path");
+    assert_eq!(connected.specs[0].class_id, 3, "a Witch");
+    assert!(connected.specs[0].ascend_id != 0);
+    assert!(connected.specs[0].alloc.contains(&necro));
+    assert!(
+        connected.specs[0].alloc.len() > start.specs[0].alloc.len(),
+        "the path to the Witch was added"
+    );
+    same_stats(&mut ours, &up, "connected");
+
+    // a Deadeye node from the Witch tree: Continue resets the tree
+    let deadeye: u32 = up.call("ascendancyNode", "Deadeye");
+    let title: Option<String> = up.call("upClickNode", (deadeye, "Continue"));
+    assert_eq!(title.as_deref(), Some("Class Change"));
+    ours.run(Command::AllocNodeChangingClass {
+        id: deadeye,
+        connect: false,
+    })
+    .expect("Continue");
+    let reset = same(&ours, &up, "Class Change, Continue");
+    assert!(reset.specs[0].alloc.contains(&deadeye));
+    assert!(reset.specs[0].alloc.len() < 5, "{:?}", reset.specs[0].alloc);
+    same_stats(&mut ours, &up, "reset");
+
+    // with nothing left to lose PoB doesn't ask: the plain click switches
+    let juggernaut: u32 = up.call("ascendancyNode", "Juggernaut");
+    let err = ours
+        .run(Command::AllocNodeChangingClass {
+            id: juggernaut,
+            connect: false,
+        })
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "PoB doesn't ask here: the class changes with the click"
+    );
+    let title: Option<String> = up.call("upClickNode", (juggernaut, "Continue"));
+    assert_eq!(title, None);
+    ours.run(Command::AllocNode { id: juggernaut })
+        .expect("the plain click");
+    same(&ours, &up, "a click that needs no question");
 }

@@ -1024,3 +1024,67 @@ function glue.move_spec(from, to)
 	end)
 	glue.frame()
 end
+
+-- ---- PoB's "Convert to <latest>" button (TreeTab:610) ----
+
+-- The button under an older tree (TreeTab.lua:330-337): the tree is copied into the latest
+-- version next to it (ConvertToVersion with `success`, :588-612), and PoB says so in its
+-- "Tree Converted" message. The message's title and lines are returned for the UI to show.
+function glue.convert_spec_latest()
+	local button = pob.build.treeTab.controls.specConvert
+	if not (button:IsShown() and button:IsEnabled()) then
+		error("PoB doesn't offer that here", 0)
+	end
+	local message
+	in_popups(function()
+		local depth = #main_module().popups
+		button.onClick()
+		local popups = main_module().popups
+		if #popups > depth then
+			local popup = popups[1]
+			local lines = {}
+			for _, control in ipairs(popup.controls) do
+				lines[#lines + 1] = control:GetProperty("label")
+			end
+			message = { title = popup:GetProperty("title"), text = table.concat(lines, "\n") }
+		end
+	end)
+	return message
+end
+
+-- ---- The canvas's Class Change question (PassiveTreeView.lua:474) ----
+
+-- A left click on an unallocated node of another class's ascendancy, with points that don't
+-- connect to that class: PoB asks "Class Change" and runs its Continue or Connect Path
+-- callback (PassiveTreeView.lua:464-492), which these steps are.
+function glue.alloc_changing_class(id, connect)
+	local spec = pob.build.spec
+	local node = node_by_id(id)
+	if node.alloc or not node.ascendancyName or node.isBloodline then
+		error("PoB doesn't offer that here", 0)
+	end
+	local targetClassId, targetAscendClassId
+	for classId, classData in pairs(spec.tree.classes) do
+		for ascendClassId, ascendClass in pairs(classData.classes) do
+			if ascendClass.id == node.ascendancyName then
+				targetClassId, targetAscendClassId = classId, ascendClassId
+			end
+		end
+	end
+	if not targetClassId or targetClassId == spec.curClassId then
+		error("PoB doesn't offer that here", 0)
+	end
+	if spec:CountAllocNodes() == 0 or spec:IsClassConnected(targetClassId) then
+		error("PoB doesn't ask here: the class changes with the click", 0)
+	end
+	if connect and not spec:ConnectToClass(targetClassId) then
+		error("couldn't connect your tree to that class", 0)
+	end
+	spec:SelectClass(targetClassId)
+	spec:SelectAscendClass(targetAscendClassId)
+	local target = spec.nodes[id]
+	if target and not target.alloc then
+		spec:AllocNode(target)
+	end
+	finish_edit(true)
+end

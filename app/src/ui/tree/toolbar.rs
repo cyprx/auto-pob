@@ -48,6 +48,12 @@ enum Dialog {
         version: String,
         label: String,
     },
+    /// PoB's "Class Change" for a click on another class's ascendancy node
+    /// (PassiveTreeView.lua:474)
+    ClassChange {
+        node: u32,
+        class: String,
+    },
 }
 
 /// What a dragged tree row carries: its position
@@ -79,6 +85,12 @@ pub(super) struct Toolbar {
 }
 
 impl Toolbar {
+    /// A click on another class's ascendancy node whose class needs the question: PoB asks
+    /// "Class Change" before anything changes.
+    pub(super) fn ask_class_change(&mut self, node: u32, class: String) {
+        self.dialog = Some(Dialog::ClassChange { node, class });
+    }
+
     pub(super) fn has_dialog(&self) -> bool {
         self.dialog.is_some() || self.class_dialog.is_some()
     }
@@ -228,6 +240,22 @@ impl Toolbar {
         rects.note(&delete, || "spec_delete".into());
         if delete.clicked() {
             self.dialog = Some(Dialog::DeleteSpec(state.active_spec));
+        }
+        // PoB's note and button under an older tree (TreeTab.lua:321-337, TreeTab:610)
+        if let Some(latest) = &state.convertible_to {
+            let label = state
+                .versions
+                .iter()
+                .find(|c| &c.value == latest)
+                .map_or(latest.as_str(), |c| c.label.as_str());
+            let convert = ui.button(format!("Convert to {label}")).on_hover_text(
+                "This is an older tree version, which may not be fully compatible with the \
+                     current game version.",
+            );
+            rects.note(&convert, || "spec_convert_latest".into());
+            if convert.clicked() {
+                commands.push(Command::ConvertSpecLatest);
+            }
         }
         let copy = ui.add_enabled(active.is_some(), egui::Button::new("Copy"));
         rects.note(&copy, || "spec_copy".into());
@@ -716,6 +744,7 @@ impl Toolbar {
             Dialog::CopySpec { .. } => "Copy Tree",
             Dialog::OrderSpecs => "Tree order",
             Dialog::ConvertVersion { .. } => "Convert to Version",
+            Dialog::ClassChange { .. } => "Class Change",
         };
         egui::Window::new(title)
             .collapsible(false)
@@ -858,6 +887,26 @@ impl Toolbar {
                         commands.push(Command::MoveSpec { from, to });
                     }
                     close |= ui.button("Done").clicked();
+                }
+                Dialog::ClassChange { node, class } => {
+                    // PoB's question (PassiveTreeView.lua:474)
+                    ui.label(format!(
+                        "Changing class to {class} will reset your passive tree.\nThis can be \
+                         avoided by connecting one of the {class} starting nodes to your tree."
+                    ));
+                    ui.horizontal(|ui| {
+                        for (key, text, connect) in [
+                            ("node_class_continue", "Continue", false),
+                            ("node_class_connect", "Connect Path", true),
+                        ] {
+                            if button(ui, rects, key, text, true) {
+                                commands
+                                    .push(Command::AllocNodeChangingClass { id: *node, connect });
+                                close = true;
+                            }
+                        }
+                        close |= ui.button("Cancel").clicked();
+                    });
                 }
                 Dialog::ConvertVersion { version, label } => {
                     // PoB's warning (TreeTab.lua:652-653)

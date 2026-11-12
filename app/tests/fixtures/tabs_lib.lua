@@ -21,7 +21,10 @@ function tabState(b)
 		local alloc = {}
 		for id in pairs(spec.allocNodes) do alloc[#alloc + 1] = id end
 		table.sort(alloc)
-		specs[i] = { title = spec.title or "Default", version = spec.treeVersion, alloc = alloc }
+		specs[i] = {
+			title = spec.title or "Default", version = spec.treeVersion, alloc = alloc,
+			class_id = spec.curClassId, ascend_id = spec.curAscendClassId,
+		}
 	end
 	local itemSpecs = {}
 	for i, title in ipairs(b.itemsTab.controls.specSelect.list) do itemSpecs[i] = title end
@@ -338,4 +341,59 @@ function upNotesZoom(keys)
 		heights[i] = edit.lineHeight
 	end
 	return heights
+end
+
+-- The "Convert to <latest>" button, and the message it shows, read then dismissed with Ok
+function upConvertLatest()
+	build.treeTab.controls.specConvert.onClick()
+	local popup = main.popups[1]
+	local lines = {}
+	for _, control in ipairs(popup.controls) do lines[#lines + 1] = control:GetProperty("label") end
+	local message = { title = popup:GetProperty("title"), text = table.concat(lines, "\n") }
+	pressLabel("Ok")
+	runCallback("OnFrame")
+	return message
+end
+
+-- ---- The canvas's Class Change (PassiveTreeView.lua:474) ----
+
+-- The lowest id of a node of the named ascendancy that isn't its start
+function ascendancyNode(name, b)
+	b = b or build
+	local best
+	for id, node in pairs(b.spec.nodes) do
+		if node.ascendancyName == name and node.type ~= "AscendClassStart" and (not best or id < best) then
+			best = id
+		end
+	end
+	return best
+end
+
+-- A left click on the node, through the tree view's own Draw: the cursor is put over the node
+-- (the view's own transform, PassiveTreeView.lua:265-276) for a press and release, then the
+-- question's `button` is pressed. Returns the question's title, nil when PoB asked nothing.
+function upClickNode(nodeId, button)
+	local viewer = build.treeTab.viewer
+	local node = build.spec.nodes[nodeId]
+	local viewPort = { x = 0, y = 0, width = 2000, height = 2000 }
+	viewer.zoom, viewer.zoomX, viewer.zoomY = 1, 0, 0
+	local scale = math.min(viewPort.width, viewPort.height) / build.spec.tree.size * viewer.zoom
+	local x = node.x * scale + viewer.zoomX + viewPort.width / 2
+	local y = node.y * scale + viewer.zoomY + viewPort.height / 2
+	local cursor = GetCursorPos
+	GetCursorPos = function() return x, y end
+	local depth = #main.popups
+	local ok, err = pcall(viewer.Draw, viewer, build, viewPort, {
+		{ type = "KeyDown", key = "LEFTBUTTON" },
+		{ type = "KeyUp", key = "LEFTBUTTON" },
+	})
+	GetCursorPos = cursor
+	assert(ok, err)
+	local title
+	if #main.popups > depth then
+		title = main.popups[1]:GetProperty("title")
+		pressLabel(button)
+	end
+	runCallback("OnFrame")
+	return title
 end

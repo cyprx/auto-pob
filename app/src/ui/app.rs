@@ -700,6 +700,8 @@ impl AutoPobApp {
                 self.tree.power_failed();
                 self.notices.push(message);
             }
+            // PoB's message popups (TreeTab:610's "Tree Converted") become notices
+            Event::Message { title, text } => self.notices.push(format!("{title}: {text}")),
         }
     }
 

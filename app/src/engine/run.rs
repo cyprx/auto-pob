@@ -115,6 +115,11 @@ pub enum Event {
         task: BackgroundTask,
         message: String,
     },
+    /// A message PoB showed after a command, as its message popup: a title and its lines
+    Message {
+        title: String,
+        text: String,
+    },
 }
 
 /// What a command changed, so the loop knows which snapshots to send.

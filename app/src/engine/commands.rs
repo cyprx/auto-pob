@@ -889,6 +889,17 @@ pub enum Command {
     RemoveAccountHistory {
         account: String,
     },
+    /// PoB's "Convert to <latest>" button under an older tree: the tree is copied into the
+    /// latest version beside it, and PoB's "Tree Converted" message comes as `Event::Message`
+    /// (TreeTab:610)
+    ConvertSpecLatest,
+    /// A click on another class's ascendancy node while the tree doesn't connect to that
+    /// class: PoB's "Class Change" question, answered with Continue (the tree is reset) or,
+    /// with `connect`, Connect Path (PassiveTreeView.lua:464-492)
+    AllocNodeChangingClass {
+        id: u32,
+        connect: bool,
+    },
 }
 
 /// A control whose hover tooltip PoB computes (R22). Gem positions are 0-based.

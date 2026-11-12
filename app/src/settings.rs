@@ -275,6 +275,12 @@ const NEW_FILE_HEADER: &str = "# auto-pob settings. PoB's own options stay in Se
 /// the folder, and replaces the file by rename. Returns the backup's path when the file there
 /// could not be parsed and was moved aside first.
 pub fn save_noting(path: &Path, s: &AppSettings) -> Result<Option<PathBuf>> {
+    // a linked file (a dotfile manager's) is written where it points, so the link stays
+    let resolved = std::fs::symlink_metadata(path)
+        .is_ok_and(|m| m.file_type().is_symlink())
+        .then(|| std::fs::canonicalize(path).ok())
+        .flatten();
+    let path = resolved.as_deref().unwrap_or(path);
     let mut backup = None;
     let existing = match std::fs::read_to_string(path) {
         Ok(text) => Some(text),
@@ -308,12 +314,23 @@ pub fn save_noting(path: &Path, s: &AppSettings) -> Result<Option<PathBuf>> {
         name.to_string_lossy(),
         std::process::id()
     ));
+    // the file keeps the mode it had (a user's `chmod 600`)
+    let mode = std::fs::metadata(path).ok().map(|m| m.permissions());
     let write = || -> Result<()> {
         use std::io::Write as _;
         let mut file = std::fs::File::create(&temp)?;
         file.write_all(text.as_bytes())?;
+        if let Some(mode) = &mode {
+            file.set_permissions(mode.clone())?;
+        }
         file.sync_all()?;
         std::fs::rename(&temp, path)?;
+        // the rename itself survives a crash once the folder is synced
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty())
+            && let Ok(dir) = std::fs::File::open(dir)
+        {
+            let _ = dir.sync_all();
+        }
         Ok(())
     };
     if let Err(e) = write() {
@@ -497,6 +514,46 @@ mod tests {
                 .starts_with("# auto-pob settings")
         );
         assert_eq!(load(&path).unwrap().unwrap(), s);
+    }
+
+    #[test]
+    fn a_save_keeps_the_files_mode_and_its_link() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = temp("mode");
+        let real = dir.join("dotfiles").join("auto-pob.toml");
+        std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+        std::fs::write(&real, "# mine\nupdate_check = false\n").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = dir.join("auto-pob.toml");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let s = AppSettings {
+            update_check: true,
+            ..AppSettings::default()
+        };
+        save(&link, &s).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the link was replaced by a file"
+        );
+        let text = std::fs::read_to_string(&real).unwrap();
+        assert!(text.starts_with("# mine\n"), "{text}");
+        assert_eq!(load(&link).unwrap().unwrap(), s);
+        let mode = std::fs::metadata(&real).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        // nothing left beside either
+        let names = |d: &Path| -> Vec<String> {
+            let mut v: Vec<_> = std::fs::read_dir(d)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(names(&dir), ["auto-pob.toml", "dotfiles"]);
+        assert_eq!(names(real.parent().unwrap()), ["auto-pob.toml"]);
     }
 
     #[test]

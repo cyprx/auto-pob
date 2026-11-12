@@ -529,3 +529,289 @@ fn tab_gaps_tree_match_pob() {
     assert_eq!(view.specs[2].title, "Main");
     same_stats(&mut ours, &up, "after the trees");
 }
+
+/// What `upCalcsWidths` reads of one section
+#[derive(Debug, serde::Deserialize)]
+struct UpSection {
+    id: String,
+    widths: Vec<f32>,
+    pop_out: bool,
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tab_gaps_calcs_match_pob() {
+    let _guard = lock();
+    let xml = fs::read_to_string(fixture_xml("attack")).unwrap();
+    let up = Upstream::new();
+    let mut ours = Ours::new();
+    ours.open(&xml, "attack");
+    up.load(&xml, "attack");
+    let view = ours.s.backend.calcs_view().expect("calcs view");
+    let want: Vec<UpSection> = up.get("upCalcsWidths", ());
+    assert_eq!(view.sections.len(), want.len(), "sections");
+    let mut compared = 0;
+    let mut seen = std::collections::BTreeSet::new();
+    for (section, up_section) in view.sections.iter().zip(&want) {
+        assert_eq!(section.id, up_section.id);
+        assert_eq!(
+            section.col_widths.len(),
+            up_section.widths.len(),
+            "{}: sub-sections",
+            section.id
+        );
+        for (si, (&ours_w, &up_w)) in section
+            .col_widths
+            .iter()
+            .zip(&up_section.widths)
+            .enumerate()
+        {
+            // PoB gives a width only to the cells it lays out
+            if up_w > 0.0 {
+                assert_eq!(ours_w, up_w, "{} sub {si}: column width", section.id);
+                compared += 1;
+                seen.insert(ours_w as u32);
+            }
+        }
+        assert_eq!(
+            section.enabled && section.pop_out,
+            up_section.pop_out,
+            "{}: the \"^\" button",
+            section.id
+        );
+    }
+    assert!(compared > 20, "only {compared} widths compared");
+    // both PoB's fixed widths and the section-wide fallback are in the attack build
+    assert!(seen.contains(&95) && seen.contains(&114), "{seen:?}");
+    assert!(seen.contains(&94), "no fallback width: {seen:?}");
+    // the selector section has controls and no pop-out
+    let select = view
+        .sections
+        .iter()
+        .find(|s| s.id == "SkillSelect")
+        .unwrap();
+    assert!(!select.pop_out);
+    assert_eq!(up.popups(), 0);
+    let popups: usize = ours.eval("return #pob.main.main.popups");
+    assert_eq!(popups, 0);
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tab_gaps_power_match_pob() {
+    let _guard = lock();
+    let xml = fs::read_to_string(fixture_xml("attack")).unwrap();
+    let up = Upstream::new();
+    let mut ours = Ours::new();
+    ours.open(&xml, "attack");
+    up.load(&xml, "attack");
+
+    // ---- Custom heat map depth (NF-6): a depth PoB's list doesn't have ----
+    ours.run(Command::SetHeatmap {
+        stat: Some("Life".into()),
+        max_depth: Some(7),
+    })
+    .expect("heat map");
+    let mut steps = 0;
+    while let Some(task) = ours.s.backend.next_background() {
+        ours.s
+            .backend
+            .background_step(task, &|_| {})
+            .expect("power step");
+        steps += 1;
+        assert!(steps < 100_000, "the power calculation never ends");
+    }
+    let depth: Option<u32> = up.call("upPowerCustom", ("Life", "7"));
+    assert_eq!(depth, Some(7));
+    let ours_depth: Option<u32> = ours.eval("return pob.build.calcsTab.nodePowerMaxDepth");
+    assert_eq!(ours_depth, depth);
+    assert_eq!(ours.s.backend.tree_state_view().unwrap().max_depth, Some(7));
+
+    // ---- The report's filter and Show Masteries (NF-5) ----
+    let listed = |ours: &mut Ours| -> (Vec<String>, auto_pob::engine::PowerReport) {
+        let report = ours.s.backend.power_report_view().expect("report");
+        let mut rows: Vec<String> = report
+            .listed
+            .iter()
+            .map(|&i| format!("{} {}", report.rows[i].id, report.rows[i].name))
+            .collect();
+        rows.sort();
+        (rows, report)
+    };
+    let (rows, report) = listed(&mut ours);
+    assert_eq!((report.filter, report.masteries), (0, true));
+    let want: Vec<String> = up.get("upReportListed", ());
+    assert_eq!(rows, want, "Show Unallocated");
+    assert!(
+        rows.len() < report.rows.len(),
+        "PoB's list drops rows of no power: {} of {}",
+        rows.len(),
+        report.rows.len()
+    );
+    assert!(report.rows.iter().any(|r| r.kind == "Mastery"));
+    for (filter, masteries, what) in [
+        (2, true, "Show Allocated"),
+        (1, true, "Show Unallocated & Clusters"),
+        (1, false, "no masteries"),
+    ] {
+        ours.run(Command::SetPowerReportFilter { filter, masteries })
+            .expect("filter");
+        up.call::<()>("upReportFilter", filter);
+        up.call::<()>("upReportMasteries", masteries);
+        let (rows, report) = listed(&mut ours);
+        assert_eq!((report.filter, report.masteries), (filter, masteries));
+        let want: Vec<String> = up.get("upReportListed", ());
+        assert_eq!(rows, want, "{what}");
+        assert!(!rows.is_empty(), "{what}: nothing listed");
+        if !masteries {
+            assert!(
+                report
+                    .listed
+                    .iter()
+                    .all(|&i| report.rows[i].kind != "Mastery"),
+                "{what}"
+            );
+        }
+    }
+    let err = ours
+        .run(Command::SetPowerReportFilter {
+            filter: 3,
+            masteries: true,
+        })
+        .unwrap_err();
+    assert_eq!(err.to_string(), "no such filter");
+    let popups: usize = ours.eval("return #pob.main.main.popups");
+    assert_eq!(popups, 0);
+    assert_eq!(up.popups(), 0);
+}
+
+#[derive(Debug, PartialEq, serde::Deserialize)]
+struct UpChoice {
+    label: String,
+    value: String,
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tab_gaps_version_import_notes_match_pob() {
+    let _guard = lock();
+    let xml = sets_xml();
+    let up = Upstream::new();
+    let mut ours = Ours::new();
+    ours.open(&xml, "tabs");
+    up.load(&xml, "tabs");
+
+    // ---- Version dropdown (NF-7): PoB's list, and a conversion to an older version ----
+    let state = ours.s.backend.tree_state_view().unwrap();
+    let want: Vec<UpChoice> = up.get("upVersions", ());
+    assert!(want.len() > 3, "{want:?}");
+    let ours_versions: Vec<(String, String)> = state
+        .versions
+        .iter()
+        .map(|c| (c.label.clone(), c.value.clone()))
+        .collect();
+    let up_versions: Vec<(String, String)> = want.into_iter().map(|c| (c.label, c.value)).collect();
+    assert_eq!(ours_versions, up_versions);
+    let older = up_versions
+        .iter()
+        .rev()
+        .find(|(_, v)| v.starts_with("3_2") && *v != state.version)
+        .expect("an older version")
+        .1
+        .clone();
+    ours.run(Command::ConvertSpec {
+        version: older.clone(),
+        keep_copy: true,
+    })
+    .expect("converting");
+    up.call::<()>("upConvertVersion", (older.as_str(), "Copy + Convert"));
+    let converted = same(&ours, &up, "Version pick, Copy + Convert");
+    assert_eq!(converted.specs.len(), 3);
+    assert_eq!(converted.specs[1].version, older);
+    same_stats(&mut ours, &up, "converted");
+
+    // ---- Import: the name box's label and Start (controller ruling), PoB's notes ----
+    for text in [
+        "",
+        "Name",
+        "Name#123",
+        "Name#1234",
+        "Name-1234",
+        "#1234",
+        " #1234",
+        "Name#1234 ",
+    ] {
+        let want: (bool, bool) = up.get("upAccountName", text);
+        assert_eq!(
+            auto_pob::engine::views::account_name_state(text),
+            want,
+            "{text:?}"
+        );
+    }
+    let account = ours.s.backend.account_view().expect("account view");
+    let label: String = up
+        .lua
+        .load("return StripEscapes(build.importTab.controls.siteAccountNameMissingDiscriminator.label)")
+        .eval()
+        .unwrap();
+    assert_eq!(account.public.missing_discriminator, label);
+    assert!(label.starts_with("Missing discriminator"));
+    let note: String = up
+        .lua
+        .load("return StripEscapes(build.importTab.controls.siteCharBanditNote.label)")
+        .eval()
+        .unwrap();
+    assert_eq!(account.public.bandit_note, note);
+    assert!(note.contains("bandit"), "{note}");
+
+    // ---- The account history and its X (NF-8) ----
+    for name in ["Zed#0001", "alice#1234", "Bob#9999"] {
+        ours.eval::<()>(&format!("saveAccountHistory(pob.build, {name:?})"));
+        up.lua
+            .load(format!("saveAccountHistory(build, {name:?})"))
+            .exec()
+            .unwrap();
+    }
+    let history: Vec<String> = up.get("accountHistory", ());
+    assert_eq!(history, ["alice#1234", "Bob#9999", "Zed#0001"]);
+    let view = ours.s.backend.account_view().unwrap();
+    assert_eq!(view.public.history, history);
+    ours.run(Command::RemoveAccountHistory {
+        account: "Bob#9999".into(),
+    })
+    .expect("removing");
+    up.call::<()>("upRemoveAccount", "Bob#9999");
+    let history: Vec<String> = up.get("accountHistory", ());
+    assert_eq!(history, ["alice#1234", "Zed#0001"]);
+    let view = ours.s.backend.account_view().unwrap();
+    assert_eq!(view.public.history, history);
+    // the pick put the name in PoB's box, on both sides
+    assert_eq!(view.public.account, "Bob#9999");
+    let err = ours
+        .run(Command::RemoveAccountHistory {
+            account: "Bob#9999".into(),
+        })
+        .unwrap_err();
+    assert_eq!(err.to_string(), "no such account in the history");
+
+    // ---- The notes' zoom: our sizes are PoB's ZoomText steps ----
+    let keys = "+++-0--------0";
+    let want: Vec<u32> = up.get("upNotesZoom", keys);
+    let mut height = auto_pob::ui::notes::NOTES_LINE_HEIGHT;
+    let ours_heights: Vec<u32> = keys
+        .chars()
+        .map(|k| {
+            height = auto_pob::ui::notes::zoom_line_height(
+                height,
+                k,
+                auto_pob::ui::notes::NOTES_LINE_HEIGHT,
+            );
+            height
+        })
+        .collect();
+    assert_eq!(ours_heights, want);
+    assert!(want.contains(&10), "the floor is reached: {want:?}");
+    let popups: usize = ours.eval("return #pob.main.main.popups");
+    assert_eq!(popups, 0);
+    assert_eq!(up.popups(), 0);
+}

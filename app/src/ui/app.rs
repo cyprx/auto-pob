@@ -1688,6 +1688,10 @@ impl AutoPobApp {
             self.engine.send(query);
         }
 
+        // the Calcs sections popped out float over every tab, as PoB's overlay panes (R24)
+        if self.tab != BuildTab::Calcs {
+            calcs_out.commands.extend(self.calcs.show_popouts(ui.ctx()));
+        }
         for command in calcs_out.commands {
             self.send(command);
         }
@@ -4043,6 +4047,9 @@ mod tests {
             snapshot: Snapshot::PowerReport(Arc::new(crate::engine::PowerReport {
                 stat: "Life".into(),
                 rows: vec![row(1, "First"), row(2, "Second")],
+                listed: vec![0, 1],
+                filter: 0,
+                masteries: true,
             })),
         });
         frame(&mut app, &ctx, vec![]);
@@ -4163,6 +4170,9 @@ mod tests {
             snapshot: Snapshot::PowerReport(Arc::new(crate::engine::PowerReport {
                 stat: "Life".into(),
                 rows: vec![],
+                listed: vec![],
+                filter: 0,
+                masteries: true,
             })),
         });
         app.on_event(Event::BackgroundFailed {

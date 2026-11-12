@@ -201,3 +201,141 @@ function upSelectSpec(index)
 	select.selFunc(index + 1, select.list[index + 1])
 	runCallback("OnFrame")
 end
+
+-- ---- Calcs (R24) ----
+
+-- Each section after PoB's own UpdateSize (CalcSectionControl.lua:103-150): the width it gave
+-- each sub-section's cells (0 where no row of the sub-section is shown), and whether its "^"
+-- shows
+function upCalcsWidths()
+	local out = {}
+	local calcs = build.calcsTab
+	for _, section in ipairs(calcs.sectionList) do
+		section:UpdateSize()
+		local widths = {}
+		for i, sub in ipairs(section.subSection) do
+			widths[i] = 0
+			for _, row in ipairs(sub.data) do
+				if calcs:CheckFlag(row) and row[1] and row[1].width then
+					widths[i] = row[1].width
+					break
+				end
+			end
+		end
+		out[#out + 1] = {
+			id = section.id,
+			widths = widths,
+			pop_out = section.controls.popOut:IsShown() and true or false,
+		}
+	end
+	return out
+end
+
+-- ---- Tree: heat map Custom depth, power report filter (NF-5, NF-6), Version (NF-7) ----
+
+-- The depth dropdown's "Custom" and its box typed into, then the stat dropdown's pick, and
+-- PoB's own power builder run to its end (its callback hands the report to the list)
+function upPowerCustom(statLabel, depthText)
+	local tab = build.treeTab
+	local depth = tab.controls.nodePowerMaxDepthSelect
+	for i, entry in ipairs(depth.list) do
+		if entry == "Custom" then depth:SetSel(i) end
+	end
+	assert(tab.controls.nodePowerMaxDepthCustom:IsShown(), "no Custom box")
+	tab.controls.nodePowerMaxDepthCustom:SetText(depthText, true)
+	local stat
+	for _, entry in ipairs(tab.powerStatList) do
+		if entry.label == statLabel then stat = entry end
+	end
+	tab.controls.treeHeatMapStatSelect.selFunc(nil, stat)
+	runCallback("OnFrame")
+	repeat build.calcsTab:BuildPower() until not build.calcsTab.powerBuilder
+	return build.calcsTab.nodePowerMaxDepth
+end
+
+-- The rows PoB's report list shows, as "id name", sorted (the report is built with `pairs`)
+function upReportListed()
+	local out = {}
+	for _, row in ipairs(build.treeTab.controls.powerReportList.list) do
+		out[#out + 1] = row.id .. " " .. row.name
+	end
+	table.sort(out)
+	return out
+end
+
+function upReportFilter(index)
+	build.treeTab.controls.powerReportList.controls.filterSelect:SetSel(index + 1)
+end
+
+function upReportMasteries(on)
+	local check = build.treeTab.controls.powerReportList.controls.masteryCheck
+	check.state = on
+	check.changeFunc(on)
+end
+
+-- The Version dropdown's entries
+function upVersions()
+	local out = {}
+	for i, entry in ipairs(build.treeTab.controls.versionSelect.list) do
+		out[i] = { label = entry.label, value = entry.value }
+	end
+	return out
+end
+
+-- The Version dropdown's pick and its popup's button
+function upConvertVersion(version, button)
+	local select = build.treeTab.controls.versionSelect
+	for i, entry in ipairs(select.list) do
+		if entry.value == version then select:SetSel(i) end
+	end
+	pressLabel(button)
+	runCallback("OnFrame")
+end
+
+-- ---- Import (NF-8) and the notes' zoom ----
+
+-- The account box typed into: whether PoB shows "Missing discriminator" and enables Start
+function upAccountName(text)
+	local controls = build.importTab.controls
+	controls.siteAccountName:SetText(text)
+	return {
+		controls.siteAccountNameMissingDiscriminator:IsShown() and true or false,
+		controls.siteAccountNameGo:IsEnabled() and true or false,
+	}
+end
+
+-- A successful list's SaveAccountHistory (ImportTab.lua:800-811), for a name in the box; used
+-- on both sides to fill the history the same way
+function saveAccountHistory(b, name)
+	b = b or build
+	b.importTab.controls.siteAccountName:SetText(name)
+	b.importTab:SaveAccountHistory()
+end
+
+function accountHistory(b)
+	b = b or build
+	local out = {}
+	for i, name in ipairs(b.importTab.controls.siteAccountHistory.list) do out[i] = name end
+	return out
+end
+
+-- The history dropdown's pick and its X
+function upRemoveAccount(name)
+	local controls = build.importTab.controls
+	local history = controls.siteAccountHistory
+	for i, entry in ipairs(history.list) do
+		if entry == name then history:SetSel(i) end
+	end
+	controls.siteRemoveAccount.onClick()
+end
+
+-- Ctrl and a key on the notes box, as EditControl:OnKeyDown passes it to ZoomText
+function upNotesZoom(keys)
+	local edit = build.notesTab.controls.edit
+	local heights = {}
+	for i = 1, #keys do
+		edit:ZoomText(keys:sub(i, i))
+		heights[i] = edit.lineHeight
+	end
+	return heights
+end

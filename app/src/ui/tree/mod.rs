@@ -327,9 +327,12 @@ impl TreeTab {
                 .resizable(true)
                 .default_size(420.0)
                 .show(ui, |ui| {
-                    clicked = self
-                        .report_panel
-                        .show(ui, report.as_deref(), &mut self.rects);
+                    clicked = self.report_panel.show(
+                        ui,
+                        report.as_deref(),
+                        &mut self.rects,
+                        &mut out.commands,
+                    );
                 });
             if let Some(id) = clicked {
                 let now = ui.input(|i| i.time);
@@ -1067,5 +1070,91 @@ mod tests {
             all.extend(h.frame(events).commands);
         }
         assert_eq!(debug(&all), ["MoveSpec { from: 0, to: 1 }"]);
+    }
+
+    // ---- Task 13: heat map Custom depth (NF-6), Version (NF-7), report filter (NF-5) ----
+
+    fn heat_harness() -> Harness {
+        let (l, s) = sample();
+        let mut state = (*s).clone();
+        state.heatmap = Some("Life".into());
+        state.power_stats = vec!["Life".into()];
+        state.versions = serde_json::from_value(serde_json::json!([
+            { "label": "3.28", "value": "3_28" },
+            { "label": "3.29", "value": "3_29" },
+        ]))
+        .unwrap();
+        let mut h = Harness::new(l, Arc::new(state));
+        h.frame(vec![]);
+        h
+    }
+
+    /// `click_key`, then a frame for what the click opened
+    fn press(h: &mut Harness, key: &str) -> TreeOutput {
+        let out = click_key(h, key);
+        h.frame(vec![]);
+        out
+    }
+
+    #[test]
+    fn custom_depth_box_sends_its_depth() {
+        let mut h = heat_harness();
+        press(&mut h, "heat_depth");
+        press(&mut h, "depth:custom");
+        press(&mut h, "depth_custom");
+        h.frame(vec![Event::Text("7a".into())]);
+        let enter = Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let out = h.frame(vec![enter]);
+        assert_eq!(
+            debug(&out.commands),
+            ["SetHeatmap { stat: Some(\"Life\"), max_depth: Some(7) }"]
+        );
+    }
+
+    #[test]
+    fn version_pick_asks_and_converts() {
+        let mut h = heat_harness();
+        press(&mut h, "version");
+        assert!(press(&mut h, "version:3_29").commands.is_empty());
+        let out = press(&mut h, "version_convert_copy");
+        assert_eq!(
+            debug(&out.commands),
+            ["ConvertSpec { version: \"3_29\", keep_copy: true }"]
+        );
+        // the tree's own version isn't offered as a conversion
+        press(&mut h, "version");
+        assert!(press(&mut h, "version:3_28").commands.is_empty());
+        assert!(!h.tab.toolbar.has_dialog());
+    }
+
+    #[test]
+    fn report_filter_and_masteries_send_pobs_choice() {
+        let mut h = heat_harness();
+        h.tab
+            .on_snapshot(&Snapshot::PowerReport(Arc::new(PowerReport {
+                stat: "Life".into(),
+                rows: vec![],
+                listed: vec![],
+                filter: 0,
+                masteries: true,
+            })));
+        press(&mut h, "report_toggle");
+        let out = press(&mut h, "report_masteries");
+        assert_eq!(
+            debug(&out.commands),
+            ["SetPowerReportFilter { filter: 0, masteries: false }"]
+        );
+        press(&mut h, "report_filter");
+        let out = press(&mut h, "report_filter:2");
+        assert_eq!(
+            debug(&out.commands),
+            ["SetPowerReportFilter { filter: 2, masteries: true }"]
+        );
     }
 }

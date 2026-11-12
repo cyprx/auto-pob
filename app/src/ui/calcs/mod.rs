@@ -45,6 +45,9 @@ pub struct CalcsUi {
     /// The text fields' ids, which focus is looked up by
     search_id: egui::Id,
     pub(crate) rects: Rects,
+    /// The sections popped out with "^" into their own windows, by id; UI state PoB doesn't
+    /// save either (R24)
+    pub(crate) popped: Vec<String>,
 }
 
 impl Default for CalcsUi {
@@ -59,6 +62,7 @@ impl Default for CalcsUi {
             clicked: None,
             search_id: egui::Id::unique("calcs_search"),
             rects: Rects::default(),
+            popped: Vec::new(),
         }
     }
 }
@@ -185,6 +189,7 @@ impl CalcsUi {
         egui::ScrollArea::both()
             .auto_shrink(false)
             .show(ui, |ui| self.sections(ui, &view, &mut out.commands));
+        self.popout_windows(ui.ctx(), &view, &mut out.commands);
         if let Some((cell, label)) = self.clicked.take() {
             self.bd.click(cell, label);
         }
@@ -372,9 +377,57 @@ impl CalcsUi {
 
     // ---- the grid ------------------------------------------------------------------------
 
+    /// The popped-out sections over any tab (PoB draws its overlay panes on top of every tab).
+    /// Off the Calcs tab their cells show no breakdown: the breakdown panel lives on the tab.
+    pub fn show_popouts(&mut self, ctx: &egui::Context) -> Vec<Command> {
+        let mut out = Vec::new();
+        if let Some(view) = self.view.clone() {
+            self.popout_windows(ctx, &view, &mut out);
+        }
+        self.hovered = None;
+        self.clicked = None;
+        out
+    }
+
+    /// One floating window per popped-out section, toggled by "^" and closed by its x
+    /// (CalcSectionControl.lua:56-62, 223-240, 280-294). The window drags as PoB's pane does.
+    fn popout_windows(&mut self, ctx: &egui::Context, view: &CalcsView, out: &mut Vec<Command>) {
+        let popped = self.popped.clone();
+        for id in popped {
+            let Some(section) = view.sections.iter().find(|s| s.id == id) else {
+                continue;
+            };
+            let mut open = true;
+            let title = section
+                .subs
+                .first()
+                .map_or(id.as_str(), |s| s.label.as_str());
+            let size = Vec2::new(
+                grid::section_width(section.width_cols),
+                grid::section_height(section),
+            );
+            egui::Window::new(title)
+                .id(egui::Id::unique(("calcs_popout", &id)))
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+                    self.section(ui, section, rect, false, out);
+                });
+            if !open {
+                self.popped.retain(|p| *p != id);
+            }
+        }
+    }
+
     fn sections(&mut self, ui: &mut egui::Ui, view: &CalcsView, out: &mut Vec<Command>) {
-        // PoB lays out and shows only sections that are enabled
-        let shown: Vec<&CalcsSection> = view.sections.iter().filter(|s| s.enabled).collect();
+        // PoB lays out and shows only sections that are enabled and not popped out
+        let shown: Vec<&CalcsSection> = view
+            .sections
+            .iter()
+            .filter(|s| s.enabled && !self.popped.contains(&s.id))
+            .collect();
         let items: Vec<(u32, u32, f32)> = shown
             .iter()
             .map(|s| (s.group, s.width_cols, grid::section_height(s)))
@@ -402,7 +455,7 @@ impl CalcsUi {
                 ),
             );
             if ui.is_rect_visible(rect) {
-                self.section(ui, section, rect, out);
+                self.section(ui, section, rect, section.pop_out, out);
             }
         }
     }
@@ -412,12 +465,44 @@ impl CalcsUi {
         ui: &mut egui::Ui,
         section: &CalcsSection,
         rect: Rect,
+        pop_out: bool,
         out: &mut Vec<Command>,
     ) {
         let colour = parse_colour(&section.colour).unwrap_or(Color32::GRAY);
         let painter = ui.painter_at(rect.expand(1.0));
         painter.rect_filled(rect, 0.0, colour);
         painter.rect_filled(rect.shrink(2.0), 0.0, Color32::from_gray(26));
+        // PoB's "^" button, left of the first toggle: pops the section out (R24)
+        if pop_out {
+            let button = Rect::from_min_size(
+                Pos2::new(rect.max.x - 22.0 - 16.0, rect.min.y + 3.0),
+                Vec2::splat(16.0),
+            );
+            let response = ui.interact(
+                button,
+                ui.scope_id().with(("calcs_popout_button", &section.id)),
+                Sense::click(),
+            );
+            self.rects
+                .note(&response, || format!("popout_button_{}", section.id));
+            let fill = if response.hovered() {
+                Color32::from_gray(70)
+            } else {
+                Color32::from_gray(45)
+            };
+            painter.rect_filled(button, 2.0, fill);
+            painter.rect_stroke(
+                button,
+                2.0,
+                Stroke::new(1.0, Color32::GRAY),
+                StrokeKind::Inside,
+            );
+            let galley = painter.layout_job(pob_text("^", 14.0, TEXT));
+            painter.galley(button.center() - galley.size() / 2.0, galley, TEXT);
+            if response.clicked() && !self.popped.contains(&section.id) {
+                self.popped.push(section.id.clone());
+            }
+        }
         let (offsets, _) = grid::sub_offsets(section);
         let first_collapsed = section.subs.first().is_some_and(|s| s.collapsed);
         for (si, (sub, offset)) in section.subs.iter().zip(offsets).enumerate() {
@@ -502,11 +587,19 @@ impl CalcsUi {
                     let x = rect.min.x + LABEL_WIDTH + 2.0 - galley.size().x;
                     painter.galley(Pos2::new(x, y), galley, TEXT);
                 }
-                let count = row.cells.len().max(1) as f32;
-                let width = (rect.width() - CELL_START - 2.0) / count;
+                // PoB's widths (R24): every cell of the sub-section is `colWidth` wide, or the
+                // section less the label column, at its place in the row (UpdateSize)
+                let width = section.col_widths.get(si).copied();
                 for (ci, cell) in row.cells.iter().enumerate() {
+                    let (x, width) = match width {
+                        Some(w) => (CELL_START + w * cell.index as f32, w),
+                        None => {
+                            let w = (rect.width() - CELL_START - 2.0) / row.cells.len() as f32;
+                            (CELL_START + w * ci as f32, w)
+                        }
+                    };
                     let cell_rect = Rect::from_min_size(
-                        Pos2::new(rect.min.x + CELL_START + width * ci as f32, y),
+                        Pos2::new(rect.min.x + x, y),
                         Vec2::new(width, ROW_HEIGHT),
                     );
                     painter.rect_filled(
@@ -615,6 +708,7 @@ mod tests {
                     }],
                 }],
                 col_widths: vec![95.0],
+                pop_out: true,
             }],
             selector: CalcsSelector {
                 group: list(&["Group"]),
@@ -1165,5 +1259,86 @@ mod tests {
         h.frame_out(t + 0.65, vec![]);
         let retry = h.frame_out(t + 0.8, vec![]);
         assert_eq!(retry.queries.len(), 1, "hovering again retries");
+    }
+
+    // ---- Task 13: pop-out windows and PoB's column widths (R24) ----
+
+    fn two_cells() -> CalcsView {
+        let mut view = sample(None);
+        let row = &mut view.sections[0].subs[0].rows[0];
+        row.cells.push(CalcsCell {
+            index: 2,
+            text: "456".into(),
+            breakdown: true,
+        });
+        view
+    }
+
+    #[test]
+    fn cells_use_column_widths() {
+        let mut h = Harness::new(two_cells());
+        h.frame(vec![]);
+        let first = h.ui.rects.map["cell_sec_0_2_0"];
+        let third = h.ui.rects.map["cell_sec_0_2_2"];
+        assert_eq!(first.width(), 95.0);
+        assert_eq!(third.width(), 95.0);
+        // the cell sits at its own place in PoB's row, two columns along
+        assert_eq!(third.min.x - first.min.x, 190.0);
+        // without PoB's widths the cells share the row as before
+        let mut view = two_cells();
+        view.sections[0].col_widths.clear();
+        let mut h = Harness::new(view);
+        h.frame(vec![]);
+        let first = h.ui.rects.map["cell_sec_0_2_0"];
+        assert!((first.width() - (grid::COL_WIDTH - CELL_START - 2.0) / 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn popout_window_toggles() {
+        let mut h = Harness::new(sample(None));
+        h.frame(vec![]);
+        assert!(h.ui.rects.map.contains_key("popout_button_sec"));
+        h.click("popout_button_sec");
+        assert_eq!(h.ui.popped, ["sec"]);
+        // the window draws the section without its "^"; the cells work there too
+        h.ui.rects.map.clear();
+        h.frame(vec![]);
+        h.frame(vec![]);
+        assert!(!h.ui.rects.map.contains_key("popout_button_sec"));
+        assert!(h.ui.rects.map.contains_key("cell_sec_0_2_0"));
+        // a new view keeps it popped; another build forgets it
+        h.ui.on_snapshot(&Snapshot::Calcs(Arc::new(sample(None))));
+        h.frame(vec![]);
+        assert_eq!(h.ui.popped, ["sec"]);
+        // the window's close button puts the section back
+        let area = h
+            .ctx
+            .memory(|m| m.area_rect(egui::Id::unique(("calcs_popout", &"sec".to_string()))))
+            .expect("the window");
+        let close = Pos2::new(area.max.x - 14.0, area.min.y + 12.0);
+        let button = |pressed| Event::PointerButton {
+            pos: close,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![Event::PointerMoved(close)],
+            vec![button(true)],
+            vec![button(false)],
+            vec![],
+        ] {
+            h.frame(events);
+        }
+        assert!(h.ui.popped.is_empty(), "the x didn't close it");
+        h.ui.rects.map.clear();
+        h.frame(vec![]);
+        assert!(h.ui.rects.map.contains_key("popout_button_sec"));
+        // a section with controls offers no pop-out
+        let mut view = sample(None);
+        view.sections[0].pop_out = false;
+        let mut h = Harness::new(view);
+        h.frame(vec![]);
+        assert!(!h.ui.rects.map.contains_key("popout_button_sec"));
     }
 }

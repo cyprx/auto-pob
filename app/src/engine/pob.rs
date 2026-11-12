@@ -1048,6 +1048,20 @@ impl PobBackend {
                 hover: Some(target),
                 ..Affected::default()
             }),
+            Command::SetPowerReportFilter { filter, masteries } => {
+                self.call::<_, ()>("set_power_report_filter", (filter, masteries))?;
+                Ok(Affected {
+                    report: true,
+                    ..Affected::default()
+                })
+            }
+            Command::RemoveAccountHistory { account } => {
+                self.call::<_, ()>("remove_account_history", account)?;
+                Ok(Affected {
+                    account: true,
+                    ..Affected::default()
+                })
+            }
             Command::CopyConfigSet { id, title } => {
                 self.call::<_, ()>("copy_config_set", (id, title))?;
                 // the name popup's Save syncs the loadouts, which flags a rebuild

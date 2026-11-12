@@ -235,6 +235,7 @@ mod tests {
             enabled,
             subs,
             col_widths: vec![],
+            pop_out: false,
         }
     }
 

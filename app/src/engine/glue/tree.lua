@@ -389,6 +389,15 @@ local function spec_entries()
 	return entries
 end
 
+-- The Version dropdown's entries (TreeTab.lua:156-175), in PoB's order (NF-7)
+local function version_choices(tab)
+	local choices = {}
+	for i, entry in ipairs(tab.treeVersions) do
+		choices[i] = { label = entry.label, value = entry.value }
+	end
+	return choices
+end
+
 -- The build's state on the active tree.
 function glue.tree_state()
 	local build = pob.build
@@ -431,6 +440,7 @@ function glue.tree_state()
 		can_redo = spec.redo[1] ~= nil,
 		heatmap_shown = build.treeTab.viewer.showHeatMap and true or false,
 		show_stat_differences = build.treeTab.viewer.showStatDifferences and true or false,
+		versions = version_choices(build.treeTab),
 	}
 end
 

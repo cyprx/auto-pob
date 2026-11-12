@@ -207,8 +207,7 @@ note = "layout anchor"
 ported = "app/src/ui/sidebar.rs N Warnings line with PoB's lines on hover (NF-1)"
 
 [controls."calcs.#CalcSectionControl"]
-gap = "Task 13"
-note = "sections ported (calcs/grid.rs); per-column widths are R24"
+ported = "app/src/ui/calcs/mod.rs sections with PoB's per-column widths (CalcsSection.col_widths, R24)"
 
 [controls."calcs.#CalcSectionControl.mainSkill"]
 ported = "app/src/ui/calcs/mod.rs selector row"
@@ -238,8 +237,7 @@ ported = "app/src/ui/calcs/mod.rs selector row"
 ported = "app/src/ui/calcs/mod.rs selector row"
 
 [controls."calcs.#CalcSectionControl.popOut"]
-gap = "Task 13"
-note = "pop-out windows (R24)"
+ported = "app/src/ui/calcs/mod.rs ^ button: the section pops out into a floating window over every tab (R24)"
 
 [controls."calcs.#CalcSectionControl.showMinion"]
 ported = "app/src/ui/calcs/mod.rs selector row"
@@ -1170,11 +1168,10 @@ ported = "app/src/ui/import.rs import by account name"
 ported = "app/src/ui/import.rs sign-in import"
 
 [controls."import.siteAccountHistory"]
-gap = "Task 13"
-note = "NF-8 (new finding, in scope by controller ruling): PoB's recent account names dropdown is not shown (PublicView.history exists but the UI ignores it)"
+ported = "app/src/ui/import.rs recent accounts dropdown: a pick fills the name box (PublicView.history, NF-8)"
 
 [controls."import.siteAccountHistory.scrollBar"]
-gap = "Task 13"
+ported = "app/src/ui/import.rs recent accounts dropdown"
 note = "part of import.siteAccountHistory"
 
 [controls."import.siteAccountName"]
@@ -1199,8 +1196,7 @@ ported = "app/src/ui/import.rs import by account name"
 ported = "app/src/ui/import.rs import by account name"
 
 [controls."import.siteAccountNameMissingDiscriminator"]
-gap = "Task 13"
-note = "controller ruling: full parity; PoB's label and disabled Start; today ported app/src/ui/import.rs Start; PoB's text comes back as the error (glue/import.lua)"
+ported = "app/src/ui/import.rs PoB's label under the name box and Start disabled as PoB's (PublicView.missing_discriminator, account_name_state)"
 
 [controls."import.siteAccountNameUnicode"]
 ported = "app/src/ui/import.rs"
@@ -1214,8 +1210,7 @@ ported = "app/src/ui/import.rs import by account name"
 note = "part of import.siteAccountRealm"
 
 [controls."import.siteCharBanditNote"]
-gap = "Task 13"
-note = "controller ruling: full parity; show PoB's bandit tip; today ported app/src/ui/import.rs; hint only; PoB bandit tip text is not shown"
+ported = "app/src/ui/import.rs PoB's bandit tip under the character list (PublicView.bandit_note)"
 
 [controls."import.siteCharClose"]
 ported = "app/src/ui/import.rs import by account name"
@@ -1265,8 +1260,7 @@ note = "part of import.siteCharSelectLeague"
 ported = "app/src/ui/import.rs import by account name"
 
 [controls."import.siteRemoveAccount"]
-gap = "Task 13"
-note = "NF-8 (new finding, in scope by controller ruling): no way to remove an account from that history"
+ported = "app/src/ui/import.rs X next to the recent accounts (RemoveAccountHistory, NF-8)"
 
 [controls."items.#ItemSlotControl"]
 gap = "Task 13"
@@ -2245,8 +2239,7 @@ ported = "app/src/ui/notes.rs colour buttons"
 ported = "app/src/ui/notes.rs colour buttons"
 
 [controls."notes.notesDesc"]
-gap = "Task 13"
-note = "controller ruling: full parity; notes-only text zoom (Ctrl +/-/0, Ctrl+scroll); today ported egui Ctrl+Plus / Ctrl+Minus / Ctrl+0 zoom; egui zooms the whole window, PoB only the notes text"
+ported = "app/src/ui/notes.rs PoB's description; Ctrl +/-/0 and Ctrl+wheel zoom the notes text only (zoom_line_height)"
 
 [controls."notes.rare"]
 ported = "app/src/ui/notes.rs colour buttons"
@@ -2748,23 +2741,22 @@ ported = "app/src/ui/tree/toolbar.rs Find timeless jewel button (PoB popup sessi
 note = "timeless jewel search (R17)"
 
 [controls."tree.nodePowerMaxDepthCustom"]
-gap = "Task 13"
-note = "NF-6 (new finding, in scope by controller ruling): no custom heat map depth"
+ported = "app/src/ui/tree/toolbar.rs heat map depth Custom entry and its digits box (SetHeatmap max_depth, NF-6)"
 
 [controls."tree.nodePowerMaxDepthCustom.buttonDown"]
-gap = "Task 13"
+ported = "app/src/ui/tree/toolbar.rs heat map depth Custom box"
 note = "part of tree.nodePowerMaxDepthCustom"
 
 [controls."tree.nodePowerMaxDepthCustom.buttonUp"]
-gap = "Task 13"
+ported = "app/src/ui/tree/toolbar.rs heat map depth Custom box"
 note = "part of tree.nodePowerMaxDepthCustom"
 
 [controls."tree.nodePowerMaxDepthCustom.scrollBarH"]
-gap = "Task 13"
+ported = "app/src/ui/tree/toolbar.rs heat map depth Custom box"
 note = "part of tree.nodePowerMaxDepthCustom"
 
 [controls."tree.nodePowerMaxDepthCustom.scrollBarV"]
-gap = "Task 13"
+ported = "app/src/ui/tree/toolbar.rs heat map depth Custom box"
 note = "part of tree.nodePowerMaxDepthCustom"
 
 [controls."tree.nodePowerMaxDepthSelect"]
@@ -2782,12 +2774,10 @@ ported = "app/src/ui/tree/toolbar.rs Power report toggle"
 ported = "app/src/ui/tree/power_report.rs"
 
 [controls."tree.powerReportList.filterSelect"]
-gap = "Task 13"
-note = "NF-5 (new finding, in scope by controller ruling): no Show Unallocated / Clusters / Allocated filter; our list shows every row"
+ported = "app/src/ui/tree/power_report.rs filter dropdown (SetPowerReportFilter, PowerReport.listed, NF-5)"
 
 [controls."tree.powerReportList.masteryCheck"]
-gap = "Task 13"
-note = "NF-5 (new finding, in scope by controller ruling): no Show Masteries toggle"
+ported = "app/src/ui/tree/power_report.rs Show Masteries box (SetPowerReportFilter, NF-5)"
 
 [controls."tree.powerReportList.scrollBarH"]
 ported = "app/src/ui/tree/power_report.rs"
@@ -2844,11 +2834,10 @@ ported = "app/src/ui/tree/toolbar.rs Search nodes"
 note = "part of tree.treeSearch"
 
 [controls."tree.versionSelect"]
-gap = "Task 13"
-note = "NF-7 (new finding, in scope by controller ruling): we convert only to the latest version; PoB's dropdown converts to any listed version"
+ported = "app/src/ui/tree/toolbar.rs Version dropdown of every tree version and its Convert / Copy + Convert dialog (ConvertSpec, NF-7)"
 
 [controls."tree.versionSelect.scrollBar"]
-gap = "Task 13"
+ported = "app/src/ui/tree/toolbar.rs Version dropdown"
 note = "part of tree.versionSelect"
 
 [controls."tree.versionText"]
@@ -3229,8 +3218,7 @@ ported = "app/src/ui/app.rs Ctrl+Y redo"
 ported = "app/src/ui/app.rs Ctrl+Z undo"
 
 [keys."CalcSectionControl.LEFTBUTTON"]
-gap = "Task 13"
-note = "pop-out window handling (R24)"
+ported = "app/src/ui/calcs/mod.rs pop-out windows: drag, close, toggles and cells (R24)"
 
 [keys."CheckBoxControl.LEFTBUTTON"]
 ported = "app/src/ui"
@@ -3300,16 +3288,13 @@ ported = "app/src/widgets/scroll_step.rs dropdown_step, at every dropdown (searc
 ported = "app/src/widgets/scroll_step.rs dropdown_step, at every dropdown (search_combo and each ComboBox): the wheel or PageUp steps a pointed-at closed dropdown, unless PoB's Disable control scroll interaction (DropDownControl.lua:502-511)"
 
 [keys."EditControl.+"]
-gap = "Task 13"
-note = "Ctrl +/-/0 text zoom (controller ruling on notes zoom)"
+ported = "app/src/ui/notes.rs Ctrl + zooms the notes text as PoB's ZoomText"
 
 [keys."EditControl.-"]
-gap = "Task 13"
-note = "Ctrl +/-/0 text zoom (controller ruling on notes zoom)"
+ported = "app/src/ui/notes.rs Ctrl - zooms the notes text as PoB's ZoomText"
 
 [keys."EditControl.0"]
-gap = "Task 13"
-note = "Ctrl +/-/0 text zoom (controller ruling on notes zoom)"
+ported = "app/src/ui/notes.rs Ctrl 0 zooms the notes text as PoB's ZoomText"
 
 [keys."EditControl.a"]
 ported = "app/src/ui"

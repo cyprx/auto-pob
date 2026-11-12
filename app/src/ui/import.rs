@@ -6,6 +6,7 @@
 
 use crate::engine::views::{
     AccountView, CharacterEntry, PendingRequest, PublicStage, ShareView, SiteRef,
+    account_name_state,
 };
 use crate::engine::{CharacterPart, Command, ImportMode, Realm, Snapshot};
 use crate::theme;
@@ -110,6 +111,8 @@ pub struct ImportUi {
     copy_ready: Option<String>,
     /// Ctrl+I: the code box takes the keyboard when next drawn (Build.lua:1162-1163)
     focus_code: bool,
+    /// The account picked in PoB's history dropdown (NF-8)
+    history_pick: Option<String>,
 }
 
 impl Default for ImportUi {
@@ -147,6 +150,7 @@ impl Default for ImportUi {
             await_code: false,
             copy_ready: None,
             focus_code: false,
+            history_pick: None,
         }
     }
 }
@@ -588,19 +592,60 @@ impl ImportUi {
                         self.account_box
                             .show(ui, self.account_id, &public.account, false, &opts);
                     mark(ui, "account_name", &r);
+                    // PoB enables Start only for a name with its discriminator (NF-8)
+                    let (_, can_start) = account_name_state(&self.account_box.text);
                     let name = self.account_box.text.trim().to_owned();
-                    let start = ui.add_enabled(!name.is_empty(), theme::primary_button("Start"));
+                    let start = ui.add_enabled(can_start, theme::primary_button("Start"));
                     mark(ui, "start", &start);
                     // Only Start, or Enter in the box, asks for the list. Leaving the box with
                     // the text (`entered`) is no request: nothing goes out the user didn't ask for.
                     let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if start.clicked() || (enter && !name.is_empty()) {
+                    if start.clicked() || (enter && can_start) {
                         out.commands.push(Command::ListPublicCharacters {
                             account: name,
                             realm: self.realm,
                         });
                     }
+                    // PoB's recent accounts: a pick fills the box, X forgets the picked one
+                    if !public.history.is_empty() {
+                        let combo = egui::ComboBox::from_id_salt("import_history")
+                            .selected_text(self.history_pick.as_deref().unwrap_or("Recent"))
+                            .show_ui(ui, |ui| {
+                                for account in &public.history {
+                                    let item = ui.selectable_label(
+                                        self.history_pick.as_ref() == Some(account),
+                                        account,
+                                    );
+                                    mark(ui, &format!("history:{account}"), &item);
+                                    if item.clicked() {
+                                        // PoB's pick puts the name in the box; it stays there
+                                        // while the box has focus, until Start or Enter
+                                        self.history_pick = Some(account.clone());
+                                        self.account_box.text = account.clone();
+                                        ui.memory_mut(|m| m.request_focus(self.account_id));
+                                    }
+                                }
+                            });
+                        mark(ui, "history", &combo.response);
+                        let picked = self
+                            .history_pick
+                            .clone()
+                            .filter(|a| public.history.contains(a));
+                        let remove = ui
+                            .add_enabled(picked.is_some(), egui::Button::new("X"))
+                            .on_hover_text("Removes account from the dropdown list");
+                        mark(ui, "history_remove", &remove);
+                        if remove.clicked()
+                            && let Some(account) = picked
+                        {
+                            self.history_pick = None;
+                            out.commands.push(Command::RemoveAccountHistory { account });
+                        }
+                    }
                 });
+                if account_name_state(&self.account_box.text).0 {
+                    ui.colored_label(ui.visuals().error_fg_color, &public.missing_discriminator);
+                }
                 Self::status_lines(ui, &public.status, None);
             }
             PublicStage::Fetching | PublicStage::Importing => {
@@ -619,6 +664,9 @@ impl ImportUi {
                     out,
                     |league, name, part| Command::ImportPublicCharacter { league, name, part },
                 );
+                if !public.bandit_note.is_empty() {
+                    ui.label(&public.bandit_note);
+                }
                 let r = ui.button("Close");
                 mark(ui, "close_public", &r);
                 if r.clicked() {
@@ -1910,5 +1958,93 @@ pub(crate) mod tests {
         view.public.stage = PublicStage::Importing;
         h.account(view);
         assert!(h.ui.cancel_signs_out("Importing passive tree"));
+    }
+
+    // ---- Task 13: PoB's account history and its labels (NF-8, controller rulings) ----
+
+    #[test]
+    fn missing_discriminator_shows_pobs_label_and_disables_start() {
+        let mut h = Harness::new();
+        let mut view = signed_in();
+        view.public.missing_discriminator = "Missing discriminator e.g. #1234".into();
+        h.account(view);
+        h.frame(vec![]);
+        h.click("mode:name");
+        h.click("account_name");
+        h.frame(vec![egui::Event::Text("Someone".into())]);
+        h.frame(vec![]);
+        assert!(h.has_text("Missing discriminator e.g. #1234"));
+        h.click("start");
+        assert!(h.log.is_empty(), "{:?}", h.log);
+        h.click("account_name");
+        h.frame(vec![egui::Event::Text("Someone#1234".into())]);
+        h.frame(vec![]);
+        assert!(!h.has_text("Missing discriminator"));
+        h.click("start");
+        assert_eq!(
+            h.log,
+            ["ListPublicCharacters { account: \"Someone#1234\", realm: Pc }"]
+        );
+    }
+
+    #[test]
+    fn history_pick_fills_the_box_and_x_removes_it() {
+        let mut h = Harness::new();
+        let mut view = signed_in();
+        view.public.history = vec!["alice#1234".into(), "Bob#0001".into()];
+        h.account(view);
+        h.frame(vec![]);
+        h.click("mode:name");
+        h.click("history");
+        h.frame(vec![]);
+        h.click("history:Bob#0001");
+        h.click("start");
+        assert_eq!(
+            h.log,
+            ["ListPublicCharacters { account: \"Bob#0001\", realm: Pc }"]
+        );
+        h.click("history_remove");
+        assert_eq!(
+            h.log[1..],
+            ["RemoveAccountHistory { account: \"Bob#0001\" }"]
+        );
+    }
+
+    #[test]
+    fn the_character_list_shows_pobs_bandit_tip() {
+        let mut h = Harness::new();
+        let mut view = signed_in();
+        view.public = PublicView {
+            account: "Someone#1234".into(),
+            stage: PublicStage::SelectCharacter,
+            leagues: vec!["Standard".into(), "All".into()],
+            characters: vec![ch("Dora", "Standard")],
+            bandit_note: "Tip: After you finish importing a character, make sure you update the bandit choice,".into(),
+            ..PublicView::default()
+        };
+        h.account(view);
+        h.frame(vec![]);
+        h.click("mode:name");
+        h.frame(vec![]);
+        assert!(h.has_text("update the bandit choice"));
+    }
+
+    #[test]
+    fn account_name_state_follows_pobs_patterns() {
+        // (label shown, Start enabled) as ImportTab.lua:367-404 decide them
+        for (text, want) in [
+            ("", (false, false)),
+            ("Name", (true, false)),
+            ("Name#123", (true, false)),
+            ("Name#1234", (false, true)),
+            ("Name-1234", (false, true)),
+            ("#1234", (false, false)),
+            (" #1234", (false, false)),
+            ("Name#1234 ", (true, false)),
+            ("Näme#1234", (false, true)),
+            ("Name#12345", (true, false)),
+        ] {
+            assert_eq!(account_name_state(text), want, "{text:?}");
+        }
     }
 }

@@ -12,6 +12,26 @@ const DESCRIPTION: &str = "^7You can use Ctrl +/- (or Ctrl+Scroll) to zoom in an
 /// Edits are sent this long after the last keystroke.
 const DEBOUNCE: f64 = 0.5;
 
+/// The notes box's line height in PoB (`NotesTab.lua:34`), which its zoom starts from and
+/// Ctrl+0 goes back to
+pub const NOTES_LINE_HEIGHT: u32 = 16;
+
+/// PoB's pixel sizes to egui points, as the tooltips scale them
+const TEXT_SCALE: f32 = 0.9;
+
+/// PoB's `EditControl:ZoomText` (EditControl.lua:184-205): Ctrl and `+` or `-` (or the wheel)
+/// changes the line height by one, `0` resets it, always within 10..=100. Any other key leaves
+/// it alone.
+pub fn zoom_line_height(height: u32, key: char, default: u32) -> u32 {
+    let next = match key {
+        '+' => height + 1,
+        '-' => height.saturating_sub(1),
+        '0' => default,
+        _ => height,
+    };
+    next.clamp(10, 100)
+}
+
 /// PoB's `NotesTab:SetColor` (ruling R7). `sel` is a byte range on char boundaries; an empty
 /// one inserts `code` at the cursor. Returns the new text and the cursor's byte position.
 pub fn apply_colour(text: &str, sel: Range<usize>, code: &str) -> (String, usize) {
@@ -77,6 +97,9 @@ pub struct NotesUi {
     sent_seq: u64,
     #[cfg(test)]
     button_rects: Vec<egui::Rect>,
+    /// The editor's text size, PoB's line height: its zoom is the notes' alone and isn't
+    /// saved (controller ruling on notes zoom)
+    pub(crate) line_height: u32,
 }
 
 impl Default for NotesUi {
@@ -90,6 +113,7 @@ impl Default for NotesUi {
             sent_seq: 0,
             #[cfg(test)]
             button_rects: Vec::new(),
+            line_height: NOTES_LINE_HEIGHT,
         }
     }
 }
@@ -194,11 +218,16 @@ impl NotesUi {
                     .max(4.0) as usize;
                     let edit = egui::TextEdit::multiline(&mut self.text)
                         .id(self.edit_id)
+                        .font(egui::FontId::proportional(
+                            self.line_height as f32 * TEXT_SCALE,
+                        ))
                         .desired_width(f32::INFINITY)
                         .desired_rows(rows);
-                    if ui.add(edit).changed() {
+                    let response = ui.add(edit);
+                    if response.changed() {
                         self.touch(now);
                     }
+                    self.zoom_keys(ui, &response);
                 });
         }
         match self.dirty_since {
@@ -210,6 +239,41 @@ impl NotesUi {
                 None
             }
             None => None,
+        }
+    }
+
+    /// Ctrl +, - and 0, and Ctrl+wheel over the editor, zoom the notes' text only, as PoB's
+    /// notes box does; the keys are taken before egui's own zoom of the whole window sees them.
+    fn zoom_keys(&mut self, ui: &egui::Ui, response: &egui::Response) {
+        use egui::gui_zoom::kb_shortcuts::{ZOOM_IN, ZOOM_IN_SECONDARY, ZOOM_OUT, ZOOM_RESET};
+        if !response.has_focus() && !response.hovered() {
+            return;
+        }
+        let mut keys = Vec::new();
+        if response.has_focus() {
+            ui.input_mut(|i| {
+                // each press counts, as each key event reaches PoB's box
+                while i.consume_shortcut(&ZOOM_RESET) {
+                    keys.push('0');
+                }
+                while i.consume_shortcut(&ZOOM_IN) || i.consume_shortcut(&ZOOM_IN_SECONDARY) {
+                    keys.push('+');
+                }
+                while i.consume_shortcut(&ZOOM_OUT) {
+                    keys.push('-');
+                }
+            });
+        }
+        if response.hovered() {
+            let zoom = ui.input(|i| i.zoom_delta());
+            if zoom > 1.0 {
+                keys.push('+');
+            } else if zoom < 1.0 {
+                keys.push('-');
+            }
+        }
+        for key in keys {
+            self.line_height = zoom_line_height(self.line_height, key, NOTES_LINE_HEIGHT);
         }
     }
 
@@ -407,5 +471,49 @@ mod tests {
         run_events(&mut ui, &ctx, 0.4, vec![button(false)]);
         assert_eq!(ui.text, "é ^xB97123abc^x00FF00 d");
         assert!(ui.has_pending());
+    }
+
+    // ---- Task 13: the notes' own text zoom (controller ruling on notes zoom) ----
+
+    fn key(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        }
+    }
+
+    #[test]
+    fn zoom_line_height_follows_pob() {
+        assert_eq!(zoom_line_height(16, '+', 16), 17);
+        assert_eq!(zoom_line_height(16, '-', 16), 15);
+        assert_eq!(zoom_line_height(30, '0', 16), 16);
+        assert_eq!(zoom_line_height(10, '-', 16), 10);
+        assert_eq!(zoom_line_height(100, '+', 16), 100);
+        assert_eq!(zoom_line_height(20, 'x', 16), 20);
+    }
+
+    #[test]
+    fn ctrl_plus_zooms_the_notes_not_the_window() {
+        let ctx = egui::Context::default();
+        let mut ui = NotesUi::default();
+        run_events(&mut ui, &ctx, 0.0, vec![]);
+        ctx.memory_mut(|m| m.request_focus(ui.edit_id));
+        run_events(&mut ui, &ctx, 0.1, vec![]);
+        run_events(&mut ui, &ctx, 0.2, vec![key(egui::Key::Plus)]);
+        run_events(&mut ui, &ctx, 0.25, vec![key(egui::Key::Plus)]);
+        assert_eq!(ui.line_height, NOTES_LINE_HEIGHT + 2);
+        assert!((ctx.zoom_factor() - 1.0).abs() < 1e-6, "the window zoomed");
+        run_events(&mut ui, &ctx, 0.3, vec![key(egui::Key::Minus)]);
+        assert_eq!(ui.line_height, NOTES_LINE_HEIGHT + 1);
+        run_events(&mut ui, &ctx, 0.4, vec![key(egui::Key::Num0)]);
+        assert_eq!(ui.line_height, NOTES_LINE_HEIGHT);
+        assert!(ui.text.is_empty(), "the keys typed text: {:?}", ui.text);
+        // without the editor's focus the keys are left to the window
+        ctx.memory_mut(|m| m.surrender_focus(ui.edit_id));
+        run_events(&mut ui, &ctx, 0.5, vec![key(egui::Key::Plus)]);
+        assert_eq!(ui.line_height, NOTES_LINE_HEIGHT);
     }
 }

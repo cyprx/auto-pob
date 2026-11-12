@@ -315,6 +315,16 @@ pub struct NodePowerEntry {
 pub struct PowerReport {
     pub stat: String,
     pub rows: Vec<PowerReportRow>,
+    /// The rows PoB's list shows under its filter and Show Masteries (NF-5): positions in
+    /// `rows`, in the list's order
+    #[serde(default)]
+    pub listed: Vec<usize>,
+    /// The filter dropdown, 0-based: Show Unallocated, ... & Clusters, Show Allocated
+    #[serde(default)]
+    pub filter: usize,
+    /// The Show Masteries box
+    #[serde(default)]
+    pub masteries: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -486,6 +496,9 @@ pub struct TreeState {
     /// PoB's `showStatDifferences` of the tree (Ctrl+D)
     #[serde(default)]
     pub show_stat_differences: bool,
+    /// PoB's Version dropdown: every tree version, `value` the id `ConvertSpec` takes (NF-7)
+    #[serde(default)]
+    pub versions: Vec<Choice>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -959,6 +972,9 @@ pub struct CalcsSection {
     /// `colWidth` or the section's width less the label column (CalcSectionControl.lua:126)
     #[serde(default)]
     pub col_widths: Vec<f32>,
+    /// PoB offers the section's "^" pop-out window: a section without controls (R24)
+    #[serde(default)]
+    pub pop_out: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1990,6 +2006,27 @@ pub struct PublicView {
     /// PoB's "Character import status" line, with colour codes stripped
     #[serde(default)]
     pub status: String,
+    /// PoB's label under a name without a discriminator (`siteAccountNameMissingDiscriminator`)
+    #[serde(default)]
+    pub missing_discriminator: String,
+    /// PoB's tip under the character import (`siteCharBanditNote`)
+    #[serde(default)]
+    pub bandit_note: String,
+}
+
+/// What PoB's account name box allows (ImportTab.lua:367-404): whether its "Missing
+/// discriminator" label shows (a name not ending in `#1234` or `-1234`), and whether Start is
+/// enabled (a visible character before that ending). `text` is the box as typed.
+pub fn account_name_state(text: &str) -> (bool, bool) {
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    let tagged = n >= 5
+        && matches!(chars[n - 5], '#' | '-')
+        && chars[n - 4..].iter().all(|c| c.is_ascii_digit());
+    // Lua's %S: not one of the C locale's space characters
+    let start =
+        tagged && n >= 6 && !matches!(chars[n - 6], ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c');
+    (!tagged && !text.is_empty(), start)
 }
 
 impl Default for PublicView {
@@ -2002,6 +2039,8 @@ impl Default for PublicView {
             leagues: Vec::new(),
             characters: Vec::new(),
             status: String::new(),
+            missing_discriminator: String::new(),
+            bandit_note: String::new(),
         }
     }
 }

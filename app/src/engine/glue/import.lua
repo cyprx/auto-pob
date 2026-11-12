@@ -742,3 +742,38 @@ function glue.import_character(realm_id, league, name, kind, a, b, c)
 	local id = press(tab, label, { confirmed = true, after = oauth_after(tab) }, button.onClick)
 	return id
 end
+
+-- ---- The account history and PoB's notes (NF-8) ----
+
+-- The history dropdown's pick and its X button (ImportTab.lua:378-393): the entry is
+-- selected, then removed from the list and from PoB's remembered accounts
+function glue.remove_account_history(account)
+	local controls = import_tab().controls
+	local history = controls.siteAccountHistory
+	local index
+	for i, name in ipairs(history.list) do
+		if name == account then
+			index = i
+		end
+	end
+	if not index then
+		error("no such account in the history", 0)
+	end
+	local remove = controls.siteRemoveAccount
+	if not (remove:IsShown() and remove:IsEnabled()) then
+		error(OFFERED, 0)
+	end
+	history:SetSel(index)
+	remove.onClick()
+end
+
+-- PoB's labels around the account name box and the character import, colour codes stripped:
+-- "Missing discriminator e.g. #1234" (ImportTab.lua:400-404) and the bandit tip (:463-465)
+local account_view = glue.account_view
+function glue.account_view()
+	local view = account_view()
+	local controls = import_tab().controls
+	view.public.missing_discriminator = StripEscapes(controls.siteAccountNameMissingDiscriminator.label)
+	view.public.bandit_note = StripEscapes(controls.siteCharBanditNote.label)
+	return view
+end

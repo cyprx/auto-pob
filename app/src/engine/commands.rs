@@ -877,6 +877,18 @@ pub enum Command {
         from: usize,
         to: usize,
     },
+    /// The power report's filter dropdown (0-based: Show Unallocated, Show Unallocated &
+    /// Clusters, Show Allocated) and its Show Masteries box (NF-5). UI state of PoB's list,
+    /// not saved.
+    SetPowerReportFilter {
+        filter: usize,
+        masteries: bool,
+    },
+    /// The Import tab's X next to the account history: removes the account from the list
+    /// and from PoB's remembered accounts (NF-8)
+    RemoveAccountHistory {
+        account: String,
+    },
 }
 
 /// A control whose hover tooltip PoB computes (R22). Gem positions are 0-based.

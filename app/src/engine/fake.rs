@@ -655,6 +655,9 @@ impl Backend for Fake {
         Ok(PowerReport {
             stat: String::new(),
             rows: vec![],
+            listed: vec![],
+            filter: 0,
+            masteries: true,
         })
     }
 
@@ -824,5 +827,6 @@ pub fn empty_tree_state() -> TreeState {
         can_redo: false,
         heatmap_shown: false,
         show_stat_differences: true,
+        versions: vec![],
     }
 }

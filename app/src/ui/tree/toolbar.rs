@@ -43,6 +43,11 @@ enum Dialog {
     },
     /// The tree manager's list, whose rows drag to a new place (NF-3)
     OrderSpecs,
+    /// PoB's "Convert to Version" popup for a Version dropdown pick (NF-7)
+    ConvertVersion {
+        version: String,
+        label: String,
+    },
 }
 
 /// What a dragged tree row carries: its position
@@ -69,6 +74,8 @@ pub(super) struct Toolbar {
     pub(super) spec_busy: bool,
     /// Ctrl+F: the search box takes the keyboard when next drawn
     pub(super) focus_search: bool,
+    /// The heat map depth's Custom box, while chosen (NF-6)
+    custom_depth: Option<String>,
 }
 
 impl Toolbar {
@@ -120,6 +127,26 @@ impl Toolbar {
             rects.note(&reset, || "reset".into());
             if reset.clicked() {
                 self.dialog = Some(Dialog::Reset);
+            }
+            // PoB's Version dropdown: any listed version converts the tree (NF-7)
+            if !state.versions.is_empty() {
+                ui.label("Version:");
+                let combo = egui::ComboBox::from_id_salt("tree_version")
+                    .selected_text(&state.version_label)
+                    .show_ui(ui, |ui| {
+                        for choice in &state.versions {
+                            let current = choice.value == state.version;
+                            let item = ui.selectable_label(current, &choice.label);
+                            rects.note(&item, || format!("version:{}", choice.value));
+                            if item.clicked() && !current {
+                                self.dialog = Some(Dialog::ConvertVersion {
+                                    version: choice.value.clone(),
+                                    label: choice.label.clone(),
+                                });
+                            }
+                        }
+                    });
+                rects.note(&combo.response, || "version".into());
             }
             let tattoos = ui
                 .button("Remove all tattoos")
@@ -466,41 +493,90 @@ impl Toolbar {
                 state.max_depth,
             ));
         }
+        // a depth PoB's list doesn't have was typed into its Custom box
+        if self.custom_depth.is_none()
+            && let Some(depth) = state.max_depth.filter(|d| !DEPTHS.contains(d))
+        {
+            self.custom_depth = Some(depth.to_string());
+        }
         ui.add_enabled_ui(state.heatmap.is_some(), |ui| {
+            let shown = match (&self.custom_depth, state.max_depth) {
+                (Some(_), _) => "Custom".to_owned(),
+                (None, Some(d)) => format!("Within {d}"),
+                (None, None) => "All".to_owned(),
+            };
             let combo = egui::ComboBox::from_id_salt("tree_heat_depth")
-                .selected_text(
-                    state
-                        .max_depth
-                        .map_or("All".to_owned(), |d| format!("Within {d}")),
-                )
+                .selected_text(shown)
                 .show_ui(ui, |ui| {
-                    let all = ui.selectable_label(state.max_depth.is_none(), "All");
+                    let custom = self.custom_depth.is_some();
+                    let all = ui.selectable_label(!custom && state.max_depth.is_none(), "All");
                     rects.note(&all, || "depth:all".into());
-                    if all.clicked() && state.max_depth.is_some() {
-                        commands.push(set(state.heatmap.clone(), None));
+                    if all.clicked() {
+                        self.custom_depth = None;
+                        if state.max_depth.is_some() {
+                            commands.push(set(state.heatmap.clone(), None));
+                        }
                     }
                     for depth in DEPTHS {
-                        let item =
-                            ui.selectable_label(state.max_depth == Some(depth), depth.to_string());
+                        let item = ui.selectable_label(
+                            !custom && state.max_depth == Some(depth),
+                            depth.to_string(),
+                        );
                         rects.note(&item, || format!("depth:{depth}"));
-                        if item.clicked() && state.max_depth != Some(depth) {
-                            commands.push(set(state.heatmap.clone(), Some(depth)));
+                        if item.clicked() {
+                            self.custom_depth = None;
+                            if state.max_depth != Some(depth) {
+                                commands.push(set(state.heatmap.clone(), Some(depth)));
+                            }
                         }
+                    }
+                    // PoB's "Custom" entry shows a box for any depth (NF-6)
+                    let item = ui.selectable_label(custom, "Custom");
+                    rects.note(&item, || "depth:custom".into());
+                    if item.clicked() && !custom {
+                        self.custom_depth =
+                            Some(state.max_depth.map(|d| d.to_string()).unwrap_or_default());
                     }
                 });
             rects.note(&combo.response, || "heat_depth".into());
-            // its entries: All, then the depths
-            let at = state
-                .max_depth
-                .and_then(|d| DEPTHS.iter().position(|x| *x == d))
-                .map_or(0, |i| i + 1);
-            if let Some(i) =
-                crate::widgets::scroll_step::combo_step(ui, &combo.response, DEPTHS.len() + 1, at)
-            {
-                commands.push(set(
-                    state.heatmap.clone(),
-                    i.checked_sub(1).map(|i| DEPTHS[i]),
-                ));
+            // its entries: All, then the depths, then Custom
+            let n = DEPTHS.len() + 2;
+            let at = if self.custom_depth.is_some() {
+                n - 1
+            } else {
+                state
+                    .max_depth
+                    .and_then(|d| DEPTHS.iter().position(|x| *x == d))
+                    .map_or(0, |i| i + 1)
+            };
+            if let Some(i) = crate::widgets::scroll_step::combo_step(ui, &combo.response, n, at) {
+                if i == n - 1 {
+                    self.custom_depth =
+                        Some(state.max_depth.map(|d| d.to_string()).unwrap_or_default());
+                } else {
+                    self.custom_depth = None;
+                    let depth = i.checked_sub(1).map(|i| DEPTHS[i]);
+                    if depth != state.max_depth {
+                        commands.push(set(state.heatmap.clone(), depth));
+                    }
+                }
+            }
+            if let Some(text) = &mut self.custom_depth {
+                let field = ui.add(
+                    egui::TextEdit::singleline(text)
+                        .desired_width(50.0)
+                        .hint_text("depth"),
+                );
+                rects.note(&field, || "depth_custom".into());
+                // PoB's box takes digits only ("%D")
+                text.retain(|c| c.is_ascii_digit());
+                if field.lost_focus() {
+                    // an empty box is no limit, as PoB's `tonumber("")`
+                    let depth = text.parse::<u32>().ok();
+                    if depth != state.max_depth {
+                        commands.push(set(state.heatmap.clone(), depth));
+                    }
+                }
             }
         });
         if power.failed {
@@ -639,6 +715,7 @@ impl Toolbar {
             Dialog::Import { .. } => "Import tree link",
             Dialog::CopySpec { .. } => "Copy Tree",
             Dialog::OrderSpecs => "Tree order",
+            Dialog::ConvertVersion { .. } => "Convert to Version",
         };
         egui::Window::new(title)
             .collapsible(false)
@@ -781,6 +858,30 @@ impl Toolbar {
                         commands.push(Command::MoveSpec { from, to });
                     }
                     close |= ui.button("Done").clicked();
+                }
+                Dialog::ConvertVersion { version, label } => {
+                    // PoB's warning (TreeTab.lua:652-653)
+                    ui.label(format!("Convert to Version {label}"));
+                    ui.label(
+                        "Warning: some or all of the passives may be de-allocated due to changes \
+                         in the tree.\n\nConvert will replace your current tree.\nCopy + Convert \
+                         will backup your current tree.",
+                    );
+                    ui.horizontal(|ui| {
+                        for (key, text, keep_copy) in [
+                            ("version_convert", "Convert", false),
+                            ("version_convert_copy", "Copy + Convert", true),
+                        ] {
+                            if button(ui, rects, key, text, true) {
+                                commands.push(Command::ConvertSpec {
+                                    version: version.clone(),
+                                    keep_copy,
+                                });
+                                close = true;
+                            }
+                        }
+                        close |= ui.button("Cancel").clicked();
+                    });
                 }
             });
         if close {

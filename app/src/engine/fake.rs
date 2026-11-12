@@ -51,6 +51,8 @@ pub struct Log {
     pub applies: usize,
     /// Hover tooltips answered (R22)
     pub hovers: Vec<crate::engine::HoverTarget>,
+    /// `shutdown` calls that finished
+    pub shutdowns: usize,
 }
 
 /// The link a fake trade window's `search` press answers
@@ -107,6 +109,8 @@ pub struct Fake {
     pub short_link: Option<String>,
     /// A Network step reports that it changed the build and asks for a recalculation
     pub network_recalc: bool,
+    /// How long `shutdown` takes, as PoB's exit save of `Settings.xml` does
+    pub shutdown_delay: std::time::Duration,
 }
 
 impl Fake {
@@ -138,6 +142,7 @@ impl Fake {
                 waker: None,
                 short_link: None,
                 network_recalc: false,
+                shutdown_delay: std::time::Duration::ZERO,
             },
             log,
         )
@@ -330,6 +335,11 @@ impl Fake {
 }
 
 impl Backend for Fake {
+    fn shutdown(&mut self) {
+        std::thread::sleep(self.shutdown_delay);
+        self.log.lock().unwrap().shutdowns += 1;
+    }
+
     fn apply(&mut self, command: Command, _send: &dyn Fn(Event)) -> anyhow::Result<Affected> {
         if let Some(scope) = cancels_requests(&command) {
             let mut log = self.log.lock().unwrap();

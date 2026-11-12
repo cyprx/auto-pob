@@ -338,6 +338,9 @@ pub trait Backend {
     /// Whether a build is open. PoB can start on its build list with none initialised, and
     /// every view but the list reads the build.
     fn build_loaded(&mut self) -> anyhow::Result<bool>;
+    /// The engine is stopping (`Shutdown`): what PoB does at exit (`main:Shutdown`). Runs once,
+    /// after the last snapshots; `Engine`'s drop waits for it.
+    fn shutdown(&mut self) {}
     fn stats_view(&mut self) -> anyhow::Result<StatsView>;
     fn config_view(&mut self) -> anyhow::Result<ConfigView>;
     fn tree_layout_view(&mut self) -> anyhow::Result<TreeLayout>;
@@ -878,6 +881,7 @@ fn run_loop_with_delay(
         recalculate_if_asked(backend, &mut affected, last_seq, send);
         send_snapshots(backend, last_seq, affected, send);
         if shutdown {
+            backend.shutdown();
             return;
         }
     }
@@ -910,6 +914,10 @@ pub struct Engine {
     alive: Arc<AtomicBool>,
     pub events: Receiver<Event>,
 }
+
+/// How long dropping an [`Engine`] waits for its thread to finish what PoB does at exit (a
+/// `Settings.xml` write, which must not be cut off by the process ending)
+pub const SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
 
 impl Engine {
     /// Starts the engine thread. `start` runs on that thread and builds the backend (it may
@@ -983,9 +991,15 @@ impl Engine {
 
 impl Drop for Engine {
     /// The waker keeps a sender of the command channel, so the loop would never see it
-    /// disconnect: the thread is told to stop instead (R9).
+    /// disconnect: the thread is told to stop instead (R9). The drop then waits, up to
+    /// [`SHUTDOWN_WAIT`], for the thread to end: at exit PoB writes `Settings.xml`, and the
+    /// process ending mid-write would leave the shared file cut short.
     fn drop(&mut self) {
         self.send(Command::Shutdown);
+        let deadline = std::time::Instant::now() + SHUTDOWN_WAIT;
+        while self.alive.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 }
 
@@ -2568,6 +2582,42 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(!alive.is_alive(), "the engine thread outlived its Engine");
+    }
+
+    #[test]
+    fn dropping_the_engine_waits_for_its_exit_save() {
+        let (mut fake, log) = Fake::new();
+        fake.shutdown_delay = Duration::from_millis(300);
+        let engine = Engine::spawn_with(move |_send| Ok(Box::new(fake) as Box<dyn Backend>), || {});
+        loop {
+            match engine.events.recv_timeout(Duration::from_secs(5)) {
+                Ok(Event::Ready) => break,
+                Ok(_) => {}
+                Err(e) => panic!("no Ready: {e}"),
+            }
+        }
+        let alive = engine.liveness();
+        drop(engine);
+        // PoB's exit save ran once, and finished before the drop returned
+        assert_eq!(log.lock().unwrap().shutdowns, 1);
+        assert!(!alive.is_alive());
+    }
+
+    #[test]
+    fn only_shutdown_runs_the_exit_save() {
+        let (mut fake, log) = Fake::new();
+        run_queued(&mut fake, vec![Command::NewBuild]);
+        assert_eq!(
+            log.lock().unwrap().shutdowns,
+            0,
+            "a closed channel isn't an exit"
+        );
+        let events = run_queued(&mut fake, vec![Command::NewBuild, Command::Shutdown]);
+        assert_eq!(log.lock().unwrap().shutdowns, 1);
+        assert!(
+            events.iter().any(|e| matches!(e, Event::Snapshot { .. })),
+            "the batch before the Shutdown was answered"
+        );
     }
 
     #[test]

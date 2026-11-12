@@ -2219,6 +2219,18 @@ impl Backend for PobBackend {
         self.call::<_, ()>("recalculate", ())
     }
 
+    /// PoB's exit save (`main:Shutdown`, Main.lua:338-339): `Settings.xml` gets what PoB keeps
+    /// in memory until then (the import history, the last account and the open build), unless
+    /// another program wrote the file since we last read or wrote it, or PoB couldn't read it
+    /// (I-1). The build mode's own Shutdown only saves a build in PoB's dev mode, so it isn't run.
+    fn shutdown(&mut self) {
+        match self.call::<_, Option<String>>("settings_exit_save", ()) {
+            Ok(None) => {}
+            Ok(Some(reason)) => log::warn!("Settings.xml not saved at exit: {reason}"),
+            Err(e) => log::warn!("Settings.xml not saved at exit: {e:#}"),
+        }
+    }
+
     fn build_view(&mut self) -> Result<BuildView> {
         self.view("build_view", ())
     }

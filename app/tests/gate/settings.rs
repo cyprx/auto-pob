@@ -617,3 +617,69 @@ fn options_cancel_sessions_and_unsaved_edits() {
     assert_eq!(s.open_popups(), 0);
     let _ = seeded_bytes;
 }
+
+/// What PoB keeps in memory until it exits, written by the engine's shutdown as PoB's
+/// `main:Shutdown` writes it (Main.lua:338-339, engine M-5): the import history's X edits only
+/// memory (ImportTab.lua:385-392). A file another program wrote, or one PoB couldn't read, is
+/// left alone, as the user's writers leave it (I-1).
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn exit_saves_what_pob_saves_at_shutdown() {
+    let _guard = lock();
+    let seed = "<PathOfBuilding>\n\t<Accounts lastAccountName=\"Gate\"><Account accountName=\"Gate\"/><Account accountName=\"Other\"/></Accounts>\n\t<Misc buildSortMode=\"LEVEL\"/>\n</PathOfBuilding>\n";
+    let mut s = LongtailSession::start("exit-save", &|_| seed.into());
+    s.run(Command::RemoveAccountHistory {
+        account: "Other".into(),
+    })
+    .unwrap();
+    assert_eq!(
+        s.settings_bytes(),
+        seed.as_bytes(),
+        "PoB's X writes nothing"
+    );
+    s.backend.shutdown();
+    let read = upstream_settings(
+        &s.user,
+        &["gameAccounts", "lastAccountName", "buildSortMode"],
+    );
+    let accounts = read["gameAccounts"].as_object().expect("accounts");
+    assert!(accounts.contains_key("Gate"), "{read}");
+    assert!(
+        !accounts.contains_key("Other"),
+        "the removal wasn't saved: {read}"
+    );
+    assert_eq!(read["lastAccountName"], "Gate");
+    assert_eq!(read["buildSortMode"], "LEVEL");
+    let xml = String::from_utf8(s.settings_bytes()).unwrap();
+    assert!(
+        xml.contains("<Mode mode=\"BUILD\">"),
+        "PoB's exit writes the live mode: {xml}"
+    );
+    drop(s);
+
+    // another program wrote the file: it stays as that program wrote it
+    let mut s = LongtailSession::start("exit-save-outside", &|_| seed.into());
+    s.run(Command::RemoveAccountHistory {
+        account: "Other".into(),
+    })
+    .unwrap();
+    let theirs = seed.replace("LEVEL", "CLASS");
+    std::fs::write(s.settings_path(), &theirs).unwrap();
+    s.backend.shutdown();
+    assert_eq!(
+        s.settings_bytes(),
+        theirs.as_bytes(),
+        "the exit wrote over it"
+    );
+    drop(s);
+
+    // PoB couldn't read it: nothing is written
+    let mut s = LongtailSession::start_unreadable("exit-save-unread");
+    let before = super::snapshot_dir(&s.user);
+    s.backend.shutdown();
+    assert_eq!(
+        super::snapshot_dir(&s.user),
+        before,
+        "the exit wrote something"
+    );
+}

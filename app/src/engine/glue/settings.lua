@@ -184,6 +184,26 @@ function glue.settings_save_failed(failed)
 	end
 end
 
+-- PoB's exit save (`main:Shutdown`, Main.lua:338-339): what PoB keeps in memory until then
+-- (the import history's accounts, the last account name, the open build as `<Mode>`) is
+-- written, through the wrapper below. A file another program wrote, or one PoB couldn't read,
+-- is left alone. Returns why nothing was written, or nil.
+function glue.settings_exit_save()
+	local ok, err = pcall(glue.settings_check_writable, "save at exit")
+	if not ok then
+		return tostring(err)
+	end
+	local saved, failed = pcall(main().SaveSettings, main())
+	if not saved then
+		return tostring(failed)
+	end
+	local reported, reason = pcall(glue.settings_save_failed, failed)
+	if not reported then
+		return tostring(reason)
+	end
+	return nil
+end
+
 -- Records `shared` after PoB's `LoadSettings` and wraps `main:SaveSettings` (R12)
 function glue.settings_init()
 	known_bytes = file_bytes()

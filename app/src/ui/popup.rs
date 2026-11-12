@@ -203,6 +203,8 @@ pub struct PopupWindow {
     tip: HoverTip,
     sort: SortState,
     search: SearchState,
+    /// The seq of the last button press, so only its refusal ends the search line
+    press_seq: Option<u64>,
     /// A `ClosePopup` went out as this command: a view from before it is stale
     close_seq: Option<u64>,
     /// A text box had the focus when the last frame ended
@@ -303,6 +305,11 @@ impl PopupWindow {
         self.search = SearchState::default();
     }
 
+    /// A button press of the window went out as `seq`.
+    pub fn press_sent(&mut self, seq: u64) {
+        self.press_seq = Some(seq);
+    }
+
     /// The command that closed the window went out as `seq`.
     pub fn close_sent(&mut self, seq: u64) {
         self.close_seq = Some(seq);
@@ -311,8 +318,10 @@ impl PopupWindow {
     /// The engine refused something: a value shown ahead of its view is not what PoB has.
     pub fn on_error(&mut self, seq: u64) {
         self.sliders.clear();
-        // a refused Search started nothing; a running one says so with its next step
-        self.search.percent = None;
+        // a refused Search started nothing
+        if self.press_seq == Some(seq) {
+            self.search.percent = None;
+        }
         if self.opening.is_some_and(|o| seq >= o) {
             self.opening = None;
         }
@@ -792,8 +801,18 @@ impl PopupWindow {
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     ui.set_min_width(c.size[0].clamp(120.0, MAX_CONTROL_WIDTH));
+                    // a Shift+click range (the timeless results) shows selected end to end
+                    let at = |key: &Option<String>| {
+                        key.as_deref()
+                            .and_then(|k| c.rows.iter().position(|r| r.key == k))
+                    };
+                    let range = match (at(&c.row_selected), at(&c.row_highlight)) {
+                        (Some(a), Some(b)) => Some((a.min(b), a.max(b))),
+                        _ => None,
+                    };
                     for (i, row) in c.rows.iter().enumerate() {
-                        let selected = c.row_selected.as_deref() == Some(row.key.as_str());
+                        let selected = c.row_selected.as_deref() == Some(row.key.as_str())
+                            || range.is_some_and(|(a, b)| a <= i && i <= b);
                         let response =
                             ui.selectable_label(selected, pob_text(&row.label, 14.0, default));
                         self.rects.note(&response, || format!("{name}_row_{i}"));
@@ -804,10 +823,24 @@ impl PopupWindow {
                                 index: Some(i),
                             },
                         );
-                        if response.clicked() {
+                        // PoB's list takes the second click of a double click, and a click with
+                        // Shift held (ListControl.lua:338-372)
+                        let key = row.key.clone();
+                        let value = if response.double_clicked() {
+                            Some(PopupInput::RowDoubleClick(key))
+                        } else if response.clicked() {
+                            Some(if ui.input(|i| i.modifiers.shift) {
+                                PopupInput::RowShiftClick(key)
+                            } else {
+                                PopupInput::Row(key)
+                            })
+                        } else {
+                            None
+                        };
+                        if let Some(value) = value {
                             out.commands.push(Command::SetPopupControl {
                                 name: name.to_owned(),
-                                value: PopupInput::Row(row.key.clone()),
+                                value,
                             });
                         }
                     }

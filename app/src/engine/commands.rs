@@ -962,6 +962,12 @@ pub enum PopupInput {
     Text(String),
     /// A list row, by its key
     Row(String),
+    /// The second click of a double click on a list row (the timeless results add that jewel,
+    /// R17)
+    RowDoubleClick(String),
+    /// A list row clicked with Shift held: the other end of a range (the timeless results'
+    /// trade search, R17)
+    RowShiftClick(String),
 }
 
 /// An item database (Task 6)

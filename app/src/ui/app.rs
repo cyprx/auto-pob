@@ -442,6 +442,11 @@ impl AutoPobApp {
         .then(|| command.clone());
         let is_close = matches!(command, Command::ClosePopup);
         let is_press = matches!(command, Command::PressPopupButton { .. });
+        // only the trade windows' link buttons answer with a link (R20)
+        let is_link_press = matches!(
+            &command,
+            Command::PressPopupButton { name } if name == "search" || name == "searchTradeButton"
+        );
         let is_open = matches!(command, Command::OpenPopup(_));
         let is_options = matches!(command, Command::OpenPopup(PopupKind::Options));
         let seq = self.engine.send(command);
@@ -455,6 +460,9 @@ impl AutoPobApp {
             self.options.window.close_sent(seq);
         }
         if is_press {
+            self.popup.press_sent(seq);
+        }
+        if is_link_press {
             self.trade_link.pressed(seq);
         }
         self.last_sent = seq;

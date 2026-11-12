@@ -430,6 +430,7 @@ pub(crate) mod testing {
             hover_tooltip: false,
             rows: vec![],
             row_selected: None,
+            row_highlight: None,
             note: None,
         }
     }

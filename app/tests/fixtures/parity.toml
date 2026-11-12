@@ -3001,7 +3001,7 @@ ported = "app/src/ui/popup.rs session (SP5b)"
 ported = "app/src/ui/tree/toolbar.rs Link menu Copy link"
 
 [popups."Find a Timeless Jewel"]
-ported = "app/src/engine/glue/timeless.lua search job over the FindTimelessJewel session (R17)"
+ported = "app/src/engine/glue/timeless.lua search job over the FindTimelessJewel session (R17); result list double click, Shift range and row tooltips via popups.lua"
 note = "R17"
 
 [popups."FolderListControl:84"]

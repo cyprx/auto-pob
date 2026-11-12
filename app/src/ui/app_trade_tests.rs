@@ -129,7 +129,12 @@ fn external_url_opens_and_copies_once_for_its_seq() {
     // a link answering an older press is not the user's click now
     let older = seq;
     let seq = app.send(Command::PressPopupButton {
-        name: "close".into(),
+        name: "searchTradeButton".into(),
+    });
+    settle(&mut app, &ctx);
+    // another window's button between the press and its link doesn't drop the link
+    app.send(Command::PressPopupButton {
+        name: "save".into(),
     });
     settle(&mut app, &ctx);
     let late = "https://www.pathofexile.com/trade/search/Standard?q=late";
@@ -153,7 +158,7 @@ fn only_trade_search_urls_are_opened() {
         "https://www.pathofexile.com/oauth/authorize?x=1",
     ] {
         let seq = app.send(Command::PressPopupButton {
-            name: "close".into(),
+            name: "searchTradeButton".into(),
         });
         settle(&mut app, &ctx);
         link(&mut app, seq, url);

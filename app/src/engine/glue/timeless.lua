@@ -8,8 +8,46 @@
 
 glue = glue or {}
 
--- { co, popup, build, seeds, last_seed, total, start, budget }: nil while no search runs
+-- { co, popup, gen, seeds, last_seed, total, start, budget, saved }: nil while no search runs
 local job
+
+-- The previous search as the window shows it: PoB's "All Sockets" branch wipes the results
+-- before it searches (TreeTab.lua:2795-2800), so a search that doesn't finish puts these back
+-- (R17). The list control holds the same tables, so they are refilled in place.
+local function save(popup, timelessData)
+	local c = popup.controls
+	return {
+		results = copyTable(timelessData.searchResults, true),
+		shared = copyTable(timelessData.sharedResults, true),
+		trade = {
+			enabled = c.searchTradeButton.enabled,
+			lastSearch = c.searchTradeButton.lastSearch,
+			label = c.searchTradeButton.label,
+		},
+		selIndex = c.searchResults.selIndex,
+		highlightIndex = c.searchResults.highlightIndex,
+	}
+end
+
+local function refill(target, from)
+	wipeTable(target)
+	for k, v in pairs(from) do
+		target[k] = v
+	end
+end
+
+local function restore(stopped)
+	local saved = stopped.saved
+	local timelessData = stopped.timelessData
+	refill(timelessData.searchResults, saved.results)
+	refill(timelessData.sharedResults, saved.shared)
+	local c = stopped.popup.controls
+	c.searchTradeButton.enabled = saved.trade.enabled
+	c.searchTradeButton.lastSearch = saved.trade.lastSearch
+	c.searchTradeButton.label = saved.trade.label
+	c.searchResults.selIndex = saved.selIndex
+	c.searchResults.highlightIndex = saved.highlightIndex
+end
 
 local function wrap(name)
 	local read = data[name]
@@ -38,7 +76,20 @@ local function install()
 	end
 end
 
+-- Drops the job without its results: a search that doesn't finish leaves the previous ones
+local function stop()
+	local stopped = job
+	job = nil
+	if stopped then
+		restore(stopped)
+	end
+end
+
 function glue.timeless_running()
+	-- a build that PoB initialised again (a failed open falls back to a new one) ends it
+	if job and job.gen ~= glue.build_generation() then
+		stop()
+	end
 	return job ~= nil
 end
 
@@ -58,7 +109,9 @@ function glue.timeless_start(popup, button)
 			button.onClick()
 		end),
 		popup = popup,
-		build = pob.build,
+		gen = glue.build_generation(),
+		timelessData = timelessData,
+		saved = save(popup, timelessData),
 		seeds = 0,
 		total = math.max(1, sockets * seeds),
 		budget = 0,
@@ -80,8 +133,7 @@ function glue.timeless_step(budget)
 	if not job then
 		return { done = true, percent = 100 }
 	end
-	if job.build ~= pob.build then
-		job = nil
+	if not glue.timeless_running() then
 		return { done = true, percent = 100 }
 	end
 	job.budget = budget
@@ -89,7 +141,7 @@ function glue.timeless_step(budget)
 	local ok, err = coroutine.resume(job.co)
 	if not ok then
 		local popup = job.popup
-		job = nil
+		stop()
 		err = tostring(err)
 		popup.controls.msg.label = "^1" .. err
 		error(err, 0)
@@ -101,8 +153,8 @@ function glue.timeless_step(budget)
 	return { done = false, percent = glue.timeless_progress() }
 end
 
--- Drops the running search. PoB replaces `searchResults` only once a search returns, so the
--- previous results stay (R17).
+-- Drops the running search; the previous results stay, as PoB never shows a search that
+-- didn't return (R17).
 function glue.timeless_cancel()
-	job = nil
+	stop()
 end

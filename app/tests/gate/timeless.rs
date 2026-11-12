@@ -22,25 +22,63 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-/// A folder of symlinks to the pinned PoB folder, except `Data/TimelessJewelData`, which is a
-/// real folder of symlinks: PoB's LUT caches are written here
+/// The LUTs the test reads; the other jewel types' data is left out
+const LUTS: [&str; 2] = ["LethalPride.zip", "MilitantFaith.zip"];
+
+/// A PoB folder for the test: symlinks to the pinned one, except `manifest.xml` and
+/// `Data/TimelessJewelData`, which are copies. PoB writes its LUT caches next to its data
+/// (DataJewelFileLoader.lua:83-91) and its repair path rewrites `NodeIndexMapping.lua`, so
+/// nothing there may lead back to the pinned folder: its `.lua` files and the LUTs this test
+/// reads are copied, any `.bin` the pinned folder holds is left out.
 fn farm(test: &str) -> PathBuf {
-    fn link_dir(from: &Path, to: &Path, deeper: &[&str]) {
-        fs::create_dir_all(to).unwrap();
-        for entry in fs::read_dir(from).unwrap() {
-            let entry = entry.unwrap();
-            let name = entry.file_name();
-            if deeper.first().is_some_and(|d| name == *d) {
-                link_dir(&entry.path(), &to.join(&name), &deeper[1..]);
-            } else {
-                std::os::unix::fs::symlink(entry.path(), to.join(&name)).unwrap();
-            }
-        }
-    }
     let farm = std::env::temp_dir().join(format!("auto-pob-tl-pob-{test}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&farm);
-    link_dir(&pob_dir(), &farm, &["Data", "TimelessJewelData"]);
+    let pinned = pob_dir();
+    fs::create_dir_all(farm.join("Data/TimelessJewelData")).unwrap();
+    for entry in fs::read_dir(&pinned).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name();
+        if name == "manifest.xml" {
+            fs::copy(entry.path(), farm.join(&name)).unwrap();
+        } else if name != "Data" {
+            std::os::unix::fs::symlink(entry.path(), farm.join(&name)).unwrap();
+        }
+    }
+    for entry in fs::read_dir(pinned.join("Data")).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name();
+        if name != "TimelessJewelData" {
+            std::os::unix::fs::symlink(entry.path(), farm.join("Data").join(&name)).unwrap();
+        }
+    }
+    for entry in fs::read_dir(pinned.join("Data/TimelessJewelData")).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.ends_with(".lua") || LUTS.contains(&name.as_str()) {
+            fs::copy(
+                entry.path(),
+                farm.join("Data/TimelessJewelData").join(&name),
+            )
+            .unwrap();
+        }
+    }
     farm
+}
+
+/// The pinned `Data/TimelessJewelData`, by file: size and modification time. The test must
+/// leave it as it found it.
+fn pinned_luts() -> BTreeMap<String, (u64, std::time::SystemTime)> {
+    fs::read_dir(pob_dir().join("Data/TimelessJewelData"))
+        .unwrap()
+        .map(|e| {
+            let e = e.unwrap();
+            let meta = fs::symlink_metadata(e.path()).unwrap();
+            (
+                e.file_name().to_string_lossy().to_string(),
+                (meta.len(), meta.modified().unwrap()),
+            )
+        })
+        .collect()
 }
 
 /// Upstream's side, written apart from the glue: PoB's own opener, the realm picked and the
@@ -93,6 +131,32 @@ function press(name)
     assert(c:IsShown() and c:IsEnabled(), name .. " is not usable")
     c.onClick()
     return opened
+end
+
+-- A click on a result row, as PoB's list takes it (ListControl.lua:362-372), Shift held for a
+-- range (TimelessJewelListControl.lua:50-58) or as the second click of a double click
+function listClick(index, shift, double)
+    local list = popup().controls.searchResults
+    local real = IsKeyDown
+    if shift then
+        IsKeyDown = function(key) return key == "SHIFT" end
+    end
+    local ok, err = pcall(function()
+        if list:SelectIndex(index) then
+            list:OnSelClick(index, list.list[index], double)
+        end
+    end)
+    IsKeyDown = real
+    assert(ok, err)
+end
+
+-- The raw text of the newest item of the build
+function newestItem()
+    local newest = 0
+    for id in pairs(build.itemsTab.items) do
+        if id > newest then newest = id end
+    end
+    return build.itemsTab.items[newest]:BuildRaw()
 end
 
 function closeTimeless()
@@ -295,6 +359,36 @@ type Case<'a> = (
     &'a [(&'a str, &'a str)],
 );
 
+/// A trade link with its query's lists sorted: the address as it is, the JSON canonical
+fn canonical_link(url: &str) -> (String, serde_json::Value) {
+    fn sort(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Array(items) => {
+                items.iter_mut().for_each(sort);
+                items.sort_by_key(|v| v.to_string());
+            }
+            serde_json::Value::Object(map) => map.values_mut().for_each(sort),
+            _ => {}
+        }
+    }
+    let (address, query) = url.split_once("?q=").expect("no query");
+    let bytes = query.as_bytes();
+    let mut decoded = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            decoded.push(u8::from_str_radix(&query[i + 1..i + 3], 16).unwrap());
+            i += 3;
+        } else {
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+    }
+    let mut json: serde_json::Value = serde_json::from_slice(&decoded).expect("query JSON");
+    sort(&mut json);
+    (address.to_string(), json)
+}
+
 /// R17's search list: three desired nodes with weights
 fn search_list(prefix: &str, ids: &[&str]) -> String {
     ids.iter()
@@ -326,6 +420,7 @@ fn timeless_search_matches_pob() {
         path: builds.join("attack.xml"),
     })
     .unwrap();
+    let pinned_before = pinned_luts();
     let before = files(&s.user);
     let refused = s.backend.net_handle().refused();
 
@@ -493,6 +588,133 @@ fn timeless_search_matches_pob() {
         kept = ours;
     }
 
+    // ---- The result list: row tooltips, a Shift+click range and a double click, as PoB ----
+    // PoB sorts by total only, so rows of equal totals may stand in another order upstream: a
+    // row is found by its seed on each side, and a range ends where a run of equal totals does
+    let index_of = |lua: &mlua::Lua, build: &str, seed: u32| -> usize {
+        lua.load(format!(
+            "for i, r in ipairs({build}.timelessData.searchResults) do if r.seed == {seed} then return i end end return 0"
+        ))
+        .eval::<usize>()
+        .unwrap()
+    };
+    let last: usize = s.eval(
+        "local r = pob.build.timelessData.searchResults
+         for e = 3, #r - 1 do
+            if r[e].total ~= r[e + 1].total then return e end
+         end
+         return #r",
+    );
+    let pick = kept[kept.len() / 2].seed;
+    let first = index_of(&s.backend.lua, "pob.build", pick);
+    let up_first = index_of(&up, "build", pick);
+    assert!(first > 0 && up_first > 0);
+    let row_tip = |s: &mut Ours, index: usize| -> String {
+        let view = s
+            .backend
+            .control_tooltip_view(&auto_pob::engine::ControlTooltipQuery::Popup {
+                control: "searchResults".into(),
+                index: Some(index),
+            })
+            .unwrap()
+            .expect("no row tooltip");
+        format!("{:?}", view.tooltip)
+    };
+    let tip = row_tip(&mut s, first - 1);
+    assert!(
+        tip.contains("Double click to add this jewel to your build."),
+        "{tip}"
+    );
+    assert!(tip.contains("Combined Node Weight: "), "{tip}");
+    assert!(tip.contains("Node List:"), "{tip}");
+    // a range: the first row, then the end of a run of equal totals with Shift
+    s.set("searchResults", PopupInput::Row("1".into()));
+    s.set("searchResults", PopupInput::RowShiftClick(last.to_string()));
+    let list = s
+        .view()
+        .controls
+        .into_iter()
+        .find(|c| c.name == "searchResults")
+        .unwrap();
+    assert_eq!(list.row_selected, Some("1".into()));
+    assert_eq!(list.row_highlight, Some(last.to_string()));
+    let up_click = |index: usize, shift: bool, double: bool| {
+        call(
+            "listClick",
+            mlua::MultiValue::from_iter([
+                mlua::Value::Integer(index as i64),
+                mlua::Value::Boolean(shift),
+                mlua::Value::Boolean(double),
+            ]),
+        );
+    };
+    up_click(1, false, false);
+    up_click(last, true, false);
+    let url = s
+        .press("searchTradeButton")
+        .external_url
+        .expect("no trade link for the range")
+        .url;
+    let theirs: Option<String> = up
+        .from_value(call(
+            "press",
+            mlua::MultiValue::from_iter([up.to_value("searchTradeButton").unwrap()]),
+        ))
+        .unwrap();
+    // the same seeds, in an order that may differ within equal totals: compared canonically
+    assert_eq!(
+        canonical_link(&url),
+        canonical_link(&theirs.expect("upstream opened no link")),
+        "the range's trade links differ"
+    );
+    // a double click adds the jewel to the build, and PoB greys the row
+    let items_before: usize =
+        s.eval("local n = 0 for _ in pairs(pob.build.itemsTab.items) do n = n + 1 end return n");
+    s.set("searchResults", PopupInput::Row(first.to_string()));
+    let added = s
+        .run(Command::SetPopupControl {
+            name: "searchResults".into(),
+            value: PopupInput::RowDoubleClick(first.to_string()),
+        })
+        .unwrap();
+    assert!(added.items && added.build && added.popup);
+    let items_after: usize =
+        s.eval("local n = 0 for _ in pairs(pob.build.itemsTab.items) do n = n + 1 end return n");
+    assert_eq!(items_after, items_before + 1, "no jewel was added");
+    up_click(up_first, false, false);
+    up_click(up_first, false, true);
+    let ours_item: String = s.eval(
+        "local newest = 0
+         for id in pairs(pob.build.itemsTab.items) do if id > newest then newest = id end end
+         return pob.build.itemsTab.items[newest]:BuildRaw()",
+    );
+    let theirs_item: String = up.load("return newestItem()").eval().unwrap();
+    assert_eq!(ours_item, theirs_item, "the added jewels differ");
+    assert!(
+        ours_item.contains(&format!("Militant Faith {pick};")),
+        "{ours_item}"
+    );
+    let row = s
+        .view()
+        .controls
+        .into_iter()
+        .find(|c| c.name == "searchResults")
+        .unwrap()
+        .rows[first - 1]
+        .label
+        .clone();
+    assert!(row.starts_with("^xB2B2B2"), "the row isn't greyed: {row}");
+    let tip = row_tip(&mut s, first - 1);
+    assert!(
+        tip.contains("was successfully added to your build"),
+        "{tip}"
+    );
+    // PoB's greyed row is part of the results from now on
+    kept = s.results();
+    // the list's state is the same on both sides again for the trade button below
+    s.set("searchResults", PopupInput::Row("1".into()));
+    up_click(1, false, false);
+
     // ---- "Search Maximum Amount" and "Open Trade URL": upstream's link ----
     s.set("searchMore", PopupInput::Check(true));
     up_set("searchMore", &PopupInput::Check(true));
@@ -540,6 +762,39 @@ fn timeless_search_matches_pob() {
     assert_eq!(ended.into_inner(), [100]);
     assert_ne!(s.backend.next_background(), Some(BackgroundTask::Timeless));
     assert_eq!(s.results(), kept, "Cancel lost the previous results");
+
+    // ---- Cancelling an "All Sockets" search keeps the previous results too ----
+    // PoB wipes them before its socket loop (TreeTab.lua:2795-2800)
+    let trade_before = s
+        .view()
+        .controls
+        .into_iter()
+        .find(|c| c.name == "searchTradeButton")
+        .unwrap();
+    s.choose("socketSelect", "All Sockets");
+    s.press("searchButton");
+    s.step();
+    assert_eq!(s.backend.next_background(), Some(BackgroundTask::Timeless));
+    s.run(Command::CancelTimelessSearch).unwrap();
+    assert_eq!(s.results(), kept, "an All Sockets cancel lost the results");
+    let view = s.view();
+    let trade_after = view
+        .controls
+        .iter()
+        .find(|c| c.name == "searchTradeButton")
+        .unwrap();
+    assert_eq!(
+        (trade_after.enabled, &trade_after.label),
+        (trade_before.enabled, &trade_before.label)
+    );
+    let rows = &view
+        .controls
+        .iter()
+        .find(|c| c.name == "searchResults")
+        .unwrap()
+        .rows;
+    assert_eq!(rows.len(), kept.len());
+    s.choose("socketSelect", &socket_label);
 
     // ---- Closing the window mid-search cancels it too ----
     s.press("searchButton");
@@ -699,7 +954,26 @@ fn timeless_search_matches_pob() {
     s.press("searchButton");
     s.finish();
     assert!(!s.results().is_empty(), "a new search on dot found nothing");
-    s.run(Command::ClosePopup).unwrap();
+
+    // ---- A failed open replaces the build too: the session and its search end ----
+    // PoB falls back to a new build (glue/builds.lua `enter_build`) and the command errors
+    let bad = builds.join("bad.xml");
+    fs::write(&bad, "not a build").unwrap();
+    s.backend.timeless_budget_ms = 1;
+    s.press("searchButton");
+    s.step();
+    assert_eq!(s.backend.next_background(), Some(BackgroundTask::Timeless));
+    assert!(s.run(Command::OpenBuild { path: bad.clone() }).is_err());
+    assert!(
+        s.backend.popup_view().unwrap().is_none(),
+        "the session outlived its build"
+    );
+    assert_ne!(
+        s.backend.next_background(),
+        Some(BackgroundTask::Timeless),
+        "the search outlived its build"
+    );
+    fs::remove_file(&bad).unwrap();
 
     // ---- No request, no file ----
     assert_eq!(
@@ -718,6 +992,11 @@ fn timeless_search_matches_pob() {
     );
     assert_eq!(files(&s.user), before, "a file was written");
     assert_eq!(s.popups(), 0);
+    assert_eq!(
+        pinned_luts(),
+        pinned_before,
+        "the pinned TimelessJewelData changed"
+    );
     let bins: Vec<String> = fs::read_dir(pob.join("Data/TimelessJewelData"))
         .unwrap()
         .filter_map(|e| {

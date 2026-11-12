@@ -25,6 +25,7 @@ fn control(name: &str, kind: PopupControlKind, pos: [f32; 2], size: [f32; 2]) ->
         hover_tooltip: false,
         rows: vec![],
         row_selected: None,
+        row_highlight: None,
         note: None,
     }
 }
@@ -780,4 +781,100 @@ fn progress_line_and_cancel() {
     let mut other = Harness::new(popup(vec![button("save", 0.0, 0.0)]));
     other.popup.on_search_progress(40);
     assert_eq!(other.popup.search_state(), (None, None));
+}
+
+#[test]
+fn list_double_and_shift_clicks_and_the_range() {
+    let rows: Vec<PopupRow> = (1..=4)
+        .map(|i| PopupRow {
+            key: i.to_string(),
+            label: format!("seed {i}"),
+        })
+        .collect();
+    let list = PopupControl {
+        rows,
+        row_selected: Some("1".into()),
+        row_highlight: Some("3".into()),
+        ..control(
+            "searchResults",
+            PopupControlKind::List,
+            [0.0, 0.0],
+            [300.0, 200.0],
+        )
+    };
+    let mut h = Harness::new(PopupView {
+        kind: PopupKind::TimelessJewel,
+        ..popup(vec![list])
+    });
+    // a double click: PoB's list takes the first click, then the second as a double click
+    let pos = h.rect("searchResults_row_1").center();
+    let button = |pressed| Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    h.step = 0.05;
+    let mut sent = Vec::new();
+    for events in [
+        vec![Event::PointerMoved(pos)],
+        vec![button(true)],
+        vec![button(false)],
+        vec![button(true)],
+        vec![button(false)],
+        vec![],
+    ] {
+        sent.extend(h.frame(events).commands);
+    }
+    assert_eq!(
+        debug(&sent),
+        [
+            set("searchResults", PopupInput::Row("2".into())),
+            set("searchResults", PopupInput::RowDoubleClick("2".into())),
+        ]
+    );
+    // Shift held: the other end of a range
+    h.step = 1.0;
+    h.frame(vec![]);
+    h.step = 0.2;
+    let pos = h.rect("searchResults_row_3").center();
+    let shift = |pressed| Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::SHIFT,
+    };
+    let mut sent = Vec::new();
+    for events in [
+        vec![
+            Event::ModifiersChanged(Modifiers::SHIFT),
+            Event::PointerMoved(pos),
+        ],
+        vec![Event::ModifiersChanged(Modifiers::SHIFT), shift(true)],
+        vec![Event::ModifiersChanged(Modifiers::SHIFT), shift(false)],
+        vec![Event::ModifiersChanged(Modifiers::NONE)],
+    ] {
+        sent.extend(h.frame(events).commands);
+    }
+    assert_eq!(
+        debug(&sent),
+        [set("searchResults", PopupInput::RowShiftClick("4".into()))]
+    );
+}
+
+#[test]
+fn only_the_searchs_own_refusal_ends_its_line() {
+    let mut h = Harness::new(PopupView {
+        kind: PopupKind::TimelessJewel,
+        title: "Find a Timeless Jewel".into(),
+        controls: vec![button("searchButton", 0.0, 0.0)],
+    });
+    h.click("btn_searchButton");
+    h.popup.press_sent(7);
+    // another command's refusal leaves the running search's line
+    h.popup.on_error(6);
+    assert_eq!(h.popup.search_state(), (Some(0), None));
+    // the Search's own refusal started nothing
+    h.popup.on_error(7);
+    assert_eq!(h.popup.search_state(), (None, None));
 }

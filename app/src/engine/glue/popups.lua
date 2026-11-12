@@ -10,7 +10,8 @@ glue = glue or {}
 
 local NOT_SHOWN = "PoB doesn't show that control for this item"
 
--- { popup, kind, owner, item, build }: nil while no session is open. The owner (R19) says what
+-- { popup, kind, owner, item, gen }: nil while no session is open (`gen`: the build's
+-- `glue.build_generation()` when it opened). The owner (R19) says what
 -- ends it: `item` (the displayed item or the build changed), `build` (the build changed) or
 -- `main` (nothing but PoB or a command; it needs no build and survives build changes).
 local session
@@ -43,7 +44,7 @@ local function live()
 	if session.owner == "main" then
 		return true
 	end
-	if session.build ~= pob.build then
+	if session.gen ~= glue.build_generation() then
 		drop()
 		return false
 	end
@@ -94,7 +95,7 @@ local function settle(mine, depth)
 			session.kind = "EditText"
 			session.owner = "item"
 			session.item = items_tab().displayItem
-			session.build = pob.build
+			session.gen = glue.build_generation()
 		end
 		return false
 	end
@@ -125,7 +126,7 @@ function glue.popup_end(keep_main)
 	end
 	-- a build-owned session ends with its build only (R19): a command that keeps the build
 	-- leaves it, and a timeless search in it, running
-	if not keep_main and session ~= nil and session.owner == "build" and session.build == pob.build then
+	if not keep_main and session ~= nil and session.owner == "build" and session.gen == glue.build_generation() then
 		return false
 	end
 	-- not `live()`: the command that just ran may itself have replaced the item (R4)
@@ -272,6 +273,8 @@ end
 -- The leagues PoB's fetch would have set (its callback, CompareBuySimilar.lua:323-339), from
 -- the app's league; the pick is PoB's own selection callback, which rebuilds the URL. The list
 -- starts as "Loading..." at index 1, so a `SetSel` to index 1 would run nothing.
+-- (Its `selFunc` also records `M.lastLeagueByRealm`, as a user's pick does; only the fetch
+-- callback reads that, and it never runs.)
 local function buy_leagues(popup)
 	local leagues = popup.controls.leagueDrop
 	local list, index = glue.trade_leagues()
@@ -415,7 +418,7 @@ function glue.popup_open(kind, arg)
 			error("PoB didn't open that window", 0)
 		end
 		drop()
-		session = { popup = top, kind = { BuySimilar = { source = arg } }, owner = "build", build = pob.build }
+		session = { popup = top, kind = { BuySimilar = { source = arg } }, owner = "build", gen = glue.build_generation() }
 		return
 	end
 	if kind == "timeless" then
@@ -444,7 +447,7 @@ function glue.popup_open(kind, arg)
 			error("PoB didn't open that window", 0)
 		end
 		drop()
-		session = { popup = top, kind = "TimelessJewel", owner = "build", build = pob.build }
+		session = { popup = top, kind = "TimelessJewel", owner = "build", gen = glue.build_generation() }
 		return
 	end
 	if kind == "spectre_library" then
@@ -515,7 +518,7 @@ function glue.popup_open(kind, arg)
 	-- a failed open above left the session it found alone; this one replaces it (R4)
 	local shown = kind == "node_replacement" and { NodeReplacement = { node = arg } } or KINDS[kind](arg)
 	drop()
-	session = { popup = top, kind = shown, owner = "item", item = tab.displayItem, build = pob.build }
+	session = { popup = top, kind = shown, owner = "item", item = tab.displayItem, gen = glue.build_generation() }
 end
 
 -- ---- Controls ----
@@ -622,6 +625,7 @@ local function control_view(name, control, kind, popup_x, popup_y)
 		value = 0,
 		checked = false,
 		text = "",
+		-- a list's rows are asked for one by one (`glue.popup_tooltip` with an index)
 		hover_tooltip = kind ~= "List" and control.tooltipFunc ~= nil,
 		rows = {},
 	}
@@ -646,12 +650,22 @@ local function control_view(name, control, kind, popup_x, popup_y)
 			local ok, label = pcall(control.GetRowValue, control, 1, i, value)
 			view.rows[i] = { key = row_key(value, i), label = ok and text_of(label) or "" }
 		end
-		if control.selValue ~= nil then
+		-- the selected row is `selIndex`: a Shift+click moves `selValue` but not the
+		-- selection (ListControl.lua:76-85)
+		local sel = control.selIndex and control.list[control.selIndex]
+		if sel ~= nil then
+			view.row_selected = row_key(sel, control.selIndex)
+		elseif control.selValue ~= nil then
 			for i, value in ipairs(control.list) do
 				if value == control.selValue then
 					view.row_selected = row_key(value, i)
 				end
 			end
+		end
+		-- the other end of a Shift+click range (TimelessJewelListControl.lua:50-58)
+		local far = control.highlightIndex and control.list[control.highlightIndex]
+		if far ~= nil then
+			view.row_highlight = row_key(far, control.highlightIndex)
 		end
 		view.note = control.defaultText and text_of(control:GetProperty("defaultText")) or nil
 	end
@@ -719,12 +733,27 @@ function glue.set_control(control, control_kind, kind, value, label)
 		end
 	elseif kind == "text" and control_kind == "Edit" then
 		glue.paste_into(control, value)
-	elseif kind == "row" and control_kind == "List" then
+	elseif (kind == "row" or kind == "row_double" or kind == "row_shift") and control_kind == "List" then
+		-- a click on the row (ListControl.lua:338-372): a double click is PoB's second click, and
+		-- Shift is held for a range pick (`OverrideSelectIndex`, which then takes the click)
 		glue.list_sync(control)
 		for i, entry in ipairs(control.list) do
 			if row_key(entry, i) == value then
-				control:SelectIndex(i)
-				control:OnSelClick(i, entry, false)
+				local real = IsKeyDown
+				if kind == "row_shift" then
+					IsKeyDown = function(key)
+						return key == "SHIFT"
+					end
+				end
+				local ok, err = pcall(function()
+					if control:SelectIndex(i) ~= false and control.OnSelClick then
+						control:OnSelClick(i, entry, kind == "row_double")
+					end
+				end)
+				IsKeyDown = real
+				if not ok then
+					error(err, 0)
+				end
 				return
 			end
 		end
@@ -849,6 +878,17 @@ function glue.popup_tooltip(name, index)
 	with_session(function()
 		local entry = all_controls(session.popup)[name]
 		local control = entry and entry.control
+		-- a list row's tooltip, as hovering the row builds it (ListControl.lua:319-321)
+		if control and not control.tooltipFunc and control.AddValueTooltip and index and control:IsShown() then
+			local value = control.list and control.list[index + 1]
+			if value == nil then
+				return
+			end
+			local tooltip = new("Tooltip")
+			control:AddValueTooltip(tooltip, index + 1, value)
+			out = glue.read_tooltip(tooltip)
+			return
+		end
 		if not (control and control.tooltipFunc and control:IsShown()) then
 			return
 		end

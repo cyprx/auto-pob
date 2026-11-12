@@ -1170,6 +1170,12 @@ impl PobBackend {
                     PopupInput::Row(key) => {
                         self.call::<_, ()>("compare_set", (name, "row", key, ()))?
                     }
+                    PopupInput::RowDoubleClick(key) => {
+                        self.call::<_, ()>("compare_set", (name, "row_double", key, ()))?
+                    }
+                    PopupInput::RowShiftClick(key) => {
+                        self.call::<_, ()>("compare_set", (name, "row_shift", key, ()))?
+                    }
                 }
                 let mut affected = compare_changed();
                 // PoB's own item set selector, with an Items undo state (CompareTab.lua:781)
@@ -1685,6 +1691,8 @@ impl PobBackend {
             }
             Command::OpenPopup(kind) => {
                 self.anoint_failed = false;
+                // another window replaces the session and ends its search (R17)
+                self.timeless_job = false;
                 let (name, arg) = match kind {
                     PopupKind::Craft => ("craft", 0),
                     // the item text editor only ever takes over a Craft session (R2)
@@ -1719,6 +1727,8 @@ impl PobBackend {
                 // a failed sort's builder is gone and a same-value pick runs no PoB code, so
                 // the control that restarts it is the glue's (Retry)
                 let restart = std::mem::take(&mut self.anoint_failed);
+                // the timeless results' double click adds that jewel to the build (R17)
+                let adds = matches!(value, PopupInput::RowDoubleClick(_));
                 match value {
                     PopupInput::Choice { index, label } => {
                         self.call::<_, ()>("popup_set", (name, "choice", index, label))?
@@ -1735,11 +1745,23 @@ impl PobBackend {
                     PopupInput::Row(key) => {
                         self.call::<_, ()>("popup_set", (name, "row", key, ()))?
                     }
+                    PopupInput::RowDoubleClick(key) => {
+                        self.call::<_, ()>("popup_set", (name, "row_double", key, ()))?
+                    }
+                    PopupInput::RowShiftClick(key) => {
+                        self.call::<_, ()>("popup_set", (name, "row_shift", key, ()))?
+                    }
                 }
                 if restart {
                     self.call::<_, ()>("anoint_sort_restart", ())?;
                 }
-                Ok(popup_changed())
+                let mut affected = popup_changed();
+                if adds {
+                    // PoB's AddItem and PopulateSlots, no undo state (TimelessJewelListControl.lua:308-310)
+                    affected.build = true;
+                    affected.items = true;
+                }
+                Ok(affected)
             }
             Command::PressPopupButton { name } => {
                 let pressed: Pressed = self.view("popup_press", name)?;
@@ -1764,6 +1786,8 @@ impl PobBackend {
             }
             Command::ClosePopup => {
                 self.call::<_, ()>("popup_close", ())?;
+                // closing the window ended its search (R17)
+                self.timeless_job = false;
                 // Escape on Options is its Cancel, which puts the settings back
                 Ok(Affected {
                     settings: true,

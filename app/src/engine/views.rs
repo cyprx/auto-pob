@@ -1099,6 +1099,7 @@ mod tests {
                 hover_tooltip: false,
                 rows: vec![],
                 row_selected: None,
+                row_highlight: None,
                 note: None,
             }],
             summary: vec![
@@ -1623,6 +1624,9 @@ pub struct PopupControl {
     #[serde(default)]
     pub rows: Vec<PopupRow>,
     pub row_selected: Option<String>,
+    /// The other end of a Shift+click range from `row_selected` (the timeless results)
+    #[serde(default)]
+    pub row_highlight: Option<String>,
     /// A list's `defaultText`
     pub note: Option<String>,
 }

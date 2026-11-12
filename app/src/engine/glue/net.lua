@@ -54,6 +54,12 @@ do
 	end
 end
 
+-- How many times PoB has initialised a build: `pob.build` is one object that every `SetMode`
+-- initialises again, so this, not its identity, tells one build from the next (R19)
+function glue.build_generation()
+	return inits
+end
+
 local SIGNING_IN = "Signing in"
 
 -- ---- Errors ----

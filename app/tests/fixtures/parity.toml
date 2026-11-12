@@ -2142,65 +2142,63 @@ ported = "app/src/ui/items/sets.rs weapon set I/II"
 ported = "app/src/ui/items/sets.rs weapon set I/II"
 
 [controls."list.buildList"]
-gap = "Task 6"
-note = "browsing ported (build_list.rs); drag to folders, Ctrl+X/V and the row menu are Task 6 (R16); NF-13 (new finding, in scope by controller ruling): F2, Enter, the Delete key and Ctrl+C then Ctrl+V into another folder"
+ported = "app/src/ui/build_list.rs table: PoB order, row menu, drag to folders, Ctrl+X/Ctrl+V, F2, Enter, Delete key; Ctrl+C then Ctrl+V is still open under keys list.v and ListControl.c"
 
 [controls."list.buildList.path"]
-gap = "Task 6"
-note = "controller ruling: full parity; clickable path segments; today ported app/src/ui/build_list.rs Builds/<folder> header and .. row; PoB's path segments are clickable; ours goes up one level at a time"
+ported = "app/src/ui/build_list.rs top_rows clickable path segments, Mouse4/5 history"
 
 [controls."list.buildList.scrollBarH"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs table (the list's own scroll area)"
 note = "part of list.buildList"
 
 [controls."list.buildList.scrollBarV"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs table (the list's own scroll area)"
 note = "part of list.buildList"
 
 [controls."list.copy"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs row menu Copy… and name dialog"
 note = "R16"
 
 [controls."list.delete"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs row menu Delete…, Delete key and confirm dialog"
 note = "R16"
 
 [controls."list.new"]
 ported = "app/src/ui/build_list.rs New"
 
 [controls."list.newFolder"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs top_rows New Folder and name dialog"
 note = "R16"
 
 [controls."list.open"]
 ported = "app/src/ui/build_list.rs row click"
 
 [controls."list.rename"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs row menu Rename…, F2 and name dialog"
 note = "R16"
 
 [controls."list.searchText"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs search_box, sent 200 ms after typing stops"
 note = "search filter (R16)"
 
 [controls."list.searchText.buttonClear"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs search_box x button"
 note = "part of list.searchText"
 
 [controls."list.searchText.scrollBarH"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs search_box"
 note = "part of list.searchText"
 
 [controls."list.searchText.scrollBarV"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs search_box"
 note = "part of list.searchText"
 
 [controls."list.sort"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs top_rows sort combo with PoB's four labels"
 note = "PoB's four sort modes (R16)"
 
 [controls."list.sort.scrollBar"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs top_rows sort combo"
 note = "part of list.sort"
 
 [controls."main.about"]
@@ -2911,39 +2909,39 @@ ported = "app/src/ui/app.rs save error"
 note = "a failed save shows the error"
 
 [popups."BuildList:143"]
-gap = "Task 6"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
 note = "PoB's message: a folder cannot be copied into itself (NF-13) (R16 operations show PoB's text)"
 
 [popups."BuildList:158"]
-gap = "Task 6"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
 note = "PoB's message: a folder cannot be moved into itself (R16 operations show PoB's text)"
 
 [popups."BuildListControl:121"]
-gap = "Task 6"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
 note = "PoB's message: rename failure (R16 operations show PoB's text)"
 
 [popups."BuildListControl:131"]
-gap = "Task 6"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
 note = "PoB's message: copy failure (R16 operations show PoB's text)"
 
 [popups."BuildListControl:137"]
-gap = "Task 6"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
 note = "PoB's message: rename failure (R16 operations show PoB's text)"
 
 [popups."BuildListControl:152"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs name dialog (Copy and Rename, PoB's character filter and 100 character limit)"
 note = "Copy/Rename Build/Folder name popup (R16)"
 
 [popups."BuildListControl:167"]
-gap = "Task 6"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
 note = "PoB's message: delete failure (R16 operations show PoB's text)"
 
 [popups."BuildListControl:238"]
-gap = "Task 6"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
 note = "PoB's message: move (drag) failure (R16 operations show PoB's text)"
 
 [popups."BuildListControl:41"]
-gap = "Task 6"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
 note = "PoB's message: move failure (R16 operations show PoB's text)"
 
 [popups."Change Settings Path"]
@@ -2975,11 +2973,11 @@ gap = "Task 9"
 note = "comparison load failure text (R5)"
 
 [popups."Confirm Delete"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs delete dialog with PoB's text"
 note = "build list delete confirm (R16)"
 
 [popups."Confirm Folder Delete"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs delete dialog with PoB's text"
 note = "folder delete confirm (R16)"
 
 [popups."Craft Item"]
@@ -3058,23 +3056,23 @@ ported = "app/src/ui/popup.rs session (SP5b)"
 note = "Corrupt Item and its implicit / roll range pages (title modType Item)"
 
 [popups."Main:1551"]
-gap = "Task 6"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
 note = "PoB's message: MoveFolder failure (R16 operations show PoB's text)"
 
 [popups."Main:1572"]
-gap = "Task 6"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
 note = "PoB's message: MoveFolder failure (R16 operations show PoB's text)"
 
 [popups."Main:1583"]
-gap = "Task 6"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
 note = "PoB's message: MoveFolder delete failure (R16 operations show PoB's text)"
 
 [popups."Main:1592"]
-gap = "Task 6"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
 note = "PoB's message: CopyFolder failure (R16 operations show PoB's text)"
 
 [popups."Main:1614"]
-gap = "Task 6"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
 note = "PoB's message: CopyFolder failure (R16 operations show PoB's text)"
 
 [popups."Main:1643"]
@@ -3090,11 +3088,11 @@ ported = "app/src/ui/app.rs AppConfirm and each tab's own confirm"
 note = "OpenConfirmPopup body; every confirm title is its own row"
 
 [popups."Main:1703"]
-gap = "Task 6"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on_list_action sends the command)"
 note = "PoB's message: New Folder failure (R16 operations show PoB's text)"
 
 [popups."Main:1747"]
-gap = "Task 6"
+ported = "app/src/ui/app.rs on_error save error notice"
 note = "controller ruling: full parity; PoB's cloud-folder save error text; today ported app/src/ui/app.rs save error; OpenCloudErrorPopup: a failed save shows our error; PoB's OneDrive hint is Windows-only"
 
 [popups."Main:804"]
@@ -3122,7 +3120,7 @@ gap = "Task 13"
 note = "R28"
 
 [popups."New Folder"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs New Folder name dialog"
 note = "R16"
 
 [popups."Options"]
@@ -3256,11 +3254,11 @@ gap = "Task 14"
 note = "Ctrl+W (R25)"
 
 [keys."BuildListControl.F2"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs keys F2 opens Rename"
 note = "NF-13 rename"
 
 [keys."BuildListControl.RETURN"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs table Enter opens the selected row"
 note = "NF-13 open"
 
 [keys."ButtonControl.LEFTBUTTON"]
@@ -3523,15 +3521,15 @@ gap = "Task 14"
 note = "wiki key: controller ruling puts it in scope; the UI opens the wiki URL with ctx.open_url on the keypress"
 
 [keys."list.MOUSE4"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs keys folder back"
 note = "folder back (R25)"
 
 [keys."list.MOUSE5"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs keys folder forward"
 note = "folder forward (R25)"
 
 [keys."list.n"]
-gap = "Task 6"
+ported = "app/src/ui/build_list.rs keys Ctrl+N new build"
 note = "Ctrl+N (R25)"
 
 [keys."list.v"]
@@ -3571,8 +3569,7 @@ gap = "Task 14"
 note = "keyboard selection in lists"
 
 [keys."ListControl.x"]
-gap = "Task 6"
-note = "Ctrl+X: the build list cut (R16)"
+ported = "app/src/ui/build_list.rs keys Ctrl+X marks the row, Ctrl+V in another folder moves it"
 
 [keys."main.F1"]
 gap = "Task 14"

@@ -1013,21 +1013,54 @@ impl AutoPobApp {
     fn list_screen(&mut self, ui: &mut egui::Ui) {
         self.release_banner(ui);
         let mut action = None;
+        let blocked = self.prompt.is_some()
+            || self.save_as.is_some()
+            || self.import.is_some()
+            || self.confirm.is_some()
+            || self.popup.is_blocking()
+            || self.options.window.is_blocking();
         egui::CentralPanel::default().show(ui, |ui| match self.list.clone() {
-            Some(view) => action = self.list_ui.show(ui, &view),
+            Some(view) => action = self.list_ui.show(ui, &view, blocked),
             None => {
                 ui.spinner();
             }
         });
+        if let Some(action) = action {
+            self.on_list_action(action);
+        }
+    }
+
+    fn on_list_action(&mut self, action: ListScreenAction) {
         match action {
-            Some(ListScreenAction::OpenFolder(folder)) => {
+            ListScreenAction::OpenFolder(folder) => {
                 self.send(Command::ListBuilds { folder });
             }
-            Some(ListScreenAction::OpenBuild(path)) => self.request(Pending::Open(path)),
-            Some(ListScreenAction::New) => self.request(Pending::New),
-            Some(ListScreenAction::Import) => self.import = Some(String::new()),
-            Some(ListScreenAction::Options) => self.open_options(),
-            None => {}
+            ListScreenAction::OpenBuild(path) => self.request(Pending::Open(path)),
+            ListScreenAction::New => self.request(Pending::New),
+            ListScreenAction::Import => self.import = Some(String::new()),
+            ListScreenAction::Options => self.open_options(),
+            // a refusal comes back as PoB's own text and is shown like any other error
+            ListScreenAction::NewFolder(name) => {
+                self.send(Command::NewFolder { name });
+            }
+            ListScreenAction::Rename { path, name } => {
+                self.send(Command::RenameBuild { path, name });
+            }
+            ListScreenAction::Copy { path, name } => {
+                self.send(Command::CopyBuild { path, name });
+            }
+            ListScreenAction::Delete { path, kind } => {
+                self.send(Command::DeleteBuild { path, kind });
+            }
+            ListScreenAction::Move { path, folder } => {
+                self.send(Command::MoveBuild { path, folder });
+            }
+            ListScreenAction::SetSort(sort) => {
+                self.send(Command::SetBuildSort { sort });
+            }
+            ListScreenAction::SetFilter(text) => {
+                self.send(Command::SetBuildFilter { text });
+            }
         }
     }
 
@@ -2023,6 +2056,61 @@ mod tests {
             repeat: false,
             modifiers: egui::Modifiers::COMMAND,
         }]
+    }
+
+    #[test]
+    fn list_actions_become_their_commands_and_refusals_show_pobs_text() {
+        use crate::engine::commands::DeleteKind;
+        use crate::engine::views::BuildSort;
+        let (mut app, _ctx) = started();
+        let path: PathBuf = "/b/one.xml".into();
+        let actions = vec![
+            ListScreenAction::NewFolder("f".into()),
+            ListScreenAction::Rename {
+                path: path.clone(),
+                name: "n".into(),
+            },
+            ListScreenAction::Copy {
+                path: path.clone(),
+                name: "c".into(),
+            },
+            ListScreenAction::Delete {
+                path: path.clone(),
+                kind: DeleteKind::Folder,
+            },
+            ListScreenAction::Move {
+                path,
+                folder: "sub/".into(),
+            },
+            ListScreenAction::SetSort(BuildSort::Level),
+            ListScreenAction::SetFilter("class:witch".into()),
+        ];
+        let before = app.sent_full.len();
+        for action in actions {
+            app.on_list_action(action);
+        }
+        assert_eq!(
+            sent_since(&app, before),
+            [
+                r#"NewFolder { name: "f" }"#,
+                r#"RenameBuild { path: "/b/one.xml", name: "n" }"#,
+                r#"CopyBuild { path: "/b/one.xml", name: "c" }"#,
+                r#"DeleteBuild { path: "/b/one.xml", kind: Folder }"#,
+                r#"MoveBuild { path: "/b/one.xml", folder: "sub/" }"#,
+                "SetBuildSort { sort: Level }",
+                r#"SetBuildFilter { text: "class:witch" }"#,
+            ]
+        );
+        // a refusal is the engine's own sentence, shown like any other error
+        let seq = app.send(Command::RenameBuild {
+            path: "/b/one.xml".into(),
+            name: "two".into(),
+        });
+        app.on_event(Event::Error {
+            seq,
+            message: "a build with that name already exists".into(),
+        });
+        assert_eq!(app.notices, ["a build with that name already exists"]);
     }
 
     #[test]

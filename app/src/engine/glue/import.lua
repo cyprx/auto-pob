@@ -24,6 +24,7 @@ local function trim(text)
 end
 
 local INVALID = "that isn't a link PoB can import"
+local COMPARE_FAILED = "Failed to import build for comparison."
 
 -- PoB's verdict on the box, without colour codes; "Invalid input" says nothing could be imported
 local function import_detail(tab)
@@ -200,10 +201,15 @@ local function import_through_tab(url, mode)
 	local id, message = glue.net_begin(label, {
 		confirmed = true,
 		after = function(req)
-			-- PoB's flags say why nothing came of it; a new build means the import worked
-			if not req.new_build and not req.error and not compared() then
-				local reason = not_imported(tab)
-				req.error = reason
+			if compared() then
+				glue.compare_landed()
+				return
+			end
+			-- PoB's flags say why nothing came of it; a new build means the import worked. A
+			-- comparison PoB couldn't build has already failed with PoB's message popup
+			-- (ImportTab.lua:660), which the request takes as its error
+			if not req.new_build and not req.error then
+				req.error = not_imported(tab)
 			end
 		end,
 	}, controls.importCodeGo.onClick)
@@ -211,7 +217,11 @@ local function import_through_tab(url, mode)
 		return id
 	end
 	if compared() then
+		glue.compare_landed(true)
 		return nil
+	end
+	if compare then
+		error(message or COMPARE_FAILED, 0)
 	end
 	-- nothing was fetched: a code imports at once, with Init run by the press
 	if not compare and pob.build.importTab ~= tab then

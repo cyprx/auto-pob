@@ -360,8 +360,12 @@ impl PobBackend {
         affected.requests = true;
         // a request of the account import ends with PoB's status and stage changed
         affected.account = true;
-        // a link imported as a comparison lands here (R5)
+        // a link imported as a comparison lands here (R5), and the overlay may now colour the
+        // tree against it
         affected.compare = true;
+        if self.call::<_, bool>("compare_take_landed", ())? {
+            affected.tree = true;
+        }
         affected.short_link = self.call("short_link_ready", ())?;
         if self.call::<_, bool>("popup_take_lost", ())? {
             affected.popup = true;

@@ -35,6 +35,22 @@ for _, entry in ipairs(CONTROLS) do
 	MODE_OF[entry[1]] = entry[2] or false
 end
 
+-- An Import-tab comparison landed: the tree's overlay may have changed (taken by the engine's
+-- network step), and PoB switched to the Compare tab (taken by the next view), R5
+local landed, switched = false, false
+
+-- `at_once`: a code, answered by its own command (which flags the tree itself)
+function glue.compare_landed(at_once)
+	switched = true
+	landed = landed or not at_once
+end
+
+function glue.compare_take_landed()
+	local was = landed
+	landed = false
+	return was
+end
+
 local function compare_tab()
 	if not glue.build_loaded() then
 		error("open a build first", 0)
@@ -114,6 +130,7 @@ function glue.compare_load_file(path)
 	local label = name:gsub("%.[xX][mM][lL]$", "")
 	local file = io.open(path, "r")
 	if not file then
+		-- PoB names the full path; errors here name the file only (no paths in errors)
 		error("Couldn't open '" .. name .. "'.", 0)
 	end
 	local xml = file:read("*a")
@@ -476,11 +493,15 @@ function glue.compare_copy_config()
 	pob.build.configTab:AddUndoState()
 end
 
+-- Not side-effect free: like PoB's Draw it rebuilds a flagged comparison and refills the
+-- selectors (`sync`), and it takes the one-shot `switched`.
 function glue.compare_view()
 	local tab = pob.build.compareTab
 	if not tab or #tab.compareEntries == 0 then
 		return nil
 	end
+	local switch = switched
+	switched = false
 	local entry = active_entry(tab)
 	local entries = {}
 	for i, compareEntry in ipairs(tab.compareEntries) do
@@ -503,5 +524,6 @@ function glue.compare_view()
 		items = item_rows(tab, entry),
 		skills = skill_rows(tab, entry),
 		config = config_rows(tab, entry),
+		switched = switch,
 	}
 end

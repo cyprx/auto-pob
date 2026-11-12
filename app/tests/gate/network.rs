@@ -1290,9 +1290,9 @@ fn build_sites_match_pob() {
     assert!(affected.requests && !affected.build, "{affected:?}");
     let steps = s.settle_net(Duration::from_secs(15));
     assert!(
-        steps
-            .iter()
-            .any(|a| a.as_ref().is_ok_and(|a| a.compare && !a.build && !a.recalc)),
+        steps.iter().any(|a| a
+            .as_ref()
+            .is_ok_and(|a| a.compare && a.tree && !a.build && !a.recalc)),
         "no step answered for the comparison"
     );
     let entry = s.requests().finished.remove(0);
@@ -1304,6 +1304,10 @@ fn build_sites_match_pob() {
         )
     };
     let ours = s.backend.compare_view().unwrap().expect("a comparison");
+    // PoB switched to its Compare tab (ImportTab.lua:658); the view says so once
+    assert!(ours.switched);
+    assert_eq!(up.eval::<String>("return build.viewMode"), "COMPARE");
+    assert!(!s.backend.compare_view().unwrap().unwrap().switched);
     assert_eq!(ours.entries, ["Imported comparison"]);
     assert_eq!(ours.entries, their_entries(&up));
     assert!(!ours.summary.is_empty());
@@ -1323,9 +1327,61 @@ fn build_sites_match_pob() {
     assert!(affected.compare && !affected.build, "{affected:?}");
     assert!(s.requests().pending.is_empty());
     let ours = s.backend.compare_view().unwrap().expect("a comparison");
+    assert!(ours.switched);
     assert_eq!(ours.entries, their_entries(&up));
     assert_eq!((ours.entries.len(), ours.active), (2, 1));
     s.assert_clean("comparison code");
+    // a code PoB reads but can't build into a comparison: PoB's own message, no popup left
+    let not_a_build: String = s.eval("return common.base64.encode(Deflate('<NotABuild/>'))");
+    up.eval::<()>(&format!("act.code_import('{not_a_build}', 'compare')"));
+    let theirs = up.eval::<Option<String>>("return popupMessage()");
+    up.eval::<()>("main:ClosePopup()");
+    let err = s
+        .backend
+        .apply(
+            import_command(&not_a_build, ImportMode::Comparison),
+            &|_| {},
+        )
+        .unwrap_err();
+    assert_eq!(format!("{err:#}"), "Failed to import build for comparison.");
+    assert_eq!(
+        theirs.as_deref(),
+        Some("Failed to import build for comparison.")
+    );
+    s.assert_clean("failed comparison code");
+    // the same from a link: the request ends with it
+    web.route(
+        "GET",
+        &sites[0].download_url(),
+        Canned::ok(not_a_build.clone()),
+    );
+    up.eval::<()>(&format!(
+        "act.code_import('{}', 'compare')",
+        sites[0].link()
+    ));
+    up.pump(Duration::from_secs(15));
+    let theirs = up.eval::<Option<String>>("return popupMessage()");
+    up.eval::<()>("main:ClosePopup()");
+    let entry = import_link(&mut s, sites[0].link(), ImportMode::Comparison);
+    assert_eq!(
+        entry.error.as_deref(),
+        Some("Failed to import build for comparison.")
+    );
+    assert_eq!(
+        theirs.as_deref(),
+        Some("Failed to import build for comparison.")
+    );
+    assert!(!entry.new_build);
+    s.assert_clean("failed comparison link");
+    web.route(
+        "GET",
+        &sites[0].download_url(),
+        Canned::ok(attack_code.clone()),
+    );
+    assert_eq!(
+        s.backend.compare_view().unwrap().unwrap().entries,
+        their_entries(&up)
+    );
 
     // ---- A failure leaves nothing stuck, and the same request then works ----
     let pobbin = sites.iter().find(|site| site.id == "POBBin").unwrap();

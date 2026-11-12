@@ -1097,6 +1097,7 @@ mod tests {
                 ours: "^x33FF77Yes".into(),
                 theirs: "^8(not set)".into(),
             }],
+            switched: true,
         };
         let json = serde_json::to_string(&view).unwrap();
         assert_eq!(serde_json::from_str::<CompareView>(&json).unwrap(), view);
@@ -1123,7 +1124,7 @@ mod tests {
               skills = { { label = "^7Boneshatter", ours = { "^x08F2FFBoneshatter^7 20/0" },
                 theirs = {}, differ = true } },
               config = { { var = "usePowerCharges", label = "Do you use Power Charges?",
-                ours = "^x33FF77Yes", theirs = "^8(not set)" } } }"#,
+                ours = "^x33FF77Yes", theirs = "^8(not set)" } }, switched = true }"#,
         );
         assert_eq!(from_lua, view);
     }
@@ -1419,6 +1420,10 @@ pub struct CompareView {
     pub skills: Vec<CompareSkillRow>,
     #[serde(default)]
     pub config: Vec<CompareConfigRow>,
+    /// PoB switched to its Compare tab: an Import-tab comparison just landed (R5). True in the
+    /// first view after it only.
+    #[serde(default)]
+    pub switched: bool,
 }
 
 /// One slot of the Compare tab's Items view, in PoB's order: the base slots (Ring 3 when either

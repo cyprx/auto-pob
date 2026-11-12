@@ -678,11 +678,22 @@ fn compare_tree_colours_match_pob() {
     assert_eq!(tree.allocated, specs.allocated);
     // PoB's copy only asks for a recalculation: it leaves the build saved (Deviation)
     assert_eq!(s.backend.build_view().unwrap().unsaved, specs.unsaved);
-    // the copied tree against the comparison's
-    assert_eq!(
-        s.backend.tree_state_view().unwrap().compare,
-        up.tree_colours()
+    // the copied tree against the comparison's: the same nodes, so only sockets can differ
+    // (PoB copies no jewels)
+    let copied = s.backend.tree_state_view().unwrap().compare;
+    assert_eq!(copied, up.tree_colours());
+    assert!(
+        copied.iter().all(|c| c.rgb == [0.0, 0.0, 1.0]),
+        "{copied:?}"
     );
+    // the original tree again: the colours from before the copy
+    run(&mut s, Command::SelectSpec { index: 0 }).unwrap();
+    up.eval::<()>("build.treeTab:SetActiveSpec(1) runCallback('OnFrame')");
+    let original = s.backend.tree_state_view().unwrap().compare;
+    assert_eq!(original, up.tree_colours());
+    assert_eq!(original, theirs);
+    run(&mut s, Command::SelectSpec { index: 1 }).unwrap();
+    up.eval::<()>("build.treeTab:SetActiveSpec(2) runCallback('OnFrame')");
 
     // ---- The Tree tab's own compare once the overlay is off ----
     run(&mut s, Command::SetCompareSpec { index: Some(0) }).unwrap();

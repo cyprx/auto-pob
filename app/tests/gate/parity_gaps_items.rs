@@ -822,9 +822,11 @@ fn shared_items_match_pob() {
         "set moved",
     );
     let saved = s.settings_bytes();
-    let affected = s.run(Command::ImportSharedItemSet { index: 0 }).unwrap();
+    // the seeded one-slot set: PoB adds a set's items in `pairs` order (ItemSetListControl.lua:97),
+    // which differs between Lua states, so a set of one item compares exactly
+    let affected = s.run(Command::ImportSharedItemSet { index: 1 }).unwrap();
     assert!(affected.items && affected.build);
-    act("act.shared_set_import(0)");
+    act("act.shared_set_import(1)");
     let imported = compare(&mut s, "set imported");
     assert_eq!(imported["sets"].as_array().unwrap().len(), 2);
     assert_eq!(s.settings_bytes(), saved, "an import wrote Settings.xml");

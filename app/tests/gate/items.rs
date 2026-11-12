@@ -1811,7 +1811,7 @@ pub(crate) fn items_round_trip(name: &str) {
     // below, and the jewels and item texts as for every recipe.
     let live_slots = name != "flasks_jewels";
     let saved_part = |mut value: serde_json::Value| {
-        for key in ["can_undo", "can_redo", "list_filter"] {
+        for key in ["can_undo", "can_redo", "list_filter", "shared_shown"] {
             value.as_object_mut().unwrap().remove(key);
         }
         if !live_slots {

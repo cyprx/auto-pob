@@ -136,14 +136,13 @@ pub struct ConfigUi {
     /// Dropdown choices made while the engine is behind
     picks: HashMap<String, String>,
     set_edit: Option<SetEdit>,
-    confirm_delete: bool,
+    /// The set the user asked to delete, until the question is answered
+    confirm_delete: Option<u32>,
     confirm_remove: Option<usize>,
     /// Ctrl+F: the search box takes the keyboard when next drawn (ConfigTab.lua:987-988)
     pub focus_search: bool,
     /// The custom-modifier boxes' heights, as their grips left them
     heights: HashMap<String, f32>,
-    /// F2: the active set's Rename box opens when next drawn
-    pub rename: bool,
     /// Where widgets were drawn last frame, so tests can click them
     #[cfg(test)]
     pub(crate) rects: HashMap<String, egui::Rect>,
@@ -279,21 +278,24 @@ impl ConfigUi {
         active_title: Option<&str>,
         commands: &mut Vec<Command>,
     ) {
-        if self.confirm_delete {
+        if let Some(id) = self.confirm_delete {
+            let title = view
+                .sets
+                .iter()
+                .find(|s| s.id == id)
+                .map(|s| s.title.as_str());
             ui.colored_label(
                 ui.visuals().warn_fg_color,
-                format!("Delete {}?", active_title.unwrap_or("this set")),
+                format!("Delete {}?", title.unwrap_or("this set")),
             );
             let yes = ui.add(theme::primary_button("Delete"));
             self.note("set_delete_yes".into(), &yes);
             if yes.clicked() {
-                commands.push(Command::DeleteConfigSet {
-                    id: view.active_set,
-                });
-                self.confirm_delete = false;
+                commands.push(Command::DeleteConfigSet { id });
+                self.confirm_delete = None;
             }
             if ui.button("Cancel").clicked() {
-                self.confirm_delete = false;
+                self.confirm_delete = None;
             }
             return;
         }
@@ -332,6 +334,10 @@ impl ConfigUi {
             } else if cancel.clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.set_edit = None;
             }
+            // the gone box gives the keyboard back, so the manager's list keys work again
+            if self.set_edit.is_none() {
+                field.surrender_focus();
+            }
             self.note("set_ok".into(), &ok);
             return;
         }
@@ -340,8 +346,7 @@ impl ConfigUi {
         if new.clicked() {
             self.set_edit = Some(SetEdit::New(String::new()));
         }
-        // F2 too (ConfigSetListControl.lua's rename)
-        if ui.button("Rename").clicked() || std::mem::take(&mut self.rename) {
+        if ui.button("Rename").clicked() {
             self.set_edit = Some(SetEdit::Rename {
                 id: view.active_set,
                 title: active_title.unwrap_or_default().to_owned(),
@@ -351,7 +356,7 @@ impl ConfigUi {
         let delete = ui.add_enabled(view.sets.len() > 1, egui::Button::new("Delete"));
         self.note("set_delete".into(), &delete);
         if delete.clicked() {
-            self.confirm_delete = true;
+            self.confirm_delete = Some(view.active_set);
         }
         // PoB's manager also copies a set and reorders the list (NF-4)
         let copy = ui.button("Copy");
@@ -377,6 +382,10 @@ impl ConfigUi {
         self.note("set_order".into(), &order);
         if order.clicked() {
             self.ordering = !self.ordering;
+            // the list opens on the current set
+            if self.ordering {
+                self.order_selected = Some(view.active_set);
+            }
         }
     }
 
@@ -389,6 +398,35 @@ impl ConfigUi {
     ) {
         if !self.ordering {
             return;
+        }
+        // its list's keys (ListControl.lua:375-392): the arrows, Home and End pick a row, F2
+        // renames it (ConfigSetListControl.lua's OnSelKeyDown) and Delete or Backspace asks to
+        // delete it. They wait for a question, a name being typed and any text field.
+        if self.set_edit.is_none() && self.confirm_delete.is_none() && !ctx.text_edit_focused() {
+            let at = view
+                .sets
+                .iter()
+                .position(|s| Some(s.id) == self.order_selected);
+            let len = view.sets.len();
+            if let Some(i) = ctx.input_mut(|i| crate::ui::shortcuts::list_key(i, len, at)) {
+                self.order_selected = Some(view.sets[i].id);
+            }
+            let (f2, delete) = ctx.input(|i| {
+                (
+                    i.key_pressed(egui::Key::F2),
+                    crate::ui::shortcuts::list_delete(i),
+                )
+            });
+            if let Some(set) = view.sets.iter().find(|s| Some(s.id) == self.order_selected) {
+                if f2 {
+                    self.set_edit = Some(SetEdit::Rename {
+                        id: set.id,
+                        title: set.title.clone(),
+                    });
+                } else if delete && len > 1 {
+                    self.confirm_delete = Some(set.id);
+                }
+            }
         }
         let mut open = true;
         egui::Window::new("Manage Config Sets")
@@ -1090,6 +1128,58 @@ mod tests {
         assert_eq!(
             debug(&h.click("set_ok")),
             ["CopyConfigSet { id: 2, title: \"Second!\" }"]
+        );
+    }
+
+    fn key(h: &mut Harness, key: egui::Key) -> Vec<Command> {
+        h.frame(vec![Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }])
+    }
+
+    /// F2 in "Manage Config Sets" renames its selected row, not the active set
+    /// (ConfigSetListControl.lua's OnSelKeyDown); off the window F2 does nothing
+    #[test]
+    fn f2_in_the_config_manager_renames_the_selected_set() {
+        let mut h = Harness::new();
+        key(&mut h, egui::Key::F2);
+        h.frame(vec![]);
+        assert!(h.ui.set_edit.is_none(), "F2 off the manager renamed");
+        h.click("set_order");
+        h.frame(vec![]);
+        h.click("order_row:1");
+        key(&mut h, egui::Key::F2);
+        h.frame(vec![]);
+        h.frame(vec![Event::Text("!".into())]);
+        assert_eq!(
+            debug(&h.click("set_ok")),
+            ["RenameConfigSet { id: 2, title: \"Second!\" }"]
+        );
+        // Up then F2 picks the first set, once the name box is gone
+        h.frame(vec![]);
+        h.frame(vec![]);
+        key(&mut h, egui::Key::ArrowUp);
+        key(&mut h, egui::Key::F2);
+        h.frame(vec![]);
+        assert!(matches!(h.ui.set_edit, Some(SetEdit::Rename { id: 1, .. })));
+    }
+
+    /// Delete in the manager asks about its selected set, which is what Delete then removes
+    #[test]
+    fn delete_in_the_config_manager_asks_about_the_selected_set() {
+        let mut h = Harness::new();
+        h.click("set_order");
+        h.frame(vec![]);
+        key(&mut h, egui::Key::ArrowDown);
+        key(&mut h, egui::Key::Delete);
+        h.frame(vec![]);
+        assert_eq!(
+            debug(&h.click("set_delete_yes")),
+            ["DeleteConfigSet { id: 2 }"]
         );
     }
 

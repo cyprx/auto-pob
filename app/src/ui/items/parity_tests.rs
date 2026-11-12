@@ -474,3 +474,42 @@ fn renaming_an_untitled_shared_set_starts_empty() {
     // unchanged, Save is off: an untitled set isn't saved as "Default"
     assert!(h.click("shared_sets_save").commands.is_empty());
 }
+
+/// The shared list takes PoB's list keys while one of its rows has the keyboard: the arrows
+/// pick a row and Backspace asks to delete it (ListControl.lua:375-392); the build's item
+/// list keeps its own
+#[test]
+fn shared_list_keys_move_the_selection_and_delete_asks() {
+    let mut h = Harness::new(shared_sample());
+    h.settle();
+    h.click("shared_row_0");
+    h.key(Key::ArrowDown, Modifiers::NONE);
+    h.settle();
+    let o = h.key(Key::Backspace, Modifiers::NONE);
+    assert!(o.commands.is_empty(), "PoB asks first: {:?}", o.commands);
+    h.settle();
+    assert_eq!(
+        debug(&h.click("confirm_shared_delete").commands),
+        ["DeleteSharedItem { index: 1 }"]
+    );
+}
+
+/// In the item set window Delete on a focused shared set asks about that set, not the build's
+/// selected one
+#[test]
+fn delete_on_a_shared_set_row_asks_about_the_shared_set() {
+    let mut h = Harness::new(shared_sample());
+    h.click("manage");
+    h.settle();
+    h.click("shared_sets_row_0");
+    h.key(Key::Delete, Modifiers::NONE);
+    h.settle();
+    assert!(
+        !h.ui.has_rect("sets_confirm_delete"),
+        "the build's set was asked about"
+    );
+    assert_eq!(
+        debug(&h.click("shared_sets_confirm_delete").commands),
+        ["DeleteSharedItemSet { index: 0 }"]
+    );
+}

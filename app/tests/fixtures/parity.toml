@@ -21,7 +21,7 @@ ported = "app/src/ui/build.rs top_bar < Builds"
 
 [controls."build.buildLoadouts"]
 ported = "app/src/ui/build.rs top_bar loadouts combo: loadouts, headers as labels, New Loadout, Sync (R21)"
-note = "its Help >> entry is drawn disabled until the Help window (Task 14)"
+note = "its Help >> entry opens the Help window at section 7, as Build.lua:312 (Task 14)"
 
 [controls."build.buildLoadouts.scrollBar"]
 ported = "app/src/ui/build.rs top_bar loadouts combo"
@@ -1012,7 +1012,7 @@ note = "layout anchor"
 ported = "app/src/ui/config.rs set combo"
 
 [controls."config.setManage"]
-ported = "app/src/ui/config.rs set buttons: New, Rename, Delete, Copy (CopyConfigSet) and Order window (MoveConfigSet, NF-4)"
+ported = "app/src/ui/config.rs set buttons: New, Rename, Delete, Copy (CopyConfigSet) and the Manage Config Sets window (MoveConfigSet, NF-4)"
 
 [controls."config.setSelect"]
 ported = "app/src/ui/config.rs set combo"
@@ -1970,7 +1970,7 @@ note = "part of items.setSelect"
 
 [controls."items.sharedItemList"]
 ported = "app/src/ui/items/shared.rs shared items under Craft item...: rows, hover (Shift: child tooltips), double-click, Ctrl+C (CopySharedItem), drag onto slots, onto the item list at the row under the cursor and onto the sidebar's minion dropdown, build items and database rows dragged in, reorder; edits save Settings.xml through main:SaveSettings (R29 amended by the controller: shared item list edits), refused when another program changed the file since we last read or wrote it"
-note = "its Delete and Backspace keys are the keys ListControl.DELETE and ListControl.BACK rows (Task 14)"
+note = "its arrows, Home/End, Delete and Backspace are the ListControl key rows (items/shared.rs)"
 
 [controls."items.sharedItemList.delete"]
 ported = "app/src/ui/items/shared.rs Delete with PoB's question (DeleteSharedItem)"
@@ -1985,8 +1985,8 @@ ported = "app/src/ui/items/shared.rs rows (part of items.sharedItemList)"
 ported = "app/src/ui/items/slots.rs"
 
 [controls."items.specButton"]
-ported = "app/src/ui/tree/mod.rs Manage... opens the Manage Passive Trees window with the Tree tab's spec controls and dialogs (opened from app/src/ui/items/slots.rs)"
-note = "the button is ported; the window's own parity (list, Copy, reorder, Import/Export Tree) is the Manage Passive Trees popup row (NF-3, Task 13a)"
+ported = "app/src/ui/tree/mod.rs Manage... opens the Tree tab's Manage Passive Trees window and its questions over the Items tab (opened from app/src/ui/items/slots.rs)"
+note = "the window's own parity is the Manage Passive Trees popup row (NF-3); one window serves the Tree tab's Manage..., Ctrl+M and this button since the Task 13 merge"
 
 [controls."items.specLabel"]
 ported = "app/src/ui/items/slots.rs Passive tree: label"
@@ -2979,13 +2979,13 @@ ruled_out = "R3"
 note = "Change Settings Path is out (R15)"
 
 [popups."Manage Config Sets"]
-ported = "app/src/ui/config.rs set buttons and Order window (NF-4)"
+ported = "app/src/ui/config.rs set buttons and the Manage Config Sets window: rows drag (MoveConfigSet), a row click selects it for Copy; arrows, Home/End, F2 (Rename) and Delete act on the selected row (NF-4)"
 
 [popups."Manage Item Sets"]
 ported = "app/src/ui/items/sets.rs item sets and PoB's shared set list: drag a set in, drag a shared set to the build, rename, delete, reorder"
 
 [popups."Manage Passive Trees"]
-ported = "app/src/ui/tree/toolbar.rs tree buttons: New, Rename, Delete, Copy (CopySpec) and Order window (MoveSpec, NF-3)"
+ported = "app/src/ui/tree/toolbar.rs manager_window: rows drag (MoveSpec), a click selects; Copy (CopySpec), Delete, Rename, New act on the selected row, as do arrows, Home/End, F2 and Delete; opened by Manage..., Ctrl+M and the Items tab's Manage... (NF-3)"
 
 [popups."Manage Skill Sets"]
 ported = "app/src/ui/skills/sets.rs set manager window: New, Rename, Copy, Delete and drag-reorder (MoveSkillSet, R31)"
@@ -3169,8 +3169,8 @@ ported = "app/src/ui/app.rs Ctrl+Y redo"
 ported = "app/src/ui/app.rs Ctrl+Z undo"
 
 [keys."ConfigSetListControl.F2"]
-ported = "app/src/ui/shortcuts.rs F2 on the Config tab opens the active set's Rename box (config.rs)"
-note = "until 13a's Manage Config Sets window merges, F2 renames the active set; at merge it renames that window's selected row (M9)"
+ported = "app/src/ui/config.rs order_window: F2 in Manage Config Sets opens the Rename box for its selected row, as PoB's list; off the window F2 does nothing"
+note = "wired at the Task 13 merge (M9); test f2_in_the_config_manager_renames_the_selected_set and the app's f2_renames_the_selected_row_in_the_set_managers"
 
 [keys."DraggerControl.LEFTBUTTON"]
 ported = "app/src/widgets/size_grip.rs on app/src/ui/config.rs custom-modifier boxes: dragging the grip sets the height within PoB's 40 to 600 (ConfigTab.lua:70, ResizableEditControl.lua:32-45)"
@@ -3375,30 +3375,30 @@ note = "Ctrl+N (R25)"
 ported = "app/src/ui/build_list.rs keys: Ctrl+V after Ctrl+X moves (MoveBuild), after Ctrl+C copies (CopyBuildTo), or opens the Copy box in the same folder; works on an empty clipboard"
 
 [keys."ListControl.BACK"]
-ported = "app/src/ui/shortcuts.rs list_delete: Backspace deletes in the build, item, socket group and set lists"
+ported = "app/src/ui/shortcuts.rs list_delete: Backspace deletes in the build, item, shared item, socket group and set lists (the item, skill, shared, tree and config set managers)"
 
 [keys."ListControl.c"]
 ported = "app/src/ui/build_list.rs keys: Ctrl+C marks the row for CopyBuildTo"
 note = "also items/list.rs (CopyItem) and items/shared.rs (CopySharedItem), each as its list's OnSelCopy"
 
 [keys."ListControl.DELETE"]
-ported = "app/src/ui/shortcuts.rs list_delete: Delete in the build, item, socket group and set lists"
+ported = "app/src/ui/shortcuts.rs list_delete: Delete in the build, item, shared item, socket group and set lists (the item, skill, shared, tree and config set managers)"
 
 [keys."ListControl.DOWN"]
-ported = "app/src/ui/shortcuts.rs list_key in the build, item, socket group and set lists (wraps round as PoB)"
+ported = "app/src/ui/shortcuts.rs list_key in the build, item, shared item, socket group and set lists (the item, skill, shared, tree and config set managers) (wraps round as PoB)"
 
 [keys."ListControl.END"]
-ported = "app/src/ui/shortcuts.rs list_key in the build, item, socket group and set lists"
+ported = "app/src/ui/shortcuts.rs list_key in the build, item, shared item, socket group and set lists (the item, skill, shared, tree and config set managers)"
 
 [keys."ListControl.HOME"]
-ported = "app/src/ui/shortcuts.rs list_key in the build, item, socket group and set lists"
+ported = "app/src/ui/shortcuts.rs list_key in the build, item, shared item, socket group and set lists (the item, skill, shared, tree and config set managers)"
 
 [keys."ListControl.LEFTBUTTON"]
 ported = "app/src/ui"
 note = "egui's own widget behaviour"
 
 [keys."ListControl.UP"]
-ported = "app/src/ui/shortcuts.rs list_key in the build, item, socket group and set lists (wraps round as PoB)"
+ported = "app/src/ui/shortcuts.rs list_key in the build, item, shared item, socket group and set lists (the item, skill, shared, tree and config set managers) (wraps round as PoB)"
 
 [keys."ListControl.x"]
 ported = "app/src/ui/build_list.rs keys Ctrl+X marks the row, Ctrl+V in another folder moves it"
@@ -3423,8 +3423,8 @@ ruled_out = "D-003"
 note = "Party tab dropped"
 
 [keys."PassiveSpecListControl.F2"]
-ported = "app/src/ui/tree/keys.rs F2 on the Tree tab opens the active tree's Rename box (tree/toolbar.rs)"
-note = "until 13a's Manage Passive Trees window merges, F2 renames the active tree; at merge it renames that window's selected row (M9)"
+ported = "app/src/ui/tree/toolbar.rs manager_window: F2 in Manage Passive Trees opens Rename tree for its selected row, as PoB's list; off the window F2 does nothing"
+note = "wired at the Task 13 merge (M9); test f2_in_the_tree_manager_renames_the_selected_tree and the app's f2_renames_the_selected_row_in_the_set_managers"
 
 [keys."PassiveTreeView.wiki"]
 ported = "app/src/ui/tree/keys.rs F1 over a node opens its poewiki page"
@@ -3520,7 +3520,8 @@ ported = "app/src/ui/tree/keys.rs Ctrl+F selects the tree search (tree/toolbar.r
 ported = "app/src/ui/tree/canvas.rs click allocates and drag pans; Ctrl+click zooms; Shift traces a path (tree/keys.rs trace_step) that a click on its end allocates (AllocTracePath) and the tooltip counts (PreviewTrace)"
 
 [keys."tree.m"]
-ported = "app/src/ui/tree/keys.rs Ctrl+M opens the tree selector, our tree manager with its New, Rename and Delete"
+ported = "app/src/ui/tree/keys.rs Ctrl+M opens Manage Passive Trees (toolbar.rs manager_window), as TreeTab.lua:381-382"
+note = "wired at the Task 13 merge (M8); test ctrl_m_opens_spec_manager"
 
 [keys."tree.p"]
 ported = "app/src/ui/tree/keys.rs P sends ToggleHeatmap (glue/tree.lua)"

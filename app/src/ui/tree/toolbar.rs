@@ -43,8 +43,6 @@ enum Dialog {
         /// typed into: PoB's Save waits for it (PassiveSpecListControl.lua:44-46)
         edited: bool,
     },
-    /// The tree manager's list, whose rows drag to a new place (NF-3)
-    OrderSpecs,
     /// PoB's "Convert to Version" popup for a Version dropdown pick (NF-7)
     ConvertVersion {
         version: String,
@@ -76,14 +74,16 @@ pub(super) struct Toolbar {
     /// "Copy link" was clicked and the link has not arrived yet
     copy_pending: bool,
     link_fresh: bool,
-    /// The tree selector drawn last: its id, and whether it was pointed at or open, when Up
-    /// and Down leave the trees alone (TreeTab.lua:367-371)
-    pub(super) spec_combo: Option<egui::Id>,
+    /// The tree selector was pointed at or open when drawn last: Up and Down leave the trees
+    /// alone (TreeTab.lua:367-371)
     pub(super) spec_busy: bool,
     /// Ctrl+F: the search box takes the keyboard when next drawn
     pub(super) focus_search: bool,
     /// The heat map depth's Custom box, while chosen (NF-6)
     custom_depth: Option<String>,
+    /// PoB's "Manage Passive Trees" window (TreeTab.lua:630), while open: its list's selected
+    /// row, which Copy, Rename, Delete and F2 act on (NF-3)
+    manager: Option<usize>,
 }
 
 impl Toolbar {
@@ -94,22 +94,29 @@ impl Toolbar {
     }
 
     pub(super) fn has_dialog(&self) -> bool {
-        self.dialog.is_some() || self.class_dialog.is_some()
+        self.dialog.is_some() || self.class_dialog.is_some() || self.manager.is_some()
+    }
+
+    /// Opens PoB's "Manage Passive Trees" with the active tree selected (TreeTab.lua:630:
+    /// the Manage button, Ctrl+M and the Items tab's "Manage...")
+    pub(super) fn open_manager(&mut self, state: &TreeState) {
+        self.manager = Some(state.active_spec);
+    }
+
+    pub(super) fn manager_open(&self) -> bool {
+        self.manager.is_some()
+    }
+
+    /// Closes the manager and the question it asked, if any
+    pub(super) fn close_manager(&mut self) {
+        if self.manager.take().is_some() {
+            self.dialog = None;
+        }
     }
 
     /// Drops the tab's own dialog; the class question belongs to the top bar and stays.
     pub(super) fn close_dialog(&mut self) {
         self.dialog = None;
-    }
-
-    /// F2: the active tree's Rename box
-    pub(super) fn rename_active(&mut self, state: &TreeState) {
-        if let Some(spec) = state.specs.get(state.active_spec) {
-            self.dialog = Some(Dialog::RenameSpec {
-                index: state.active_spec,
-                title: spec.title.clone(),
-            });
-        }
     }
 
     /// A link snapshot arrived.
@@ -161,6 +168,24 @@ impl Toolbar {
                         }
                     });
                 rects.note(&combo.response, || "version".into());
+                // the wheel and the arrows step it as a pick: the Convert question asks
+                let at = state
+                    .versions
+                    .iter()
+                    .position(|c| c.value == state.version)
+                    .unwrap_or(0);
+                if let Some(i) = crate::widgets::scroll_step::combo_step(
+                    ui,
+                    &combo.response,
+                    state.versions.len(),
+                    at,
+                ) && state.versions[i].value != state.version
+                {
+                    self.dialog = Some(Dialog::ConvertVersion {
+                        version: state.versions[i].value.clone(),
+                        label: state.versions[i].label.clone(),
+                    });
+                }
             }
             let tattoos = ui
                 .button("Remove all tattoos")
@@ -220,7 +245,6 @@ impl Toolbar {
         ) {
             commands.push(Command::SelectSpec { index });
         }
-        self.spec_combo = Some(combo.response.id);
         self.spec_busy = combo.response.hovered()
             || egui::Popup::is_id_open(ui.ctx(), combo.response.id.with("popup"));
         let add = ui.button("+").on_hover_text("Add a tree");
@@ -273,7 +297,7 @@ impl Toolbar {
         let order = ui.button("Manage\u{2026}");
         rects.note(&order, || "spec_order".into());
         if order.clicked() {
-            self.dialog = Some(Dialog::OrderSpecs);
+            self.open_manager(state);
         }
         ui.label("Compare");
         let compare = egui::ComboBox::from_id_salt("tree_compare")
@@ -726,19 +750,152 @@ impl Toolbar {
         }
     }
 
-    /// The spec dialogs only (New, Rename, Delete tree), for the "Manage Passive Trees" window
-    pub(super) fn spec_dialogs(
+    /// The manager and the questions it asks (New, Copy, Rename, Delete tree), for the Items
+    /// tab's "Manage..." (ItemsTab.lua:203-205)
+    pub(super) fn manager_and_dialogs(
         &mut self,
         ctx: &egui::Context,
         state: &TreeState,
         rects: &mut Rects,
         commands: &mut Vec<Command>,
     ) {
-        if matches!(
-            self.dialog,
-            Some(Dialog::NewSpec(_) | Dialog::RenameSpec { .. } | Dialog::DeleteSpec(_))
-        ) {
+        if self.dialog.is_none()
+            || matches!(
+                self.dialog,
+                Some(
+                    Dialog::NewSpec(_)
+                        | Dialog::RenameSpec { .. }
+                        | Dialog::DeleteSpec(_)
+                        | Dialog::CopySpec { .. }
+                )
+            )
+        {
             self.dialogs(ctx, state, rects, commands);
+        }
+    }
+
+    /// PoB's "Manage Passive Trees" (TreeTab.lua:630, PassiveSpecListControl.lua): the trees,
+    /// dragged to a new place, with Copy, Delete, Rename and New on the selected row. Its list
+    /// takes the arrows, Home/End, Delete/Backspace and F2 (ListControl.lua:375-392). A
+    /// question it asks draws over it and holds it.
+    fn manager_window(
+        &mut self,
+        ctx: &egui::Context,
+        state: &TreeState,
+        rects: &mut Rects,
+        commands: &mut Vec<Command>,
+    ) {
+        let Some(mut selected) = self.manager else {
+            return;
+        };
+        let n = state.specs.len();
+        if n == 0 {
+            return;
+        }
+        selected = selected.min(n - 1);
+        let asking = self.dialog.is_some();
+        let mut open = true;
+        let mut done = false;
+        let mut next = None;
+        // the keys wait for a question or a text field (ControlHost.lua:39-42)
+        if !asking && !ctx.text_edit_focused() {
+            if let Some(i) = ctx.input_mut(|i| crate::ui::shortcuts::list_key(i, n, Some(selected)))
+            {
+                selected = i;
+            }
+            let (f2, delete) = ctx.input(|i| {
+                (
+                    i.key_pressed(egui::Key::F2),
+                    crate::ui::shortcuts::list_delete(i),
+                )
+            });
+            if f2 {
+                next = Some(Dialog::RenameSpec {
+                    index: selected,
+                    title: state.specs[selected].title.clone(),
+                });
+            } else if delete && n > 1 {
+                next = Some(Dialog::DeleteSpec(selected));
+            }
+        }
+        egui::Window::new("Manage Passive Trees")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, -80.0])
+            .show(ctx, |ui| {
+                ui.add_enabled_ui(!asking, |ui| {
+                    let rows = reorder_rows(
+                        ui,
+                        "tree_specs",
+                        n,
+                        true,
+                        false,
+                        SpecDrag,
+                        |p: &SpecDrag| p.0,
+                        |ui, i| {
+                            let spec = &state.specs[i];
+                            let label = if i == state.active_spec {
+                                format!("{} (current)", spec.title)
+                            } else {
+                                spec.title.clone()
+                            };
+                            let fill = if i == selected {
+                                ui.visuals().selection.bg_fill
+                            } else {
+                                egui::Color32::TRANSPARENT
+                            };
+                            egui::Frame::NONE
+                                .fill(fill)
+                                .inner_margin(2.0)
+                                .show(ui, |ui| {
+                                    ui.set_min_width(240.0);
+                                    ui.add(egui::Label::new(label).selectable(false));
+                                });
+                        },
+                    );
+                    for (i, row) in rows.rows.iter().enumerate() {
+                        rects.note(row, || format!("spec_order_row:{i}"));
+                        if row.clicked() {
+                            selected = i;
+                        }
+                    }
+                    if let Some((from, to)) = rows.moved {
+                        commands.push(Command::MoveSpec { from, to });
+                        selected = to;
+                    }
+                    let spec = &state.specs[selected];
+                    // PassiveSpecListControl.lua:13-45, in its order
+                    ui.horizontal(|ui| {
+                        if button(ui, rects, "spec_manager_copy", "Copy", true) {
+                            next = Some(Dialog::CopySpec {
+                                index: selected,
+                                title: spec.title.clone(),
+                                edited: false,
+                            });
+                        }
+                        // the last tree can't be deleted
+                        if button(ui, rects, "spec_manager_delete", "Delete", n > 1) {
+                            next = Some(Dialog::DeleteSpec(selected));
+                        }
+                        if button(ui, rects, "spec_manager_rename", "Rename", true) {
+                            next = Some(Dialog::RenameSpec {
+                                index: selected,
+                                title: spec.title.clone(),
+                            });
+                        }
+                        if button(ui, rects, "spec_manager_new", "New", true) {
+                            next = Some(Dialog::NewSpec(String::new()));
+                        }
+                    });
+                    done = button(ui, rects, "spec_manager_done", "Done", true);
+                });
+            });
+        self.manager = (open && !done).then_some(selected);
+        if self.manager.is_some()
+            && let Some(dialog) = next
+        {
+            self.dialog = Some(dialog);
         }
     }
 
@@ -749,11 +906,11 @@ impl Toolbar {
         rects: &mut Rects,
         commands: &mut Vec<Command>,
     ) {
+        self.manager_window(ctx, state, rects, commands);
         let Some(dialog) = &mut self.dialog else {
             return;
         };
         let mut close = false;
-        let mut next = None;
         let title = match dialog {
             Dialog::NewSpec(_) => "New tree",
             Dialog::RenameSpec { .. } => "Rename tree",
@@ -762,7 +919,6 @@ impl Toolbar {
             Dialog::RemoveTattoos => "Remove all tattoos",
             Dialog::Import { .. } => "Import tree link",
             Dialog::CopySpec { .. } => "Copy Tree",
-            Dialog::OrderSpecs => "Manage Passive Trees",
             Dialog::ConvertVersion { .. } => "Convert to Version",
             Dialog::ClassChange { .. } => "Class Change",
         };
@@ -883,47 +1039,10 @@ impl Toolbar {
                             });
                             close = true;
                         }
-                        close |= ui.button("Cancel").clicked();
+                        let cancel = ui.button("Cancel");
+                        rects.note(&cancel, || "spec_copy_cancel".into());
+                        close |= cancel.clicked();
                     });
-                }
-                Dialog::OrderSpecs => {
-                    ui.label("Click a tree to copy it; drag it to a new place.");
-                    let rows = reorder_rows(
-                        ui,
-                        "tree_specs",
-                        state.specs.len(),
-                        true,
-                        false,
-                        SpecDrag,
-                        |p: &SpecDrag| p.0,
-                        |ui, i| {
-                            let spec = &state.specs[i];
-                            let label = if i == state.active_spec {
-                                format!("{} (current)", spec.title)
-                            } else {
-                                spec.title.clone()
-                            };
-                            egui::Frame::NONE.inner_margin(2.0).show(ui, |ui| {
-                                ui.set_min_width(240.0);
-                                ui.add(egui::Label::new(label).selectable(false));
-                            });
-                        },
-                    );
-                    for (i, row) in rows.rows.iter().enumerate() {
-                        rects.note(row, || format!("spec_order_row:{i}"));
-                        // PoB's manager copies its selected row (PassiveSpecListControl.lua:13-21)
-                        if row.clicked() {
-                            next = Some(Dialog::CopySpec {
-                                index: i,
-                                title: state.specs[i].title.clone(),
-                                edited: false,
-                            });
-                        }
-                    }
-                    if let Some((from, to)) = rows.moved {
-                        commands.push(Command::MoveSpec { from, to });
-                    }
-                    close |= ui.button("Done").clicked();
                 }
                 Dialog::ClassChange { node, class } => {
                     // PoB's question (PassiveTreeView.lua:474)
@@ -972,9 +1091,6 @@ impl Toolbar {
             });
         if close {
             self.dialog = None;
-        }
-        if let Some(dialog) = next {
-            self.dialog = Some(dialog);
         }
     }
 }

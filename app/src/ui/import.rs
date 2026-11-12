@@ -633,6 +633,23 @@ impl ImportUi {
                                 }
                             });
                         mark(ui, "history", &combo.response);
+                        // the wheel and the arrows step it as a pick (DropDownControl.lua)
+                        let at = current
+                            .as_ref()
+                            .and_then(|c| public.history.iter().position(|a| a == c))
+                            .unwrap_or(0);
+                        if let Some(i) = crate::widgets::scroll_step::combo_step(
+                            ui,
+                            &combo.response,
+                            public.history.len(),
+                            at,
+                        ) {
+                            // as the click: the name goes in the box, which takes the keyboard
+                            let account = public.history[i].clone();
+                            self.history_pick = Some(account.clone());
+                            self.account_box.text = account;
+                            ui.memory_mut(|m| m.request_focus(self.account_id));
+                        }
                         let picked = current;
                         let remove = ui
                             .add_enabled(picked.is_some(), egui::Button::new("X"))

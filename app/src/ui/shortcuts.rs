@@ -76,9 +76,6 @@ pub enum ShortcutAction {
     Zoom(i32),
     /// E (Items)
     EditSlot,
-    /// F2 (Tree, Config): rename the active tree or config set, as F2 renames the selected
-    /// set in PoB's set lists (PassiveSpecListControl.lua, ConfigSetListControl.lua)
-    Rename,
 }
 
 /// PoB's wiki page for `name` (ItemTools.lua:401-405)
@@ -244,8 +241,9 @@ pub fn shortcut_action(state: &ShortcutState, input: &egui::InputState) -> Optio
         BuildTab::Items if pressed(input, Key::E, false) => return Some(A::EditSlot),
         _ => {}
     }
-    // the tree view and the set lists read theirs after the controls: a selected control
-    // takes them (PassiveTreeView.lua:198-218, ControlHost.lua:39-42)
+    // the tree view reads its keys after the controls: a selected control takes them
+    // (PassiveTreeView.lua:198-218, ControlHost.lua:39-42). The set lists' keys are their
+    // windows' own.
     if state.typing {
         return None;
     }
@@ -253,9 +251,7 @@ pub fn shortcut_action(state: &ShortcutState, input: &egui::InputState) -> Optio
         BuildTab::Tree => {
             let zoom =
                 |key, step: i32| pressed_shift(input, key).map(|s| if s { 3 * step } else { step });
-            if pressed(input, Key::F2, false) {
-                Some(A::Rename)
-            } else if pressed(input, Key::D, true) {
+            if pressed(input, Key::D, true) {
                 Some(A::StatDifferences)
             } else if state.copy_node && copy(input) {
                 Some(A::CopyNode)
@@ -267,7 +263,6 @@ pub fn shortcut_action(state: &ShortcutState, input: &egui::InputState) -> Optio
                     .map(A::Zoom)
             }
         }
-        BuildTab::Config if pressed(input, Key::F2, false) => Some(A::Rename),
         _ => None,
     }
 }
@@ -297,7 +292,6 @@ pub fn consume(action: &ShortcutAction, input: &mut egui::InputState) {
         A::Zoom(n) if *n > 0 => Key::PageUp,
         A::Zoom(_) => Key::PageDown,
         A::EditSlot => Key::E,
-        A::Rename => Key::F2,
     };
     input.events.retain(|e| match e {
         Event::Key { key: k, .. } => *k != key,

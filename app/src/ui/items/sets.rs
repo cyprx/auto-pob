@@ -395,12 +395,30 @@ impl ItemsUi {
                         }
                     });
                 }
+                if row.has_focus() {
+                    crate::ui::shortcuts::keep_arrows(ui.ctx(), row.id);
+                }
                 // PoB's F2 renames the selected shared set
                 if row.has_focus() && ui.input(|inp| inp.key_pressed(egui::Key::F2)) {
                     self.sets.shared_naming = Some(rename_start(view, i));
                 }
             }
             self.sets.shared_focused = rows.rows.iter().any(|r| r.has_focus());
+            // the shared list's own keys (ListControl.lua:375-392): the arrows, Home and End
+            // pick a row, Delete or Backspace asks to delete it (SharedItemSetListControl's
+            // OnSelDelete)
+            if self.sets.shared_focused && !blocked && !ui.ctx().text_edit_focused() {
+                if let Some(i) = ui.input_mut(|inp| {
+                    crate::ui::shortcuts::list_key(inp, n, self.sets.shared_selected)
+                }) {
+                    self.sets.shared_selected = Some(i);
+                    rows.rows[i].request_focus();
+                } else if let Some(i) = self.sets.shared_selected
+                    && ui.input(crate::ui::shortcuts::list_delete)
+                {
+                    self.sets.confirm_shared_delete = Some(i);
+                }
+            }
             if let Some((from, to)) = rows.moved {
                 self.sets.shared_selected = Some(to);
                 out.commands.push(Command::MoveSharedItemSet { from, to });

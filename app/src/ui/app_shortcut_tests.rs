@@ -165,12 +165,21 @@ fn ctrl_f_focuses_the_tab_search() {
 #[test]
 fn ctrl_m_opens_spec_manager() {
     let (mut app, ctx) = tree_app();
-    assert!(!egui::Popup::is_any_open(&ctx));
+    assert!(!app.tree.spec_manager_open());
     frame(&mut app, &ctx, ctrl(Key::M));
     frame(&mut app, &ctx, vec![]);
-    assert!(egui::Popup::is_any_open(&ctx), "the tree list didn't open");
-    // its entries are drawn: the trees to pick
-    assert!(app.tree.rects.map.contains_key("spec:1"));
+    // PoB's "Manage Passive Trees" (TreeTab.lua:381-382), not the tree dropdown
+    assert!(app.tree.spec_manager_open(), "the manager didn't open");
+    assert!(!egui::Popup::is_any_open(&ctx));
+    // its rows are drawn: both trees, with the manager's own buttons
+    assert!(app.tree.rects.map.contains_key("spec_order_row:1"));
+    assert!(app.tree.rects.map.contains_key("spec_manager_done"));
+    // it is modal: the tree's own keys wait
+    let before = app.sent_full.len();
+    frame(&mut app, &ctx, plain(Key::P));
+    assert!(sent_since(&app, before).is_empty());
+    click(&mut app, &ctx, "spec_manager_done");
+    assert!(!app.tree.spec_manager_open());
 }
 
 #[test]
@@ -435,19 +444,47 @@ fn f1_over_an_item_opens_its_page() {
     );
 }
 
+/// F2 renames the selected row of "Manage Passive Trees" and "Manage Config Sets"
+/// (PassiveSpecListControl.lua, ConfigSetListControl.lua); with neither open it does nothing
 #[test]
-fn f2_renames_the_active_tree_and_config_set() {
+fn f2_renames_the_selected_row_in_the_set_managers() {
     let (mut app, ctx) = tree_app();
-    assert!(!app.tree.has_dialog());
     frame(&mut app, &ctx, plain(Key::F2));
-    assert!(app.tree.has_dialog(), "no Rename box");
+    frame(&mut app, &ctx, vec![]);
+    assert!(!app.tree.has_dialog(), "F2 off the manager opened a box");
+    frame(&mut app, &ctx, ctrl(Key::M));
+    frame(&mut app, &ctx, vec![]);
+    // the second tree, not the active first one
+    click(&mut app, &ctx, "spec_order_row:1");
+    frame(&mut app, &ctx, plain(Key::F2));
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![]);
+    let before = app.sent_full.len();
+    click(&mut app, &ctx, "spec_rename_ok");
+    let sent = sent_since(&app, before);
+    assert!(
+        sent.len() == 1 && sent[0].starts_with("RenameSpec { index: 1,"),
+        "{sent:?}"
+    );
 
     let (mut app, ctx) = config_app(sample_config());
     frame(&mut app, &ctx, plain(Key::F2));
     frame(&mut app, &ctx, vec![]);
+    assert!(!ctx.text_edit_focused(), "F2 off the manager opened a box");
+    click(&mut app, &ctx, "set_order");
+    click(&mut app, &ctx, "order_row:1");
+    frame(&mut app, &ctx, plain(Key::F2));
     frame(&mut app, &ctx, vec![]);
-    // the set's Rename box has the keyboard (config.rs set_edit)
+    frame(&mut app, &ctx, vec![]);
+    // the set's Rename box has the keyboard (config.rs set_edit), for Mapping (id 2)
     assert!(ctx.text_edit_focused(), "no Rename box");
+    frame(&mut app, &ctx, vec![Event::Text("!".into())]);
+    let before = app.sent_full.len();
+    click(&mut app, &ctx, "set_ok");
+    assert_eq!(
+        sent_since(&app, before),
+        ["RenameConfigSet { id: 2, title: \"Mapping!\" }"]
+    );
 }
 
 #[test]

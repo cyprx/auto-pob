@@ -151,6 +151,17 @@ impl ItemsUi {
             });
             self.rects
                 .note(&combo.inner.response, || "spec_combo".into());
+            // the wheel and the arrows step it (DropDownControl.lua:476-516)
+            if specs.enabled
+                && let Some(index) = crate::widgets::scroll_step::combo_step(
+                    ui,
+                    &combo.inner.response,
+                    specs.labels.len(),
+                    specs.selected,
+                )
+            {
+                out.commands.push(Command::SelectSpec { index });
+            }
             let manage = ui.button("Manage\u{2026}");
             self.rects.note(&manage, || "spec_manage".into());
             if manage.clicked() {

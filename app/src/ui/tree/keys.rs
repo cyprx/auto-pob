@@ -118,11 +118,9 @@ impl TreeTab {
     pub fn on_shortcut(&mut self, action: &ShortcutAction, ctx: &egui::Context) -> Option<Command> {
         let state = self.state.clone()?;
         match action {
-            // PoB's "Manage trees..." popup; ours is the tree selector with its buttons
+            // PoB's "Manage Passive Trees" (TreeTab.lua:381-382, 630)
             ShortcutAction::SpecManager => {
-                if let Some(id) = self.toolbar.spec_combo {
-                    egui::Popup::open_id(ctx, id.with("popup"));
-                }
+                self.toolbar.open_manager(&state);
                 None
             }
             ShortcutAction::PrevSpec => state
@@ -133,10 +131,6 @@ impl TreeTab {
                 (state.active_spec + 1 < state.specs.len()).then(|| Command::SelectSpec {
                     index: state.active_spec + 1,
                 })
-            }
-            ShortcutAction::Rename => {
-                self.toolbar.rename_active(&state);
-                None
             }
             ShortcutAction::Heatmap => Some(Command::ToggleHeatmap),
             ShortcutAction::StatDifferences => Some(Command::SetTreeStatDifferences {

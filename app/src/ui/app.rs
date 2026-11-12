@@ -1144,7 +1144,6 @@ impl AutoPobApp {
                     self.send(command);
                 }
             }
-            A::Rename if self.tab == BuildTab::Config => self.config_ui.rename = true,
             tree => {
                 if let Some(command) = self.tree.on_shortcut(&tree, ctx) {
                     self.send(command);
@@ -1663,12 +1662,13 @@ impl AutoPobApp {
         if items_out.manage_trees {
             self.tree.open_spec_manager();
         }
-        // the window belongs to the Items tab: leaving the tab closes it
+        // the Tree tab draws its own; on the Items tab it is that tab's window, and leaving
+        // for any other tab closes it
         if self.tab == BuildTab::Items {
             for command in self.tree.spec_manager(ui.ctx()) {
                 self.send(command);
             }
-        } else if self.tree.spec_manager_open() {
+        } else if self.tab != BuildTab::Tree && self.tree.spec_manager_open() {
             self.tree.close_spec_manager();
         }
         for command in items_out.commands {
@@ -6190,8 +6190,8 @@ mod tests {
             app.tree.rects.map.contains_key("spec_manager_done"),
             "the window is not drawn"
         );
-        // its "+" is the Tree tab's New tree, with the same dialog
-        let pos = app.tree.rects.map["spec_new"].center();
+        // its New is the Tree tab's New tree, with the same dialog
+        let pos = app.tree.rects.map["spec_manager_new"].center();
         let press = |pressed| egui::Event::PointerButton {
             pos,
             button: egui::PointerButton::Primary,

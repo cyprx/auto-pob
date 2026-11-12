@@ -147,8 +147,6 @@ pub struct TreeTab {
     pub(crate) rects: Rects,
     /// The path traced with Shift held, from the tree to its end (PoB's `tracePath`)
     pub(super) trace: Vec<u32>,
-    /// The "Manage Passive Trees" window the Items tab's "Manage..." opens
-    spec_manager: bool,
 }
 
 impl TreeTab {
@@ -195,50 +193,28 @@ impl TreeTab {
     }
 
     /// Opens PoB's "Manage Passive Trees" window (the Items tab's "Manage...",
-    /// ItemsTab.lua:203-205): the Tree tab's spec controls and their dialogs.
+    /// ItemsTab.lua:203-205): the Tree tab's own manager, with its questions.
     pub fn open_spec_manager(&mut self) {
-        self.spec_manager = true;
+        if let Some(state) = &self.state {
+            self.toolbar.open_manager(state);
+        }
     }
 
     pub fn spec_manager_open(&self) -> bool {
-        self.spec_manager
+        self.toolbar.manager_open()
     }
 
     pub fn close_spec_manager(&mut self) {
-        self.spec_manager = false;
-        self.toolbar.close_dialog();
+        self.toolbar.close_manager();
     }
 
-    /// Draws the "Manage Passive Trees" window while it is open; returns what the user chose
+    /// Draws the "Manage Passive Trees" window off the Tree tab while it is open; returns what
+    /// the user chose
     pub fn spec_manager(&mut self, ctx: &egui::Context) -> Vec<Command> {
         let mut commands = Vec::new();
-        let Some(state) = self.state.clone() else {
-            return commands;
-        };
-        if !self.spec_manager {
-            return commands;
-        }
-        let mut open = true;
-        egui::Window::new("Manage Passive Trees")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, -80.0])
-            .show(ctx, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    self.toolbar
-                        .specs(ui, &state, &mut self.rects, &mut commands);
-                });
-                let done = ui.button("Done");
-                self.rects.note(&done, || "spec_manager_done".into());
-                if done.clicked() {
-                    self.spec_manager = false;
-                }
-            });
-        self.toolbar
-            .spec_dialogs(ctx, &state, &mut self.rects, &mut commands);
-        if !open {
-            self.close_spec_manager();
+        if let Some(state) = self.state.clone() {
+            self.toolbar
+                .manager_and_dialogs(ctx, &state, &mut self.rects, &mut commands);
         }
         commands
     }
@@ -1127,11 +1103,15 @@ mod tests {
             debug(&h.click_at(pos).commands),
             ["CopySpec { index: 0, title: \"Main2\" }"]
         );
-        // a row clicked in the manager is copied
+        // the manager's Copy copies its selected row (PassiveSpecListControl.lua:13-21); a
+        // click on a row only selects it
         let pos = h.tab.rects.map["spec_order"].center();
         h.click_at(pos);
         h.frame(vec![]);
         let pos = h.tab.rects.map["spec_order_row:1"].center();
+        assert!(h.click_at(pos).commands.is_empty());
+        h.frame(vec![]);
+        let pos = h.tab.rects.map["spec_manager_copy"].center();
         h.click_at(pos);
         h.frame(vec![]);
         h.frame(vec![Event::Text("!".into())]);
@@ -1141,6 +1121,112 @@ mod tests {
             debug(&h.click_at(pos).commands),
             ["CopySpec { index: 1, title: \"Bare!\" }"]
         );
+    }
+
+    fn key(h: &mut Harness, key: egui::Key) -> TreeOutput {
+        h.frame(vec![Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }])
+    }
+
+    /// F2 in "Manage Passive Trees" renames its selected row, not the active tree
+    /// (PassiveSpecListControl.lua's OnSelKeyDown); the arrows pick the row
+    #[test]
+    fn f2_in_the_tree_manager_renames_the_selected_tree() {
+        let mut h = two_specs();
+        let pos = h.tab.rects.map["spec_order"].center();
+        h.click_at(pos);
+        h.frame(vec![]);
+        assert!(h.tab.has_dialog(), "the manager counts as a dialog");
+        let pos = h.tab.rects.map["spec_order_row:1"].center();
+        h.click_at(pos);
+        key(&mut h, egui::Key::F2);
+        h.frame(vec![]);
+        let pos = h.tab.rects.map["spec_rename_ok"].center();
+        assert_eq!(
+            debug(&h.click_at(pos).commands),
+            ["RenameSpec { index: 1, title: \"Bare\" }"]
+        );
+        // the manager is still open; a typed Copy Tree name box leaves it the keyboard
+        h.frame(vec![]);
+        assert!(h.tab.spec_manager_open());
+        let pos = h.tab.rects.map["spec_manager_copy"].center();
+        h.click_at(pos);
+        h.frame(vec![]);
+        h.frame(vec![Event::Text("!".into())]);
+        h.frame(vec![]);
+        let pos = h.tab.rects.map["spec_copy_ok"].center();
+        assert_eq!(
+            debug(&h.click_at(pos).commands),
+            ["CopySpec { index: 1, title: \"Bare!\" }"]
+        );
+        h.frame(vec![]);
+        // an untyped Copy Tree box holds the keyboard until Cancel takes it away
+        let pos = h.tab.rects.map["spec_manager_copy"].center();
+        h.click_at(pos);
+        h.frame(vec![]);
+        h.frame(vec![]);
+        let pos = h.tab.rects.map["spec_copy_cancel"].center();
+        assert!(h.click_at(pos).commands.is_empty());
+        h.frame(vec![]);
+        h.frame(vec![]);
+        // Up then F2 renames the first tree
+        key(&mut h, egui::Key::ArrowUp);
+        key(&mut h, egui::Key::F2);
+        h.frame(vec![]);
+        let pos = h.tab.rects.map["spec_rename_ok"].center();
+        assert_eq!(
+            debug(&h.click_at(pos).commands),
+            ["RenameSpec { index: 0, title: \"Main\" }"]
+        );
+    }
+
+    /// Delete in the manager asks about the selected tree; F2 on the tab itself does nothing,
+    /// as PoB's F2 belongs to the manager's list
+    #[test]
+    fn delete_in_the_tree_manager_asks_and_f2_off_it_does_nothing() {
+        let mut h = two_specs();
+        key(&mut h, egui::Key::F2);
+        h.frame(vec![]);
+        assert!(!h.tab.has_dialog());
+        let pos = h.tab.rects.map["spec_order"].center();
+        h.click_at(pos);
+        h.frame(vec![]);
+        key(&mut h, egui::Key::ArrowDown);
+        key(&mut h, egui::Key::Delete);
+        h.frame(vec![]);
+        let pos = h.tab.rects.map["spec_delete_yes"].center();
+        assert_eq!(
+            debug(&h.click_at(pos).commands),
+            ["DeleteSpec { index: 1 }"]
+        );
+    }
+
+    /// The arrows over the Version dropdown step it as a pick: PoB's Convert question asks
+    /// (DropDownControl.lua:476-516, TreeTab.lua:652)
+    #[test]
+    fn the_arrows_over_the_version_dropdown_ask_to_convert() {
+        let (l, s) = sample();
+        let mut state = (*s).clone();
+        state.versions = serde_json::from_value(serde_json::json!([
+            { "value": "3_27", "label": "3.27" },
+            { "value": "3_28", "label": "3.28" },
+        ]))
+        .unwrap();
+        let mut h = Harness::new(l, Arc::new(state));
+        let pos = h.tab.rects.map["version"].center();
+        h.frame(vec![Event::PointerMoved(pos)]);
+        h.frame(vec![]);
+        assert!(!h.tab.has_dialog());
+        let out = key(&mut h, egui::Key::ArrowUp);
+        assert!(out.commands.is_empty(), "{:?}", out.commands);
+        h.frame(vec![]);
+        assert!(h.tab.has_dialog(), "no Convert question");
+        assert!(h.tab.rects.map.contains_key("version_convert"));
     }
 
     #[test]

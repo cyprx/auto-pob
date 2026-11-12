@@ -106,6 +106,9 @@ impl ItemsUi {
                 self.shared_selected = Some(i);
                 row.request_focus();
             }
+            if row.has_focus() {
+                crate::ui::shortcuts::keep_arrows(ui.ctx(), row.id);
+            }
             focused |= row.has_focus();
             if row.double_clicked() {
                 out.commands.push(Command::ViewSharedItem { index: i });
@@ -130,6 +133,19 @@ impl ItemsUi {
         {
             self.shared_copy_asked = Some(index);
             out.queries.push(Command::CopySharedItem { index });
+        }
+        // the list's keys (ListControl.lua:375-392): the arrows, Home and End pick a row, and
+        // Delete or Backspace asks to delete it (SharedItemListControl's OnSelDelete)
+        if focused && !(self.has_dialog() || self.modal || ui.ctx().text_edit_focused()) {
+            if let Some(i) =
+                ui.input_mut(|inp| crate::ui::shortcuts::list_key(inp, n, self.shared_selected))
+            {
+                self.shared_selected = Some(i);
+                rows.rows[i].request_focus();
+            } else if self.shared_selected.is_some() && ui.input(crate::ui::shortcuts::list_delete)
+            {
+                self.confirm_shared_delete = self.shared_selected;
+            }
         }
         if let Some((from, to)) = rows.moved {
             self.shared_selected = Some(to);

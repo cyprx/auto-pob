@@ -81,6 +81,18 @@ impl ReportPanel {
                     }
                 });
             rects.note(&combo.response, || "report_filter".into());
+            // the wheel and the arrows step it (DropDownControl.lua:476-516)
+            if let Some(filter) = crate::widgets::scroll_step::combo_step(
+                ui,
+                &combo.response,
+                FILTERS.len(),
+                report.filter,
+            ) {
+                commands.push(Command::SetPowerReportFilter {
+                    filter,
+                    masteries: report.masteries,
+                });
+            }
         });
         let id = self.id;
         let order = sorted(&report.rows, &report.listed, list_sort(ui.ctx(), id));

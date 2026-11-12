@@ -156,7 +156,7 @@ note = "part of build.mainSocketGroup"
 ported = "app/src/ui/build.rs tab_strip"
 
 [controls."build.modeCompare"]
-gap = "Task 9"
+ported = "app/src/ui/build.rs tab_strip Compare tab"
 note = "Compare tab"
 
 [controls."build.modeConfig"]
@@ -417,143 +417,143 @@ ruled_out = "R9"
 note = "part of compare.cmpCalcsStageCount"
 
 [controls."compare.cmpMainSkill"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "R6 selector"
 
 [controls."compare.cmpMainSkill.scrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "part of compare.cmpMainSkill"
 
 [controls."compare.cmpMineCount"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "R6 selector"
 
 [controls."compare.cmpMineCount.buttonDown"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "part of compare.cmpMineCount"
 
 [controls."compare.cmpMineCount.buttonUp"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "part of compare.cmpMineCount"
 
 [controls."compare.cmpMineCount.scrollBarH"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "part of compare.cmpMineCount"
 
 [controls."compare.cmpMineCount.scrollBarV"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "part of compare.cmpMineCount"
 
 [controls."compare.cmpMineCountLabel"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector captions drawn with their controls"
 note = "label of an R6 selector"
 
 [controls."compare.cmpMinion"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "R6 selector"
 
 [controls."compare.cmpMinion.scrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "part of compare.cmpMinion"
 
 [controls."compare.cmpMinionSkill"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "R6 selector"
 
 [controls."compare.cmpMinionSkill.scrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "part of compare.cmpMinionSkill"
 
 [controls."compare.cmpSkillLabel"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector captions drawn with their controls"
 note = "label of an R6 selector"
 
 [controls."compare.cmpSkillPart"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "R6 selector"
 
 [controls."compare.cmpSkillPart.scrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "part of compare.cmpSkillPart"
 
 [controls."compare.cmpSocketGroup"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "R6 selector"
 
 [controls."compare.cmpSocketGroup.scrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "part of compare.cmpSocketGroup"
 
 [controls."compare.cmpStageCount"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "R6 selector"
 
 [controls."compare.cmpStageCount.buttonDown"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "part of compare.cmpStageCount"
 
 [controls."compare.cmpStageCount.buttonUp"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "part of compare.cmpStageCount"
 
 [controls."compare.cmpStageCount.scrollBarH"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "part of compare.cmpStageCount"
 
 [controls."compare.cmpStageCount.scrollBarV"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "part of compare.cmpStageCount"
 
 [controls."compare.cmpStageCountLabel"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector captions drawn with their controls"
 note = "label of an R6 selector"
 
 [controls."compare.compareBuildLabel"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs header 'Compare with:'"
 note = "entries, load and remove (R5)"
 
 [controls."compare.compareBuildSelect"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs header entries combo (SelectCompare)"
 note = "entries, load and remove (R5)"
 
 [controls."compare.compareBuildSelect.scrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs header entries combo (SelectCompare)"
 note = "part of compare.compareBuildSelect"
 
 [controls."compare.compareConfigSetLabel"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector captions drawn with their controls"
 note = "label of an R6 selector"
 
 [controls."compare.compareConfigSetSelect"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "R6 selector"
 
 [controls."compare.compareConfigSetSelect.scrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "part of compare.compareConfigSetSelect"
 
 [controls."compare.compareItemSetLabel"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector captions drawn with their controls"
 note = "label of an R6 selector"
 
 [controls."compare.compareItemSetLabel2"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector captions drawn with their controls"
 note = "label of an R6 selector"
 
 [controls."compare.compareItemSetSelect"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "R6 selector"
 
 [controls."compare.compareItemSetSelect.scrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "part of compare.compareItemSetSelect"
 
 [controls."compare.compareItemSetSelect2"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "R6 selector"
 
 [controls."compare.compareItemSetSelect2.scrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "part of compare.compareItemSetSelect2"
 
 [controls."compare.comparePowerConfigCheck"]
@@ -597,171 +597,171 @@ ruled_out = "R9"
 note = "Compare power report out (D-004)"
 
 [controls."compare.compareSkillSetLabel"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector captions drawn with their controls"
 note = "label of an R6 selector"
 
 [controls."compare.compareSkillSetSelect"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "R6 selector"
 
 [controls."compare.compareSkillSetSelect.scrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "part of compare.compareSkillSetSelect"
 
 [controls."compare.compareSpecLabel"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector captions drawn with their controls"
 note = "label of an R6 selector"
 
 [controls."compare.compareSpecSelect"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "R6 selector"
 
 [controls."compare.compareSpecSelect.scrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "part of compare.compareSpecSelect"
 
 [controls."compare.compareTreeSetLabel"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row 'Tree set:' (compareSpecSelect, the same function)"
 note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list"
 
 [controls."compare.compareTreeSetSelect"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row compareSpecSelect, the same function (their tree set)"
 note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; same function as compareSpecSelect (their tree set)"
 
 [controls."compare.compareTreeSetSelect.scrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row compareSpecSelect, the same function (their tree set)"
 note = "part of compare.compareTreeSetSelect"
 
 [controls."compare.configPrimarySetLabel"]
-gap = "Task 9"
+ported = "app/src/ui/compare/config.rs 'Config set:' caption"
 note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list"
 
 [controls."compare.configPrimarySetSelect"]
-gap = "Task 9"
+ported = "app/src/ui/compare/config.rs our config set combo (SelectConfigSet), off with one set as PoB"
 note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; switches our own config set from the Compare tab"
 
 [controls."compare.configPrimarySetSelect.scrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/compare/config.rs our config set combo (SelectConfigSet), off with one set as PoB"
 note = "part of compare.configPrimarySetSelect"
 
 [controls."compare.configSearchEdit"]
-gap = "Task 9"
+ported = "app/src/ui/compare/config.rs search box over the option labels"
 note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; R25 already has Ctrl+F on Compare Config, so the box is implied"
 
 [controls."compare.configSearchEdit.buttonClear"]
-gap = "Task 9"
+ported = "app/src/ui/compare/config.rs search box over the option labels"
 note = "part of compare.configSearchEdit"
 
 [controls."compare.configSearchEdit.scrollBarH"]
-gap = "Task 9"
+ported = "app/src/ui/compare/config.rs search box over the option labels"
 note = "part of compare.configSearchEdit"
 
 [controls."compare.configSearchEdit.scrollBarV"]
-gap = "Task 9"
+ported = "app/src/ui/compare/config.rs search box over the option labels"
 note = "part of compare.configSearchEdit"
 
 [controls."compare.configToggleBtn"]
 gap = "Task 9"
-note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; Show All Configurations in the Config view"
+note = "the engine sends only differing options, not the relevant/all common ones the toggle shows; listed in the Task 9 report"
 
 [controls."compare.copyConfigBtn"]
-gap = "Task 9"
+ported = "app/src/ui/compare/config.rs 'Copy Config from Compare Build' (CopyCompareConfig)"
 note = "Copy config (R8)"
 
 [controls."compare.copySpecBtn"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs Tree view 'Copy tree' (CopyCompareTree)"
 note = "Copy tree (R8)"
 
 [controls."compare.copySpecUseBtn"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs Tree view 'Copy and use' (CopyCompareTree and_use)"
 note = "Copy and use (R8)"
 
 [controls."compare.importBtn"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs header 'Load build…' menu (LoadCompare, ImportFromUrl Comparison)"
 note = "entries, load and remove (R5)"
 
 [controls."compare.itemsExpandedCheck"]
 gap = "Task 9"
-note = "R6 selector"
+note = "no engine view of PoB's expanded item cards (DrawItemExpanded); listed in the Task 9 report"
 
 [controls."compare.itemsHScrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/compare/items.rs ScrollArea"
 note = "Items view scrolling"
 
 [controls."compare.leftFooterAnchor"]
-gap = "Task 9"
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
 note = "layout anchor of the side-by-side footer"
 
 [controls."compare.leftSpecSelect"]
-gap = "Task 9"
+ported = "app/src/ui/tree/mod.rs show_compare our tree set combo (SelectSpec)"
 note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; switches our own tree set from the Compare tree header"
 
 [controls."compare.leftSpecSelect.scrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/tree/mod.rs show_compare our tree set combo (SelectSpec)"
 note = "part of compare.leftSpecSelect"
 
 [controls."compare.leftTreeSearch"]
-gap = "Task 9"
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
 note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; tree search, side by side"
 
 [controls."compare.leftTreeSearch.buttonClear"]
-gap = "Task 9"
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
 note = "part of compare.leftTreeSearch"
 
 [controls."compare.leftTreeSearch.scrollBarH"]
-gap = "Task 9"
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
 note = "part of compare.leftTreeSearch"
 
 [controls."compare.leftTreeSearch.scrollBarV"]
-gap = "Task 9"
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
 note = "part of compare.leftTreeSearch"
 
 [controls."compare.leftVersionSelect"]
 gap = "Task 9"
-note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; converts our tree version from the Compare tab"
+note = "no engine command to convert our tree to an arbitrary version from the Compare tab; listed in the Task 9 report"
 
 [controls."compare.leftVersionSelect.scrollBar"]
 gap = "Task 9"
-note = "part of compare.leftVersionSelect"
+note = "no engine command to convert our tree to an arbitrary version from the Compare tab; listed in the Task 9 report"
 
 [controls."compare.overlayTreeSearch"]
-gap = "Task 9"
+ported = "app/src/ui/tree/mod.rs show_compare search box (SetTreeSearch)"
 note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; tree search in the overlay view"
 
 [controls."compare.overlayTreeSearch.buttonClear"]
-gap = "Task 9"
+ported = "app/src/ui/tree/mod.rs show_compare search box (SetTreeSearch)"
 note = "part of compare.overlayTreeSearch"
 
 [controls."compare.overlayTreeSearch.scrollBarH"]
-gap = "Task 9"
+ported = "app/src/ui/tree/mod.rs show_compare search box (SetTreeSearch)"
 note = "part of compare.overlayTreeSearch"
 
 [controls."compare.overlayTreeSearch.scrollBarV"]
-gap = "Task 9"
+ported = "app/src/ui/tree/mod.rs show_compare search box (SetTreeSearch)"
 note = "part of compare.overlayTreeSearch"
 
 [controls."compare.primaryItemSetLabel"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector captions drawn with their controls"
 note = "label of an R6 selector"
 
 [controls."compare.primaryItemSetSelect"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "R6 selector"
 
 [controls."compare.primaryItemSetSelect.scrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
 note = "part of compare.primaryItemSetSelect"
 
 [controls."compare.primaryTreeSetLabel"]
-gap = "Task 9"
+ported = "app/src/ui/tree/mod.rs show_compare 'Tree set:' caption on the Compare Tree view"
 note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list"
 
 [controls."compare.primaryTreeSetSelect"]
-gap = "Task 9"
+ported = "app/src/ui/tree/mod.rs show_compare our tree set combo (SelectSpec) on the Compare Tree view; PoB repeats it on Items"
 note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; switches our own tree set from the Compare tab"
 
 [controls."compare.primaryTreeSetSelect.scrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/tree/mod.rs show_compare our tree set combo (SelectSpec) on the Compare Tree view; PoB repeats it on Items"
 note = "part of compare.primaryTreeSetSelect"
 
 [controls."compare.primCalcsMainSkill"]
@@ -861,51 +861,51 @@ ruled_out = "R5"
 note = "Re-import Current: the Import/Export tab has the same buttons"
 
 [controls."compare.removeBtn"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs header Remove (RemoveCompare)"
 note = "entries, load and remove (R5)"
 
 [controls."compare.rightFooterAnchor"]
-gap = "Task 9"
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
 note = "layout anchor of the side-by-side footer"
 
 [controls."compare.rightSpecSelect"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row compareSpecSelect, the same function (their tree set)"
 note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; same function as compareSpecSelect, in the tree header"
 
 [controls."compare.rightSpecSelect.scrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs selector row compareSpecSelect, the same function (their tree set)"
 note = "part of compare.rightSpecSelect"
 
 [controls."compare.rightTreeSearch"]
-gap = "Task 9"
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
 note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; tree search, side by side"
 
 [controls."compare.rightTreeSearch.buttonClear"]
-gap = "Task 9"
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
 note = "part of compare.rightTreeSearch"
 
 [controls."compare.rightTreeSearch.scrollBarH"]
-gap = "Task 9"
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
 note = "part of compare.rightTreeSearch"
 
 [controls."compare.rightTreeSearch.scrollBarV"]
-gap = "Task 9"
+ruled_out = "R7 fallback: no side-by-side tree (Task 7 Open check 3 failed)"
 note = "part of compare.rightTreeSearch"
 
 [controls."compare.rightVersionSelect"]
 gap = "Task 9"
-note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; converts their tree version"
+note = "no engine command to convert the comparison's tree version; listed in the Task 9 report"
 
 [controls."compare.rightVersionSelect.scrollBar"]
 gap = "Task 9"
-note = "part of compare.rightVersionSelect"
+note = "no engine command to convert the comparison's tree version; listed in the Task 9 report"
 
 [controls."compare.skillsHScrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/compare/skills.rs ScrollArea"
 note = "Skills view scrolling"
 
 [controls."compare.subTabAnchor"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs sub_tabs"
 note = "Compare sub-tabs"
 
 [controls."compare.subTabCalcs"]
@@ -913,31 +913,31 @@ ruled_out = "R9"
 note = "Compare Calcs sub-view out"
 
 [controls."compare.subTabConfig"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs sub_tabs Config (app/src/ui/compare/config.rs)"
 note = "Compare sub-tabs"
 
 [controls."compare.subTabItems"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs sub_tabs Items (app/src/ui/compare/items.rs)"
 note = "Compare sub-tabs"
 
 [controls."compare.subTabSkills"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs sub_tabs Skills (app/src/ui/compare/skills.rs)"
 note = "Compare sub-tabs"
 
 [controls."compare.subTabSummary"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs sub_tabs Summary (app/src/ui/compare/summary.rs)"
 note = "Compare sub-tabs"
 
 [controls."compare.subTabTree"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs sub_tabs Tree (overlay, R7)"
 note = "Compare sub-tabs"
 
 [controls."compare.treeOverlayCheck"]
-gap = "Task 9"
+ruled_out = "R7 fallback: no side-by-side tree; app/src/ui/compare/mod.rs shows the box ticked and disabled with a hover note"
 note = "R6 selector"
 
 [controls."compare.viewScrollBar"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs views in egui ScrollAreas"
 note = "Compare sub-tabs"
 
 [controls."config.#CheckBoxControl"]
@@ -2961,15 +2961,15 @@ gap = "Task 10"
 note = "Buy similar popup (R10)"
 
 [popups."CompareTab:1566"]
-gap = "Task 9"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB failure text as a notice"
 note = "comparison load failure text (R5)"
 
 [popups."CompareTab:1572"]
-gap = "Task 9"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB failure text as a notice"
 note = "comparison load failure text (R5)"
 
 [popups."CompareTab:1578"]
-gap = "Task 9"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB failure text as a notice"
 note = "comparison load failure text (R5)"
 
 [popups."Confirm Delete"]
@@ -3031,7 +3031,7 @@ ruled_out = "R3"
 note = "pending Open check 14: our open path must refuse those builds with PoB text, or this becomes a gap; provisional ruling until Open check 14 runs"
 
 [popups."Import Comparison Build"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs 'Load build…' menu: from a saved build, a code or a link (R5)"
 note = "R5"
 
 [popups."Import from Folder"]
@@ -3046,7 +3046,7 @@ ported = "app/src/ui/import.rs share error"
 note = "PoB's Error creating link text (SP6)"
 
 [popups."ImportTab:660"]
-gap = "Task 9"
+ported = "app/src/ui/app.rs on_error shows the engine's PoB failure text as a notice"
 note = "Import as comparison failure text (R5)"
 
 [popups."ItemsTab:3340"]
@@ -3283,15 +3283,15 @@ gap = "Task 14"
 note = "Ctrl+F on Compare Config (R25)"
 
 [keys."compare.LEFTBUTTON"]
-gap = "Task 9"
+ported = "app/src/ui/compare/items.rs Copy and Equip buttons on each Items row"
 note = "Compare Items row Copy / Copy and use clicks (R8)"
 
 [keys."compare.WHEELDOWN"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs views in egui ScrollAreas (wheel scrolling)"
 note = "Compare view scrolling"
 
 [keys."compare.WHEELUP"]
-gap = "Task 9"
+ported = "app/src/ui/compare/mod.rs views in egui ScrollAreas (wheel scrolling)"
 note = "Compare view scrolling"
 
 [keys."CompareTab.RETURN"]

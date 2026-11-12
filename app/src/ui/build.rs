@@ -22,6 +22,8 @@ pub enum BuildTab {
     Calcs,
     Config,
     Notes,
+    /// PoB's Compare tab; it has no undo of its own: its copies use the target tab's (R8)
+    Compare,
     Import,
 }
 
@@ -95,6 +97,7 @@ pub fn tab_strip(ui: &mut egui::Ui, tab: &mut BuildTab) {
         ui.selectable_value(tab, BuildTab::Calcs, "Calcs");
         ui.selectable_value(tab, BuildTab::Config, "Config");
         ui.selectable_value(tab, BuildTab::Notes, "Notes");
+        ui.selectable_value(tab, BuildTab::Compare, "Compare");
         ui.selectable_value(tab, BuildTab::Import, "Import/Export");
     });
 }

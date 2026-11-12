@@ -12,6 +12,7 @@ use crate::theme;
 use crate::ui::build::{self, BuildAction, BuildTab};
 use crate::ui::build_list::{BuildListUi, ListScreenAction};
 use crate::ui::calcs::{CalcsOutput, CalcsUi};
+use crate::ui::compare::{CompareOutput, CompareUi};
 use crate::ui::config::ConfigUi;
 use crate::ui::folder_picker::{FolderPicker, PickerOutput};
 use crate::ui::import::{Confirm, ImportOutput, ImportUi, Plan};
@@ -125,6 +126,9 @@ pub struct AutoPobApp {
     text_seq: Option<u64>,
     sidebar: sidebar::SidebarState,
     notes: NotesUi,
+    compare: CompareUi,
+    /// `SetCompareOverlay { on: true }` is the engine's state: the Compare tab's Tree view is up
+    compare_overlay: bool,
     import_ui: ImportUi,
     /// The pending network requests (the finished ones are turned into notices)
     requests: RequestsView,
@@ -195,6 +199,8 @@ impl AutoPobApp {
             text_seq: None,
             sidebar: sidebar::SidebarState::default(),
             notes: NotesUi::default(),
+            compare: CompareUi::default(),
+            compare_overlay: false,
             import_ui: ImportUi::default(),
             requests: RequestsView::default(),
             confirm: None,
@@ -403,7 +409,11 @@ impl AutoPobApp {
                 .to_owned(),
         );
         let is_notes = matches!(command, Command::SetNotes { .. });
-        let is_import = matches!(command, Command::ImportFromUrl { .. });
+        // a comparison keeps the build: its answers never replace it
+        let is_import = matches!(
+            command,
+            Command::ImportFromUrl { mode, .. } if mode != ImportMode::Comparison
+        );
         // the Import tab follows the answers to these
         let echo = matches!(
             command,
@@ -500,6 +510,11 @@ impl AutoPobApp {
                     self.import_seq = None;
                 }
                 self.import_ui.on_snapshot(&snapshot, seq);
+                self.compare.on_snapshot(&snapshot);
+                // PoB switched to its Compare tab: an Import-tab comparison landed (R5)
+                if self.compare.take_switched() {
+                    self.tab = BuildTab::Compare;
+                }
                 match snapshot {
                     Snapshot::Build(view) => {
                         self.build = Some(view);
@@ -537,7 +552,7 @@ impl AutoPobApp {
                     Snapshot::Settings(view) => self.on_settings(&view, seq),
                     // the Import tab keeps its own
                     Snapshot::Share(_) | Snapshot::ShareCode(_) | Snapshot::Account(_) => {}
-                    // no Compare tab is drawn yet
+                    // the Compare tab took it above
                     Snapshot::Compare(_) => {}
                     // power results of the build being left
                     Snapshot::NodePower(_) | Snapshot::PowerReport(_)
@@ -592,6 +607,9 @@ impl AutoPobApp {
         self.sidebar = sidebar::SidebarState::default();
         self.notes.reset();
         self.import_ui.reset();
+        self.compare.reset();
+        // the engine dropped the overlay with the comparisons
+        self.compare_overlay = false;
     }
 
     /// A network step replaced the build (R14): the build screen starts over, as for
@@ -829,7 +847,8 @@ impl AutoPobApp {
             BuildTab::Items => Tab::Items,
             BuildTab::Calcs => Tab::Calcs,
             // the notes editor keeps its own history
-            BuildTab::Notes | BuildTab::Import => return,
+            // the Compare tab's copies use the target tab's undo (R8)
+            BuildTab::Notes | BuildTab::Compare | BuildTab::Import => return,
         };
         self.send(if redo {
             Command::Redo(tab)
@@ -1111,6 +1130,7 @@ impl AutoPobApp {
             || self.tree.has_dialog()
             || self.skills.has_dialog()
             || self.items.has_dialog()
+            || self.compare.has_dialog()
             || self.popup.is_blocking()
             || self.options.window.is_blocking();
         // a focused button or row doesn't take Ctrl+Z from the tab
@@ -1167,6 +1187,7 @@ impl AutoPobApp {
         let mut items_out = ItemsOutput::default();
         let mut notes_command = None;
         let mut import_out = ImportOutput::default();
+        let mut compare_out = CompareOutput::default();
         let config = self.config.clone();
         egui::CentralPanel::default().show(ui, |ui| {
             build::tab_strip(ui, &mut self.tab);
@@ -1188,6 +1209,14 @@ impl AutoPobApp {
                 BuildTab::Notes => {
                     let now = ui.input(|i| i.time);
                     notes_command = self.notes.show(ui, now);
+                }
+                BuildTab::Compare => {
+                    compare_out = self.compare.show(ui, behind);
+                    // R7's overlay: our tree, coloured against the comparison
+                    if compare_out.tree {
+                        self.tree.set_enabled_sockets(self.items.enabled_sockets());
+                        tree_out = self.tree.show_compare(ui, behind);
+                    }
                 }
                 BuildTab::Import => {
                     let now = epoch_now();
@@ -1220,6 +1249,26 @@ impl AutoPobApp {
         }
         if self.tab != BuildTab::Tree {
             self.tree.close_dialog();
+        }
+        if self.tab != BuildTab::Compare {
+            // leaving the tab sends a count still being typed and closes its windows
+            if let Some(command) = self.compare.flush() {
+                self.send(command);
+            }
+            self.compare.close_dialog();
+        }
+        for command in compare_out.commands {
+            self.send(command);
+        }
+        // questions never leave the app waiting
+        for query in compare_out.queries {
+            self.engine.send(query);
+        }
+        // the overlay is on while the Compare tab's Tree view shows (R7)
+        let overlay = self.tab == BuildTab::Compare && self.compare.tree_shown();
+        if overlay != self.compare_overlay {
+            self.compare_overlay = overlay;
+            self.send(Command::SetCompareOverlay { on: overlay });
         }
         if self.tab != BuildTab::Skills {
             // leaving the tab sends an edit still being typed and closes its dialogs
@@ -1639,6 +1688,10 @@ impl eframe::App for AutoPobApp {
 #[cfg(test)]
 #[path = "app_options_tests.rs"]
 mod options_tests;
+
+#[cfg(test)]
+#[path = "app_compare_tests.rs"]
+mod compare_tests;
 
 #[cfg(test)]
 mod tests {

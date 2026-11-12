@@ -2,6 +2,7 @@ pub mod app;
 pub mod build;
 pub mod build_list;
 pub mod calcs;
+pub mod compare;
 pub mod config;
 pub mod first_run;
 pub mod folder_picker;

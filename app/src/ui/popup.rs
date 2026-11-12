@@ -307,6 +307,58 @@ impl PopupWindow {
         Some(Command::ClosePopup)
     }
 
+    /// Draws `controls` with the window's renderers, outside any window (the Compare tab's
+    /// selectors). What they change comes back as `SetPopupControl`s for the caller to
+    /// readdress; a box still being typed in goes first. No tooltip is ever asked for: there is
+    /// no popup session to ask. Lists are not drawn.
+    pub(crate) fn inline_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        controls: &[&PopupControl],
+        busy: bool,
+    ) -> Vec<Command> {
+        let view = PopupView {
+            kind: PopupKind::Craft,
+            title: String::new(),
+            controls: Vec::new(),
+        };
+        let mut out = PopupOutput::default();
+        for c in controls.iter().filter(|c| c.kind != PopupControlKind::List) {
+            let first = out.commands.len();
+            self.draw_control(ui, &view, c, busy, &mut out);
+            if c.kind != PopupControlKind::Edit
+                && out.commands.len() > first
+                && let Some((name, text)) = self.boxes.take_pending()
+            {
+                out.commands.insert(
+                    first,
+                    Command::SetPopupControl {
+                        name,
+                        value: PopupInput::Text(text),
+                    },
+                );
+            }
+        }
+        out.commands
+    }
+
+    /// For `inline_controls`: the text typed into a box and not sent yet, once.
+    pub(crate) fn take_typed(&mut self) -> Option<(String, String)> {
+        self.boxes.take_pending()
+    }
+
+    /// For `inline_controls`, once per frame after drawing: the typed text of boxes that were
+    /// not drawn this frame, to send now.
+    pub(crate) fn end_inline_frame(&mut self) -> Vec<(String, String)> {
+        self.tip.reset();
+        self.boxes.end_frame()
+    }
+
+    /// For `inline_controls`: whether a box holds text not sent yet.
+    pub(crate) fn has_typed(&self) -> bool {
+        self.boxes.has_pending()
+    }
+
     /// Draws the window. `busy`: the engine hasn't caught up with what was sent.
     pub fn show(&mut self, ctx: &egui::Context, now: f64, busy: bool) -> PopupOutput {
         self.show_with(ctx, now, busy, &mut Plain)

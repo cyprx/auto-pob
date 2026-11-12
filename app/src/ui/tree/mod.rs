@@ -312,6 +312,41 @@ impl TreeTab {
                 self.focus_node(id, now);
             }
         }
+        self.canvas(ui, &layout, &state, &mut out);
+        out
+    }
+
+    /// The Compare tab's Tree view (R7's overlay): our tree with the comparison's colours, under
+    /// PoB's header for it, our tree set and the overlay search (`leftSpecSelect`,
+    /// `overlayTreeSearch`). The Tree tab's toolbar and power report are not drawn.
+    pub fn show_compare(&mut self, ui: &mut egui::Ui, busy: bool) -> TreeOutput {
+        let mut out = TreeOutput::default();
+        let (Some(layout), Some(state)) = (self.layout.clone(), self.state.clone()) else {
+            ui.centered_and_justified(|ui| ui.label("No passive tree loaded"));
+            return out;
+        };
+        self.busy = busy;
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Tree set:");
+            self.toolbar
+                .specs(ui, &state, &mut self.rects, &mut out.commands);
+            ui.separator();
+            self.toolbar
+                .search(ui, &state, &mut self.rects, &mut out.commands);
+        });
+        self.canvas(ui, &layout, &state, &mut out);
+        out
+    }
+
+    /// The canvas, its hover tooltips and the mastery picker.
+    fn canvas(
+        &mut self,
+        ui: &mut egui::Ui,
+        layout: &Arc<TreeLayout>,
+        state: &Arc<TreeState>,
+        out: &mut TreeOutput,
+    ) {
+        let (layout, state) = (layout.clone(), state.clone());
         let power = self.power.clone();
         let actions = canvas::show(ui, self, &layout, &state, power.as_deref());
         let now = ui.input(|i| i.time);
@@ -343,8 +378,7 @@ impl TreeTab {
             }
         }
 
-        self.show_picker(ui.ctx(), &layout, &state, &mut out);
-        out
+        self.show_picker(ui.ctx(), &layout, &state, out);
     }
 
     /// The effect list of a mastery. A choice sends `SetMastery`, which allocates the mastery

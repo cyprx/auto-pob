@@ -115,7 +115,7 @@ impl Toolbar {
         self.dialogs(ui.ctx(), state, rects, commands);
     }
 
-    fn specs(
+    pub(super) fn specs(
         &mut self,
         ui: &mut egui::Ui,
         state: &TreeState,
@@ -254,7 +254,7 @@ impl Toolbar {
         rects.note(&combo.response, || "ascendancy_combo".into());
     }
 
-    fn search(
+    pub(super) fn search(
         &mut self,
         ui: &mut egui::Ui,
         state: &TreeState,

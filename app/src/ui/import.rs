@@ -759,7 +759,8 @@ impl ImportUi {
         if !stale && !self.code.trim().is_empty() && !view.detail.is_empty() {
             ui.colored_label(detail_colour(view.valid, ui.visuals()), &view.detail);
         }
-        if !view.can_import_to_this_build && self.mode == ImportMode::ThisBuild {
+        // PoB offers both only for a build with a file
+        if !view.can_import_to_this_build && self.mode != ImportMode::NewBuild {
             self.mode = ImportMode::NewBuild;
         }
         ui.horizontal(|ui| {
@@ -772,6 +773,12 @@ impl ImportUi {
             if view.can_import_to_this_build {
                 let r = ui.radio_value(&mut self.mode, ImportMode::ThisBuild, "Replace this build");
                 mark(ui, "mode:this", &r);
+                let r = ui.radio_value(
+                    &mut self.mode,
+                    ImportMode::Comparison,
+                    "Import as comparison",
+                );
+                mark(ui, "mode:compare", &r);
             }
         });
         ui.horizontal(|ui| {
@@ -797,7 +804,7 @@ impl ImportUi {
                         });
                     }
                     ImportMode::NewBuild => out.confirm = Some(Confirm::NewBuild { url }),
-                    // the build stays as it is (no radio offers it yet)
+                    // the build stays as it is; PoB then shows its Compare tab
                     ImportMode::Comparison => out.commands.push(Command::ImportFromUrl {
                         url,
                         mode: ImportMode::Comparison,
@@ -1542,6 +1549,31 @@ pub(crate) mod tests {
         view.import.can_import_to_this_build = false;
         h.share(view);
         h.frame(vec![]);
+        assert_eq!(h.ui.mode, ImportMode::NewBuild);
+    }
+
+    #[test]
+    fn import_as_comparison_mode_offered() {
+        // PoB's third mode, only for a build with a file
+        let mut h = Harness::new();
+        h.share(valid_share());
+        h.frame(vec![]);
+        assert!(marked("mode:compare").is_some());
+        h.click("mode:compare");
+        assert_eq!(h.ui.mode, ImportMode::Comparison);
+        // the build stays: no question, the import goes at once
+        h.click("import_code");
+        assert!(h.confirms.is_empty());
+        assert_eq!(
+            h.log,
+            ["ImportFromUrl { url: \"https://pobb.in/abc\", mode: Comparison }"]
+        );
+        // a build without a file: not offered, and a chosen mode falls back
+        let mut view = valid_share();
+        view.import.can_import_to_this_build = false;
+        h.share(view);
+        h.frame(vec![]);
+        assert!(marked("mode:compare").is_none());
         assert_eq!(h.ui.mode, ImportMode::NewBuild);
     }
 

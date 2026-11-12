@@ -78,9 +78,9 @@ fn calcs_cells_match_pob() {
                 ours.sections.iter().any(|section| section.enabled),
                 "{name} {mode}: nothing is enabled"
             );
-            modes_seen.push(serde_json::to_value(&ours.sections).unwrap());
+            modes_seen.push(serde_json::to_value(without_layout(&ours.sections)).unwrap());
             assert_eq!(
-                serde_json::to_value(&ours.sections).unwrap(),
+                serde_json::to_value(without_layout(&ours.sections)).unwrap(),
                 serde_json::to_value(&theirs).unwrap(),
                 "{name} {mode}"
             );
@@ -163,7 +163,7 @@ fn calcs_collapse_and_search_match_pob() {
             .any(|r| r.search_match)
     );
     assert_eq!(
-        serde_json::to_value(&ours.sections).unwrap(),
+        serde_json::to_value(without_layout(&ours.sections)).unwrap(),
         serde_json::to_value(&theirs).unwrap()
     );
 }
@@ -216,6 +216,20 @@ fn fixture_xml(name: &str) -> std::path::PathBuf {
         .1
 }
 
+/// Our sections without PoB's layout (`col_widths`, `pop_out`), which `calcsDump` doesn't
+/// read: `parity_gaps_tabs::tab_gaps_calcs_match_pob` checks them against PoB's own `UpdateSize`
+fn without_layout(sections: &[CalcsSection]) -> Vec<CalcsSection> {
+    sections
+        .iter()
+        .cloned()
+        .map(|mut s| {
+            s.col_widths.clear();
+            s.pop_out = false;
+            s
+        })
+        .collect()
+}
+
 /// A session and an upstream state on the same fixture.
 fn both(name: &str) -> (Session, mlua::Lua) {
     let xml = fixture_xml(name);
@@ -229,7 +243,7 @@ fn assert_matches_pob(s: &mut Session, lua: &mlua::Lua, step: &str) -> CalcsSele
     let ours = s.backend.calcs_view().unwrap();
     let sections: Vec<CalcsSection> = lua_value(lua, "return calcsDump()");
     assert_eq!(
-        serde_json::to_value(&ours.sections).unwrap(),
+        serde_json::to_value(without_layout(&ours.sections)).unwrap(),
         serde_json::to_value(&sections).unwrap(),
         "{step}: sections"
     );

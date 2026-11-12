@@ -1144,11 +1144,14 @@ fn build_list_data_loss_guards() {
     }
     symlink(&outside, builds.join("escape")).unwrap();
     assert_eq!(
-        try_remove(&s, &builds.join("escape")).1.as_deref(),
-        Some(refused)
+        try_remove(&s, &builds.join("escape/deep")).1.as_deref(),
+        Some(refused),
+        "below a link"
     );
+    // the link itself goes, what it leads to stays
+    assert_eq!(try_remove(&s, &builds.join("escape")), (Some(true), None));
+    assert!(fs::symlink_metadata(builds.join("escape")).is_err());
     assert_eq!(tree(&outside), outside_before);
-    fs::remove_file(builds.join("escape")).unwrap();
 
     // I2: a delete is the one the user was asked about
     let sub = builds.join("sub");
@@ -1280,5 +1283,97 @@ fn build_list_data_loss_guards() {
         outside_before,
         "nothing was taken from or put in outside"
     );
+    assert_eq!(s.open_popups(), 0);
+
+    // N3: a link to a folder inside Builds is listed as a folder; it is renamed as one and can
+    // be deleted, unlinking only the link
+    symlink(&sub, builds.join("lnk")).unwrap();
+    fs::write(builds.join("plain"), "plain file").unwrap();
+    assert_eq!(
+        err(
+            &mut s,
+            Command::RenameBuild {
+                path: builds.join("lnk"),
+                name: "plain".into()
+            }
+        ),
+        taken
+    );
+    assert_eq!(fs::read(builds.join("plain")).unwrap(), b"plain file");
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .unwrap();
+    let view = s.backend.build_list_view().unwrap();
+    let entry = view
+        .entries
+        .iter()
+        .find(|e| e.name == "lnk")
+        .expect("listed");
+    assert!(entry.is_folder && entry.delete_prompt.starts_with("The folder is not empty"));
+    s.run(delete(builds.join("lnk"), entry.delete_kind()))
+        .expect("delete the link");
+    assert!(fs::symlink_metadata(builds.join("lnk")).is_err());
+    assert!(sub.join("b.xml").is_file(), "its target stays");
+    symlink(&empty, builds.join("lnk")).unwrap();
+    s.run(delete(builds.join("lnk"), DeleteKind::EmptyFolder))
+        .expect("an empty folder's link");
+    assert!(fs::symlink_metadata(builds.join("lnk")).is_err() && empty.is_dir());
+    fs::remove_file(builds.join("plain")).unwrap();
+
+    // N4: a move onto a file nobody can read is refused (a readable one becomes name[2])
+    if !is_root() {
+        fs::write(sub.join("a.xml"), "hidden").unwrap();
+        set_mode(&sub.join("a.xml"), 0o000);
+        let result = s.run(Command::MoveBuild {
+            path: builds.join("a.xml"),
+            folder: "sub/".into(),
+        });
+        set_mode(&sub.join("a.xml"), 0o644);
+        assert_eq!(result.expect_err("refused").to_string(), taken);
+        assert_eq!(fs::read(sub.join("a.xml")).unwrap(), b"hidden");
+        fs::remove_file(sub.join("a.xml")).unwrap();
+    }
+
+    // N5: a.xml and A.xml both exist, a -> A
+    fs::copy(builds.join("a.xml"), builds.join("A.xml")).unwrap();
+    fs::write(builds.join("A.xml"), "the other one").unwrap();
+    assert_eq!(
+        err(
+            &mut s,
+            Command::RenameBuild {
+                path: builds.join("a.xml"),
+                name: "A".into()
+            }
+        ),
+        taken
+    );
+    assert_eq!(fs::read(builds.join("A.xml")).unwrap(), b"the other one");
+    fs::remove_file(builds.join("A.xml")).unwrap();
+
+    // N1: a Builds folder that holds the user folder arms nothing and the list says so
+    let user = s.user.clone();
+    let real = s.eval::<String>("return pob.main.main.buildPath");
+    s.backend
+        .lua
+        .globals()
+        .set("NEWROOT", format!("{}/", user.display()))
+        .unwrap();
+    s.eval::<()>("pob.main.main.buildPath = NEWROOT");
+    for command in [
+        Command::ListBuilds {
+            folder: String::new(),
+        },
+        delete(builds.join("sub"), DeleteKind::Folder),
+    ] {
+        assert_eq!(err(&mut s, command), "that Builds folder isn't allowed");
+    }
+    assert!(builds.join("sub/b.xml").is_file());
+    s.backend.lua.globals().set("NEWROOT", real).unwrap();
+    s.eval::<()>("pob.main.main.buildPath = NEWROOT");
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .expect("the real root again");
     assert_eq!(s.open_popups(), 0);
 }

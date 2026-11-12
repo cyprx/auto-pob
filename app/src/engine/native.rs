@@ -42,50 +42,89 @@ pub(crate) fn redact(line: &str) -> String {
 /// PoB spells it, and canonical.
 struct BuildsRoot(Option<(PathBuf, PathBuf)>);
 
-/// Sets the folder a recursive `RemoveDir` is confined to; `None`, or a folder that can't be
-/// resolved, refuses every recursive delete.
-pub fn set_builds_root(lua: &Lua, root: Option<&Path>) {
-    lua.set_app_data(BuildsRoot(root.and_then(|r| {
-        fs::canonicalize(r).ok().map(|real| (r.to_path_buf(), real))
-    })));
+/// Folders that no Builds root may be or contain: the PoB folder, the user folder and more
+/// (the home folder), canonical.
+struct Protected(Vec<PathBuf>);
+
+/// Adds folders (such as the home folder) that no Builds root may be or contain.
+pub fn protect(lua: &Lua, folders: &[PathBuf]) {
+    let mut all = lua
+        .app_data_ref::<Protected>()
+        .map(|p| p.0.clone())
+        .unwrap_or_default();
+    all.extend(folders.iter().filter_map(|f| fs::canonicalize(f).ok()));
+    lua.set_app_data(Protected(all));
 }
 
-/// `remove_dir_all` for a folder strictly below the root: no component of the path below the
-/// root is a link, and the root itself is never removed. Links inside the tree are unlinked,
-/// never followed (`remove_dir_all` does not traverse them).
-fn recursive_remove(root: Option<&(PathBuf, PathBuf)>, path: &Path) -> std::io::Result<()> {
-    let refuse = || {
-        log::warn!("refused a recursive delete outside the Builds folder");
-        Err(std::io::Error::other("refused: outside the builds folder"))
-    };
-    let Some((spelled, real)) = root else {
-        return refuse();
-    };
-    let Some(rel) = path
+/// Sets the folder a recursive `RemoveDir` is confined to. A root that can't be resolved, is
+/// `/`, or is or contains the PoB folder, the user folder or the home folder is refused: every
+/// recursive delete then stays disarmed and this returns false.
+pub fn set_builds_root(lua: &Lua, root: Option<&Path>) -> bool {
+    let real = root.and_then(|r| fs::canonicalize(r).ok().map(|real| (r.to_path_buf(), real)));
+    let home = std::env::var_os("HOME")
+        .and_then(|h| fs::canonicalize(h).ok())
+        .into_iter();
+    let allowed = real.as_ref().is_some_and(|(_, real)| {
+        real.parent().is_some()
+            && !lua.app_data_ref::<Protected>().is_some_and(|p| {
+                p.0.iter()
+                    .cloned()
+                    .chain(home.clone())
+                    .any(|f| f.starts_with(real))
+            })
+    });
+    if !allowed && root.is_some() {
+        log::warn!("the Builds folder is not one recursive deletes may work in");
+    }
+    lua.set_app_data(BuildsRoot(real.filter(|_| allowed)));
+    allowed
+}
+
+/// Where `path` is below the root, and whether it is a link: every part above it must be a real
+/// folder, the root itself is never it.
+fn locate(root: Option<&(PathBuf, PathBuf)>, path: &Path) -> Option<(PathBuf, bool)> {
+    let (spelled, real) = root?;
+    let rel = path
         .strip_prefix(spelled)
         .or_else(|_| path.strip_prefix(real))
         .ok()
-        .filter(|rel| path.is_absolute() && rel.file_name().is_some())
-    else {
-        return refuse();
-    };
+        .filter(|rel| path.is_absolute() && rel.file_name().is_some())?;
     let mut walk = real.clone();
-    for part in rel.components() {
+    let count = rel.components().count();
+    for (i, part) in rel.components().enumerate() {
         if !matches!(part, std::path::Component::Normal(_)) {
-            return refuse();
+            return None;
         }
         walk.push(part);
-        match fs::symlink_metadata(&walk) {
-            Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {}
-            _ => return refuse(),
+        let meta = fs::symlink_metadata(&walk).ok()?;
+        if i + 1 == count {
+            return Some((walk, meta.file_type().is_symlink()));
+        }
+        if !meta.is_dir() || meta.file_type().is_symlink() {
+            return None;
         }
     }
-    fs::remove_dir_all(&walk)
+    None
+}
+
+/// `remove_dir_all` for a folder strictly below the root. A link as the last part is unlinked
+/// and what it leads to stays; a link anywhere above it refuses. Links inside the tree are
+/// unlinked, never followed (`remove_dir_all` does not traverse them).
+fn recursive_remove(root: Option<&(PathBuf, PathBuf)>, path: &Path) -> std::io::Result<()> {
+    match locate(root, path) {
+        Some((walk, true)) => fs::remove_file(walk),
+        Some((walk, false)) if walk.is_dir() => fs::remove_dir_all(walk),
+        _ => {
+            log::warn!("refused a recursive delete outside the Builds folder");
+            Err(std::io::Error::other("refused: outside the builds folder"))
+        }
+    }
 }
 
 /// Registers `Inflate`, `Deflate`, `NewFileSearch`, `ConPrintf` support and the path functions.
 pub fn register(lua: &Lua, pob_dir: &Path, user_dir: &Path) -> mlua::Result<()> {
     let g = lua.globals();
+    protect(lua, &[pob_dir.to_path_buf(), user_dir.to_path_buf()]);
     register_compression(lua)?;
     g.set("NewFileSearch", lua.create_function(new_file_search)?)?;
     g.set(
@@ -138,7 +177,12 @@ pub fn register(lua: &Lua, pob_dir: &Path, user_dir: &Path) -> mlua::Result<()> 
                 let root = lua.app_data_ref::<BuildsRoot>().and_then(|r| r.0.clone());
                 recursive_remove(root.as_ref(), Path::new(&path))
             } else {
-                fs::remove_dir(path)
+                // a link to a folder that PoB lists is removed as a link, below the root only
+                let root = lua.app_data_ref::<BuildsRoot>().and_then(|r| r.0.clone());
+                match locate(root.as_ref(), Path::new(&path)) {
+                    Some((walk, true)) => fs::remove_file(walk),
+                    _ => fs::remove_dir(path),
+                }
             };
             Ok(match removed {
                 Ok(()) => (Some(true), None),
@@ -492,17 +536,15 @@ mod tests {
             remove(&lua, &builds.join("../outside")),
             (None, refused.clone())
         );
-        // a folder that is a link, and one below a link
+        // a folder below a link; the link itself is only unlinked
         symlink(&outside, builds.join("escape")).unwrap();
-        assert_eq!(
-            remove(&lua, &builds.join("escape")),
-            (None, refused.clone())
-        );
         assert_eq!(
             remove(&lua, &builds.join("escape/keep")),
             (None, refused.clone())
         );
         assert!(outside.join("keep/f.txt").is_file());
+        assert_eq!(remove(&lua, &builds.join("escape")), (Some(true), None));
+        assert!(!builds.join("escape").exists() && outside.join("keep/f.txt").is_file());
         // a tree holding links out: they are unlinked, what they lead to stays
         symlink(&outside, builds.join("tree/inner/dir_link")).unwrap();
         symlink(outside.join("s.xml"), builds.join("tree/file_link")).unwrap();
@@ -517,6 +559,63 @@ mod tests {
         let plain: (Option<bool>, Option<String>) = lua.load("return RemoveDir(p)").eval().unwrap();
         assert_eq!(plain.0, None);
         assert!(outside.join("keep/f.txt").is_file());
+    }
+
+    #[test]
+    fn a_root_that_holds_home_user_or_pob_stays_disarmed() {
+        let tmp = TempDir::new("rmbad");
+        let (home, user, pob) = (
+            tmp.0.join("home"),
+            tmp.0.join("home/user"),
+            tmp.0.join("pob"),
+        );
+        let builds = user.join("Builds");
+        for dir in [&pob, &builds] {
+            fs::create_dir_all(dir.join("victim/inner")).unwrap();
+        }
+        let lua = lua();
+        register(&lua, &pob, &user).unwrap();
+        protect(&lua, std::slice::from_ref(&home));
+        let refused = Some("refused: outside the builds folder".to_string());
+        for bad in [Path::new("/"), &home, &user, &pob, &tmp.0] {
+            assert!(!set_builds_root(&lua, Some(bad)), "{bad:?}");
+            for victim in [
+                pob.join("victim"),
+                builds.join("victim"),
+                user.join("Builds"),
+            ] {
+                assert_eq!(remove(&lua, &victim), (None, refused.clone()), "{bad:?}");
+                assert!(victim.is_dir());
+            }
+        }
+        assert!(set_builds_root(&lua, Some(&builds)));
+        assert_eq!(remove(&lua, &builds.join("victim")), (Some(true), None));
+        // a root that arms and then is replaced by a refused one disarms again
+        fs::create_dir_all(builds.join("again")).unwrap();
+        assert!(!set_builds_root(&lua, Some(&user)));
+        assert_eq!(remove(&lua, &builds.join("again")), (None, refused));
+    }
+
+    #[test]
+    fn a_link_to_a_folder_is_unlinked_and_its_target_stays() {
+        use std::os::unix::fs::symlink;
+        let tmp = TempDir::new("rmlink");
+        let builds = tmp.0.join("Builds");
+        fs::create_dir_all(builds.join("real")).unwrap();
+        fs::write(builds.join("real/b.xml"), "b").unwrap();
+        symlink(builds.join("real"), builds.join("lnk")).unwrap();
+        symlink(builds.join("real"), builds.join("lnk2")).unwrap();
+        let lua = lua();
+        set_builds_root(&lua, Some(&builds));
+        assert_eq!(remove(&lua, &builds.join("lnk")), (Some(true), None));
+        assert!(!builds.join("lnk").exists() && builds.join("real/b.xml").is_file());
+        // and the non-recursive form, for a link PoB listed as an empty folder
+        lua.globals()
+            .set("p", builds.join("lnk2").to_string_lossy().into_owned())
+            .unwrap();
+        let plain: (Option<bool>, Option<String>) = lua.load("return RemoveDir(p)").eval().unwrap();
+        assert_eq!(plain, (Some(true), None));
+        assert!(!builds.join("lnk2").exists() && builds.join("real/b.xml").is_file());
     }
 
     #[test]

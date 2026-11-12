@@ -162,7 +162,8 @@ pub(crate) fn name_free(entry: &str, new_name: &str, rename: bool) -> Result<()>
     else {
         return Err(anyhow!("no such build"));
     };
-    let is_folder = fs::symlink_metadata(source).is_ok_and(|m| m.is_dir());
+    // a link to a folder is a folder, as PoB treats it (it renames it to the bare name)
+    let is_folder = fs::metadata(source).is_ok_and(|m| m.is_dir());
     let target = if is_folder {
         new_name.to_string()
     } else {
@@ -175,6 +176,7 @@ pub(crate) fn name_free(entry: &str, new_name: &str, rename: bool) -> Result<()>
     for found in fs::read_dir(dir).map_err(|_| anyhow!("no such build"))? {
         let found = found.map_err(|_| taken())?;
         let name = found.file_name().to_string_lossy().into_owned();
+        // a case variant counts as taken: stricter than PoB on Linux, by ruling (N2)
         if name.to_lowercase() == lower && !(rename && name == own) {
             return Err(taken());
         }
@@ -182,13 +184,17 @@ pub(crate) fn name_free(entry: &str, new_name: &str, rename: bool) -> Result<()>
     Ok(())
 }
 
-/// Refuses a move onto a name that is a link the move would replace
+/// Refuses a move onto a name that PoB's probe (`io.open`) can't see and `os.rename` would then
+/// replace: a link, or a file that can't be read. A readable file is PoB's `name[2]` case.
 pub(crate) fn move_target_free(entry: &str, root: &str, dest_folder: &str) -> Result<()> {
     let Some(name) = Path::new(entry).file_name() else {
         return Err(anyhow!("no such build"));
     };
     let target = Path::new(&root_dir(root)).join(dest_folder).join(name);
-    if fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
+    let Ok(meta) = fs::symlink_metadata(&target) else {
+        return Ok(());
+    };
+    if meta.file_type().is_symlink() || (meta.is_file() && fs::File::open(&target).is_err()) {
         return Err(anyhow!("a build with that name already exists"));
     }
     Ok(())
@@ -346,6 +352,51 @@ mod tests {
         );
         // only the case of its own name changes
         assert!(name_free(&a, "A", true).is_ok());
+        // both a.xml and A.xml exist: a -> A would replace A.xml
+        fs::write(tree.0.join("Builds/A.xml"), "A").unwrap();
+        assert_eq!(err(name_free(&a, "A", true)), taken);
+        // a link to a folder is a folder: its new name is the bare name, not name.xml
+        fs::write(tree.0.join("Builds/plain"), "p").unwrap();
+        let link = tree.0.join("Builds/lnk");
+        symlink(tree.0.join("Builds/sub"), &link).unwrap();
+        assert_eq!(err(name_free(link.to_str().unwrap(), "plain", true)), taken);
+    }
+
+    #[test]
+    fn a_move_never_replaces_what_the_probe_cannot_see() {
+        use std::os::unix::fs::PermissionsExt;
+        let tree = Tree::new("movetarget");
+        let root = tree.root();
+        let a = format!("{root}a.xml");
+        // sub/ holds b.xml (readable: PoB names the move b[2]) so move a.xml there
+        assert!(move_target_free(&a, &root, "sub/").is_ok());
+        let b = format!("{root}b.xml");
+        assert!(
+            move_target_free(&b, &root, "sub/").is_ok(),
+            "a readable file is PoB's [2]"
+        );
+        symlink(
+            tree.0.join("outside/s.xml"),
+            tree.0.join("Builds/sub/a.xml"),
+        )
+        .unwrap();
+        assert!(move_target_free(&a, &root, "sub/").is_err(), "a link");
+        fs::remove_file(tree.0.join("Builds/sub/a.xml")).unwrap();
+        let hidden = tree.0.join("Builds/sub/a.xml");
+        fs::write(&hidden, "h").unwrap();
+        fs::set_permissions(&hidden, fs::Permissions::from_mode(0o000)).unwrap();
+        let readable = fs::File::open(&hidden).is_ok();
+        assert!(
+            readable || move_target_free(&a, &root, "sub/").is_err(),
+            "an unreadable file"
+        );
+        fs::set_permissions(&hidden, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::remove_file(&hidden).unwrap();
+        fs::create_dir_all(&hidden).unwrap();
+        assert!(
+            move_target_free(&a, &root, "sub/").is_ok(),
+            "a folder: PoB's probe sees it"
+        );
     }
 
     #[test]

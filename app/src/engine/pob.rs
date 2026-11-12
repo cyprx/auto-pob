@@ -184,7 +184,9 @@ impl PobBackend {
     fn build_root(&self) -> Result<String> {
         let root: String = self.call("build_root", ())?;
         // a recursive RemoveDir may delete only below it (R16)
-        super::native::set_builds_root(&self.lua, Some(Path::new(&root)));
+        if !super::native::set_builds_root(&self.lua, Some(Path::new(&root))) {
+            anyhow::bail!("that Builds folder isn't allowed");
+        }
         Ok(root)
     }
 
@@ -714,7 +716,8 @@ impl PobBackend {
                 };
                 // the contents are looked at again: what the user was asked about must be
                 // what is deleted
-                let looked = std::fs::symlink_metadata(&path).ok();
+                // (a link to a folder is a folder, as PoB lists it)
+                let looked = std::fs::metadata(&path).ok();
                 let is_dir = looked.as_ref().is_some_and(|m| m.is_dir());
                 let has_contents = is_dir
                     && std::fs::read_dir(&path).is_ok_and(|mut entries| entries.next().is_some());

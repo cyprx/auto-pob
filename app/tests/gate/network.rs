@@ -3244,13 +3244,17 @@ fn no_silent_writes_network() {
         Canned::ok(net_fixture("oauth_characters.json")),
     );
 
+    // none of these is a token command: each leaves Settings.xml's bytes alone, <Accounts>
+    // included (tests M-3)
     let mut each = |command: Command| {
         let shown = format!("{command:?}");
+        let settings = s.settings_xml();
         run(&mut s, &rec, command).unwrap_or_else(|e| panic!("{shown}: {e}"));
         settle(&mut s, &rec);
         for entry in rec.take_finished() {
             assert_eq!(entry.error, None, "{shown}: {entry:?}");
         }
+        assert_eq!(s.settings_xml(), settings, "{shown} wrote Settings.xml");
     };
     each(Command::ExportShareCode);
     each(Command::SetImportCode { text: code });
@@ -3269,19 +3273,28 @@ fn no_silent_writes_network() {
     drop(each);
     let (entry, _) = sign_in(&mut s, &rec, None);
     assert_eq!(entry.error, None);
+    // none of these is a token command: each leaves Settings.xml's bytes alone, <Accounts>
+    // included (tests M-3)
     let mut each = |command: Command| {
         let shown = format!("{command:?}");
+        let settings = s.settings_xml();
         run(&mut s, &rec, command).unwrap_or_else(|e| panic!("{shown}: {e}"));
         settle(&mut s, &rec);
         for entry in rec.take_finished() {
             assert_eq!(entry.error, None, "{shown}: {entry:?}");
         }
+        assert_eq!(s.settings_xml(), settings, "{shown} wrote Settings.xml");
     };
     each(Command::ListCharacters { realm: Realm::Sony });
     each(import_oauth(Realm::Pc, None, "GateOne", tree_part()));
     each(import_oauth(Realm::Pc, None, "GateOne", items_part()));
-    each(Command::SignOut);
     drop(each);
+    // PoB's logout saves the cleared tokens (ImportTab.lua:87)
+    let signed_in = s.settings_xml();
+    run(&mut s, &rec, Command::SignOut).unwrap();
+    settle(&mut s, &rec);
+    assert!(rec.take_finished().iter().all(|e| e.error.is_none()));
+    assert_ne!(s.settings_xml(), signed_in, "SignOut saved nothing");
     run(&mut s, &rec, Command::SignIn).unwrap();
     wait_for_link(&mut s, &rec);
     let id = s.requests().pending[0].id;

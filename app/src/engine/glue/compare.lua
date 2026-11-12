@@ -8,8 +8,15 @@
 glue = glue or {}
 
 local NOT_OFFERED = "PoB doesn't offer that here"
--- PoB's Items view helpers: CompareTab keeps its own instance (CompareTab.lua:12)
-local trade_helpers = LoadModule("Classes/TradeHelpers")
+-- PoB's Items view helpers: CompareTab keeps its own instance (CompareTab.lua:12). Loaded on
+-- first use: the module requires PoB's stat descriptions and builds a pattern for each line,
+-- which PoB itself does only when a build opens (new("CompareTab"), Build.lua:606). Loading it
+-- here at start cost the build list 0.16 s and about 28 MB.
+local trade_helpers_module
+local function trade_helpers()
+	trade_helpers_module = trade_helpers_module or LoadModule("Classes/TradeHelpers")
+	return trade_helpers_module
+end
 local FAILED = "Failed to import build for comparison."
 
 -- R6's controls, in order, with the sub-view PoB shows each in (nil: the top bar, shown in
@@ -421,6 +428,7 @@ local function item_slots(tab, entry)
 end
 
 local function item_rows(tab, entry)
+	local helpers = trade_helpers()
 	local out = {}
 	for i, row in ipairs(item_slots(tab, entry)) do
 		out[i] = {
@@ -431,13 +439,13 @@ local function item_rows(tab, entry)
 			differ = (row.pItem and row.pItem.raw) ~= (row.cItem and row.cItem.raw),
 			can_copy = row.cItem ~= nil,
 			can_equip = row.cItem ~= nil and not row.missing,
-			diff_label = trade_helpers.getSlotDiffLabel(row.pItem, row.cItem),
+			diff_label = helpers.getSlotDiffLabel(row.pItem, row.cItem),
 			ours_unallocated = row.pWarn,
 			theirs_unallocated = row.cWarn,
 			-- the names are drawn in their rarity's colour (TradeHelpers.lua:470-471)
 			ours_name = row.pItem and row.pItem.name or nil,
-			ours_colour = trade_helpers.getRarityColor(row.pItem),
-			theirs_colour = trade_helpers.getRarityColor(row.cItem),
+			ours_colour = helpers.getRarityColor(row.pItem),
+			theirs_colour = helpers.getRarityColor(row.cItem),
 		}
 	end
 	return out

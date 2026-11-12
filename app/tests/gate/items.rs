@@ -300,7 +300,11 @@ fn compare_tooltips(s: &mut Session, lua: &mlua::Lua, what: &str) -> Seen {
             ));
         }
         for (slot, code) in queries {
-            let query = ItemTooltipQuery { id: item.id, slot };
+            let query = ItemTooltipQuery {
+                id: item.id,
+                slot,
+                theirs: false,
+            };
             let ours = s.backend.item_tooltip_view(&query).unwrap();
             let theirs = upstream_tooltip(lua, &format!("return {code}"));
             let label = format!("{what}: {} {:?}", item.name, query.slot);
@@ -534,6 +538,7 @@ fn item_tooltips_match_pob() {
             .item_tooltip_view(&ItemTooltipQuery {
                 id,
                 slot: slot.map(str::to_string),
+                theirs: false,
             })
             .unwrap()
     };
@@ -597,6 +602,7 @@ fn tooltip_of_the_unique_jewel() {
         let query = ItemTooltipQuery {
             id: jewel.id,
             slot: Some(slot.name.clone()),
+            theirs: false,
         };
         let start = std::time::Instant::now();
         let ours = s
@@ -1987,7 +1993,11 @@ fn no_silent_writes_items() {
     if let Some(id) = id {
         s.backend.item_text(id).unwrap();
         s.backend
-            .item_tooltip_view(&ItemTooltipQuery { id, slot: None })
+            .item_tooltip_view(&ItemTooltipQuery {
+                id,
+                slot: None,
+                theirs: false,
+            })
             .unwrap();
     }
     assert_eq!(

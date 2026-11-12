@@ -277,6 +277,205 @@ local function summary(tab, entry)
 	return out, { headers[2] or "", headers[3] or "" }
 end
 
+-- ---- Items, skills and config (R9) ----
+
+-- The rows of the Items view: PoB's own slot list (`DrawItems` builds it from its base slots,
+-- `ShouldShowRing3` and `AddAbyssSockets`) and its jewel slots (`GetJewelComparisonSlots`, by
+-- node). Both are taken from a `DrawItems` call, which stops once it has them.
+local STOP = {}
+
+local function item_slots(tab, entry)
+	local base, jewels
+	local add_abyss = tab.AddAbyssSockets
+	tab.AddAbyssSockets = function(self, comparison, dest, both)
+		add_abyss(self, comparison, dest, both)
+		base = dest
+	end
+	local jewel_slots = tab.GetJewelComparisonSlots
+	tab.GetJewelComparisonSlots = function(self, ...)
+		jewels = jewel_slots(self, ...)
+		error(STOP, 0)
+	end
+	local width, height = GetScreenSize()
+	local ok, err = pcall(tab.DrawItems, tab, { x = 0, y = 0, width = width, height = height }, entry, {})
+	tab.AddAbyssSockets = nil
+	tab.GetJewelComparisonSlots = nil
+	if not ok and err ~= STOP then
+		error(err, 0)
+	end
+	if not (base and jewels) then
+		error("PoB's Items view lists no slots", 0)
+	end
+	local primary = tab.primaryBuild
+	local env = primary.calcsTab and primary.calcsTab.mainEnv
+	local hasRing3 = env and env.modDB:Flag(nil, "AdditionalRingSlot")
+	local rows = {}
+	local function add(slot, label, pItem, cItem, missing)
+		rows[#rows + 1] = {
+			slot = slot, label = label, pItem = pItem, cItem = cItem,
+			-- the Equip button is "Missing slot" (TradeHelpers.lua:418)
+			missing = missing and true or false,
+		}
+	end
+	local pTab, cTab = primary.itemsTab, entry.itemsTab
+	for _, name in ipairs(base) do
+		local pSlot, cSlot = pTab.slots[name], cTab.slots[name]
+		add(name, name, pSlot and pTab.items[pSlot.selItemId], cSlot and cTab.items[cSlot.selItemId],
+			name == "Ring 3" and not hasRing3)
+	end
+	for _, jewel in ipairs(jewels) do
+		add(jewel.cSlotName, jewel.label, jewel.pItem, jewel.cItem, false)
+	end
+	return rows
+end
+
+local function item_rows(tab, entry)
+	local out = {}
+	for i, row in ipairs(item_slots(tab, entry)) do
+		out[i] = {
+			slot = row.slot,
+			label = row.label,
+			ours = row.pItem and row.pItem.id or nil,
+			theirs = row.cItem and row.cItem.name or nil,
+			differ = (row.pItem and row.pItem.raw) ~= (row.cItem and row.cItem.raw),
+			can_copy = row.cItem ~= nil,
+		}
+	end
+	return out
+end
+
+-- The Skills view as `DrawSkills` draws it: its group pairs (PoB matches the groups by their
+-- gems), each a header per side and the gem lines under it. A header is drawn at height 18 and
+-- the pair's `y`; this build's side is the left column.
+local function skill_rows(tab, entry)
+	local strings = {}
+	local draw_string = DrawString
+	DrawString = function(x, y, align, height, font, text)
+		strings[#strings + 1] = { x = x, y = y, height = height, text = text }
+	end
+	local width, height = GetScreenSize()
+	local ok, err = pcall(tab.DrawSkills, tab, { x = 0, y = 0, width = width, height = height }, entry)
+	DrawString = draw_string
+	if not ok then
+		error(err, 0)
+	end
+	-- the first two are the builds' names
+	local left
+	for i = 3, #strings do
+		left = left and math.min(left, strings[i].x) or strings[i].x
+	end
+	local rows, row = {}, nil
+	for i = 3, #strings do
+		local s = strings[i]
+		local side = s.x == left and "ours" or "theirs"
+		if s.height == 18 then
+			if not row or row.y ~= s.y then
+				row = { y = s.y, ours = {}, theirs = {} }
+				rows[#rows + 1] = row
+			end
+			row[side .. "_header"] = s.text
+		else
+			table.insert(row[side], s.text)
+		end
+	end
+	local added, missing = colorCodes.POSITIVE .. "+ ", colorCodes.NEGATIVE .. "- "
+	local out = {}
+	for i, r in ipairs(rows) do
+		local differ = not (r.ours_header and r.theirs_header)
+		for _, list in ipairs({ r.ours, r.theirs }) do
+			for _, line in ipairs(list) do
+				if line:sub(1, #added) == added or line:sub(1, #missing) == missing then
+					differ = true
+				end
+			end
+		end
+		out[i] = { label = r.ours_header or r.theirs_header, ours = r.ours, theirs = r.theirs, differ = differ }
+	end
+	return out
+end
+
+-- The config options the builds set differently (CompareTab.lua:2098-2104), with PoB's
+-- `FormatConfigValue` texts, from the sections `RebuildConfigControls` keeps, rebuilt when the
+-- Config view would rebuild them (CompareTab.lua:2025-2029)
+local function config_rows(tab, entry)
+	if tab.configCompareId ~= tab.activeCompareIndex or tab.configNeedsRebuild then
+		tab:RebuildConfigControls(entry)
+		tab.configCompareId = tab.activeCompareIndex
+		tab.configNeedsRebuild = false
+	end
+	local pInput = tab.primaryBuild.configTab.input or {}
+	local cInput = entry.configTab.input or {}
+	local out = {}
+	for _, section in ipairs(tab.configSections) do
+		for _, info in ipairs(section.items) do
+			local varData = info.varData
+			local var = varData.var
+			local pVal, cVal = tab:NormalizeConfigVals(varData, pInput[var], cInput[var])
+			if tostring(pVal) ~= tostring(cVal) then
+				out[#out + 1] = {
+					var = var,
+					label = varData.label or var,
+					ours = tab:FormatConfigValue(varData, pInput[var]),
+					theirs = tab:FormatConfigValue(varData, cInput[var]),
+				}
+			end
+		end
+	end
+	return out
+end
+
+-- The comparison's item in `slot`, as hovering it shows: PoB's `AddItemTooltip` on the
+-- comparison's Items tab (CompareTab.lua:3962-3965). Nil when there is none.
+function glue.compare_item_tooltip(slot)
+	if not slot or not glue.build_loaded() then
+		return nil
+	end
+	local tab = pob.build.compareTab
+	local entry = sync(tab)
+	if not entry then
+		return nil
+	end
+	for _, row in ipairs(item_slots(tab, entry)) do
+		if row.slot == slot and row.cItem then
+			local width = GetScreenSize()
+			local tooltip = new("Tooltip")
+			entry.itemsTab:AddItemTooltip(tooltip, row.cItem, nil, nil, math.min(600, math.max(260, width - 24)))
+			return glue.read_tooltip(tooltip)
+		end
+	end
+	return nil
+end
+
+-- PoB's Copy and Equip buttons on an Items row (CompareTab.lua:3936-3941)
+function glue.compare_copy_item(slot, andUse)
+	local tab = compare_tab()
+	local entry = active_entry(tab)
+	for _, row in ipairs(item_slots(tab, entry)) do
+		if row.slot == slot then
+			if not row.cItem or (andUse and row.missing) then
+				error(NOT_OFFERED, 0)
+			end
+			glue.in_popups(function()
+				tab:CopyCompareItemToPrimary(slot, entry, andUse)
+			end)
+			return
+		end
+	end
+	error("no such slot", 0)
+end
+
+-- The Config view's "Copy Config from Compare Build", then an undo state of ours (R8)
+function glue.compare_copy_config()
+	local tab = compare_tab()
+	active_entry(tab)
+	in_mode(tab, "CONFIG", function()
+		local button = tab.controls.copyConfigBtn
+		require_usable(button)
+		glue.in_popups(button.onClick)
+	end)
+	pob.build.configTab:AddUndoState()
+end
+
 function glue.compare_view()
 	local tab = pob.build.compareTab
 	if not tab or #tab.compareEntries == 0 then
@@ -301,5 +500,8 @@ function glue.compare_view()
 		headers = headers,
 		controls = controls,
 		summary = rows,
+		items = item_rows(tab, entry),
+		skills = skill_rows(tab, entry),
+		config = config_rows(tab, entry),
 	}
 end

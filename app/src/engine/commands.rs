@@ -744,6 +744,15 @@ pub enum Command {
     CopyCompareTree {
         and_use: bool,
     },
+    /// PoB's Copy (`and_use: false`) and Equip buttons on an Items row of the Compare tab: the
+    /// comparison's item in `slot` (`CompareItemRow.slot`) is added, and equipped (R8). An Items
+    /// undo state.
+    CopyCompareItem {
+        slot: String,
+        and_use: bool,
+    },
+    /// PoB's "Copy Config from Compare Build", plus a Config undo state of ours (R8)
+    CopyCompareConfig,
     /// UI state, sent on entering (`on`) and leaving the Compare tab's Tree view: while on,
     /// `TreeState.compare` colours the tree against the active comparison (R7). No undo, not
     /// unsaved. A build change drops it with the comparisons.
@@ -831,11 +840,15 @@ pub struct GemTooltipQuery {
 }
 
 /// An item tooltip: `slot: None` is a hover in the item list, `Some(name)` a hover over that
-/// slot or one of its dropdown entries.
+/// slot or one of its dropdown entries; `theirs` asks for the comparison's item in the slot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemTooltipQuery {
     pub id: u32,
     pub slot: Option<String>,
+    /// The active comparison's item in `slot` (`id` is not used): what hovering it on the
+    /// Compare tab's Items view shows
+    #[serde(default)]
+    pub theirs: bool,
 }
 
 /// A window PoB opens from the Items tab's buttons (R3).

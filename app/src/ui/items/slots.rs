@@ -173,6 +173,7 @@ impl ItemsUi {
                                     ItemTooltipQuery {
                                         id,
                                         slot: Some(slot.name.clone()),
+                                        theirs: false,
                                     },
                                 );
                             }
@@ -195,6 +196,7 @@ impl ItemsUi {
                         ItemTooltipQuery {
                             id: slot.selected,
                             slot: Some(slot.name.clone()),
+                            theirs: false,
                         },
                     );
                 }

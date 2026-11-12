@@ -1182,7 +1182,11 @@ mod tests {
     fn item_queries_without_a_build_send_nothing() {
         let queries = || {
             vec![
-                Command::ItemTooltip(ItemTooltipQuery { id: 1, slot: None }),
+                Command::ItemTooltip(ItemTooltipQuery {
+                    id: 1,
+                    slot: None,
+                    theirs: false,
+                }),
                 Command::CopyItem { id: 1 },
             ]
         };
@@ -1430,6 +1434,7 @@ mod tests {
         crate::engine::ItemTooltipQuery {
             id,
             slot: Some("Ring 1".into()),
+            theirs: false,
         }
     }
 

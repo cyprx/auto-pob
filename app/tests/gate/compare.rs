@@ -5,7 +5,8 @@ use super::net_harness::{NetSession, canned, canned_web, net_session};
 use super::{assert_sidebar, fixture_xml, fixtures_dir, golden, lock, pob_dir};
 use auto_pob::engine::upstream::{load_xml, upstream_lua};
 use auto_pob::engine::{
-    Backend, Command, CompareColour, CompareRow, CompareSource, CompareView, PopupInput,
+    Backend, Command, CompareColour, CompareConfigRow, CompareItemRow, CompareRow, CompareSkillRow,
+    CompareSource, CompareView, ConfigValue, PopupInput,
 };
 use mlua::LuaSerdeExt;
 use std::collections::BTreeMap;
@@ -529,6 +530,45 @@ fn compare_summary_matches_pob() {
         },
     };
     assert_eq!(err(&mut s, stale), "the list changed; pick again");
+
+    // ---- The count boxes: typed as PoB's edit boxes take text ----
+    let set = choice(&view(&mut s), "compareSkillSetSelect", 0);
+    run(&mut s, set).unwrap();
+    up.call::<()>("pressChoice", ("compareSkillSetSelect", 1));
+    for (group, boxed, typed) in [(1, "cmpStageCount", "5"), (2, "cmpMineCount", "3")] {
+        let pick = choice(&view(&mut s), "cmpSocketGroup", group);
+        run(&mut s, pick).unwrap();
+        up.call::<()>("pressChoice", ("cmpSocketGroup", group + 1));
+        let before = same_summary(&mut s, &up, boxed);
+        let control = view(&mut s)
+            .controls
+            .into_iter()
+            .find(|c| c.name == boxed)
+            .unwrap();
+        assert!(control.shown && control.enabled, "{boxed} isn't offered");
+        // PoB's filter drops what isn't a digit
+        run(
+            &mut s,
+            Command::SetCompareControl {
+                name: boxed.into(),
+                value: PopupInput::Text(format!("x{typed}")),
+            },
+        )
+        .unwrap();
+        up.call::<()>("pressText", (boxed, typed));
+        let after = same_summary(&mut s, &up, &format!("{boxed} typed"));
+        assert_ne!(after, before, "{boxed} changed nothing");
+        let control = view(&mut s)
+            .controls
+            .into_iter()
+            .find(|c| c.name == boxed)
+            .unwrap();
+        assert_eq!(control.text, typed);
+        assert_eq!(
+            control.text,
+            up.eval::<String>(&format!("return build.compareTab.controls.{boxed}.buf"))
+        );
+    }
     assert_eq!(files(&s.user), before, "a file was written");
 
     // ---- No request, no launch ----
@@ -658,4 +698,372 @@ fn compare_tree_colours_match_pob() {
     assert!(web.unrouted().is_empty());
     let secs = started.elapsed().as_secs_f64();
     assert!(secs < 20.0, "took {secs:.1}s");
+}
+
+// ---- Items, skills and config (Task 8) ----
+
+#[derive(Debug, PartialEq, serde::Deserialize)]
+struct ItemState {
+    raws: Vec<String>,
+    #[serde(default)]
+    slot: Option<String>,
+    set: u32,
+}
+
+impl Upstream {
+    fn items(&self) -> (Vec<CompareItemRow>, Vec<String>) {
+        #[derive(serde::Deserialize)]
+        struct Raw {
+            rows: Vec<CompareItemRow>,
+            #[serde(default)]
+            drawn: Vec<String>,
+        }
+        let raw: Raw = self.json("return itemsFrame()");
+        (raw.rows, raw.drawn)
+    }
+
+    /// The Skills view's pairs, parsed from what DrawSkills drew in a whole frame: a header
+    /// (height 18) at the pair's `y` per side, the gem lines under it; the left column is this
+    /// build's
+    fn skills(&self) -> Vec<CompareSkillRow> {
+        #[derive(serde::Deserialize)]
+        struct Drawn {
+            x: f64,
+            y: f64,
+            height: f64,
+            text: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct Raw {
+            strings: Vec<Drawn>,
+            added: String,
+            missing: String,
+        }
+        let raw: Raw = self.json("return skillsFrame()");
+        let body = &raw.strings[2..];
+        let left = body.iter().map(|d| d.x).fold(f64::INFINITY, f64::min);
+        struct Pair {
+            y: f64,
+            ours_header: Option<String>,
+            theirs_header: Option<String>,
+            ours: Vec<String>,
+            theirs: Vec<String>,
+        }
+        let mut pairs: Vec<Pair> = Vec::new();
+        for d in body {
+            let ours = d.x == left;
+            if d.height == 18.0 {
+                if pairs.last().is_none_or(|p| p.y != d.y) {
+                    pairs.push(Pair {
+                        y: d.y,
+                        ours_header: None,
+                        theirs_header: None,
+                        ours: vec![],
+                        theirs: vec![],
+                    });
+                }
+                let pair = pairs.last_mut().unwrap();
+                if ours {
+                    pair.ours_header = Some(d.text.clone());
+                } else {
+                    pair.theirs_header = Some(d.text.clone());
+                }
+            } else {
+                let pair = pairs.last_mut().expect("a gem line before any header");
+                if ours {
+                    pair.ours.push(d.text.clone());
+                } else {
+                    pair.theirs.push(d.text.clone());
+                }
+            }
+        }
+        pairs
+            .into_iter()
+            .map(|p| {
+                let marked = p
+                    .ours
+                    .iter()
+                    .chain(&p.theirs)
+                    .any(|l| l.starts_with(&raw.added) || l.starts_with(&raw.missing));
+                CompareSkillRow {
+                    differ: marked || p.ours_header.is_none() || p.theirs_header.is_none(),
+                    label: p.ours_header.or(p.theirs_header).unwrap(),
+                    ours: p.ours,
+                    theirs: p.theirs,
+                }
+            })
+            .collect()
+    }
+
+    fn config(&self) -> Vec<CompareConfigRow> {
+        self.json("return configFrame()")
+    }
+
+    fn item_state(&self, slot: &str) -> ItemState {
+        let f: mlua::Function = self.lua.globals().get("itemState").unwrap();
+        self.lua.from_value(f.call(slot).unwrap()).unwrap()
+    }
+
+    fn config_input(&self) -> BTreeMap<String, String> {
+        self.json("return configInput()")
+    }
+}
+
+fn our_item_state(s: &NetSession, slot: &str) -> ItemState {
+    let f: mlua::Function = s
+        .backend
+        .lua
+        .load(
+            r#"return function(slot)
+                local t = pob.build.itemsTab
+                local raws = {}
+                for i, id in ipairs(t.itemOrderList) do raws[i] = t.items[id]:BuildRaw() end
+                local sel = t.items[t.slots[slot].selItemId]
+                return { raws = raws, slot = sel and sel:BuildRaw() or nil, set = t.activeItemSetId }
+            end"#,
+        )
+        .eval()
+        .unwrap();
+    s.backend.lua.from_value(f.call(slot).unwrap()).unwrap()
+}
+
+fn our_config_input(s: &NetSession) -> BTreeMap<String, String> {
+    s.eval::<mlua::Table>(
+        "local out = {} for k, v in pairs(pob.build.configTab.input) do out[k] = tostring(v) end return out",
+    )
+    .pairs::<String, String>()
+    .map(|p| p.unwrap())
+    .collect()
+}
+
+/// Rows of all three views agree with upstream's, and the items are drawn in that order
+fn same_views(s: &mut NetSession, up: &Upstream, what: &str) -> CompareView {
+    let ours = view(s);
+    let (items, drawn) = up.items();
+    assert!(!items.is_empty(), "{what}: no item rows");
+    assert_eq!(ours.items, items, "{what}: items");
+    let mut at = 0;
+    for row in &items {
+        let label = format!("^7{}:", row.label);
+        at += drawn[at..]
+            .iter()
+            .position(|t| *t == label)
+            .unwrap_or_else(|| panic!("{what}: {label} isn't drawn in order"));
+    }
+    let skills = up.skills();
+    assert!(!skills.is_empty(), "{what}: no skill rows");
+    assert_eq!(ours.skills, skills, "{what}: skills");
+    assert_eq!(ours.config, up.config(), "{what}: config");
+    ours
+}
+
+/// Opens a build file in the session's Builds folder, as the list does
+fn open_xml(s: &mut NetSession, name: &str, xml: &str) {
+    let dest = s.user.join(format!("Path of Building/Builds/{name}.xml"));
+    fs::write(&dest, xml).unwrap();
+    run(s, Command::OpenBuild { path: dest }).expect("open");
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn compare_views_and_copies_match_pob() {
+    let _guard = lock();
+    let started = Instant::now();
+    let web = canned_web();
+    let mut s = net_session("compare-views", canned(&web), None);
+    let scratch = Scratch::new("views");
+    let gear_xml = super::items_harness::setup_xml("gear");
+    let gear = scratch.0.join("gear.xml");
+    fs::write(&gear, &gear_xml).unwrap();
+    s.open_fixture("attack");
+    let up = Upstream::new("attack");
+    let refused = s.backend.net_handle().refused();
+
+    // ---- (attack, gear): the items differ, the skills match ----
+    let before = files(&s.user);
+    load_file(&mut s, &gear);
+    up.call::<()>("loadCompare", (gear_xml.clone(), "gear".to_string()));
+    let ours = same_views(&mut s, &up, "attack, gear");
+    assert!(ours.items.iter().any(|r| r.differ && r.can_copy));
+    assert!(ours.items.iter().any(|r| !r.differ && !r.can_copy));
+    assert!(ours.items.iter().any(|r| r.slot.starts_with("Jewel ")));
+    assert!(ours.items.iter().any(|r| r.slot.contains("Abyssal Socket")));
+    assert!(ours.skills.iter().any(|r| !r.differ));
+
+    // ---- Their item's tooltip ----
+    let tooltip = s
+        .backend
+        .item_tooltip_view(&auto_pob::engine::ItemTooltipQuery {
+            id: 0,
+            slot: Some("Body Armour".into()),
+            theirs: true,
+        })
+        .unwrap()
+        .expect("their body armour");
+    let theirs: auto_pob::engine::ItemTooltip = {
+        let f: mlua::Function = up.lua.globals().get("theirTooltip").unwrap();
+        up.lua.from_value(f.call("Body Armour").unwrap()).unwrap()
+    };
+    assert!(!tooltip.tooltip.lines.is_empty());
+    assert_eq!(tooltip.tooltip, theirs);
+    // no item there, or no such slot: nothing
+    for slot in ["Ring 2", "Nowhere"] {
+        let none = s
+            .backend
+            .item_tooltip_view(&auto_pob::engine::ItemTooltipQuery {
+                id: 0,
+                slot: Some(slot.into()),
+                theirs: true,
+            })
+            .unwrap();
+        assert!(none.is_none(), "{slot}");
+    }
+
+    // ---- Copy and equip their body armour; Items undo takes it back ----
+    let start = our_item_state(&s, "Body Armour");
+    assert_eq!(start, up.item_state("Body Armour"));
+    let affected = run(
+        &mut s,
+        Command::CopyCompareItem {
+            slot: "Body Armour".into(),
+            and_use: true,
+        },
+    )
+    .unwrap();
+    assert!(affected.items && affected.build && affected.compare);
+    up.call::<()>("copyItem", ("Body Armour", true));
+    let copied = our_item_state(&s, "Body Armour");
+    assert_ne!(copied, start);
+    assert_eq!(copied, up.item_state("Body Armour"));
+    same_views(&mut s, &up, "after the copy");
+    assert_eq!(
+        err(
+            &mut s,
+            Command::CopyCompareItem {
+                slot: "Ring 2".into(),
+                and_use: false,
+            }
+        ),
+        "PoB doesn't offer that here"
+    );
+    assert_eq!(
+        err(
+            &mut s,
+            Command::CopyCompareItem {
+                slot: "Nowhere".into(),
+                and_use: false,
+            }
+        ),
+        "no such slot"
+    );
+    run(&mut s, Command::Undo(auto_pob::engine::Tab::Items)).unwrap();
+    assert_eq!(our_item_state(&s, "Body Armour"), start);
+    assert_eq!(files(&s.user), before, "a file was written");
+
+    // ---- (dot, attack): other skills, other config; copy the config, Config undo ----
+    s.open_fixture("dot");
+    up.load("dot");
+    // two options this build sets: a check and a list
+    for (var, value) in [
+        ("usePowerCharges", ConfigValue::Bool(true)),
+        ("enemyIsBoss", ConfigValue::Choice("Uber".into())),
+    ] {
+        run(
+            &mut s,
+            Command::SetConfig {
+                var: var.into(),
+                value,
+            },
+        )
+        .unwrap();
+    }
+    up.eval::<()>(
+        r#"local controls = build.configTab.varControls
+        controls.usePowerCharges.state = true
+        controls.usePowerCharges.changeFunc(true)
+        controls.enemyIsBoss:SetSel(4)
+        runCallback("OnFrame")"#,
+    );
+    let attack = fixture_xml("attack");
+    load_file(&mut s, &attack);
+    up.call::<()>(
+        "loadCompare",
+        (fs::read_to_string(&attack).unwrap(), "attack".to_string()),
+    );
+    let ours = same_views(&mut s, &up, "dot, attack");
+    assert!(ours.skills.iter().any(|r| r.differ));
+    assert!(!ours.config.is_empty(), "the builds' config is the same");
+    let start = our_config_input(&s);
+    assert_eq!(start, up.config_input());
+    let affected = run(&mut s, Command::CopyCompareConfig).unwrap();
+    assert!(affected.config && affected.build && affected.recalc && affected.compare);
+    up.call::<()>("pressCopyConfig", ());
+    let copied = our_config_input(&s);
+    assert_ne!(copied, start);
+    assert_eq!(copied, up.config_input());
+    // PoB copies the options the comparison sets; one it leaves unset stays as it was here
+    let after = same_views(&mut s, &up, "after the config copy");
+    assert!(after.config.len() < ours.config.len(), "{:?}", after.config);
+    assert!(after.config.iter().all(|r| r.var != "enemyIsBoss"));
+    run(&mut s, Command::Undo(auto_pob::engine::Tab::Config)).unwrap();
+    assert_eq!(our_config_input(&s), start);
+
+    // ---- (gear, attack): this build's item set, from the Items view ----
+    open_xml(&mut s, "gear", &gear_xml);
+    {
+        let f: mlua::Function = up.lua.globals().get("loadBuildFromXML").unwrap();
+        f.call::<()>((gear_xml.clone(), "gear")).unwrap();
+        up.eval::<()>("build.modFlag = false runCallback('OnFrame')");
+    }
+    load_file(&mut s, &attack);
+    up.call::<()>(
+        "loadCompare",
+        (fs::read_to_string(&attack).unwrap(), "attack".to_string()),
+    );
+    let first = same_views(&mut s, &up, "gear, attack");
+    let pick = choice(&first, "primaryItemSetSelect", 1);
+    let affected = run(&mut s, pick).unwrap();
+    assert!(affected.items && affected.build && affected.recalc && affected.compare);
+    up.call::<()>("pressItemsChoice", ("primaryItemSetSelect", 2));
+    let second = same_views(&mut s, &up, "gear set 2");
+    assert_ne!(second.items, first.items, "the item set changed nothing");
+    let state = our_item_state(&s, "Ring 2");
+    assert_eq!(state, up.item_state("Ring 2"));
+    assert_ne!(state.set, 1);
+
+    // ---- Review Focus 5: a build change leaves nothing of the comparison ----
+    s.open_fixture("attack");
+    assert_eq!(s.backend.compare_view().unwrap(), None);
+    assert_eq!(
+        err(
+            &mut s,
+            Command::CopyCompareItem {
+                slot: "Body Armour".into(),
+                and_use: true,
+            }
+        ),
+        "no comparison build loaded"
+    );
+    assert_eq!(
+        err(&mut s, Command::CopyCompareConfig),
+        "no comparison build loaded"
+    );
+    let tree = s.backend.tree_state_view().unwrap();
+    assert!(
+        tree.specs
+            .iter()
+            .all(|spec| !spec.title.contains("(Compared)")),
+        "{:?}",
+        tree.specs
+    );
+
+    assert_eq!(
+        s.backend.net_handle().refused(),
+        refused,
+        "a launch was tried"
+    );
+    assert!(web.requests().is_empty());
+    assert!(web.unrouted().is_empty());
+    let secs = started.elapsed().as_secs_f64();
+    assert!(secs < 40.0, "took {secs:.1}s");
 }

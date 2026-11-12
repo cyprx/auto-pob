@@ -212,6 +212,7 @@ impl ItemsUi {
                 ItemTooltipQuery {
                     id: entry.id,
                     slot: None,
+                    theirs: false,
                 },
             );
             list_focus |= row.has_focus();

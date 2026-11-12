@@ -1067,6 +1067,36 @@ mod tests {
                 row("Mana", "^xDD0022-5", Some(false)),
                 row("Armour", "", None),
             ],
+            items: vec![
+                CompareItemRow {
+                    slot: "Body Armour".into(),
+                    label: "Body Armour".into(),
+                    ours: Some(3),
+                    theirs: Some("Kaom's Heart".into()),
+                    differ: true,
+                    can_copy: true,
+                },
+                CompareItemRow {
+                    slot: "Ring 2".into(),
+                    label: "Ring 2".into(),
+                    ours: None,
+                    theirs: None,
+                    differ: false,
+                    can_copy: false,
+                },
+            ],
+            skills: vec![CompareSkillRow {
+                label: "^7Boneshatter".into(),
+                ours: vec!["^x08F2FFBoneshatter^7 20/0".into()],
+                theirs: vec![],
+                differ: true,
+            }],
+            config: vec![CompareConfigRow {
+                var: "usePowerCharges".into(),
+                label: "Do you use Power Charges?".into(),
+                ours: "^x33FF77Yes".into(),
+                theirs: "^8(not set)".into(),
+            }],
         };
         let json = serde_json::to_string(&view).unwrap();
         assert_eq!(serde_json::from_str::<CompareView>(&json).unwrap(), view);
@@ -1084,7 +1114,16 @@ mod tests {
                 { label = "^7Mana", ours = "^7100", theirs = "^xFFD62A120",
                   diff = "^xDD0022-5", better = false },
                 { label = "^7Armour", ours = "^7100", theirs = "^xFFD62A120" },
-              } }"#,
+              },
+              items = {
+                { slot = "Body Armour", label = "Body Armour", ours = 3, theirs = "Kaom's Heart",
+                  differ = true, can_copy = true },
+                { slot = "Ring 2", label = "Ring 2", differ = false, can_copy = false },
+              },
+              skills = { { label = "^7Boneshatter", ours = { "^x08F2FFBoneshatter^7 20/0" },
+                theirs = {}, differ = true } },
+              config = { { var = "usePowerCharges", label = "Do you use Power Charges?",
+                ours = "^x33FF77Yes", theirs = "^8(not set)" } } }"#,
         );
         assert_eq!(from_lua, view);
     }
@@ -1374,6 +1413,52 @@ pub struct CompareView {
     pub controls: Vec<PopupControl>,
     #[serde(default)]
     pub summary: Vec<CompareRow>,
+    #[serde(default)]
+    pub items: Vec<CompareItemRow>,
+    #[serde(default)]
+    pub skills: Vec<CompareSkillRow>,
+    #[serde(default)]
+    pub config: Vec<CompareConfigRow>,
+}
+
+/// One slot of the Compare tab's Items view, in PoB's order: the base slots (Ring 3 when either
+/// build has it), the abyssal sockets, then the jewel sockets by node (R9)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompareItemRow {
+    /// PoB's slot name (`Jewel <node>` for a tree socket), as `CopyCompareItem` takes it
+    pub slot: String,
+    pub label: String,
+    /// This build's item in the slot
+    #[serde(default)]
+    pub ours: Option<u32>,
+    /// The comparison's item in the slot: its name line
+    #[serde(default)]
+    pub theirs: Option<String>,
+    /// The two items' texts differ
+    pub differ: bool,
+    /// PoB offers Copy for the comparison's item (Equip too, unless this build lacks the slot)
+    pub can_copy: bool,
+}
+
+/// One pair of socket groups of the Compare tab's Skills view, matched as PoB's view matches
+/// them; the lines are PoB's, colour codes kept ("+ " an extra gem, "- " a missing one)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompareSkillRow {
+    pub label: String,
+    #[serde(default)]
+    pub ours: Vec<String>,
+    #[serde(default)]
+    pub theirs: Vec<String>,
+    pub differ: bool,
+}
+
+/// A config option the two builds set differently, in `ConfigOptions` order
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompareConfigRow {
+    pub var: String,
+    pub label: String,
+    pub ours: String,
+    pub theirs: String,
 }
 
 /// The open popup, whatever it is: PoB's controls as data (R5).

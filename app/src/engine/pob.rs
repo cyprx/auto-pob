@@ -1095,6 +1095,18 @@ impl PobBackend {
                 affected.compare = true;
                 Ok(affected)
             }
+            Command::CopyCompareItem { slot, and_use } => {
+                self.call::<_, ()>("compare_copy_item", (slot, and_use))?;
+                let mut affected = self.items_edited()?;
+                affected.compare = true;
+                Ok(affected)
+            }
+            Command::CopyCompareConfig => {
+                self.call::<_, ()>("compare_copy_config", ())?;
+                let mut affected = config_changed();
+                affected.compare = true;
+                Ok(affected)
+            }
             Command::SetCompareOverlay { on } => {
                 self.call::<_, ()>("compare_overlay", on)?;
                 Ok(Affected {
@@ -2024,8 +2036,11 @@ impl Backend for PobBackend {
     }
 
     fn item_tooltip_view(&mut self, query: &ItemTooltipQuery) -> Result<Option<ItemTooltipView>> {
-        let found: Option<ItemTooltip> =
-            self.view("item_tooltip", (query.id, query.slot.clone()))?;
+        let found: Option<ItemTooltip> = if query.theirs {
+            self.view("compare_item_tooltip", query.slot.clone())?
+        } else {
+            self.view("item_tooltip", (query.id, query.slot.clone()))?
+        };
         Ok(found.map(|tooltip| ItemTooltipView {
             query: query.clone(),
             tooltip,
@@ -2169,7 +2184,11 @@ mod tests {
     fn queries_do_not_end_the_popup_session() {
         use crate::engine::{CellRef, GemTarget, ItemDb};
         let keeps = [
-            Command::ItemTooltip(ItemTooltipQuery { id: 1, slot: None }),
+            Command::ItemTooltip(ItemTooltipQuery {
+                id: 1,
+                slot: None,
+                theirs: false,
+            }),
             Command::ControlTooltip(ControlTooltipQuery::Popup {
                 control: "save".into(),
                 index: None,
@@ -2380,6 +2399,11 @@ mod tests {
         // a copy into this build, or a pick of its own item set, edits it
         for command in [
             Command::CopyCompareTree { and_use: true },
+            Command::CopyCompareItem {
+                slot: "Body Armour".into(),
+                and_use: true,
+            },
+            Command::CopyCompareConfig,
             Command::SetCompareControl {
                 name: PRIMARY_ITEM_SET.into(),
                 value: PopupInput::Choice {

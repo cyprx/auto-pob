@@ -134,6 +134,9 @@ function makeVariant()
 	skills:SetActiveSkillSet(2)
 	skills:PasteSocketGroup("Vaal Double Strike 20/0  1\r\nMelee Physical Damage 20/0  1\r\n")
 	skills:SetActiveSkillSet(1)
+	-- groups with a Stages box and a Mines box, for the main skill's count boxes
+	skills:PasteSocketGroup("Scorching Ray 20/0  1\r\n")
+	skills:PasteSocketGroup("Icicle Mine 20/0  1\r\n")
 	build.buildFlag = true
 	runCallback("OnFrame")
 	return build:SaveDB("variant")
@@ -199,5 +202,171 @@ function pressCopy(andUse)
 		local button = andUse and controls.copySpecUseBtn or controls.copySpecBtn
 		assert(button:IsShown() and button:IsEnabled(), "copy is not offered")
 		button.onClick()
+	end)
+end
+
+-- ---- Items, skills and config (R9) ----
+
+-- The Items view's rows from a whole ITEMS frame: the slot list PoB's DrawItems built
+-- (`AddAbyssSockets` fills it) and its jewel slots, with the items in them; plus every string
+-- the frame drew, to check the rows are drawn in that order
+function itemsFrame()
+	local tab = build.compareTab
+	local base, jewels
+	local strings = compareFrame("ITEMS", function(on)
+		if on then
+			local addAbyss, jewelSlots = tab.AddAbyssSockets, tab.GetJewelComparisonSlots
+			tab.AddAbyssSockets = function(self, comparison, dest, both)
+				addAbyss(self, comparison, dest, both)
+				base = dest
+			end
+			tab.GetJewelComparisonSlots = function(self, ...)
+				jewels = jewelSlots(self, ...)
+				return jewels
+			end
+		else
+			tab.AddAbyssSockets, tab.GetJewelComparisonSlots = nil, nil
+		end
+	end)
+	local entry = tab:GetActiveCompare()
+	local pTab, cTab = build.itemsTab, entry.itemsTab
+	local rows = {}
+	local function add(slot, label, pItem, cItem)
+		rows[#rows + 1] = {
+			slot = slot, label = label, ours = pItem and pItem.id or nil,
+			theirs = cItem and cItem.name or nil,
+			differ = (pItem and pItem.raw) ~= (cItem and cItem.raw), can_copy = cItem ~= nil,
+		}
+	end
+	for _, name in ipairs(base) do
+		local pSlot, cSlot = pTab.slots[name], cTab.slots[name]
+		add(name, name, pSlot and pTab.items[pSlot.selItemId], cSlot and cTab.items[cSlot.selItemId])
+	end
+	for _, jewel in ipairs(jewels) do
+		add(jewel.cSlotName, jewel.label, jewel.pItem, jewel.cItem)
+	end
+	local drawn = {}
+	for i, s in ipairs(strings) do drawn[i] = s.text end
+	return { rows = rows, drawn = drawn }
+end
+
+-- What DrawSkills draws in a whole SKILLS frame: { x, y, height, text }, the build names first
+function skillsFrame()
+	local tab = build.compareTab
+	local strings = {}
+	compareFrame("SKILLS", function(on)
+		if on then
+			local drawSkills = tab.DrawSkills
+			tab.DrawSkills = function(self, ...)
+				local outer = DrawString
+				DrawString = function(x, y, align, height, font, text)
+					strings[#strings + 1] = { x = x, y = y, height = height, text = text }
+				end
+				local ok, err = pcall(drawSkills, self, ...)
+				DrawString = outer
+				assert(ok, err)
+			end
+		else
+			tab.DrawSkills = nil
+		end
+	end)
+	return { strings = strings, added = colorCodes.POSITIVE .. "+ ", missing = colorCodes.NEGATIVE .. "- " }
+end
+
+-- The rows a whole CONFIG frame marks as differing (LayoutConfigView's section layout), with
+-- PoB's value texts
+function configFrame()
+	compareFrame("CONFIG")
+	local tab = build.compareTab
+	local entry = tab:GetActiveCompare()
+	local pInput, cInput = build.configTab.input, entry.configTab.input
+	local rows = {}
+	for _, section in ipairs(tab.configSectionLayout) do
+		for _, row in ipairs(section.rows) do
+			if row.isDiff then
+				local varData = row.ctrlInfo.varData
+				rows[#rows + 1] = {
+					var = varData.var, label = varData.label or varData.var,
+					ours = tab:FormatConfigValue(varData, pInput[varData.var]),
+					theirs = tab:FormatConfigValue(varData, cInput[varData.var]),
+				}
+			end
+		end
+	end
+	return rows
+end
+
+local function dumpTooltip(tt)
+	local out = { influences = {}, lines = {} }
+	if tt.tooltipHeader then out.header = tostring(tt.tooltipHeader) end
+	if tt.influenceHeader1 then out.influences[#out.influences + 1] = tt.influenceHeader1 end
+	if tt.influenceHeader2 then out.influences[#out.influences + 1] = tt.influenceHeader2 end
+	out.foil = tt.foilType or nil
+	if type(tt.color) == "string" then out.colour = tt.color end
+	for i, line in ipairs(tt.lines) do
+		if line.text == nil then
+			out.lines[i] = { separator = line.size }
+		else
+			out.lines[i] = { size = line.size, text = line.text, font = line.font, center = line.center or false }
+			if type(line.background) == "string" then out.lines[i].background = line.background end
+		end
+	end
+	return out
+end
+
+-- What hovering the comparison's item in a base slot shows (CompareTab.lua:3962-3965)
+function theirTooltip(slot)
+	local entry = build.compareTab:GetActiveCompare()
+	local cTab = entry.itemsTab
+	local item = cTab.items[cTab.slots[slot].selItemId]
+	local tt = new("Tooltip")
+	cTab:AddItemTooltip(tt, item, nil, nil, 600)
+	return dumpTooltip(tt)
+end
+
+-- The Copy / Equip buttons' call (CompareTab.lua:3936-3941)
+function copyItem(slot, andUse)
+	local tab = build.compareTab
+	tab:CopyCompareItemToPrimary(slot, tab:GetActiveCompare(), andUse)
+	compareFrame("ITEMS")
+end
+
+-- This build's items as raw texts in list order, and what the slot holds
+function itemState(slot)
+	local t = build.itemsTab
+	local raws = {}
+	for i, id in ipairs(t.itemOrderList) do raws[i] = t.items[id]:BuildRaw() end
+	local sel = t.items[t.slots[slot].selItemId]
+	return { raws = raws, slot = sel and sel:BuildRaw() or nil, set = t.activeItemSetId }
+end
+
+function configInput()
+	local out = {}
+	for k, v in pairs(build.configTab.input) do out[k] = tostring(v) end
+	return out
+end
+
+-- An edit box of the top bar: typed as PoB's EditControl takes it
+function pressText(name, text)
+	press("SUMMARY", function(controls)
+		local control = controls[name]
+		assert(control:IsShown() and control:IsEnabled(), name .. " is not offered")
+		control:SetText(text, true)
+	end)
+end
+
+-- A dropdown of the Items view (1-based)
+function pressItemsChoice(name, index)
+	press("ITEMS", function(controls)
+		local control = controls[name]
+		assert(control:IsShown() and control:IsEnabled(), name .. " is not offered")
+		control:SetSel(index)
+	end)
+end
+
+function pressCopyConfig()
+	press("CONFIG", function(controls)
+		assert(controls.copyConfigBtn:IsShown(), "copy config is not offered")
+		controls.copyConfigBtn.onClick()
 	end)
 end

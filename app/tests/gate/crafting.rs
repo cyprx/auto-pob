@@ -544,7 +544,11 @@ fn popup_session_lifecycle() {
     let id = items.items[0].id;
     let tooltip = s
         .backend
-        .item_tooltip_view(&auto_pob::engine::ItemTooltipQuery { id, slot: None })
+        .item_tooltip_view(&auto_pob::engine::ItemTooltipQuery {
+            id,
+            slot: None,
+            theirs: false,
+        })
         .unwrap()
         .expect("the item is listed");
     assert!(

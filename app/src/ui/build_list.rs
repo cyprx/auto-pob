@@ -269,6 +269,12 @@ fn delete_dialog(entry: &BuildListEntry) -> Dialog {
 }
 
 impl BuildListUi {
+    /// The search box's text
+    #[cfg(test)]
+    pub(crate) fn filter_for_test(&self) -> &str {
+        &self.filter_text
+    }
+
     /// `blocked`: a question of the app's own is open, so the list's keys and buttons wait.
     pub fn show(
         &mut self,

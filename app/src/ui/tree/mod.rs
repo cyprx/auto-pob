@@ -408,8 +408,9 @@ impl TreeTab {
             self.toolbar
                 .search(ui, &state, &mut self.rects, &mut out.commands);
         });
-        // the compare view has none of the Tree tab's windows (CompareTab.lua:840-900): a
-        // click that needs a Class Change does nothing
+        // the compare view draws none of the Tree tab's windows, so a click that needs a
+        // Class Change does nothing (final-fix ruling I-4; PoB's overlay viewer would ask,
+        // CompareTab.lua:3401)
         self.canvas(ui, &layout, &state, false, &mut out);
         out
     }
@@ -500,7 +501,9 @@ impl TreeTab {
             .iter()
             .find(|m| m.node == node)
             .map(|m| m.effect);
-        let mut open = true;
+        // PoB's mastery popup closes on Esc (TreeTab.lua:1034, PopupDialog.lua:72-77)
+        let window = egui::Id::unique("tree_mastery_picker");
+        let mut open = !crate::widgets::escape::escape(ctx, window);
         let mut picked = None;
         egui::Window::new(name)
             .collapsible(false)
@@ -520,6 +523,7 @@ impl TreeTab {
                     }
                 }
             });
+        crate::widgets::escape::note(ctx, window);
         if let Some(effect) = picked {
             out.commands.push(Command::SetMastery { node, effect });
         }
@@ -735,6 +739,24 @@ mod tests {
         let out = h.click_with(h.screen_of(3), PointerButton::Secondary);
         assert!(out.commands.is_empty(), "{:?}", out.commands);
         assert_eq!(h.tab.picker, Some(3));
+    }
+
+    #[test]
+    fn esc_closes_the_mastery_picker() {
+        // PoB's mastery popup (TreeTab.lua:1034) closes on Esc (PopupDialog.lua:72-77)
+        let mut h = allocated_mastery();
+        h.click_with(h.screen_of(3), PointerButton::Secondary);
+        assert_eq!(h.tab.picker, Some(3));
+        let esc = Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let out = h.frame(vec![esc]);
+        assert!(out.commands.is_empty(), "{:?}", out.commands);
+        assert_eq!(h.tab.picker, None, "Esc left it open");
     }
 
     /// 1 allocated plain passive, 2 a replaceable small attribute, 3 an unallocated mastery

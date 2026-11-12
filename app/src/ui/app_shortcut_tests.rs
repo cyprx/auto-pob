@@ -161,6 +161,27 @@ fn esc_closes_the_tree_windows_top_first() {
 }
 
 #[test]
+fn esc_closes_help_over_the_config_manager_first() {
+    // Help is the top popup: Esc closes it, and the manager under it stays
+    let (mut app, ctx) = config_app(sample_config());
+    click(&mut app, &ctx, "set_order");
+    assert!(app.config_ui.manager_open());
+    frame(&mut app, &ctx, release(Key::F1));
+    frame(&mut app, &ctx, vec![]);
+    assert!(app.help.is_open());
+    frame(&mut app, &ctx, plain(Key::Escape));
+    frame(&mut app, &ctx, vec![]);
+    assert!(!app.help.is_open(), "Esc left Help open");
+    assert!(
+        app.config_ui.manager_open(),
+        "Esc closed the manager under Help"
+    );
+    frame(&mut app, &ctx, plain(Key::Escape));
+    frame(&mut app, &ctx, vec![]);
+    assert!(!app.config_ui.manager_open(), "Esc left the manager open");
+}
+
+#[test]
 fn esc_cancels_the_unsaved_prompt() {
     let (mut app, ctx) = notes_app();
     app.notes.type_for_test("my notes", 0.0);

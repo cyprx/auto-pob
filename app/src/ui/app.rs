@@ -1061,10 +1061,13 @@ impl AutoPobApp {
         self.notices_panel(ui);
         self.pending_panel(ui);
         self.main_labels(ui);
+        // the app's own windows sit above the screen's: Esc is theirs while one is open
+        crate::widgets::escape::hold(&ctx, self.app_window_open());
         match self.screen {
             Screen::List => self.list_screen(ui),
             Screen::Build => self.build_screen(ui),
         }
+        crate::widgets::escape::hold(&ctx, false);
         self.options_window(ui);
         self.help_window(&ctx);
         self.apply_ui_settings(&ctx);
@@ -1334,6 +1337,9 @@ impl AutoPobApp {
     }
 
     fn list_screen(&mut self, ui: &mut egui::Ui) {
+        // PoB's edit box has no Ctrl+W (EditControl.lua:500-640): egui's word delete never
+        // sees it
+        strip_ctrl_w(ui);
         self.release_banner(ui);
         let mut action = None;
         let blocked = self.prompt.is_some()
@@ -1415,6 +1421,20 @@ impl AutoPobApp {
             }
             ListScreenAction::About => self.open_help(HelpStart::VersionHistory),
         }
+    }
+
+    /// One of the app's own windows is open, drawn after the screen and above its windows:
+    /// the questions, Save as, Import code, a popup session, Options and Help. The top bar's
+    /// Set Name takes its own Esc before the tabs' windows are drawn.
+    fn app_window_open(&self) -> bool {
+        self.top_bar.has_dialog()
+            || self.prompt.is_some()
+            || self.save_as.is_some()
+            || self.import.is_some()
+            || self.confirm.is_some()
+            || self.popup.is_blocking()
+            || self.options.window.is_blocking()
+            || self.help.is_open()
     }
 
     /// A window is open on the build screen that PoB would hold as a popup: nothing behind
@@ -1523,12 +1543,7 @@ impl AutoPobApp {
         });
         // PoB's edit box has no Ctrl+W (EditControl.lua:500-640): it closes the build and
         // edits nothing, so egui's word delete never sees it, under a window too
-        ui.input_mut(|i| {
-            i.events.retain(|e| {
-                !matches!(e, egui::Event::Key { key: egui::Key::W, modifiers, .. }
-                    if modifiers.command || modifiers.ctrl)
-            })
-        });
+        strip_ctrl_w(ui);
         if let Some(shortcut) = shortcut {
             action = self.run_shortcut(ui.ctx(), shortcut).or(action);
         }
@@ -2139,6 +2154,15 @@ mod compare_tests;
 #[path = "app_trade_tests.rs"]
 mod trade_tests;
 
+/// Takes Ctrl+W out of the frame, so no text box deletes a word on it
+fn strip_ctrl_w(ui: &egui::Ui) {
+    ui.input_mut(|i| {
+        i.events.retain(|e| {
+            !matches!(e, egui::Event::Key { key: egui::Key::W, modifiers, .. }
+                if modifiers.command || modifiers.ctrl)
+        })
+    });
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2772,6 +2796,39 @@ mod tests {
             frame(app, ctx, vec![button(pressed)]);
         }
         frame(app, ctx, vec![]);
+    }
+
+    #[test]
+    fn ctrl_w_in_the_list_search_deletes_nothing() {
+        // PoB's edit box has no Ctrl+W (EditControl.lua:500-640)
+        let (mut app, ctx) = started();
+        click_mark(&mut app, &ctx, "search");
+        frame(&mut app, &ctx, vec![egui::Event::Text("witch".into())]);
+        assert_eq!(app.list_ui.filter_for_test(), "witch");
+        frame(
+            &mut app,
+            &ctx,
+            key_with(
+                egui::Key::W,
+                egui::Modifiers::COMMAND | egui::Modifiers::CTRL,
+            ),
+        );
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.list_ui.filter_for_test(), "witch");
+    }
+
+    #[test]
+    fn esc_cancels_save_as_once_its_name_box_is_left() {
+        let (mut app, ctx) = started();
+        deliver(&mut app, picker_list());
+        app.open_save_as(None);
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        let esc = key_with(egui::Key::Escape, egui::Modifiers::NONE);
+        frame(&mut app, &ctx, esc.clone());
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.save_as.is_none(), "Esc left it open");
+        assert!(app.sent_full.iter().all(|c| !c.starts_with("SaveAs")));
     }
 
     #[test]

@@ -9,6 +9,17 @@
 
 use eframe::egui::{self, Key, Modifiers};
 
+fn hold_id() -> egui::Id {
+    egui::Id::NULL.with("pob_escape_hold")
+}
+
+/// While a window drawn later in the frame sits above the ones drawn now (the app's
+/// questions, Help, Options, a popup session), Esc is that window's: the ones drawn now
+/// leave it alone. The app sets it before drawing a screen and clears it after.
+pub fn hold(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|d| d.insert_temp(hold_id(), on));
+}
+
 fn typing_id(window: egui::Id) -> egui::Id {
     window.with("pob_escape_typing")
 }
@@ -17,7 +28,8 @@ fn typing_id(window: egui::Id) -> egui::Id {
 /// An Esc a box or a dropped list takes is left alone for it; an Esc that only left a box is
 /// consumed, so nothing else closes on it either.
 pub fn escape(ctx: &egui::Context, window: egui::Id) -> bool {
-    if egui::Popup::is_any_open(ctx) {
+    if egui::Popup::is_any_open(ctx) || ctx.data(|d| d.get_temp::<bool>(hold_id()).unwrap_or(false))
+    {
         return false;
     }
     let now = ctx.cumulative_pass_nr();

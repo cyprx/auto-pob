@@ -294,6 +294,18 @@ fn paste_event_sends_paste_outside_text_fields() {
 }
 
 #[test]
+fn esc_closes_the_skill_sets_window() {
+    // every PoB popup closes on Esc (PopupDialog.lua:72-77)
+    let mut h = Harness::new(sample());
+    h.click("manage");
+    h.frame(vec![]);
+    assert!(h.ui.has_dialog());
+    h.press(Key::Escape);
+    h.frame(vec![]);
+    assert!(!h.ui.has_dialog(), "Esc left it open");
+}
+
+#[test]
 fn last_set_cannot_be_deleted() {
     let mut v = sample();
     v.sets.truncate(1);

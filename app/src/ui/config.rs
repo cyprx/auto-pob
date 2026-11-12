@@ -174,6 +174,12 @@ impl ConfigUi {
         self.rects.insert(key, response.rect);
     }
 
+    /// "Manage Config Sets" is open
+    #[cfg(test)]
+    pub(crate) fn manager_open(&self) -> bool {
+        self.ordering
+    }
+
     #[cfg(test)]
     pub(crate) fn draft(&self, key: &str) -> Option<&str> {
         self.drafts.get(key).map(String::as_str)

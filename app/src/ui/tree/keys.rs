@@ -74,6 +74,10 @@ impl TreeTab {
                     index: state.active_spec + 1,
                 })
             }
+            ShortcutAction::Rename => {
+                self.toolbar.rename_active(&state);
+                None
+            }
             ShortcutAction::Heatmap => Some(Command::ToggleHeatmap),
             ShortcutAction::StatDifferences => Some(Command::SetTreeStatDifferences {
                 on: !state.show_stat_differences,

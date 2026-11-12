@@ -614,3 +614,115 @@ fn a_pending_default_quality_is_not_unsaved_but_still_flushes() {
     h.frame(vec![]);
     assert!(h.ui.has_pending());
 }
+
+/// A click on `key` with Ctrl held, primary or secondary (PoB's NF-11 clicks)
+fn ctrl_click(h: &mut Harness, key: &str, button: PointerButton) -> SkillsOutput {
+    let pos = h.ui.rect(key).center();
+    let mut all = SkillsOutput::default();
+    for events in [
+        vec![
+            Event::ModifiersChanged(Modifiers::COMMAND),
+            Event::PointerMoved(pos),
+        ],
+        vec![Event::PointerButton {
+            pos,
+            button,
+            pressed: true,
+            modifiers: Modifiers::COMMAND,
+        }],
+        vec![Event::PointerButton {
+            pos,
+            button,
+            pressed: false,
+            modifiers: Modifiers::COMMAND,
+        }],
+        vec![Event::ModifiersChanged(Modifiers::NONE)],
+    ] {
+        h.time += 0.2;
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 700.0))),
+            time: Some(h.time),
+            events,
+            ..Default::default()
+        };
+        let time = h.time;
+        let ui = &mut h.ui;
+        h.ctx
+            .run_ui(input, |eui| {
+                let pass = ui.show(eui, time, false);
+                all.commands.extend(pass.commands);
+            })
+            .drop_without_applying_deltas();
+    }
+    all
+}
+
+#[test]
+fn ctrl_clicks_on_a_group_toggle_it_and_its_full_dps() {
+    let mut h = Harness::new(sample());
+    let o = ctrl_click(&mut h, "row_0", PointerButton::Primary);
+    assert_eq!(
+        debug(&o.commands),
+        ["SetGroupEnabled { group: 0, on: false }"]
+    );
+    let o = ctrl_click(&mut h, "row_0", PointerButton::Secondary);
+    assert_eq!(
+        debug(&o.commands),
+        ["SetGroupFullDps { group: 0, on: false }"]
+    );
+    // the right click's menu stays shut under Ctrl
+    h.frame(vec![]);
+    assert!(!egui::Popup::is_any_open(&h.ctx));
+}
+
+#[test]
+fn f2_renames_the_selected_set() {
+    let mut h = Harness::new(sample());
+    h.click("manage");
+    h.frame(vec![]);
+    h.click("sets_row_1");
+    h.press(Key::F2);
+    h.frame(vec![]);
+    let o = h.click("sets_save");
+    assert_eq!(
+        debug(&o.commands),
+        ["RenameSkillSet { id: 2, title: \"Alt\" }"]
+    );
+}
+
+#[test]
+fn right_clicking_a_gem_name_opens_the_picker_too() {
+    let mut h = Harness::new(sample());
+    let pos = h.ui.rect("gem_0_name").center();
+    for events in [
+        vec![Event::PointerMoved(pos)],
+        vec![Event::PointerButton {
+            pos,
+            button: PointerButton::Secondary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        }],
+        vec![Event::PointerButton {
+            pos,
+            button: PointerButton::Secondary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        }],
+        vec![],
+    ] {
+        h.frame(events);
+    }
+    let p = h.ui.picker.as_ref().expect("picker open");
+    assert_eq!((p.group(), p.target()), (0, GemTarget::Slot(0)));
+}
+
+#[test]
+fn group_list_keys_move_the_selection_and_backspace_deletes() {
+    let mut h = Harness::new(sample());
+    h.click("row_0");
+    h.press(Key::ArrowDown);
+    h.frame(vec![]);
+    // the second group has no gems: it goes at once
+    let o = h.press(Key::Backspace);
+    assert_eq!(debug(&o.commands), ["DeleteSocketGroup { group: 1 }"]);
+}

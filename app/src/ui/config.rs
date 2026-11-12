@@ -125,6 +125,8 @@ pub struct ConfigUi {
     confirm_remove: Option<usize>,
     /// Ctrl+F: the search box takes the keyboard when next drawn (ConfigTab.lua:987-988)
     pub focus_search: bool,
+    /// F2: the active set's Rename box opens when next drawn
+    pub rename: bool,
     /// Where widgets were drawn last frame, so tests can click them
     #[cfg(test)]
     pub(crate) rects: HashMap<String, egui::Rect>,
@@ -276,7 +278,8 @@ impl ConfigUi {
         if new.clicked() {
             self.set_edit = Some(SetEdit::New(String::new()));
         }
-        if ui.button("Rename").clicked() {
+        // F2 too (ConfigSetListControl.lua's rename)
+        if ui.button("Rename").clicked() || std::mem::take(&mut self.rename) {
             self.set_edit = Some(SetEdit::Rename {
                 id: view.active_set,
                 title: active_title.unwrap_or_default().to_owned(),

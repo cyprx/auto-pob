@@ -70,6 +70,16 @@ impl Toolbar {
         self.dialog = None;
     }
 
+    /// F2: the active tree's Rename box
+    pub(super) fn rename_active(&mut self, state: &TreeState) {
+        if let Some(spec) = state.specs.get(state.active_spec) {
+            self.dialog = Some(Dialog::RenameSpec {
+                index: state.active_spec,
+                title: spec.title.clone(),
+            });
+        }
+    }
+
     /// A link snapshot arrived.
     pub(super) fn link_arrived(&mut self) {
         self.link_fresh = true;

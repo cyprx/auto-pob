@@ -604,6 +604,7 @@ impl Backend for Fake {
             .map(|kind| PopupView {
                 kind,
                 title: "popup".into(),
+                enter: None,
                 controls: vec![],
             }))
     }

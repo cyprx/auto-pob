@@ -1051,6 +1051,7 @@ impl AutoPobApp {
                     self.send(command);
                 }
             }
+            A::Rename if self.tab == BuildTab::Config => self.config_ui.rename = true,
             tree => {
                 if let Some(command) = self.tree.on_shortcut(&tree, ctx) {
                     self.send(command);
@@ -4469,6 +4470,7 @@ mod tests {
         crate::engine::PopupView {
             kind,
             title: "Corrupt Item".into(),
+            enter: None,
             controls: vec![],
         }
     }

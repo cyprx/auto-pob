@@ -182,7 +182,9 @@ function popupDump()
 		if a.pos[1] ~= b.pos[1] then return a.pos[1] < b.pos[1] end
 		return a.name < b.name
 	end)
-	return { kind = popupKind, title = text(popup:GetProperty("title")), controls = controls }
+	-- the button Enter clicks (PopupDialog.lua:79-83)
+	local enter = type(popup.enterControl) == "string" and popup.enterControl or nil
+	return { kind = popupKind, title = text(popup:GetProperty("title")), controls = controls, enter = enter }
 end
 
 -- The tooltip a dropdown entry (`index`, 0-based) or a button of the open popup shows

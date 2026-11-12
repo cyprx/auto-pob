@@ -47,6 +47,7 @@ fn popup(controls: Vec<PopupControl>) -> PopupView {
     PopupView {
         kind: PopupKind::Corrupt,
         title: "Corrupt Item".into(),
+        enter: None,
         controls,
     }
 }
@@ -731,6 +732,7 @@ fn anoint_view(rows: usize) -> PopupView {
     PopupView {
         kind: PopupKind::Anoint { slot: 0 },
         title: "Anoint Item".into(),
+        enter: None,
         controls: vec![
             dropdown("notableDB.sort", &["Sort by Dps", "Sort by Life"], 1),
             list,
@@ -813,6 +815,7 @@ fn progress_line_and_cancel() {
     let mut h = Harness::new(PopupView {
         kind: PopupKind::TimelessJewel,
         title: "Find a Timeless Jewel".into(),
+        enter: None,
         controls: vec![
             button("searchButton", 0.0, 0.0),
             button("closeButton", 120.0, 0.0),
@@ -938,6 +941,7 @@ fn only_the_searchs_own_refusal_ends_its_line() {
     let mut h = Harness::new(PopupView {
         kind: PopupKind::TimelessJewel,
         title: "Find a Timeless Jewel".into(),
+        enter: None,
         controls: vec![button("searchButton", 0.0, 0.0)],
     });
     h.click("btn_searchButton");
@@ -948,4 +952,39 @@ fn only_the_searchs_own_refusal_ends_its_line() {
     // the Search's own refusal started nothing
     h.popup.on_error(7);
     assert_eq!(h.popup.search_state(), (None, None));
+}
+
+#[test]
+fn enter_presses_pobs_enter_control_unless_a_box_has_the_keyboard() {
+    let edit = control("custom", PopupControlKind::Edit, [0.0, 0.0], [200.0, 20.0]);
+    let mut view = popup(vec![
+        edit,
+        button("save", 0.0, 30.0),
+        button("close", 0.0, 60.0),
+    ]);
+    view.enter = Some("save".into());
+    let mut h = Harness::new(view.clone());
+    let out = h.key(Key::Enter);
+    assert_eq!(debug(&out.commands), [press("save")]);
+
+    // a box with the keyboard takes the key, as PoB's selected control does
+    h.click("edit_custom");
+    h.frame(vec![Event::Text("abc".into())]);
+    let out = h.key(Key::Enter);
+    assert!(
+        !debug(&out.commands).contains(&press("save")),
+        "{:?}",
+        out.commands
+    );
+
+    // a window without an enter control ignores Enter
+    let mut h = Harness::new(popup(vec![button("save", 0.0, 30.0)]));
+    assert!(h.key(Key::Enter).commands.is_empty());
+    // nor is a disabled button pressed
+    let mut disabled = button("save", 0.0, 30.0);
+    disabled.enabled = false;
+    let mut view = popup(vec![disabled]);
+    view.enter = Some("save".into());
+    let mut h = Harness::new(view);
+    assert!(h.key(Key::Enter).commands.is_empty());
 }

@@ -325,6 +325,7 @@ fn timeless_progress_reaches_the_window() {
         snapshot: Snapshot::Popup(Some(Arc::new(crate::engine::PopupView {
             kind: PopupKind::TimelessJewel,
             title: "Find a Timeless Jewel".into(),
+            enter: None,
             controls: vec![],
         }))),
     });

@@ -215,7 +215,21 @@ impl ItemsUi {
                     theirs: false,
                 },
             );
+            if row.has_focus() {
+                crate::ui::shortcuts::keep_arrows(ui.ctx(), row.id);
+            }
             list_focus |= row.has_focus();
+        }
+        // Up, Down, Home and End move the selection (ListControl.lua:375-382)
+        if list_focus && !self.has_dialog() && !self.modal && !ui.ctx().text_edit_focused() {
+            let at = self
+                .selected
+                .and_then(|id| rows.iter().position(|e| e.id == id));
+            if let Some(i) = ui.input_mut(|inp| crate::ui::shortcuts::list_key(inp, rows.len(), at))
+            {
+                self.selected = Some(rows[i].id);
+                reordered.rows[i].request_focus();
+            }
         }
         // keys act on the selected item (by id), whichever index-keyed row holds the focus
         if list_focus
@@ -242,7 +256,7 @@ impl ItemsUi {
             self.copy_asked = Some(entry.id);
             out.queries.push(Command::CopyItem { id: entry.id });
         }
-        if ui.input(|inp| inp.key_pressed(egui::Key::Delete)) {
+        if ui.input(crate::ui::shortcuts::list_delete) {
             match delete_prompt(entry) {
                 Some(text) => self.confirm_delete = Some((entry.id, text)),
                 None => out.commands.push(Command::DeleteItem {

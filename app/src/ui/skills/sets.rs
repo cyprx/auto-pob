@@ -94,6 +94,19 @@ impl SkillsUi {
                     self.sets.selected = view.sets.first().map(|s| s.id);
                 }
                 let blocked = self.sets.naming.is_some() || self.sets.confirm_delete.is_some();
+                // the list's keys (ListControl.lua:375-392)
+                if !blocked {
+                    let at = view
+                        .sets
+                        .iter()
+                        .position(|s| Some(s.id) == self.sets.selected);
+                    let len = view.sets.len();
+                    if let Some(i) =
+                        ui.input_mut(|inp| crate::ui::shortcuts::list_key(inp, len, at))
+                    {
+                        self.sets.selected = Some(view.sets[i].id);
+                    }
+                }
                 ui.add_enabled_ui(!blocked, |ui| {
                     for (i, set) in view.sets.iter().enumerate() {
                         let label = if set.id == view.active_set {
@@ -126,8 +139,11 @@ impl SkillsUi {
                             self.rects.note(&rename, || "sets_rename".into());
                             let copy = ui.button("Copy");
                             self.rects.note(&copy, || "sets_copy".into());
+                            // F2 renames the selected set (SkillSetListControl.lua)
+                            let f2 = self.sets.naming.is_none()
+                                && ui.input(|i| i.key_pressed(egui::Key::F2));
                             if let Some(set) = sel {
-                                if rename.clicked() {
+                                if rename.clicked() || f2 {
                                     let t = title_text(set);
                                     self.sets.naming = Some((Naming::Rename(set.id), t));
                                 }
@@ -141,7 +157,9 @@ impl SkillsUi {
                         let can_delete = sel.is_some() && view.sets.len() > 1;
                         let delete = ui.add_enabled(can_delete, egui::Button::new("Delete"));
                         self.rects.note(&delete, || "sets_delete".into());
-                        if delete.clicked()
+                        let key =
+                            can_delete && !blocked && ui.input(crate::ui::shortcuts::list_delete);
+                        if (delete.clicked() || key)
                             && let Some(set) = sel
                         {
                             self.sets.confirm_delete = Some(set.id);

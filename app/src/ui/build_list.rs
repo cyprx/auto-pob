@@ -554,6 +554,13 @@ impl BuildListUi {
         if !list_focused || typing {
             return action;
         }
+        // Up, Down, Home and End move the selection (ListControl.lua:375-382)
+        crate::ui::shortcuts::keep_arrows(ui.ctx(), self.id);
+        if let Some(to) =
+            ui.input_mut(|i| crate::ui::shortcuts::list_key(i, rows.len(), self.selected))
+        {
+            self.selected = Some(to);
+        }
         // egui-winit turns Ctrl+X and Ctrl+C into events, and Ctrl+V into one only when the
         // clipboard holds text; with nothing on it the press is dropped and only the release
         // arrives as a key. So a paste is the event, the key press, or a release whose press
@@ -576,7 +583,9 @@ impl BuildListUi {
                 paste_down,
                 paste_up,
                 i.consume_key(egui::Modifiers::NONE, Key::F2),
-                i.consume_key(egui::Modifiers::NONE, Key::Delete),
+                // PoB's list deletes on Delete and Backspace (ListControl.lua:392)
+                i.consume_key(egui::Modifiers::NONE, Key::Delete)
+                    || i.consume_key(egui::Modifiers::NONE, Key::Backspace),
             )
         });
         let paste = if paste_down {
@@ -1198,6 +1207,26 @@ mod tests {
             })
             .collect();
         assert_eq!(names, ["..", "zed", "Beta", "alpha"]);
+    }
+
+    #[test]
+    fn arrow_keys_home_and_end_move_the_selection() {
+        let mut h = H::new(view(""));
+        h.select(1);
+        let rows = ordered(&h.view).len();
+        h.key(Key::ArrowDown, Modifiers::NONE);
+        assert_eq!(h.ui.selected, Some(2));
+        h.key(Key::Home, Modifiers::NONE);
+        assert_eq!(h.ui.selected, Some(0));
+        // Up from the top wraps round, as PoB's list does
+        h.key(Key::ArrowUp, Modifiers::NONE);
+        assert_eq!(h.ui.selected, Some(rows - 1));
+        h.key(Key::End, Modifiers::NONE);
+        assert_eq!(h.ui.selected, Some(rows - 1));
+        // Backspace asks to delete, as Delete does
+        h.select(1);
+        h.key(Key::Backspace, Modifiers::NONE);
+        assert!(matches!(h.ui.dialog, Some(Dialog::Delete { .. })));
     }
 
     #[test]

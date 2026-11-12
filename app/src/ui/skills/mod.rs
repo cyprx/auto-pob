@@ -65,6 +65,8 @@ pub struct SkillsUi {
     /// An app-level dialog is open, so Ctrl+V is left alone
     modal: bool,
     pub(crate) rects: Rects,
+    /// The group row Up, Down, Home or End moved to: it takes the focus when drawn
+    focus_group: Option<usize>,
 }
 
 impl SkillsUi {

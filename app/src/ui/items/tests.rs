@@ -2326,3 +2326,62 @@ fn focus_slot_of_a_hidden_slot_does_not_linger() {
 pub(crate) fn db_view_for_app() -> ItemDbView {
     db_view(ItemDb::Uniques)
 }
+
+#[test]
+fn f2_renames_the_selected_set() {
+    let mut h = Harness::new(sample());
+    h.click("manage");
+    h.frame(vec![]);
+    h.click("sets_row_1");
+    h.key(Key::F2, Modifiers::NONE);
+    h.frame(vec![]);
+    let o = h.click("sets_save");
+    assert_eq!(
+        debug(&o.commands),
+        ["RenameItemSet { id: 2, title: \"Alt\" }"]
+    );
+}
+
+#[test]
+fn list_keys_move_the_selection_and_backspace_deletes() {
+    // rows 1, 2, 3, 4; row 1 is unused and goes at once
+    let mut h = Harness::new(sample());
+    h.click("row_2");
+    h.key(Key::ArrowUp, Modifiers::NONE);
+    h.frame(vec![]);
+    let o = h.key(Key::Backspace, Modifiers::NONE);
+    assert_eq!(
+        debug(&o.commands),
+        ["DeleteItem { id: 1, confirmed: false }"]
+    );
+    // Up from the first row wraps to the last, Home and End go to the ends
+    let mut h = Harness::new(sample());
+    h.click("row_1");
+    h.key(Key::End, Modifiers::NONE);
+    h.key(Key::Home, Modifiers::NONE);
+    h.key(Key::ArrowUp, Modifiers::NONE);
+    h.frame(vec![]);
+    assert_eq!(h.ui.selected, Some(4));
+    h.key(Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(h.ui.selected, Some(1));
+}
+
+#[test]
+fn set_list_keys_move_the_selection_and_delete_asks() {
+    let mut h = Harness::new(sample());
+    h.click("manage");
+    h.frame(vec![]);
+    h.click("sets_row_0");
+    h.key(Key::ArrowDown, Modifiers::NONE);
+    h.key(Key::F2, Modifiers::NONE);
+    h.frame(vec![]);
+    let o = h.click("sets_save");
+    assert_eq!(
+        debug(&o.commands),
+        ["RenameItemSet { id: 2, title: \"Alt\" }"]
+    );
+    h.key(Key::Delete, Modifiers::NONE);
+    h.frame(vec![]);
+    let o = h.click("sets_confirm_delete");
+    assert_eq!(debug(&o.commands), ["DeleteItemSet { id: 2 }"]);
+}

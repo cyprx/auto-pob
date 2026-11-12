@@ -1593,6 +1593,10 @@ pub struct PopupView {
     pub title: String,
     /// Ordered by position (top to bottom, then left to right)
     pub controls: Vec<PopupControl>,
+    /// The button Enter presses when no control has the keyboard (the popup's
+    /// `enterControl`, PopupDialog.lua:79-83)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enter: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -2630,8 +2630,7 @@ ported = "app/src/ui/skills/group.rs label"
 note = "part of skills.groupLabel"
 
 [controls."skills.groupList"]
-gap = "Task 14"
-note = "list, drag reorder, context menu and Ctrl+C/V are ported (skills/groups.rs); NF-11 (new finding, in scope by controller ruling): Ctrl+click (enable) and Ctrl+right-click (Full DPS) on a row are not"
+ported = "app/src/ui/skills/groups.rs list, drag reorder, menu, Ctrl+C/V, Delete or Backspace, Up/Down/Home/End, Ctrl+click enable and Ctrl+right-click Full DPS"
 
 [controls."skills.groupList.delete"]
 ported = "app/src/ui/skills/groups.rs Delete"
@@ -2643,11 +2642,11 @@ ported = "app/src/ui/skills/groups.rs Delete All"
 ported = "app/src/ui/skills/groups.rs New"
 
 [controls."skills.groupList.scrollBarH"]
-gap = "Task 14"
+ported = "app/src/ui/skills/groups.rs list"
 note = "part of skills.groupList"
 
 [controls."skills.groupList.scrollBarV"]
-gap = "Task 14"
+ported = "app/src/ui/skills/groups.rs list"
 note = "part of skills.groupList"
 
 [controls."skills.groupSlot"]
@@ -2661,8 +2660,7 @@ note = "part of skills.groupSlot"
 ported = "app/src/ui/skills/group.rs slot"
 
 [controls."skills.groupTip"]
-gap = "Task 14"
-note = "PoB's usage tips name the NF-11 clicks"
+ported = "app/src/ui/skills/groups.rs GROUP_TIP: PoB's usage tips under the list"
 
 [controls."skills.imbuedSupport"]
 ported = "app/src/ui/skills/group.rs imbued support"
@@ -3277,8 +3275,7 @@ ported = "app/src/ui/app.rs Ctrl+Y redo"
 ported = "app/src/ui/app.rs Ctrl+Z undo"
 
 [keys."ConfigSetListControl.F2"]
-gap = "Task 14"
-note = "NF-14 F2 rename"
+ported = "app/src/ui/shortcuts.rs F2 on the Config tab opens the active set's Rename box (config.rs)"
 
 [keys."DraggerControl.LEFTBUTTON"]
 ported = "app/src/ui/app.rs resizable sidebar"
@@ -3286,7 +3283,7 @@ note = "egui side panel drag"
 
 [keys."DraggerControl.RIGHTBUTTON"]
 gap = "Task 14"
-note = "PoB resets the sidebar width on right-click"
+note = "PoB's dragger is the Config custom-modifier box's size grip, not the sidebar's: a right-click toggles the box between its least and most size (ResizableEditControl.lua:16-25); our box has no grip"
 
 [keys."DropDownControl.DOWN"]
 gap = "Task 14"
@@ -3437,8 +3434,7 @@ ported = "app/src/ui/skills/picker.rs"
 note = "picker keys"
 
 [keys."GemSelectControl.RIGHTBUTTON"]
-gap = "Task 14"
-note = "right-click opens the gem list"
+ported = "app/src/ui/skills/group.rs right-click on a gem box or the empty slot opens the gem list"
 
 [keys."GemSelectControl.UP"]
 ported = "app/src/ui/skills/picker.rs"
@@ -3472,8 +3468,7 @@ ported = "app/src/ui/app.rs Ctrl+Y redo"
 ported = "app/src/ui/app.rs Ctrl+Z undo"
 
 [keys."ItemSetListControl.F2"]
-gap = "Task 14"
-note = "NF-14 F2 rename"
+ported = "app/src/ui/items/sets.rs F2 renames the selected set"
 
 [keys."ItemSlotControl.wiki"]
 ported = "app/src/ui/items/slots.rs F1 over a slot or its dropdown entry opens the item's poewiki page"
@@ -3494,35 +3489,29 @@ note = "Ctrl+N (R25)"
 ported = "app/src/ui/build_list.rs keys: Ctrl+V after Ctrl+X moves (MoveBuild), after Ctrl+C copies (CopyBuildTo), or opens the Copy box in the same folder; works on an empty clipboard"
 
 [keys."ListControl.BACK"]
-gap = "Task 14"
-note = "Delete key: item list ported (items/list.rs); build list is NF-13 (Task 6); socket groups and set lists need it"
+ported = "app/src/ui/shortcuts.rs list_delete: Backspace deletes in the build, item, socket group and set lists"
 
 [keys."ListControl.c"]
 ported = "app/src/ui/build_list.rs keys: Ctrl+C marks the row for CopyBuildTo"
 
 [keys."ListControl.DELETE"]
-gap = "Task 14"
-note = "Delete key: item list ported (items/list.rs); build list is NF-13 (Task 6); socket groups and set lists need it"
+ported = "app/src/ui/shortcuts.rs list_delete: Delete in the build, item, socket group and set lists"
 
 [keys."ListControl.DOWN"]
-gap = "Task 14"
-note = "keyboard selection in lists"
+ported = "app/src/ui/shortcuts.rs list_key in the build, item, socket group and set lists (wraps round as PoB)"
 
 [keys."ListControl.END"]
-gap = "Task 14"
-note = "keyboard selection in lists"
+ported = "app/src/ui/shortcuts.rs list_key in the build, item, socket group and set lists"
 
 [keys."ListControl.HOME"]
-gap = "Task 14"
-note = "keyboard selection in lists"
+ported = "app/src/ui/shortcuts.rs list_key in the build, item, socket group and set lists"
 
 [keys."ListControl.LEFTBUTTON"]
 ported = "app/src/ui"
 note = "egui's own widget behaviour"
 
 [keys."ListControl.UP"]
-gap = "Task 14"
-note = "keyboard selection in lists"
+ported = "app/src/ui/shortcuts.rs list_key in the build, item, socket group and set lists (wraps round as PoB)"
 
 [keys."ListControl.x"]
 ported = "app/src/ui/build_list.rs keys Ctrl+X marks the row, Ctrl+V in another folder moves it"
@@ -3547,8 +3536,7 @@ ruled_out = "D-003"
 note = "Party tab dropped"
 
 [keys."PassiveSpecListControl.F2"]
-gap = "Task 14"
-note = "NF-14 F2 rename"
+ported = "app/src/ui/tree/keys.rs F2 on the Tree tab opens the active tree's Rename box (tree/toolbar.rs)"
 
 [keys."PassiveTreeView.wiki"]
 ported = "app/src/ui/tree/keys.rs F1 over a node opens its poewiki page"
@@ -3558,8 +3546,7 @@ ported = "app/src/ui/popup.rs Esc closes the session"
 note = "PoB presses the popup's escape button, which closes it"
 
 [keys."popup.RETURN"]
-gap = "Task 14"
-note = "NF-12 (new finding, in scope by controller ruling): Enter doesn't press a PoB popup session's default button (save, go, search, convert...)"
+ported = "app/src/ui/popup.rs Enter presses PoB's enterControl (PopupView.enter) when no control has the keyboard"
 
 [keys."ScrollBarControl.LEFTBUTTON"]
 ported = "app/src/ui"
@@ -3578,12 +3565,10 @@ gap = "Task 13"
 note = "NF-2 shared item sets, NF-14 F2"
 
 [keys."SkillListControl.LEFTBUTTON"]
-gap = "Task 14"
-note = "click ported; NF-11 Ctrl+click toggles enabled"
+ported = "app/src/ui/skills/groups.rs click selects; Ctrl+click sends SetGroupEnabled"
 
 [keys."SkillListControl.RIGHTBUTTON"]
-gap = "Task 14"
-note = "right-click menu ported; NF-11 Ctrl+right-click toggles Full DPS"
+ported = "app/src/ui/skills/groups.rs right-click menu; Ctrl+right-click sends SetGroupFullDps"
 
 [keys."SkillListControl.wiki"]
 ported = "app/src/ui/skills/keys.rs F1 over a socket group opens its first gem's poewiki page"
@@ -3598,8 +3583,7 @@ ported = "app/src/ui/app.rs Ctrl+Y redo"
 ported = "app/src/ui/app.rs Ctrl+Z undo"
 
 [keys."SkillSetListControl.F2"]
-gap = "Task 14"
-note = "NF-14 F2 rename"
+ported = "app/src/ui/skills/sets.rs F2 renames the selected set"
 
 [keys."SliderControl.DOWN"]
 ported = "app/src/ui"
@@ -3651,7 +3635,7 @@ ported = "app/src/ui/tree/keys.rs Ctrl+F selects the tree search (tree/toolbar.r
 
 [keys."tree.LEFTBUTTON"]
 gap = "Task 14"
-note = "click to allocate and drag to pan ported (tree/canvas.rs); NF-17 (new finding, in scope by controller ruling): Shift-held path tracing and Ctrl+click zoom are not"
+note = "click to allocate, drag to pan and Ctrl+click zoom ported (tree/canvas.rs); NF-17 Shift-held path tracing (PassiveTreeView.lua:284-350) is not: it needs an engine path allocation and a traced tooltip"
 
 [keys."tree.m"]
 ported = "app/src/ui/tree/keys.rs Ctrl+M opens the tree selector, our tree manager with its New, Rename and Delete"
@@ -3666,8 +3650,7 @@ ported = "app/src/ui/tree/keys.rs PageDown zooms out one of PoB's 1.2 steps, thr
 ported = "app/src/ui/tree/keys.rs PageUp zooms in one of PoB's 1.2 steps, three with Shift"
 
 [keys."tree.RIGHTBUTTON"]
-gap = "Task 14"
-note = "right-click ported (tree/canvas.rs: tattoos, jewel jump, mastery); NF-17: Ctrl+right-click zooms out"
+ported = "app/src/ui/tree/canvas.rs right-click (tattoos, jewel jump, mastery); Ctrl+right-click zooms out two steps"
 
 [keys."tree.UP"]
 ported = "app/src/ui/tree/keys.rs Up selects the previous tree unless the tree selector is hovered or open"

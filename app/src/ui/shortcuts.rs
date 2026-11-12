@@ -65,6 +65,9 @@ pub enum ShortcutAction {
     Zoom(i32),
     /// E (Items)
     EditSlot,
+    /// F2 (Tree, Config): rename the active tree or config set, as F2 renames the selected
+    /// set in PoB's set lists (PassiveSpecListControl.lua, ConfigSetListControl.lua)
+    Rename,
 }
 
 /// PoB's wiki page for `name` (ItemTools.lua:401-405)
@@ -102,6 +105,55 @@ fn released(input: &egui::InputState, key: Key) -> bool {
 /// egui-winit turns Ctrl+C into `Event::Copy`; tests and other platforms send the key
 fn copy(input: &egui::InputState) -> bool {
     input.events.iter().any(|e| matches!(e, Event::Copy)) || pressed(input, Key::C, true)
+}
+
+/// PoB's list keys (ListControl.lua:375-382): Up and Down step the selection round the list,
+/// Home and End go to its ends. The new index, the key taken out of `input`.
+pub fn list_key(
+    input: &mut egui::InputState,
+    len: usize,
+    selected: Option<usize>,
+) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    let (key, to) = if pressed(input, Key::ArrowUp, false) {
+        (
+            Key::ArrowUp,
+            selected.map_or(len - 1, |i| (i + len - 1) % len),
+        )
+    } else if pressed(input, Key::ArrowDown, false) {
+        (Key::ArrowDown, selected.map_or(0, |i| (i + 1) % len))
+    } else if pressed(input, Key::Home, false) {
+        (Key::Home, 0)
+    } else if pressed(input, Key::End, false) {
+        (Key::End, len - 1)
+    } else {
+        return None;
+    };
+    input
+        .events
+        .retain(|e| !matches!(e, Event::Key { key: k, .. } if *k == key));
+    Some(to.min(len - 1))
+}
+
+/// Keeps the arrow keys on the focused list row `id`, for [`list_key`]: egui would move the
+/// focus with them otherwise
+pub fn keep_arrows(ctx: &egui::Context, id: egui::Id) {
+    ctx.memory_mut(|m| {
+        m.set_focus_lock_filter(
+            id,
+            egui::EventFilter {
+                vertical_arrows: true,
+                ..Default::default()
+            },
+        );
+    });
+}
+
+/// PoB's list deletes on Delete and Backspace (ListControl.lua:392)
+pub fn list_delete(input: &egui::InputState) -> bool {
+    pressed(input, Key::Delete, false) || pressed(input, Key::Backspace, false)
 }
 
 /// The shortcut this frame's input asks for, if any.
@@ -166,6 +218,8 @@ pub fn shortcut_action(state: &ShortcutState, input: &egui::InputState) -> Optio
                 |key, step: i32| pressed_shift(input, key).map(|s| if s { 3 * step } else { step });
             if pressed(input, Key::M, true) {
                 Some(A::SpecManager)
+            } else if pressed(input, Key::F2, false) {
+                Some(A::Rename)
             } else if pressed(input, Key::D, true) {
                 Some(A::StatDifferences)
             } else if copy(input) {
@@ -185,6 +239,7 @@ pub fn shortcut_action(state: &ShortcutState, input: &egui::InputState) -> Optio
             }
         }
         BuildTab::Items if pressed(input, Key::E, false) => Some(A::EditSlot),
+        BuildTab::Config if pressed(input, Key::F2, false) => Some(A::Rename),
         _ => None,
     }
 }
@@ -214,6 +269,7 @@ pub fn consume(action: &ShortcutAction, input: &mut egui::InputState) {
         A::Zoom(n) if *n > 0 => Key::PageUp,
         A::Zoom(_) => Key::PageDown,
         A::EditSlot => Key::E,
+        A::Rename => Key::F2,
     };
     input.events.retain(|e| match e {
         Event::Key { key: k, .. } => *k != key,

@@ -441,6 +441,7 @@ pub(crate) mod testing {
         PopupView {
             kind: crate::engine::PopupKind::Options,
             title: "Options".into(),
+            enter: None,
             controls: vec![
                 control("showFlavourText", PopupControlKind::Check, [0.0, 0.0]),
                 control("showAnimations", PopupControlKind::Check, [0.0, 30.0]),

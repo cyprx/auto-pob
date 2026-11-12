@@ -697,6 +697,10 @@ function glue.popup_view()
 			end
 			return a.name < b.name
 		end)
+		-- what Enter clicks when no control is selected (PopupDialog.lua:79-83)
+		if type(popup.enterControl) == "string" then
+			view.enter = popup.enterControl
+		end
 	end)
 	return view
 end

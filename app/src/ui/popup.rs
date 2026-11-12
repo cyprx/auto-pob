@@ -426,6 +426,7 @@ impl PopupWindow {
         let view = PopupView {
             kind: PopupKind::Craft,
             title: String::new(),
+            enter: None,
             controls: Vec::new(),
         };
         let mut out = PopupOutput::default();
@@ -488,6 +489,13 @@ impl PopupWindow {
             }
             return out;
         };
+        // Enter clicks PoB's `enterControl` when no control has the keyboard
+        // (PopupDialog.lua:79-83; ControlHost.lua:39-42 gives a selected control the key)
+        let enter = view.enter.clone().filter(|_| {
+            !self.typing
+                && !egui::Popup::is_any_open(ctx)
+                && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+        });
         // Esc closes the window, unless it is closing a dropdown or reverting a box
         // (egui drops the focus as the frame begins, so what the last frame ended with counts)
         let escape = !std::mem::take(&mut self.typing)
@@ -541,6 +549,16 @@ impl PopupWindow {
             out.queries.push(query);
         }
         self.typing = ctx.text_edit_focused();
+        if let Some(name) = enter
+            && !close
+            && self.search.percent.is_none()
+            && view.controls.iter().any(|c| {
+                c.name == name && c.kind == PopupControlKind::Button && c.shown && c.enabled
+            })
+        {
+            out.commands.extend(self.flush());
+            out.commands.push(Command::PressPopupButton { name });
+        }
         if close {
             out.commands.extend(self.flush());
             out.commands.extend(self.close());

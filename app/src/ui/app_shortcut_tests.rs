@@ -420,3 +420,18 @@ fn f1_over_an_item_opens_its_page() {
         ["https://www.poewiki.net/wiki/Base"]
     );
 }
+
+#[test]
+fn f2_renames_the_active_tree_and_config_set() {
+    let (mut app, ctx) = tree_app();
+    assert!(!app.tree.has_dialog());
+    frame(&mut app, &ctx, plain(Key::F2));
+    assert!(app.tree.has_dialog(), "no Rename box");
+
+    let (mut app, ctx) = config_app(sample_config());
+    frame(&mut app, &ctx, plain(Key::F2));
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![]);
+    // the set's Rename box has the keyboard (config.rs set_edit)
+    assert!(ctx.text_edit_focused(), "no Rename box");
+}

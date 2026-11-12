@@ -182,7 +182,7 @@ impl SkillsUi {
                 let add = ui.button("Add gem\u{2026}");
                 self.rects
                     .note(&add, || format!("gem_{}_name", g.gems.len()));
-                if add.clicked() {
+                if add.clicked() || add.secondary_clicked() {
                     self.open_picker(gi, GemTarget::Slot(g.gems.len()));
                 }
                 ui.end_row();
@@ -278,7 +278,8 @@ impl SkillsUi {
         }
         let name = ui.add(button);
         self.rects.note(&name, || format!("gem_{si}_name"));
-        if name.clicked() {
+        // PoB's gem box drops its list on a right click too (GemSelectControl.lua:800-804)
+        if name.clicked() || name.secondary_clicked() {
             self.open_picker(gi, GemTarget::Slot(si));
         }
         self.gem_tooltip_hover(&name, gi, si, gem, out);

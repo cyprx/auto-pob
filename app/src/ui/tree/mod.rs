@@ -912,4 +912,24 @@ mod tests {
         h.frame(vec![]);
         h.frame(vec![Event::PointerMoved(h.screen_of(1))]);
     }
+
+    #[test]
+    fn ctrl_clicks_zoom_instead_of_acting_on_the_node() {
+        let (l, s) = sample();
+        let mut h = Harness::new(l, s);
+        h.tab.camera.zoom = 0.2;
+        h.frame(vec![Event::ModifiersChanged(egui::Modifiers::COMMAND)]);
+        let start = h.tab.camera.zoom;
+        let out = h.click_at(h.screen_of(2));
+        assert!(out.commands.is_empty(), "{:?}", out.commands);
+        let zoomed = h.tab.camera.zoom;
+        assert!((zoomed / start - 1.44).abs() < 1e-3, "{start} -> {zoomed}");
+        // the right click zooms out and opens nothing
+        let out = h.click_with(h.screen_of(2), PointerButton::Secondary);
+        assert!(out.commands.is_empty() && out.jump_to_socket.is_none());
+        assert!((h.tab.camera.zoom - start).abs() < 1e-4);
+        h.frame(vec![Event::ModifiersChanged(egui::Modifiers::NONE)]);
+        let out = h.click_at(h.screen_of(2));
+        assert_eq!(debug(&out.commands), ["AllocNode { id: 2 }"]);
+    }
 }

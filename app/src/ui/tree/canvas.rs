@@ -230,8 +230,10 @@ pub fn show(
         .any(|m| m.node == node.id && !m.options.is_empty());
     let is_mastery = node.kind == "Mastery";
     let allocated = tab.derived.allocated.contains(&node.id);
+    // a click with Ctrl held only zooms (PassiveTreeView.lua:259-263)
+    let ctrl = ui.input(|i| i.modifiers.command);
     // as PoB's right click, in its order (PassiveTreeView.lua:510-533, R19)
-    if response.secondary_clicked() {
+    if response.secondary_clicked() && !ctrl {
         if allocated && node.kind == "Socket" {
             // only a slot PoB lets the user use
             if tab.sockets.contains(&node.id) {
@@ -247,7 +249,7 @@ pub fn show(
             });
         }
     }
-    if response.clicked() {
+    if response.clicked() && !ctrl {
         // a left click on an allocated node removes it, a mastery included
         // (PassiveTreeView.lua:383); an unallocated mastery asks for its effect
         if allocated {
@@ -311,6 +313,19 @@ pub fn tooltip_body<'a>(node: &TreeNode, reply: Option<&'a NodeTooltip>) -> Tool
 fn handle_input(ui: &egui::Ui, tab: &mut TreeTab, response: &egui::Response) {
     if response.dragged() && tab.camera.zoom > 0.0 {
         tab.camera.center -= response.drag_delta() / tab.camera.zoom;
+    }
+    // Ctrl+click zooms in two of PoB's 1.2 steps at the pointer, Ctrl+right-click out
+    // (PassiveTreeView.lua:259-263)
+    let ctrl = ui.input(|i| i.modifiers.command);
+    let clicked = response.clicked() || response.secondary_clicked();
+    if ctrl
+        && clicked
+        && tab.camera.zoom > 0.0
+        && let Some(pointer) = response.interact_pointer_pos()
+    {
+        let level = if response.secondary_clicked() { -2 } else { 2 };
+        tab.camera
+            .zoom_at(response.rect, pointer, 1.2f32.powi(level));
     }
     if let Some(pointer) = response.hover_pos() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);

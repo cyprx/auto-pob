@@ -41,6 +41,11 @@ local function live()
 	if not session then
 		return false
 	end
+	-- the Game Version window stands over the new build its open left; another build ends it
+	if session.kind == "GameVersion" and session.gen ~= glue.build_generation() then
+		drop()
+		return false
+	end
 	if session.owner == "main" then
 		return true
 	end
@@ -126,7 +131,8 @@ end
 
 -- Ends the session; true when one was open (the engine then sends `Popup(None)`)
 function glue.popup_end(keep_main)
-	-- a main-owned session survives a build change (R19)
+	-- a main-owned session survives a build change (R19); the Game Version window then ends
+	-- in `live()`
 	if keep_main and session ~= nil and session.owner == "main" then
 		return false
 	end
@@ -168,6 +174,34 @@ function glue.popup_cancel_for_save()
 		drop()
 		lost = true
 	end
+end
+
+-- PoB's "Game Version" window (Build.lua:1323-1350), which a build made for another game
+-- version opens instead of loading (`enter_build`): a main-owned session, so the open that
+-- made it doesn't end it; the next build does. `convert` is the Init arguments its Convert
+-- button reopens the build with. Any way it ends but Convert is its Cancel, which leaves the new
+-- build behind it.
+function glue.popup_adopt_game_version(popup, convert)
+	glue.popup_cancel_options()
+	drop()
+	session = { popup = popup, kind = "GameVersion", owner = "main", convert = convert, gen = glue.build_generation() }
+end
+
+-- Presses the Game Version window's button. PoB's Convert closes the window and runs Init
+-- again with the conversion flag, outside a frame (Build.lua:1340-1343); here the build is
+-- entered as an open does, so a frame initialises and calculates it. PoB's Cancel goes back to
+-- the build list (Build.lua:1344-1347); here the new build behind the window stays.
+local function game_version_press(name)
+	if name ~= "convert" and name ~= "cancel" then
+		error("no such control", 0)
+	end
+	local convert = session.convert
+	drop()
+	if name == "convert" then
+		glue.enter_build(unpack(convert, 1, 4))
+		return { ended = true, build_flag = false, rebuilt = true }
+	end
+	return { ended = true, build_flag = false }
 end
 
 -- Whether the open session is PoB's Options window
@@ -898,6 +932,9 @@ end
 -- recalculation (`buildFlag`, which a tattoo sets).
 function glue.popup_press(name)
 	require_session()
+	if session.kind == "GameVersion" then
+		return game_version_press(name)
+	end
 	local flag_before = pob.build.buildFlag and true or false
 	refuse_while_searching(name)
 	local options = session.kind == "Options"

@@ -1151,6 +1151,11 @@ pub enum PopupKind {
     ModBrowser {
         group: usize,
     },
+    /// PoB's "Game Version" window (`build:OpenConversionPopup`, Build.lua:1323-1350): opening a
+    /// build made for another game version shows it instead of the build, as a main-owned
+    /// session. Its `convert` opens the build converted; `cancel` (or any other end) leaves the
+    /// new build behind it. Only an open makes it: `OpenPopup` refuses it.
+    GameVersion,
 }
 
 /// Where a "Buy similar" search starts from (R10): PoB's own three entry points

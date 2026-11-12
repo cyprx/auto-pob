@@ -198,7 +198,7 @@ local function import_through_tab(url, mode)
 	local function compared()
 		return compare and #compare.compareEntries > entries
 	end
-	local id, message = glue.net_begin(label, {
+	local id, message, failed_init = glue.net_begin(label, {
 		confirmed = true,
 		after = function(req)
 			if compared() then
@@ -227,6 +227,10 @@ local function import_through_tab(url, mode)
 	if not compare and pob.build.importTab ~= tab then
 		-- Init ran inside the press; a frame calculates the new build, as opening one does
 		glue.frame()
+		-- an Init that couldn't open the build left a new one in its place (net.lua)
+		if failed_init then
+			error(failed_init, 0)
+		end
 		return nil
 	end
 	error(message or not_imported(tab), 0)
@@ -565,7 +569,7 @@ function glue.import_public_character(league, name, kind, a, b, c)
 	if not button:IsShown() or not button:IsEnabled() then
 		error(OFFERED, 0)
 	end
-	local id, message = glue.net_begin(label, { confirmed = true, after = status_after(tab, "import") }, button.onClick)
+	local id, message, failed_init = glue.net_begin(label, { confirmed = true, after = status_after(tab, "import") }, button.onClick)
 	if not id then
 		error(message or "couldn't start the request", 0)
 	end

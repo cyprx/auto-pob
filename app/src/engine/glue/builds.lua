@@ -66,16 +66,53 @@ end
 -- lets PoB refresh `unsaved` (Build.lua:1303).
 glue.frame = frame
 
--- Switches mode and runs a frame so PoB initialises the build and calculates it.
--- A build file PoB can't load sends it back to the list; fall back to a new build then.
-local function enter_build(...)
-	main_module():SetMode("BUILD", ...)
-	frame()
-	if main_module().mode ~= "BUILD" then
-		main_module():SetMode("BUILD", false, "Unnamed build")
-		frame()
-		error("couldn't open that build", 0)
+-- The text of a message popup PoB opened (OpenMessagePopup, OpenCloudErrorPopup): its title,
+-- then its numbered label lines, without colour codes or the version line
+local function popup_text(popup)
+	local lines = {}
+	for _, control in ipairs(popup.controls) do
+		if type(control.label) == "string" then
+			lines[#lines + 1] = control.label
+		end
 	end
+	local title = tostring(popup.title or ""):gsub("%^x%x%x%x%x%x%x", ""):gsub("%^%d", "")
+	title = title:gsub("^%s+", ""):gsub("%s+$", "")
+	if #lines == 0 then
+		return title ~= "" and title or nil
+	end
+	local reason = error_reason(table.concat(lines, "\n"))
+	return title ~= "" and (title .. ": " .. reason) or reason
+end
+glue.popup_text = popup_text
+
+-- Switches mode and runs a frame so PoB initialises the build and calculates it. A build PoB
+-- can't open leaves a new build in its place and fails with PoB's reason (`Build:Init`'s
+-- wrapper in net.lua sees to both); one made for another game version leaves PoB's "Game
+-- Version" window open as a session, with a new build behind it.
+local function enter_build(...)
+	local m = main_module()
+	local popups = m.popups
+	local depth = #popups
+	m:SetMode("BUILD", ...)
+	local ok, err = pcall(frame)
+	local failure = glue.take_init_failure()
+	while #popups > depth do
+		m:ClosePopup()
+	end
+	pob.main.promptMsg = nil
+	if ok and not failure and m.mode == "BUILD" then
+		return
+	end
+	-- a load that raised, or anything else that left no build: a new build stands in
+	if not failure or m.mode ~= "BUILD" then
+		pob.build.treeTab = nil
+		m:SetMode("BUILD", false, "Unnamed build")
+		frame()
+	end
+	if not ok then
+		error(err, 0)
+	end
+	error(failure or "couldn't open that build", 0)
 end
 
 -- Whether PoB has a build initialised. It starts on the build list when Settings.xml says so

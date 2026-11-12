@@ -39,14 +39,81 @@ end
 -- Init builds a new ImportTab, whose constructor validates (and maybe refreshes) a stored
 -- token. No launch may happen while it runs, even inside a request; and a request whose
 -- callback ran it made a new build.
+--
+-- An Init that couldn't open its build is taken care of here, for every caller (an open, an
+-- import's code or link, the Game Version window's Convert):
+-- - A build PoB can't load makes Init close it (`CloseBuild`, Build.lua:953-956), often with a
+--   popup that says why (TreeTab.lua:507-509's unknown tree version). The popup is closed and
+--   its text kept as the reason (`glue.take_init_failure`), the switch to the build list is
+--   cancelled and a new build takes the failed one's place. The half-loaded tabs are dropped
+--   first: TreeTab:Load empties the spec list before it fails, and the next Init would read it
+--   (Build.lua:853-854).
+-- - A build made for another game version stops before its tabs are made and opens PoB's
+--   "Game Version" window (Build.lua:102-105, 1323-1350). The window becomes a session, and a
+--   new build stands behind it, not the previous build's tabs under the new name.
+local init_failure
+
+-- Returns true when the Init that just ran left no build of its own, plus the Game Version
+-- window and its Convert's arguments when that is why
+local function settle_init(self, depth, newMode_before)
+	local m = main()
+	local popups = m.popups
+	local conversion, reason
+	for i = #popups - depth, 1, -1 do
+		local popup = popups[i]
+		if popup.title == "Game Version" and popup.controls.convert then
+			conversion = popup
+		elseif not reason then
+			reason = glue.popup_text(popup)
+		end
+	end
+	local closed = m.newMode == "LIST" and newMode_before ~= "LIST"
+	local converting = conversion ~= nil and self.targetVersion == nil
+	if not closed and not converting then
+		return false
+	end
+	while #popups > depth do
+		m:ClosePopup()
+	end
+	self.treeTab = nil
+	if closed then
+		m.newMode = nil
+		init_failure = reason or "couldn't open that build"
+		return true
+	end
+	-- PoB's Convert reopens the same file converted, or an import without its text
+	-- (Build.lua:1340-1343). No nil in the list: `SetMode` unpacks it with `#`.
+	return true, conversion, { self.dbFileName or false, self.buildName, false, true }
+end
+
+-- Why the last Init couldn't open its build; nil when it did (taken once)
+function glue.take_init_failure()
+	local failure = init_failure
+	init_failure = nil
+	return failure
+end
+
 do
 	local build = pob.build
 	local init = build.Init
 	build.Init = function(self, ...)
+		local m = main()
+		local depth, newMode = #m.popups, m.newMode
+		init_failure = nil
 		__net_in_init(true)
 		local ret = { pcall(init, self, ...) }
+		local failed, conversion, convert
+		if ret[1] then
+			failed, conversion, convert = settle_init(self, depth, newMode)
+		end
+		if failed then
+			ret = { pcall(init, self, false, "Unnamed build") }
+		end
 		__net_in_init(false)
 		inits = inits + 1
+		if conversion then
+			glue.popup_adopt_game_version(conversion, convert)
+		end
 		if not ret[1] then
 			error(ret[2], 0)
 		end
@@ -271,6 +338,13 @@ local function guarded(req, open, fn, ...)
 		record_error(req, glue.error_reason(prompt))
 	end
 	if inits ~= inits_before then
+		-- the callback's Init couldn't open the build: a new one stands in, and PoB's reason
+		-- is the request's
+		local failure = glue.take_init_failure()
+		if failure then
+			record_error(req, failure)
+			req.init_failure = failure
+		end
 		effects.rebuilt = true
 		effects.new_build_req = req.id
 		req.new_build = true
@@ -379,7 +453,8 @@ function glue.net_begin(label, opts, fn)
 		if not ok then
 			error(first_line(err), 0)
 		end
-		return nil, req.error
+		-- the third: why an Init the press ran couldn't open its build
+		return nil, req.error, req.init_failure
 	end
 	pending[#pending + 1] = req.id
 	return req.id

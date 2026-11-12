@@ -712,6 +712,9 @@ struct Pressed {
     /// The press started a timeless search (R17)
     #[serde(default)]
     started: bool,
+    /// The press replaced the build: the Game Version window's Convert
+    #[serde(default)]
+    rebuilt: bool,
 }
 
 /// A popup session command changed the popup only (a press also flags the display item).
@@ -1953,6 +1956,12 @@ impl PobBackend {
                     PopupKind::TimelessJewel => ("timeless", 0),
                     PopupKind::SpectreLibrary => ("spectre_library", 0),
                     PopupKind::ModBrowser { group } => ("mod_browser", group as i64 + 1),
+                    // only opening an old build shows it (Build.lua:102-105)
+                    PopupKind::GameVersion => {
+                        anyhow::bail!(
+                            "the Game Version window opens with an old build, not on its own"
+                        )
+                    }
                     PopupKind::BuySimilar { source } => {
                         let source = self.lua.to_value(&source).map_err(|e| anyhow!("{e}"))?;
                         self.call::<_, ()>("popup_open", ("buy_similar", source))?;
@@ -2018,6 +2027,15 @@ impl PobBackend {
             }
             Command::PressPopupButton { name } => {
                 let pressed: Pressed = self.view("popup_press", name)?;
+                // Convert opened the build: the same as an open, after the fact (R13, R14)
+                if pressed.rebuilt {
+                    self.reset_heatmap();
+                    self.cancel_all_requests(CancelScope::All)?;
+                    let mut affected = self.network_affected()?;
+                    affected.merge(self.left_build()?);
+                    affected.merge(self.all_views()?);
+                    return Ok(affected);
+                }
                 // the timeless window's Search started the job (R17)
                 if pressed.started {
                     self.timeless_job = true;
@@ -2128,7 +2146,25 @@ impl Backend for PobBackend {
             }
             None => None,
         };
-        let mut affected = self.apply_command(command, send)?;
+        // a failed open or import still replaced the build: a new one stands in for the one
+        // PoB couldn't open (net.lua's Init wrapper)
+        let opens = leaves || matches!(command, Command::ImportFromUrl { .. });
+        let generation: Option<i64> = if opens {
+            Some(self.call("build_generation", ())?)
+        } else {
+            None
+        };
+        let mut affected = match self.apply_command(command, send) {
+            Ok(affected) => affected,
+            Err(e) => {
+                if let Some(before) = generation
+                    && self.call::<_, i64>("build_generation", ())? != before
+                {
+                    self.left_build()?;
+                }
+                return Err(e);
+            }
+        };
         if let Some(cancelled) = cancelled {
             affected.merge(cancelled);
         }

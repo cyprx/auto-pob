@@ -19,7 +19,10 @@ local OUTSIDE = "that path is outside the Builds folder"
 local function list_mode()
 	local mode = main().modes.LIST
 	if not mode.initialised then
-		mode:Init(nil, "")
+		-- its first scan may open PoB's cloud error for a file (see `prepare`)
+		glue.in_popups(function()
+			mode:Init(nil, "")
+		end)
 	end
 	return mode
 end
@@ -30,7 +33,11 @@ local function prepare(subPath)
 	mode.controls.searchText:SetText(main().filterBuildList or "")
 	mode.controls.sort:SelByValue(main().buildSortMode, "sortMode")
 	mode.subPath = subPath
-	mode:BuildList()
+	-- a build file that reads as nothing opens PoB's cloud error (BuildListHelpers.lua:22-24);
+	-- the list shows the entry without its class and level, and the popup goes
+	glue.in_popups(function()
+		mode:BuildList()
+	end)
 	return mode
 end
 
@@ -147,7 +154,9 @@ local function with_entry(path, fn)
 	main().filterBuildList = ""
 	local ok, err = pcall(function()
 		mode.subPath = rel:match("^(.*/)[^/]*$") or ""
-		mode:BuildList()
+		glue.in_popups(function()
+			mode:BuildList()
+		end)
 		local list = mode.controls.buildList
 		list:SelByFullFileName(path)
 		if not list.selValue then

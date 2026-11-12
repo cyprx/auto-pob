@@ -2908,8 +2908,8 @@ ported = "app/src/ui/folder_picker.rs ask_delete: PoB's text The folder is not e
 ported = "app/src/ui/app.rs on_picker sends DeleteBuild; a failure shows the engine's PoB text as a notice"
 
 [popups."Game Version"]
-ruled_out = "R3"
-note = "pending Open check 14: our open path must refuse those builds with PoB text, or this becomes a gap; provisional ruling until Open check 14 runs"
+ported = "app/src/engine/glue/net.lua Build:Init wrapper adopts PoB's own window as a GameVersion popup session (glue popup_adopt_game_version), drawn by app/src/ui/popup.rs; Convert reopens the build converted (Build.lua:1340-1343), gate build_open::game_version_matches_pob and game_version_on_the_first_open"
+note = "behind the window is a new Unnamed build, never the previous build's tabs under the new name; an import's Convert makes an empty build, as upstream's. Deviation: PoB's Cancel goes back to the build list (Build.lua:1344-1347); ours leaves the Unnamed build open, and the app returning to the list on Cancel is a UI follow-up"
 
 [popups."Import Comparison Build"]
 ported = "app/src/ui/compare/mod.rs 'Load build…' menu: from a saved build, a code or a link (R5)"
@@ -2971,8 +2971,8 @@ ported = "app/src/ui/app.rs on_error shows the engine's PoB text as a notice (on
 note = "PoB's message: New Folder failure (R16 operations show PoB's text)"
 
 [popups."Main:1747"]
-ported = "app/src/ui/app.rs on_error save error notice"
-note = "controller ruling: full parity; PoB's cloud-folder save error text; today ported app/src/ui/app.rs save error; OpenCloudErrorPopup: a failed save shows our error; PoB's OneDrive hint is Windows-only"
+ported = "app/src/engine/glue/net.lua Build:Init wrapper and glue/builds.lua popup_text: a build load PoB answers with OpenCloudErrorPopup (Build.lua:1981-1983) fails the open with that popup's text as the error notice; an unreadable Settings.xml at start (Main.lua:488-490, 651-653) makes every Settings.xml writer refuse with a notice (glue/settings.lua settings_check_writable, gate parity_gaps_items::settings_writers_refuse_outside_changes)"
+note = "PoB opens this popup on load failures only, never on a save; the build list's (BuildListHelpers.lua:23) is closed with the list's other popups. The startup popup itself is not shown: the refusal says why instead. PoB's OneDrive hint is Windows-only"
 
 [popups."Main:804"]
 ruled_out = "R3"
@@ -3056,8 +3056,7 @@ note = "trade query"
 ported = "app/src/ui/tree/mod.rs mastery picker"
 
 [popups."TreeTab:508"]
-ruled_out = "R3"
-note = "unknown tree version on load: provisional with Game Version until Open check 14 runs"
+ported = "app/src/engine/glue/net.lua Build:Init wrapper: PoB's Unknown Passive Tree Version message is the open's error notice (by file, code or link), the popup is closed and a new build takes the failed one's place, gate build_open::unknown_tree_version_matches_pob"
 
 [popups."TreeTab:610"]
 ported = "app/src/ui/tree/toolbar.rs Convert to <latest> button (ConvertSpecLatest); PoB's Tree Converted message arrives as Event::Message and shows as a notice"
@@ -3527,10 +3526,10 @@ note = "wired at the Task 13 merge (M8); test ctrl_m_opens_spec_manager"
 ported = "app/src/ui/tree/keys.rs P sends ToggleHeatmap (glue/tree.lua)"
 
 [keys."tree.PAGEDOWN"]
-ported = "app/src/ui/tree/keys.rs PageDown zooms out one of PoB's 1.2 steps, three with Shift"
+ported = "app/src/ui/shortcuts.rs reads PageDown, app/src/ui/tree/keys.rs holds the zoom step: PageDown zooms out one of PoB's 1.2 steps, three with Shift"
 
 [keys."tree.PAGEUP"]
-ported = "app/src/ui/tree/keys.rs PageUp zooms in one of PoB's 1.2 steps, three with Shift"
+ported = "app/src/ui/shortcuts.rs reads PageUp, app/src/ui/tree/keys.rs holds the zoom step: PageUp zooms in one of PoB's 1.2 steps, three with Shift"
 
 [keys."tree.RIGHTBUTTON"]
 ported = "app/src/ui/tree/canvas.rs right-click (tattoos, jewel jump, mastery); Ctrl+right-click zooms out two steps"

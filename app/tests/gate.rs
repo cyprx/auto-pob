@@ -19,6 +19,8 @@ use std::{
 
 #[path = "gate/build_list.rs"]
 mod build_list;
+#[path = "gate/build_open.rs"]
+mod build_open;
 #[path = "gate/calcs.rs"]
 mod calcs;
 #[path = "gate/compare.rs"]

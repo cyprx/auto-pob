@@ -177,10 +177,12 @@ impl HelpUi {
         if !self.open {
             return false;
         }
-        let mut close = false;
         let mut download = false;
         let default = ctx.global_style().visuals.text_color();
-        let modal = egui::Modal::new(egui::Id::unique("help_window")).show(ctx, |ui| {
+        // PoB's popup closes on Esc, never on an outside click (PopupDialog.lua:68-77)
+        let window = egui::Id::new("help_window");
+        let mut close = crate::widgets::escape::escape(ctx, window);
+        egui::Modal::new(egui::Id::unique("help_window")).show(ctx, |ui| {
             ui.set_width(780.0);
             ui.horizontal(|ui| {
                 ui.heading("About");
@@ -277,7 +279,8 @@ impl HelpUi {
                     }
                 });
         });
-        if close || modal.should_close() {
+        crate::widgets::escape::note(ctx, window);
+        if close {
             self.open = false;
         }
         download

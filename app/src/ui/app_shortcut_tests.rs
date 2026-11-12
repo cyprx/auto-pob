@@ -557,6 +557,24 @@ fn the_help_window_is_modal() {
     frame(&mut app, &ctx, plain(Key::P));
     assert_eq!(app.tab, BuildTab::Tree);
     assert!(sent_since(&app, before).is_empty());
+    // an outside click does nothing to a PoB popup (PopupDialog.lua:68-77)
+    let corner = Pos2::new(2.0, 2.0);
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            &ctx,
+            vec![
+                Event::PointerMoved(corner),
+                Event::PointerButton {
+                    pos: corner,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    assert!(app.help.is_open(), "an outside click closed it");
     frame(&mut app, &ctx, plain(Key::Escape));
     frame(&mut app, &ctx, vec![]);
     assert!(!app.help.is_open(), "Esc closes it");

@@ -902,8 +902,10 @@ impl BuildListUi {
         let (dialog_id, name_id) = (self.dialog_id, self.name_id);
         let dialog = self.dialog.as_mut()?;
         let mut done = None;
-        let mut cancel = false;
-        let modal = egui::Modal::new(dialog_id).show(ctx, |ui| {
+        // PoB's popup closes on Esc once its name box is left, and never on an outside click
+        // (PopupDialog.lua:68-77)
+        let mut cancel = crate::widgets::escape::escape(ctx, dialog_id);
+        egui::Modal::new(dialog_id).show(ctx, |ui| {
             ui.set_width(380.0);
             match dialog {
                 Dialog::Name {
@@ -923,7 +925,7 @@ impl BuildListUi {
                     let ok = name_edit(ui, name_id, text, focus);
                     let valid = !text.trim().is_empty() && text != original;
                     let (save, cancelled) = buttons(ui, "Save", valid);
-                    cancel = cancelled;
+                    cancel |= cancelled;
                     if (save || ok) && valid {
                         let (path, name) = (path.clone(), text.clone());
                         done = Some(if *copy {
@@ -939,7 +941,7 @@ impl BuildListUi {
                     let ok = name_edit(ui, name_id, text, focus);
                     let valid = !text.trim().is_empty();
                     let (create, cancelled) = buttons(ui, "Create", valid);
-                    cancel = cancelled;
+                    cancel |= cancelled;
                     if (create || ok) && valid {
                         done = Some(ListScreenAction::NewFolder(text.clone()));
                     }
@@ -948,7 +950,7 @@ impl BuildListUi {
                     ui.heading("Delete");
                     ui.label(prompt.as_str());
                     let (yes, cancelled) = buttons_keyed(ui, "Delete", "delete_yes", "delete_no");
-                    cancel = cancelled;
+                    cancel |= cancelled;
                     if yes {
                         done = Some(ListScreenAction::Delete {
                             path: path.clone(),
@@ -958,7 +960,8 @@ impl BuildListUi {
                 }
             }
         });
-        if done.is_some() || cancel || modal.should_close() {
+        crate::widgets::escape::note(ctx, dialog_id);
+        if done.is_some() || cancel {
             self.dialog = None;
         }
         done
@@ -1409,6 +1412,27 @@ mod tests {
             Some(ListScreenAction::NewFolder("myfolder".into()))
         );
         assert_eq!(h.ui.dialog, None);
+    }
+
+    #[test]
+    fn a_name_dialog_leaves_its_box_on_esc_first_and_ignores_outside_clicks() {
+        // PopupDialog.lua:68-77: an outside click does nothing, and the selected box takes
+        // the first Esc (EditControl.lua:505)
+        let mut h = H::new(view(""));
+        h.click("list_new_folder");
+        h.frame(vec![]);
+        h.click("name_edit");
+        h.text("typed");
+        h.click_at(Pos2::new(2.0, 2.0), PointerButton::Primary);
+        assert!(h.ui.dialog.is_some(), "an outside click closed it");
+        h.click("name_edit");
+        h.key(Key::Escape, Modifiers::NONE);
+        let Some(Dialog::NewFolder { text, .. }) = &h.ui.dialog else {
+            panic!("the first Esc closed it");
+        };
+        assert_eq!(text, "typed");
+        h.key(Key::Escape, Modifiers::NONE);
+        assert_eq!(h.ui.dialog, None, "the second Esc left it open");
     }
 
     #[test]

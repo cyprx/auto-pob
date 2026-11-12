@@ -324,6 +324,12 @@ impl BuildListUi {
         }
         action = self.menu(ui.ctx(), view).or(action);
         action = self.dialog(ui.ctx()).or(action);
+        // only the paste's move can be given its mark back; a drag or menu move is not it
+        if let Some(ListScreenAction::Move { path, .. }) = &action
+            && self.spent.as_ref().map(|m| &m.entry.path) != Some(path)
+        {
+            self.spent = None;
+        }
         // a folder asked for any other way than Mouse4/5 is not part of the history walk
         if let Some(ListScreenAction::OpenFolder(f)) = &action
             && self.navigating.as_deref() != Some(f.as_str())
@@ -587,20 +593,25 @@ impl BuildListUi {
             let from = &mark.entry.folder;
             if mark.copy && *from == view.folder {
                 // in its own folder PoB asks for a name
+                self.cut = None;
                 self.dialog = Some(dialog_for(&mark.entry, true));
             } else if mark.copy {
-                // the mark stays, as PoB's does
+                // PoB clears the mark after every paste (BuildList.lua:153)
+                self.cut = None;
                 return Some(ListScreenAction::CopyTo {
                     path: mark.entry.path,
                     folder: view.folder.clone(),
                 });
             } else if *from != view.folder {
-                // PoB moves only to another folder; the mark waits for the engine's answer
+                // the mark waits for the engine's answer
                 self.spent = self.cut.take();
                 return Some(ListScreenAction::Move {
                     path: mark.entry.path,
                     folder: view.folder.clone(),
                 });
+            } else {
+                // PoB clears it in the folder it was cut in, too (BuildList.lua:167)
+                self.cut = None;
             }
         }
         if f2 && let Some(e) = entry {
@@ -1362,8 +1373,10 @@ mod tests {
         let mut h = H::new(view(""));
         h.select(1);
         assert_eq!(h.frame(vec![Event::Cut]), None);
-        // pasting where it was cut changes nothing
+        // pasting where it was cut changes nothing, and PoB clears the mark
         assert_eq!(h.frame(vec![Event::Paste(String::new())]), None);
+        assert!(h.ui.marked_path().is_none());
+        h.frame(vec![Event::Cut]);
         // another folder
         h.view = view("sub/");
         h.frame(vec![]);
@@ -1635,7 +1648,13 @@ mod tests {
             h.frame(vec![event_key(Key::V, false, Modifiers::COMMAND)]),
             None
         );
-        // the next press and release is a paste again
+        // the next press and release is a paste again, of a fresh mark
+        h.view = view("");
+        h.frame(vec![]);
+        h.select(1);
+        h.frame(vec![Event::Copy]);
+        h.view = view("sub/");
+        h.frame(vec![]);
         assert!(matches!(
             h.frame(vec![Event::Paste("x".into())]),
             Some(ListScreenAction::CopyTo { .. })
@@ -1651,6 +1670,11 @@ mod tests {
         assert_eq!(h.frame(vec![Event::Paste(String::new())]), None);
         assert!(matches!(h.ui.dialog, Some(Dialog::Name { copy: true, .. })));
         h.ui.dialog = None;
+        // PoB clears the mark with that paste
+        assert_eq!(h.frame(vec![Event::Paste(String::new())]), None);
+        assert!(h.ui.dialog.is_none());
+        h.select(1);
+        h.frame(vec![Event::Copy]);
         h.view = view("sub/");
         h.frame(vec![]);
         let copy = Some(ListScreenAction::CopyTo {
@@ -1658,8 +1682,8 @@ mod tests {
             folder: "sub/".into(),
         });
         assert_eq!(h.frame(vec![Event::Paste(String::new())]), copy);
-        // the mark stays, as PoB's does
-        assert_eq!(h.frame(vec![Event::Paste(String::new())]), copy);
+        // and after every paste (a second Ctrl+V copies nothing)
+        assert_eq!(h.frame(vec![Event::Paste(String::new())]), None);
         // Ctrl+X after Ctrl+C replaces the mark
         h.select(2);
         h.frame(vec![Event::Cut]);
@@ -1755,5 +1779,22 @@ mod tests {
         let mut deep = entry("b", false, Some(1));
         deep.folder = "other/".into();
         assert_eq!(names(&deep), ["", "sub/", "other/inner/", "a/", "a/sub/"]);
+    }
+
+    #[test]
+    fn only_the_pastes_move_gets_its_mark_back() {
+        let mut h = H::new(view(""));
+        h.select(1);
+        h.frame(vec![Event::Cut]);
+        h.view = view("sub/");
+        h.frame(vec![]);
+        assert!(h.frame(vec![Event::Paste(String::new())]).is_some());
+        // that move worked; later a drag is refused: the old mark must not return
+        h.view = view("a/");
+        h.frame(vec![]);
+        let (two, sub) = (h.row_center(3), h.row_center(1));
+        assert!(h.drag(two, sub).is_some());
+        h.ui.move_refused();
+        assert!(h.ui.marked_path().is_none());
     }
 }

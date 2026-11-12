@@ -179,7 +179,13 @@ fn set_mode(path: &Path, mode: u32) {
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
 }
 
-/// Upstream PoB with the file natives, its build list started on its own temp Builds folder
+/// Upstream PoB with the file natives, its build list started on its own temp Builds folder.
+///
+/// HeadlessWrapper stubs `NewFileSearch`, `MakeDir` and `RemoveDir`, so upstream runs on our
+/// natives (native.rs). The comparison proves that PoB's list logic on our natives matches our
+/// glue; it does not prove our natives match SimpleGraphic's. A native bug in ordering or in
+/// `NewFileSearch`'s fields would show on both sides alike; native.rs's own unit tests cover the
+/// natives.
 struct Upstream {
     lua: mlua::Lua,
     dir: PathBuf,

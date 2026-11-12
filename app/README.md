@@ -230,11 +230,26 @@ numbers are PoB's numbers.
   - Tree: Ctrl+M, Up/Down, P, Ctrl+D, Ctrl+C on a hovered node (its text), PageUp and PageDown
     zoom. Items: E on a slot. F2 renames the selected set in the set managers; arrow keys,
     Home, End and Delete work in the lists, as in PoB.
-  - Mouse4 goes back (to the list, or up a folder). F1 opens Help.
-  - Shortcuts wait while a dialog is open or a box has the keyboard.
-- **Nothing written behind your back**: views, tooltips, Compare, trade links, the timeless
-  search, the Spectre Library before Save and Help write no file. `Settings.xml` is written
-  only by Options' Save, the build list's sort, the shared item edits and signing in or out.
+  - Mouse4 goes back (to the list, or up a folder). F1 opens Help, or the wiki page of the
+    hovered node, item, database row or gem.
+  - While a dialog is open no shortcut fires, except F1 over a row of the gem list's window.
+  - While a text box has the keyboard, the keys PoB reads before its controls still fire, as
+    in PoB: Ctrl+S, Ctrl+1 to Ctrl+6, Ctrl+I, Ctrl+W, Mouse4 and Ctrl+F, and Ctrl+M and Up/Down
+    on the Tree tab, E on the Items tab. The others wait: Ctrl+Z and Ctrl+Y (the box keeps its
+    own undo), the tree view's P, Ctrl+D, Ctrl+C, PageUp and PageDown, the set lists' F2, the
+    build list's Ctrl+N and F1's Help (a hovered row's, slot's or gem's wiki page still opens).
+    A box of the top bar or the sidebar keeps every key but Ctrl+S, Ctrl+1 to Ctrl+6, Ctrl+I,
+    Ctrl+W and Mouse4.
+- **Nothing written behind your back**: views, tooltips, Compare, trade links, the Spectre
+  Library before Save and Help write nothing in your folders. Two things write into the PoB
+  folder auto-pob downloaded, as PoB does: the timeless jewel search caches PoB's lookup tables
+  there (`Data/TimelessJewelData/*.bin`), and Help's "Download PoB's help files" button, only
+  when you click it, adds `help.txt` and `changelog.txt`. `Settings.xml` is written only by
+  Options' Save, the build list's sort, the shared item edits, signing in or out, PoB refreshing
+  an expired sign-in token, and quitting, where auto-pob saves what PoB saves at exit (the
+  import history, the last account, the open build). A write you ask for is refused with a
+  notice, and quitting leaves the file alone, when another program (classic PoB) changed
+  `Settings.xml` since auto-pob last read or wrote it, or PoB couldn't read it at start.
 
 ## Running
 

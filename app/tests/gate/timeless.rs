@@ -744,6 +744,14 @@ fn timeless_search_matches_pob() {
     s.press("searchButton");
     s.step();
     assert_eq!(s.backend.next_background(), Some(BackgroundTask::Timeless));
+    // a window that can't open leaves the search running (engine M-1)
+    s.run(Command::OpenPopup(PopupKind::EditText))
+        .expect_err("the text editor opens only from Craft");
+    assert_eq!(
+        s.backend.next_background(),
+        Some(BackgroundTask::Timeless),
+        "a refused open stranded the search"
+    );
     let ended = RefCell::new(Vec::new());
     let cancelled = s
         .backend

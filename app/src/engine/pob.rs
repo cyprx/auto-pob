@@ -383,6 +383,13 @@ impl PobBackend {
             affected.recalc = true;
             affected
         } else if effects.edited {
+            // the edit (a character import) changed what a build's or an item's window is
+            // about, and the tree a timeless search walks: such a window ends, as for a new
+            // build, and its search with it; a main one (Options) stays (R17, R19)
+            let ended = self.call::<_, bool>("popup_end", true)?;
+            if ended {
+                self.timeless_job = false;
+            }
             Affected {
                 build: true,
                 tree: true,
@@ -390,6 +397,7 @@ impl PobBackend {
                 skills: true,
                 config: true,
                 recalc: true,
+                popup: ended,
                 tree_layout: self.layout_changed()?,
                 ..Affected::default()
             }
@@ -1937,8 +1945,6 @@ impl PobBackend {
             }
             Command::OpenPopup(kind) => {
                 self.anoint_failed = false;
-                // another window replaces the session and ends its search (R17)
-                self.timeless_job = false;
                 let (name, arg) = match kind {
                     PopupKind::Craft => ("craft", 0),
                     // the item text editor only ever takes over a Craft session (R2)
@@ -1965,6 +1971,8 @@ impl PobBackend {
                     PopupKind::BuySimilar { source } => {
                         let source = self.lua.to_value(&source).map_err(|e| anyhow!("{e}"))?;
                         self.call::<_, ()>("popup_open", ("buy_similar", source))?;
+                        // another window replaces the session and ends its search (R17)
+                        self.timeless_job = false;
                         return Ok(popup_changed());
                     }
                 };
@@ -1974,6 +1982,9 @@ impl PobBackend {
                 } else {
                     self.call::<_, ()>("popup_open", (name, arg))?;
                 }
+                // another window replaces the session and ends its search (R17); a refused
+                // open left the session, and its search, as they were
+                self.timeless_job = false;
                 Ok(popup_changed())
             }
             Command::SetPopupControl { name, value } => {

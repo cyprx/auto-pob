@@ -9,8 +9,8 @@ use auto_pob::engine::pob::PobBackend;
 use auto_pob::engine::upstream::golden_of;
 use auto_pob::engine::{
     Affected, Backend, BackgroundTask, CharacterEntry, CharacterPart, Command, ConfigValue, Engine,
-    Event, FinishedRequest, ImportMode, OAuthView, PublicStage, PublicView, Realm, RequestsView,
-    Snapshot, send_snapshots,
+    Event, FinishedRequest, ImportMode, OAuthView, PopupKind, PublicStage, PublicView, Realm,
+    RequestsView, Snapshot, send_snapshots,
 };
 use auto_pob::game::Game;
 use pob_runtime::net::Canned;
@@ -1939,7 +1939,20 @@ fn public_import_matches_pob() {
         .expect("tree import");
     assert_eq!(s.requests().pending[0].label, "Importing passive tree");
     assert_eq!(our_public(&mut s).stage, PublicStage::Importing);
+    // an item's window open when the import lands ends with the edit (engine M-2)
+    s.backend
+        .apply(Command::OpenPopup(PopupKind::Craft), &|_| {})
+        .expect("Craft item");
+    assert!(s.backend.popup_view().unwrap().is_some());
     let steps = s.settle_net(Duration::from_secs(15));
+    assert!(
+        s.backend.popup_view().unwrap().is_none(),
+        "the window outlived the build it showed"
+    );
+    assert!(
+        steps.iter().any(|a| a.as_ref().is_ok_and(|a| a.popup)),
+        "the window wasn't told it ended"
+    );
     assert!(
         steps
             .iter()

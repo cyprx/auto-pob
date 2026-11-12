@@ -65,7 +65,7 @@ fn settings_xml(attributes: &BTreeMap<String, String>) -> String {
     )
 }
 
-/// PoB's own defaults for the rows (headless: the DPI stub answers 1), so the test can show
+/// PoB's own defaults for the rows (our DPI stub answers 0, "Use system default"), so the test can show
 /// that each row is compared away from them.
 fn pob_defaults(user: &std::path::Path) -> BTreeMap<&'static str, String> {
     [
@@ -103,7 +103,7 @@ fn pob_defaults(user: &std::path::Path) -> BTreeMap<&'static str, String> {
         ("showAnimations", "true".into()),
         ("showAllItemAffixes", "true".into()),
         ("disableScrollControlInteraction", "false".into()),
-        ("dpiScaleOverridePercent", "1".into()),
+        ("dpiScaleOverridePercent", "0".into()),
     ]
     .into_iter()
     .collect()
@@ -682,4 +682,23 @@ fn exit_saves_what_pob_saves_at_shutdown() {
         before,
         "the exit wrote something"
     );
+}
+
+/// A fresh user folder (no Settings.xml): PoB's DPI override default comes from our stub, which
+/// must be "Use system default" (0), so the app doesn't zoom, and the exit save writes 0
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_fresh_user_folder_does_not_shrink_the_ui() {
+    use super::net_harness::{canned, canned_web, net_session};
+    let _guard = lock();
+    let mut s = net_session("fresh-dpi", canned(&canned_web()), None);
+    let path = s.user.join("Path of Building/Settings.xml");
+    assert!(!path.exists(), "the folder is fresh");
+    let view = s.backend.settings_view().unwrap();
+    assert_eq!(row(&view, "dpiScaleOverridePercent").value, "0");
+    let zoom = auto_pob::ui::options::ui_effects(&view.rows).zoom;
+    assert!((zoom - 1.0).abs() < 1e-6, "zoom {zoom}");
+    s.backend.shutdown();
+    let written = misc_attributes(&std::fs::read_to_string(&path).unwrap());
+    assert_eq!(written["dpiScaleOverridePercent"], "0");
 }

@@ -58,16 +58,21 @@ impl Default for UiEffects {
     }
 }
 
-/// The zoom factor and window-title switch the settings ask for. `dpiScaleOverridePercent` 0
-/// is "no override".
+/// The percentages PoB's "UI scaling override" dropdown offers besides "Use system default"
+/// (0; Main.lua:928-937)
+const DPI_OVERRIDES: [u32; 7] = [100, 125, 150, 175, 200, 225, 250];
+
+/// The zoom factor and window-title switch the settings ask for. Only a percentage PoB's
+/// dropdown offers zooms; anything else (0, "Use system default", a stray 1, garbage) is no
+/// override.
 pub fn ui_effects(rows: &[SettingRow]) -> UiEffects {
     let value = |key: &str| rows.iter().find(|r| r.key == key).map(|r| r.value.as_str());
     let percent = value("dpiScaleOverridePercent")
-        .and_then(|v| v.trim().parse::<f32>().ok())
-        .filter(|p| *p > 0.0)
-        .unwrap_or(100.0);
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|p| p.fract() == 0.0 && DPI_OVERRIDES.contains(&(*p as u32)))
+        .unwrap_or(100.0) as f32;
     UiEffects {
-        zoom: (percent / 100.0).clamp(0.25, 4.0),
+        zoom: percent / 100.0,
         show_title: value("showTitlebarName") == Some("true"),
     }
 }
@@ -802,7 +807,17 @@ mod tests {
         // 0 is "no override"
         assert!((ui_effects(&rows("0", "false")).zoom - 1.0).abs() < 1e-6);
         assert!((ui_effects(&rows("garbage", "false")).zoom - 1.0).abs() < 1e-6);
-        assert!((ui_effects(&rows("1000", "false")).zoom - 4.0).abs() < 1e-6);
+        // only PoB's own percentages zoom: a fresh folder's stray 1 once shrank the UI to 25%
+        for other in ["1", "-100", "99", "1000", "150.5", ""] {
+            assert!(
+                (ui_effects(&rows(other, "false")).zoom - 1.0).abs() < 1e-6,
+                "{other}"
+            );
+        }
+        for percent in [100, 125, 175, 200, 225, 250] {
+            let zoom = ui_effects(&rows(&percent.to_string(), "false")).zoom;
+            assert!((zoom - percent as f32 / 100.0).abs() < 1e-6, "{percent}");
+        }
         assert_eq!(window_title(true, Some("Witch")), "auto-pob - Witch");
         assert_eq!(window_title(false, Some("Witch")), "auto-pob");
         assert_eq!(window_title(true, None), "auto-pob");

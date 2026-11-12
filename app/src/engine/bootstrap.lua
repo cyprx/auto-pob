@@ -57,8 +57,10 @@ end
 function GetVirtualScreenSize()
 	return GetScreenSize()
 end
+-- PoB's "Use system default" (Main.lua:928-937): PoB takes this as the setting's default when
+-- Settings.xml has none (Main.lua:112), and the UI sizes itself (R13)
 function GetDPIScaleOverridePercent()
-	return 1
+	return 0
 end
 function SetDPIScaleOverridePercent(scale) end
 function SetClearColor(r, g, b, a) end

@@ -126,6 +126,28 @@ fn pobs_switch_to_its_compare_tab_is_followed() {
 }
 
 #[test]
+fn a_comparison_landing_under_a_window_keeps_its_tab() {
+    // PoB switches at the user's Import click; a link's comparison lands later, and the
+    // switch would end the window the user has open by then
+    let (mut app, ctx) = open_build();
+    app.tab = BuildTab::Items;
+    frame(&mut app, &ctx, vec![]);
+    app.items.open_text_window_for_test();
+    frame(&mut app, &ctx, vec![]);
+    let mut view = sample();
+    view.switched = true;
+    inject(&mut app, Some(view));
+    frame(&mut app, &ctx, vec![]);
+    assert_eq!(app.tab, BuildTab::Items);
+    assert!(app.items.text_window_open(), "the text window was dropped");
+    assert!(
+        app.notices.iter().any(|n| n.contains("Compare tab")),
+        "{:?}",
+        app.notices
+    );
+}
+
+#[test]
 fn the_tree_view_turns_the_overlay_on_and_off() {
     let (mut app, ctx) = open_build();
     inject(&mut app, Some(sample()));

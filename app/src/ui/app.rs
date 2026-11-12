@@ -595,9 +595,16 @@ impl AutoPobApp {
                 }
                 self.import_ui.on_snapshot(&snapshot, seq);
                 self.compare.on_snapshot(&snapshot);
-                // PoB switched to its Compare tab: an Import-tab comparison landed (R5)
+                // PoB switched to its Compare tab: an Import-tab comparison landed (R5). PoB
+                // switches at the user's Import click; a link's comparison lands later, so
+                // a window open by then keeps its tab, which leaving would end
                 if self.compare.take_switched() {
-                    self.tab = BuildTab::Compare;
+                    if self.tab == BuildTab::Compare || !(self.modal() || self.popup.is_open()) {
+                        self.tab = BuildTab::Compare;
+                    } else {
+                        self.notices
+                            .push("Comparison imported: see the Compare tab".to_owned());
+                    }
                 }
                 match snapshot {
                     Snapshot::Build(view) => {
@@ -1410,6 +1417,24 @@ impl AutoPobApp {
         }
     }
 
+    /// A window is open on the build screen that PoB would hold as a popup: nothing behind
+    /// it gets a key (Main.lua:365-367)
+    fn modal(&self) -> bool {
+        self.prompt.is_some()
+            || self.save_as.is_some()
+            || self.import.is_some()
+            || self.confirm.is_some()
+            || self.tree.has_dialog()
+            || self.skills.has_dialog()
+            || self.items.has_dialog()
+            || self.compare.has_dialog()
+            || self.top_bar.has_dialog()
+            || self.popup.is_blocking()
+            || self.options.window.is_blocking()
+            // PoB's About is a popup too
+            || self.help.is_open()
+    }
+
     fn build_screen(&mut self, ui: &mut egui::Ui) {
         let (Some(view), None) = (self.build.clone(), self.entering) else {
             egui::CentralPanel::default().show(ui, |ui| {
@@ -1424,19 +1449,7 @@ impl AutoPobApp {
 
         // Shortcuts. Nothing fires under a modal. While a text field has focus, Ctrl+Z and
         // Ctrl+Y are left unconsumed for the field's own undo; Ctrl+S still saves.
-        let modal = self.prompt.is_some()
-            || self.save_as.is_some()
-            || self.import.is_some()
-            || self.confirm.is_some()
-            || self.tree.has_dialog()
-            || self.skills.has_dialog()
-            || self.items.has_dialog()
-            || self.compare.has_dialog()
-            || self.top_bar.has_dialog()
-            || self.popup.is_blocking()
-            || self.options.window.is_blocking()
-            // PoB's About is a popup: nothing behind it gets a key (Main.lua:365-367)
-            || self.help.is_open();
+        let modal = self.modal();
         // a dropped list of the top bar's or the sidebar's is Build's selected control: it
         // takes every key, as a Build box does (Build.lua:1230, ControlHost.lua:35-45)
         let build_dropped = crate::widgets::scroll_step::take_build_dropped(ui.ctx());

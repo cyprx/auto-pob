@@ -188,6 +188,11 @@ impl ItemsUi {
     }
 
     #[cfg(test)]
+    #[cfg(test)]
+    pub(crate) fn open_text_window_for_test(&mut self) {
+        self.display.text_window = Some(text_window::TextWindow::create());
+    }
+
     pub fn text_window_open(&self) -> bool {
         self.display.text_window.is_some()
     }

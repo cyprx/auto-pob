@@ -272,6 +272,19 @@ fn bloodline(ui: &mut egui::Ui, view: &BuildView, commands: &mut Vec<Command>) {
                 }
             });
         note(ui, "bloodline", combo.response.rect);
+        // the wheel and the arrows step it (DropDownControl.lua:476-516)
+        let at = view
+            .secondary
+            .iter()
+            .position(|(id, _)| *id == view.secondary_selected)
+            .unwrap_or(0);
+        if let Some(i) =
+            crate::widgets::scroll_step::combo_step(ui, &combo.response, view.secondary.len(), at)
+        {
+            commands.push(Command::SelectSecondaryAscendancy {
+                id: view.secondary[i].0,
+            });
+        }
     });
 }
 
@@ -346,6 +359,22 @@ fn loadouts(
             }
         });
     note(ui, "loadouts", combo.response.rect);
+    // the wheel and the arrows step through the loadouts themselves, not the headers and
+    // actions between them
+    let real: Vec<usize> = (0..view.loadouts.len())
+        .filter(|&i| !is_loadout_marker(&view.loadouts[i]))
+        .collect();
+    let at = view
+        .loadout_selected
+        .and_then(|s| real.iter().position(|&i| i == s));
+    if let Some(at) = at
+        && let Some(i) =
+            crate::widgets::scroll_step::combo_step(ui, &combo.response, real.len(), at)
+    {
+        commands.push(Command::SelectLoadout {
+            label: view.loadouts[real[i]].clone(),
+        });
+    }
 }
 
 /// "New Loadout"'s name popup ("Set Name"): Save needs a name with a visible character

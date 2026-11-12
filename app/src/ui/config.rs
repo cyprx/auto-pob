@@ -206,6 +206,19 @@ impl ConfigUi {
                     }
                 });
             self.note("set_combo".into(), &combo.response);
+            // the wheel and the arrows step it (DropDownControl.lua:476-516)
+            let at = view
+                .sets
+                .iter()
+                .position(|s| s.id == view.active_set)
+                .unwrap_or(0);
+            if let Some(i) =
+                crate::widgets::scroll_step::combo_step(ui, &combo.response, view.sets.len(), at)
+            {
+                commands.push(Command::SelectConfigSet {
+                    id: view.sets[i].id,
+                });
+            }
             self.set_buttons(ui, view, active.map(|s| s.title.as_str()), commands);
             ui.separator();
             let search = ui.add(
@@ -431,6 +444,24 @@ impl ConfigUi {
                         }
                     });
                 self.note(format!("list:{var}"), &combo.response);
+                let at = option
+                    .choices
+                    .iter()
+                    .position(|c| c.value == current)
+                    .unwrap_or(0);
+                if let Some(i) = crate::widgets::scroll_step::combo_step(
+                    ui,
+                    &combo.response,
+                    option.choices.len(),
+                    at,
+                ) {
+                    let value = option.choices[i].value.clone();
+                    self.picks.insert(var.to_owned(), value.clone());
+                    commands.push(Command::SetConfig {
+                        var: var.to_owned(),
+                        value: ConfigValue::Choice(value),
+                    });
+                }
                 combo.response
             }
             ConfigKind::Count | ConfigKind::Integer | ConfigKind::Float | ConfigKind::Text => {

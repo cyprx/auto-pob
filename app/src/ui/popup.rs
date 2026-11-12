@@ -724,6 +724,18 @@ impl PopupWindow {
                 }
                 let slider = ui.add_enabled(c.enabled, widget);
                 self.rects.note(&slider, || name.to_owned());
+                // the wheel and the arrows move it, to its divisions (SliderControl.lua:164-180)
+                if let Some(to) = crate::widgets::scroll_step::slider_step(ui, &slider, value) {
+                    let to = match c.divisions.filter(|d| *d > 0) {
+                        Some(d) => (to * f64::from(d)).round() / f64::from(d),
+                        None => to,
+                    };
+                    self.sliders.insert(name.to_owned(), to);
+                    out.commands.push(Command::SetPopupControl {
+                        name: name.to_owned(),
+                        value: PopupInput::Number(to),
+                    });
+                }
                 self.hint(&slider, c, None);
                 if slider.dragged() || slider.changed() {
                     self.sliders.insert(name.to_owned(), value);

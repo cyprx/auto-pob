@@ -4,6 +4,7 @@ pub mod edit_box;
 pub mod item_tooltip;
 pub mod list;
 pub mod pob_text;
+pub mod scroll_step;
 pub mod search_combo;
 pub mod size_grip;
 pub mod tooltip;

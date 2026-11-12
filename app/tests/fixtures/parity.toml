@@ -3285,8 +3285,7 @@ note = "PoB's only dragger is ResizableEditControl's grip, not the sidebar"
 ported = "app/src/widgets/size_grip.rs right-click puts the box at its least, or its most when it is at its least (ResizableEditControl.lua:16-25)"
 
 [keys."DropDownControl.DOWN"]
-gap = "Task 14"
-note = "arrow keys step a focused dropdown"
+ported = "app/src/widgets/scroll_step.rs dropdown_step, at every dropdown (search_combo and each ComboBox): Down steps a pointed-at or dropped dropdown (DropDownControl.lua:498-501)"
 
 [keys."DropDownControl.ESCAPE"]
 ported = "app/src/ui"
@@ -3301,16 +3300,13 @@ ported = "app/src/ui"
 note = "egui's own widget behaviour"
 
 [keys."DropDownControl.UP"]
-gap = "Task 14"
-note = "arrow keys step a focused dropdown"
+ported = "app/src/widgets/scroll_step.rs dropdown_step, at every dropdown (search_combo and each ComboBox): Up steps a pointed-at or dropped dropdown (DropDownControl.lua:512-515)"
 
 [keys."DropDownControl.WHEELDOWN"]
-gap = "Task 14"
-note = "controller ruling: the wheel changes a hovered dropdown or slider, as PoB (read the scroll delta while hovered)"
+ported = "app/src/widgets/scroll_step.rs dropdown_step, at every dropdown (search_combo and each ComboBox): the wheel or PageDown steps a pointed-at closed dropdown, unless PoB's Disable control scroll interaction (DropDownControl.lua:488-497)"
 
 [keys."DropDownControl.WHEELUP"]
-gap = "Task 14"
-note = "controller ruling: the wheel changes a hovered dropdown or slider, as PoB (read the scroll delta while hovered)"
+ported = "app/src/widgets/scroll_step.rs dropdown_step, at every dropdown (search_combo and each ComboBox): the wheel or PageUp steps a pointed-at closed dropdown, unless PoB's Disable control scroll interaction (DropDownControl.lua:502-511)"
 
 [keys."EditControl.+"]
 gap = "Task 13"
@@ -3551,12 +3547,10 @@ ported = "app/src/ui"
 note = "egui's own widget behaviour"
 
 [keys."SearchHost.BACK"]
-gap = "Task 14"
-note = "type-to-search in a dropped dropdown (SearchHost)"
+ported = "app/src/widgets/search_combo.rs a dropped dropdown's search box: Backspace takes the search's last letter (SearchHost.lua:112-114)"
 
 [keys."SearchHost.ESCAPE"]
-gap = "Task 14"
-note = "type-to-search in a dropped dropdown (SearchHost)"
+ported = "app/src/widgets/search_combo.rs Esc empties a search and keeps the list dropped; with no search Esc closes it (SearchHost.lua:109-111)"
 
 [keys."SharedItemSetListControl.F2"]
 gap = "Task 13"
@@ -3604,12 +3598,10 @@ ported = "app/src/ui"
 note = "egui's own widget behaviour"
 
 [keys."SliderControl.WHEELDOWN"]
-gap = "Task 14"
-note = "controller ruling: the wheel changes a hovered dropdown or slider, as PoB (read the scroll delta while hovered)"
+ported = "app/src/widgets/scroll_step.rs slider_step at every slider: 0.05 a notch, 0.25 with Shift, 0.01 with Ctrl, reversed by PoB's Invert slider scroll direction (SliderControl.lua:164-171)"
 
 [keys."SliderControl.WHEELUP"]
-gap = "Task 14"
-note = "controller ruling: the wheel changes a hovered dropdown or slider, as PoB (read the scroll delta while hovered)"
+ported = "app/src/widgets/scroll_step.rs slider_step at every slider: 0.05 a notch, 0.25 with Shift, 0.01 with Ctrl, reversed by PoB's Invert slider scroll direction (SliderControl.lua:172-179)"
 
 [keys."TextListControl.WHEELDOWN"]
 ported = "app/src/ui"

@@ -109,7 +109,15 @@ fn dropdown(ui: &mut egui::Ui, rects: &mut Rects, key: &str, list: &DropList) ->
             })
     });
     rects.note(&combo.inner.response, || key.to_owned());
-    picked
+    // the wheel and the arrows step it (DropDownControl.lua:476-516)
+    picked.or_else(|| {
+        crate::widgets::scroll_step::combo_step(
+            ui,
+            &combo.inner.response,
+            list.labels.len(),
+            list.selected,
+        )
+    })
 }
 
 fn colour(name: &str) -> Option<SocketColour> {
@@ -268,6 +276,25 @@ fn panel(
                         }
                     });
                 state.rects.note(&combo.response, || format!("socket_{i}"));
+                // the wheel and the arrows step it (DropDownControl.lua:476-516)
+                let colours = [
+                    SocketColour::R,
+                    SocketColour::G,
+                    SocketColour::B,
+                    SocketColour::W,
+                ];
+                let at = colours
+                    .iter()
+                    .position(|c| current == Some(*c))
+                    .unwrap_or(0);
+                if let Some(to) =
+                    crate::widgets::scroll_step::combo_step(ui, &combo.response, colours.len(), at)
+                {
+                    out.push(Command::SetItemSocket {
+                        index: i,
+                        colour: colours[to],
+                    });
+                }
                 if let Some(linked) = socket.linked {
                     let mut on = linked;
                     let link = ui.checkbox(&mut on, "");
@@ -370,6 +397,15 @@ fn panel(
                     }
                 });
             state.rects.note(&combo.response, || "range_lines".into());
+            if let Some(i) = crate::widgets::scroll_step::combo_step(
+                ui,
+                &combo.response,
+                view.range_lines.len(),
+                line,
+            ) {
+                state.range_line = i;
+                state.slider = None;
+            }
         });
         let current = &view.range_lines[state.range_line];
         let line = state.range_line;
@@ -383,6 +419,11 @@ fn panel(
                 };
                 let slider = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).show_value(false));
                 state.rects.note(&slider, || "range_slider".into());
+                // the wheel and the arrows move it (SliderControl.lua:164-180)
+                if let Some(to) = crate::widgets::scroll_step::slider_step(ui, &slider, value) {
+                    state.slider = Some((line, to));
+                    out.push(Command::SetRangeLine { line, value: to });
+                }
                 if slider.dragged() || slider.changed() {
                     state.slider = Some((line, value));
                 }

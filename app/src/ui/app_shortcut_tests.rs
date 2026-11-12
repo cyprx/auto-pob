@@ -183,13 +183,14 @@ fn up_down_switch_specs() {
     frame(&mut app, &ctx, plain(Key::ArrowDown));
     assert_eq!(sent_since(&app, before), ["SelectSpec { index: 1 }"]);
 
-    // with the pointer on the tree selector the keys leave the trees alone
+    // with the pointer on the tree selector TreeTab leaves the key to the dropdown, which
+    // steps itself (TreeTab.lua:367-371, DropDownControl.lua:498-501): one step, not two
     let combo = rect_of(&app, "spec_combo").center();
     frame(&mut app, &ctx, vec![Event::PointerMoved(combo)]);
     frame(&mut app, &ctx, vec![]);
     let before = app.sent_full.len();
     frame(&mut app, &ctx, plain(Key::ArrowDown));
-    assert!(sent_since(&app, before).is_empty());
+    assert_eq!(sent_since(&app, before), ["SelectSpec { index: 1 }"]);
 }
 
 #[test]
@@ -583,4 +584,24 @@ fn a_right_click_into_a_text_box_pastes_the_clipboard() {
             .iter()
             .any(|c| c == "SetTreeSearch { text: \"life\" }")
     });
+}
+
+#[test]
+fn the_wheel_steps_a_pointed_at_dropdown() {
+    let (mut app, ctx) = tree_app();
+    let combo = rect_of(&app, "spec_combo").center();
+    frame(&mut app, &ctx, vec![Event::PointerMoved(combo)]);
+    let before = app.sent_full.len();
+    let wheel = |y| Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::Vec2::new(0.0, y),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+        modifiers: Modifiers::NONE,
+    };
+    // the first of two trees: up does nothing, down picks the second
+    frame(&mut app, &ctx, vec![wheel(1.0)]);
+    assert!(sent_since(&app, before).is_empty());
+    frame(&mut app, &ctx, vec![wheel(-1.0)]);
+    assert_eq!(sent_since(&app, before), ["SelectSpec { index: 1 }"]);
 }

@@ -188,6 +188,15 @@ fn dropdown(
                 }
             });
         note(ui, key, combo.response.rect);
+        // the wheel and the arrows step it (DropDownControl.lua:476-516)
+        if let Some(index) = crate::widgets::scroll_step::combo_step(
+            ui,
+            &combo.response,
+            list.labels.len(),
+            list.selected,
+        ) {
+            out.push(Command::SetMainSkillSelect { control, index });
+        }
     });
     ui.end_row();
 }

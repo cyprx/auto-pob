@@ -436,6 +436,13 @@ impl BuildListUi {
                         }
                     });
                 mark(ui, "sort_combo", &combo.response);
+                // the wheel and the arrows step it (DropDownControl.lua:476-516)
+                let at = SORTS.iter().position(|(s, _)| *s == view.sort).unwrap_or(0);
+                if let Some(i) =
+                    crate::widgets::scroll_step::combo_step(ui, &combo.response, SORTS.len(), at)
+                {
+                    action = Some(ListScreenAction::SetSort(SORTS[i].0));
+                }
             });
         });
         action = self.search_box(ui, view, now).or(action);

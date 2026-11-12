@@ -78,6 +78,23 @@ impl SkillsUi {
                         }
                     });
                 self.rects.note(&combo.response, || "slot".into());
+                // the wheel and the arrows step it (DropDownControl.lua:476-516)
+                let at = view
+                    .slot_choices
+                    .iter()
+                    .position(|c| c.slot == g.slot)
+                    .unwrap_or(0);
+                if let Some(i) = crate::widgets::scroll_step::combo_step(
+                    ui,
+                    &combo.response,
+                    view.slot_choices.len(),
+                    at,
+                ) {
+                    out.commands.push(Command::SetGroupSlot {
+                        group: gi,
+                        slot: view.slot_choices[i].slot.clone(),
+                    });
+                }
                 if !g.slot_enabled {
                     ui.colored_label(ERROR, "slot disabled");
                 }

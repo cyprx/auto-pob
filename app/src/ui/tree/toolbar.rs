@@ -159,6 +159,15 @@ impl Toolbar {
                 }
             });
         rects.note(&combo.response, || "spec_combo".into());
+        // the wheel and the arrows step it (DropDownControl.lua:476-516)
+        if let Some(index) = crate::widgets::scroll_step::combo_step(
+            ui,
+            &combo.response,
+            state.specs.len(),
+            state.active_spec,
+        ) {
+            commands.push(Command::SelectSpec { index });
+        }
         self.spec_combo = Some(combo.response.id);
         self.spec_busy = combo.response.hovered()
             || egui::Popup::is_id_open(ui.ctx(), combo.response.id.with("popup"));
@@ -208,6 +217,23 @@ impl Toolbar {
                 }
             });
         rects.note(&compare.response, || "compare_combo".into());
+        // its entries: None, then every tree but the active one
+        let entries: Vec<Option<usize>> = std::iter::once(None)
+            .chain(
+                (0..state.specs.len())
+                    .filter(|&i| i != state.active_spec)
+                    .map(Some),
+            )
+            .collect();
+        let at = entries
+            .iter()
+            .position(|e| *e == state.compare_spec)
+            .unwrap_or(0);
+        if let Some(i) =
+            crate::widgets::scroll_step::combo_step(ui, &compare.response, entries.len(), at)
+        {
+            commands.push(Command::SetCompareSpec { index: entries[i] });
+        }
     }
 
     /// PoB's point display (`pointDisplay`), in the top bar; `progress` is its tooltip
@@ -269,6 +295,24 @@ impl Toolbar {
                 }
             });
         rects.note(&combo.response, || "class_combo".into());
+        let at = state
+            .classes
+            .iter()
+            .position(|c| c.id == state.class_id)
+            .unwrap_or(0);
+        if let Some(i) =
+            crate::widgets::scroll_step::combo_step(ui, &combo.response, state.classes.len(), at)
+        {
+            let c = &state.classes[i];
+            if c.needs_confirm {
+                self.class_dialog = Some((c.id, c.name.clone()));
+            } else {
+                commands.push(Command::SelectClass {
+                    id: c.id,
+                    connect: false,
+                });
+            }
+        }
         let ascendancies = class.map_or(&[][..], |c| c.ascendancies.as_slice());
         let current = ascendancies.iter().find(|a| a.id == state.ascendancy_id);
         let combo = egui::ComboBox::from_id_salt("tree_ascendancy")
@@ -283,6 +327,17 @@ impl Toolbar {
                 }
             });
         rects.note(&combo.response, || "ascendancy_combo".into());
+        let at = ascendancies
+            .iter()
+            .position(|a| a.id == state.ascendancy_id)
+            .unwrap_or(0);
+        if let Some(i) =
+            crate::widgets::scroll_step::combo_step(ui, &combo.response, ascendancies.len(), at)
+        {
+            commands.push(Command::SelectAscendancy {
+                id: ascendancies[i].id,
+            });
+        }
     }
 
     pub(super) fn search(
@@ -368,6 +423,23 @@ impl Toolbar {
                 }
             });
         rects.note(&combo.response, || "heat_stat".into());
+        // its entries: Off, then the stats
+        let at = state
+            .heatmap
+            .as_ref()
+            .and_then(|h| state.power_stats.iter().position(|s| s == h))
+            .map_or(0, |i| i + 1);
+        if let Some(i) = crate::widgets::scroll_step::combo_step(
+            ui,
+            &combo.response,
+            state.power_stats.len() + 1,
+            at,
+        ) {
+            commands.push(set(
+                i.checked_sub(1).map(|i| state.power_stats[i].clone()),
+                state.max_depth,
+            ));
+        }
         ui.add_enabled_ui(state.heatmap.is_some(), |ui| {
             let combo = egui::ComboBox::from_id_salt("tree_heat_depth")
                 .selected_text(
@@ -391,6 +463,19 @@ impl Toolbar {
                     }
                 });
             rects.note(&combo.response, || "heat_depth".into());
+            // its entries: All, then the depths
+            let at = state
+                .max_depth
+                .and_then(|d| DEPTHS.iter().position(|x| *x == d))
+                .map_or(0, |i| i + 1);
+            if let Some(i) =
+                crate::widgets::scroll_step::combo_step(ui, &combo.response, DEPTHS.len() + 1, at)
+            {
+                commands.push(set(
+                    state.heatmap.clone(),
+                    i.checked_sub(1).map(|i| DEPTHS[i]),
+                ));
+            }
         });
         if power.failed {
             ui.colored_label(theme::NEGATIVE, "calculation failed");

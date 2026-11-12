@@ -317,6 +317,15 @@ impl CalcsUi {
                     }
                 });
             self.rects.note(&combo.response, || key.to_owned());
+            // the wheel and the arrows step it (DropDownControl.lua:476-516)
+            if let Some(index) = crate::widgets::scroll_step::combo_step(
+                ui,
+                &combo.response,
+                list.labels.len(),
+                list.selected,
+            ) {
+                out.push(Command::SetCalcsSelect { control, index });
+            }
             response = Some(combo.response);
         });
         response

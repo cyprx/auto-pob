@@ -63,6 +63,19 @@ impl SkillsUi {
                     }
                 });
             self.rects.note(&combo.response, || "set".into());
+            // the wheel and the arrows step it (DropDownControl.lua:476-516)
+            let at = view
+                .sets
+                .iter()
+                .position(|s| s.id == view.active_set)
+                .unwrap_or(0);
+            if let Some(i) =
+                crate::widgets::scroll_step::combo_step(ui, &combo.response, view.sets.len(), at)
+            {
+                out.commands.push(Command::SelectSkillSet {
+                    id: view.sets[i].id,
+                });
+            }
             let manage = ui.button("Manage\u{2026}");
             self.rects.note(&manage, || "manage".into());
             if manage.clicked() {

@@ -200,6 +200,26 @@ impl ItemsUi {
                 self.rects.note(&combo.inner.response, || {
                     format!("slot_combo_{}", slot.name)
                 });
+                // the wheel and the arrows step it: None, then its items
+                // (DropDownControl.lua:476-516)
+                let entries: Vec<u32> = std::iter::once(0)
+                    .chain(slot.choices.iter().copied())
+                    .collect();
+                let at = entries
+                    .iter()
+                    .position(|&e| e == slot.selected)
+                    .unwrap_or(0);
+                if let Some(i) = crate::widgets::scroll_step::combo_step(
+                    ui,
+                    &combo.inner.response,
+                    entries.len(),
+                    at,
+                ) {
+                    out.commands.push(Command::EquipItem {
+                        slot: slot.name.clone(),
+                        id: (entries[i] != 0).then_some(entries[i]),
+                    });
+                }
 
                 // the tree's right click on this slot's socket: scroll to it and drop it down
                 if self.focus_slot.as_deref() == Some(&slot.name) {

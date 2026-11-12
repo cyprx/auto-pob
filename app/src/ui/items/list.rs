@@ -130,6 +130,15 @@ impl ItemsUi {
                     })
             });
             self.rects.note(&combo.inner.response, || "filter".into());
+            // the wheel and the arrows step it (DropDownControl.lua:476-516)
+            if let Some(index) = crate::widgets::scroll_step::combo_step(
+                ui,
+                &combo.inner.response,
+                f.labels.len(),
+                f.selected,
+            ) {
+                out.commands.push(Command::SetItemListFilter { index });
+            }
             let sort = ui.button("Sort");
             self.rects.note(&sort, || "sort".into());
             if sort.clicked() {

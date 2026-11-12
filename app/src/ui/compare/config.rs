@@ -79,6 +79,22 @@ pub(super) fn show(
                         }
                     });
                 rects.note(&combo.response, || "config_set".into());
+                // the wheel and the arrows step it (DropDownControl.lua:476-516)
+                let at = config
+                    .sets
+                    .iter()
+                    .position(|s| s.id == config.active_set)
+                    .unwrap_or(0);
+                if let Some(i) = crate::widgets::scroll_step::combo_step(
+                    ui,
+                    &combo.response,
+                    config.sets.len(),
+                    at,
+                ) {
+                    out.commands.push(Command::SelectConfigSet {
+                        id: config.sets[i].id,
+                    });
+                }
             });
         }
     });

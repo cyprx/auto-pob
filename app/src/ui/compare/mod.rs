@@ -345,6 +345,17 @@ impl CompareUi {
                         }
                     });
                 self.rects.note(&combo.response, || "entries".into());
+                // the wheel and the arrows step it (DropDownControl.lua:476-516)
+                if !busy
+                    && let Some(index) = crate::widgets::scroll_step::combo_step(
+                        ui,
+                        &combo.response,
+                        view.entries.len(),
+                        view.active,
+                    )
+                {
+                    out.commands.push(Command::SelectCompare { index });
+                }
             }
             let has_file = self.has_file;
             let rects = &mut self.rects;

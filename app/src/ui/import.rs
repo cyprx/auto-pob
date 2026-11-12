@@ -436,6 +436,14 @@ impl ImportUi {
                     }
                 });
             mark(ui, "realm_combo", &combo.response);
+            // the wheel and the arrows step it (DropDownControl.lua:476-516)
+            let realms = [Realm::Pc, Realm::Xbox, Realm::Sony];
+            let at = realms.iter().position(|r| *r == self.realm).unwrap_or(0);
+            if let Some(i) =
+                crate::widgets::scroll_step::combo_step(ui, &combo.response, realms.len(), at)
+            {
+                self.realm = realms[i];
+            }
             if before != self.realm {
                 self.league = None;
                 self.selected = None;
@@ -651,6 +659,14 @@ impl ImportUi {
                     }
                 });
             mark(ui, "league_combo", &combo.response);
+            let at = (0..leagues.len())
+                .position(|i| league_value(leagues, i) == self.league)
+                .unwrap_or(0);
+            if let Some(i) =
+                crate::widgets::scroll_step::combo_step(ui, &combo.response, leagues.len(), at)
+            {
+                self.league = league_value(leagues, i);
+            }
         });
         let visible: Vec<&CharacterEntry> = characters
             .iter()
@@ -867,6 +883,16 @@ impl ImportUi {
                     }
                 });
             mark(ui, "site_combo", &combo.response);
+            let at = view
+                .sites
+                .iter()
+                .position(|s| Some(&s.id) == chosen.as_ref())
+                .unwrap_or(0);
+            if let Some(i) =
+                crate::widgets::scroll_step::combo_step(ui, &combo.response, view.sites.len(), at)
+            {
+                self.site = Some(view.sites[i].id.clone());
+            }
             let r = ui.add_enabled(
                 chosen.is_some() && !view.sharing,
                 theme::primary_button("Share"),

@@ -435,6 +435,15 @@ impl SkillsUi {
                 })
         });
         self.rects.note(&combo.inner.response, || key.to_owned());
+        // the wheel and the arrows step it (DropDownControl.lua:476-516)
+        chosen = chosen.or_else(|| {
+            crate::widgets::scroll_step::combo_step(
+                ui,
+                &combo.inner.response,
+                list.labels.len(),
+                list.selected,
+            )
+        });
         if !help.is_empty() {
             combo.inner.response.on_hover_ui(|ui| {
                 for line in help {

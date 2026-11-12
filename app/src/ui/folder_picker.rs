@@ -128,6 +128,14 @@ impl FolderPicker {
                     }
                 });
             mark(ui, "picker_sort", &combo.response);
+            // the wheel and the arrows step it (DropDownControl.lua:476-516)
+            let sorts = [FolderSort::Name, FolderSort::Edited];
+            let at = sorts.iter().position(|s| *s == self.sort).unwrap_or(0);
+            if let Some(i) =
+                crate::widgets::scroll_step::combo_step(ui, &combo.response, sorts.len(), at)
+            {
+                self.sort = sorts[i];
+            }
         });
         if let Some(text) = &mut self.naming {
             let mut create = false;

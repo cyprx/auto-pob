@@ -57,6 +57,13 @@ pub fn show(ctx: &egui::Context, window: &mut TextWindow, rects: &mut Rects) -> 
                     }
                 });
             rects.note(&combo.response, || "text_rarity".into());
+            // the wheel and the arrows step it (DropDownControl.lua:476-516)
+            let at = window.rarity.min(RARITIES.len() - 1);
+            if let Some(i) =
+                crate::widgets::scroll_step::combo_step(ui, &combo.response, RARITIES.len(), at)
+            {
+                window.rarity = i;
+            }
         });
         let edit = ui.add(
             egui::TextEdit::multiline(&mut window.text)

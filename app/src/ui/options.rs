@@ -326,6 +326,16 @@ impl Extras<'_> {
                         }
                     });
                 super::import::mark(ui, "options_realm", &combo.response);
+                // the wheel and the arrows step it (DropDownControl.lua:476-516)
+                let at = REALMS
+                    .iter()
+                    .position(|r| *r == self.draft.trade_realm)
+                    .unwrap_or(0);
+                if let Some(i) =
+                    crate::widgets::scroll_step::combo_step(ui, &combo.response, REALMS.len(), at)
+                {
+                    self.draft.trade_realm = REALMS[i].to_owned();
+                }
                 ui.end_row();
 
                 ui.label("Trade league");

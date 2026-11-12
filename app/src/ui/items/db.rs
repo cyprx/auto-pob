@@ -220,7 +220,15 @@ fn drop_list(
             })
     });
     rects.note(&combo.inner.response, || format!("db_{key}"));
-    picked
+    // the wheel and the arrows step it (DropDownControl.lua:476-516)
+    picked.or_else(|| {
+        crate::widgets::scroll_step::combo_step(
+            ui,
+            &combo.inner.response,
+            list.labels.len(),
+            selected,
+        )
+    })
 }
 
 pub fn show(

@@ -179,6 +179,8 @@ pub struct AutoPobApp {
     clipboard_read: Option<ClipboardRead>,
     /// The text a right-click pastes into the box it focused, at the next frame's start
     paste_next: Option<String>,
+    /// PoB's options for the wheel on dropdowns and sliders, as its settings last said
+    scroll_options: crate::widgets::scroll_step::ScrollOptions,
     /// PoB's foot labels as drawn, for tests
     #[cfg(test)]
     label_texts: Vec<String>,
@@ -254,6 +256,7 @@ impl AutoPobApp {
             help_rx: None,
             clipboard_read: None,
             paste_next: None,
+            scroll_options: Default::default(),
             #[cfg(test)]
             label_texts: Vec::new(),
             #[cfg(test)]
@@ -378,6 +381,11 @@ impl AutoPobApp {
     /// PoB's settings, as the engine sees them now; the answer to an Options Save also carries
     /// the overrides it moved, and then the file is written and the map sent again (R12).
     fn on_settings(&mut self, view: &crate::engine::SettingsView, seq: u64) {
+        let on = |key: &str| view.rows.iter().any(|r| r.key == key && r.value == "true");
+        self.scroll_options = crate::widgets::scroll_step::ScrollOptions {
+            disable: on("disableScrollControlInteraction"),
+            invert_slider: on("invertSliderScrollDirection"),
+        };
         let Some(next) = self.options.on_settings(view, seq) else {
             return;
         };
@@ -966,6 +974,7 @@ impl AutoPobApp {
     pub fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.process_events();
+        crate::widgets::scroll_step::set_options(&ctx, self.scroll_options);
         self.right_click_paste(&ctx);
 
         // closing the window with unsaved changes asks first

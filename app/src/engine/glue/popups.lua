@@ -668,8 +668,9 @@ local function control_view(name, control, kind, popup_x, popup_y)
 			view.row_highlight = row_key(far, control.highlightIndex)
 		end
 		view.note = control.defaultText and text_of(control:GetProperty("defaultText")) or nil
-		-- PoB lets the user drag rows to reorder this list
-		view.reorder = control.isMutable and true or false
+		-- PoB lets the user drag rows to reorder this list (left out otherwise, so the view
+		-- keeps the shape the item gate compares)
+		view.reorder = control.isMutable and true or nil
 	end
 	return view
 end

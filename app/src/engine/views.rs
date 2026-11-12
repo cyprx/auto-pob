@@ -1634,8 +1634,9 @@ pub struct PopupControl {
     pub row_highlight: Option<String>,
     /// A list's `defaultText`
     pub note: Option<String>,
-    /// A list whose rows PoB lets the user drag into another order (`isMutable`)
-    #[serde(default)]
+    /// A list whose rows PoB lets the user drag into another order (`isMutable`); left out
+    /// of the serialised view when false
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reorder: bool,
 }
 

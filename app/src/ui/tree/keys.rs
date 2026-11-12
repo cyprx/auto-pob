@@ -54,6 +54,66 @@ impl TreeTab {
         self.hovered_node().map(|n| n.name.clone())
     }
 
+    /// PoB's path tracing (PassiveTreeView.lua:283-363), for the node under the pointer
+    /// (`hovered`) with Shift held or not. Returns the node that stays hovered: one the trace
+    /// can't take isn't. A change of the trace asks for the tooltip again.
+    pub(super) fn trace_step(
+        &mut self,
+        layout: &crate::engine::TreeLayout,
+        hovered: Option<u32>,
+        shift: bool,
+    ) -> Option<u32> {
+        let before = self.trace.len();
+        if !shift {
+            self.trace.clear();
+            if before > 0 {
+                self.previewed = None;
+            }
+            return hovered;
+        }
+        let id = hovered?;
+        // a node with no path can't be traced to
+        let path = self.derived.paths.get(&id)?;
+        let old = self.trace.clone();
+        let mut keep = Some(id);
+        match self.trace.last().copied() {
+            // it starts as the node's own path, from the tree to it
+            None => self.trace = path.iter().rev().copied().collect(),
+            Some(last) if last != id => {
+                let index = |id: u32| self.index.get(&id).copied();
+                let linked = match (index(id), index(last)) {
+                    (Some(a), Some(b)) => layout
+                        .edges
+                        .iter()
+                        .any(|&(x, y)| (x, y) == (a, b) || (x, y) == (b, a)),
+                    _ => false,
+                };
+                let last_mastery = index(last).is_some_and(|i| layout.nodes[i].kind == "Mastery");
+                if !linked {
+                    keep = None;
+                } else if let Some(at) = self.trace.iter().position(|&n| n == id) {
+                    self.trace.remove(at);
+                    self.trace.push(id);
+                } else if last_mastery {
+                    keep = None;
+                } else {
+                    self.trace.push(id);
+                }
+            }
+            Some(_) => {}
+        }
+        if self.trace != old {
+            self.previewed = None;
+        }
+        keep
+    }
+
+    /// The traced path, for tests
+    #[cfg(test)]
+    pub fn trace_for_test(&self) -> &[u32] {
+        &self.trace
+    }
+
     /// Carries out a Tree tab key; returns the command it sends, if any.
     pub fn on_shortcut(&mut self, action: &ShortcutAction, ctx: &egui::Context) -> Option<Command> {
         let state = self.state.clone()?;

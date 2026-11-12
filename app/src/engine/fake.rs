@@ -659,6 +659,7 @@ impl Backend for Fake {
         }
         Ok(Some(NodeTooltip {
             id,
+            trace: vec![],
             lines: vec![TooltipLine::Line {
                 size: 14,
                 text: format!("node {id}"),

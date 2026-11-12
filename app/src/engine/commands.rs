@@ -832,6 +832,19 @@ pub enum Command {
     SetTreeStatDifferences {
         on: bool,
     },
+    /// A click with Shift held on the last node of the traced path: PoB allocates the path
+    /// traced through the hovered nodes instead of the node's own (PassiveTreeView.lua:504).
+    /// `path` runs from the tree to `id`, which is its last.
+    AllocTracePath {
+        id: u32,
+        path: Vec<u32>,
+    },
+    /// A query, as `PreviewNode`, while Shift traces a path: the tooltip PoB shows then
+    /// (PassiveTreeView.lua:1662, 1715-1716)
+    PreviewTrace {
+        id: u32,
+        path: Vec<u32>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

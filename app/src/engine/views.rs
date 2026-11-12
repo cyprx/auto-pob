@@ -334,6 +334,9 @@ pub struct PowerReportRow {
 pub struct NodeTooltip {
     pub id: u32,
     pub lines: Vec<TooltipLine>,
+    /// The Shift-traced path the tooltip was built with (empty: none)
+    #[serde(default)]
+    pub trace: Vec<u32>,
 }
 
 /// What PoB's group list shows when the mouse is over a socket group (`AddValueTooltip`).

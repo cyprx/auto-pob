@@ -11,7 +11,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, TextureHandle, Tool
 use std::collections::HashSet;
 
 /// What the user did on the canvas this frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CanvasAction {
     Alloc(u32),
     Dealloc(u32),
@@ -23,6 +23,8 @@ pub enum CanvasAction {
     JumpToSocket(u32),
     /// The node under the pointer changed
     Hover(Option<u32>),
+    /// A click on the end of the path traced with Shift: allocate that path (`AllocTracePath`)
+    AllocTrace(u32, Vec<u32>),
 }
 
 /// An uploaded sprite sheet: its texture and size in pixels.
@@ -74,7 +76,11 @@ pub fn show(
         .hover_pos()
         .filter(|_| valid_zoom && !response.dragged())
         .and_then(|p| tab.grid.node_at(layout, camera.to_tree(rect, p), zoom));
-    let hovered_id = hovered.map(|i| layout.nodes[i].id);
+    // Shift traces a path through the hovered nodes (PassiveTreeView.lua:283-363); a node
+    // the trace can't take is not hovered
+    let shift = ui.input(|i| i.modifiers.shift);
+    let hovered_id = tab.trace_step(layout, hovered.map(|i| layout.nodes[i].id), shift);
+    let hovered = hovered_id.and_then(|id| tab.index.get(&id).copied());
     let mut actions = Vec::new();
     if hovered_id != tab.hover {
         actions.push(CanvasAction::Hover(hovered_id));
@@ -82,6 +88,8 @@ pub fn show(
 
     // the nodes a click on the hovered one would add or drop
     let (highlight, highlight_colour) = match hovered_id {
+        // the trace is the path (PassiveTreeView.lua:359-363)
+        _ if !tab.trace.is_empty() => (Some(&tab.trace), PATH),
         Some(id) if tab.derived.allocated.contains(&id) => (tab.derived.depends.get(&id), DROP),
         Some(id) => (tab.derived.paths.get(&id), PATH),
         None => (None, PATH),
@@ -266,12 +274,20 @@ pub fn show(
                 .as_ref()
                 .is_some_and(|a| tab.derived.current_ascendancy.as_ref() != Some(a))
         {
-            actions.push(CanvasAction::Alloc(node.id));
+            // the trace's end allocates the trace (PassiveTreeView.lua:504)
+            actions.push(match tab.trace.last() {
+                Some(&end) if end == node.id => {
+                    CanvasAction::AllocTrace(node.id, tab.trace.clone())
+                }
+                _ => CanvasAction::Alloc(node.id),
+            });
         }
     }
 
     let jewel = state.jewels.iter().find(|j| j.node == node.id);
-    let body = tooltip_body(node, tab.tooltip.as_deref());
+    // a reply is the tooltip for this trace (or for none)
+    let reply = tab.tooltip.as_deref().filter(|t| t.trace == tab.trace);
+    let body = tooltip_body(node, reply);
     Tooltip::for_widget(&response)
         .at_pointer()
         .show(|ui| match body {
@@ -413,6 +429,7 @@ mod tests {
     fn reply(id: u32, lines: usize) -> NodeTooltip {
         NodeTooltip {
             id,
+            trace: vec![],
             lines: (0..lines)
                 .map(|_| TooltipLine::Line {
                     size: 14,

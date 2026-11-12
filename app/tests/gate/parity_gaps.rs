@@ -975,3 +975,110 @@ fn tree_keys_match_pob() {
             .show_stat_differences
     );
 }
+
+// ---- Task 14 fix: the Shift-traced path ----
+
+/// Picks, by lowest ids, an unallocated node B next to an allocated one and an unallocated
+/// node C next to B whose own path doesn't go through B: the trace B, C is then not C's path.
+const TRACE_PICK: &str = r#"
+local spec = B.spec
+local ids = {}
+for id in pairs(spec.nodes) do ids[#ids + 1] = id end
+table.sort(ids)
+for _, bId in ipairs(ids) do
+    local b = spec.nodes[bId]
+    if not b.alloc and b.path and #b.path == 1 and b.type == "Normal" then
+        local linked = {}
+        for _, n in ipairs(b.linked) do linked[#linked + 1] = n end
+        table.sort(linked, function(x, y) return x.id < y.id end)
+        for _, c in ipairs(linked) do
+            if not c.alloc and c.path and c.type ~= "Mastery" and c.path[2] ~= b
+                and not c.ascendancyName then
+                return { b.id, c.id }
+            end
+        end
+    end
+end
+"#;
+
+/// Upstream's click on the trace's end, as PassiveTreeView.lua:500-506 runs it
+const UP_TRACE_ALLOC: &str = r#"
+local spec = build.spec
+local path = {}
+for i, id in ipairs(TRACE) do path[i] = spec.nodes[id] end
+local node = path[#path]
+spec:AllocNode(node, path)
+spec:AddUndoState()
+build.buildFlag = true
+runCallback("OnFrame")
+local alloc = {}
+for id in pairs(spec.allocNodes) do alloc[#alloc + 1] = id end
+table.sort(alloc)
+return alloc
+"#;
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn trace_path_matches_pob() {
+    let _guard = lock();
+    let xml = fs::read_to_string(fixture_xml("attack")).unwrap();
+    let up = Upstream::new();
+    let mut ours = Ours::new();
+    ours.open(&xml, "attack");
+    up.load(&xml, "attack");
+    ours.eval::<()>("B = pob.build");
+    up.lua.load("B = build").exec().unwrap();
+    let pick: Vec<u32> = ours.eval(TRACE_PICK);
+    let up_pick: Vec<u32> = up.lua.load(TRACE_PICK).eval().unwrap();
+    assert_eq!(pick, up_pick);
+    let (b, c) = (pick[0], pick[1]);
+    let own: Vec<u32> = ours.eval(&format!(
+        "local p = {{}} for i, n in ipairs(pob.build.spec.nodes[{c}].path) do p[i] = n.id end return p"
+    ));
+    assert!(!own.contains(&b), "C's own path goes through B: {own:?}");
+
+    // the tooltip over the trace's end counts the trace (PassiveTreeView.lua:1715-1716)
+    ours.run(Command::PreviewTrace {
+        id: c,
+        path: vec![b, c],
+    })
+    .unwrap();
+    let tip = ours.s.backend.node_tooltip_view(c).unwrap().unwrap();
+    assert_eq!(tip.trace, [b, c]);
+    let text = format!("{:?}", tip.lines);
+    assert!(text.contains("2 nodes in trace path"), "{text}");
+    ours.run(Command::PreviewNode { id: c }).unwrap();
+    let plain = ours.s.backend.node_tooltip_view(c).unwrap().unwrap();
+    assert!(plain.trace.is_empty());
+    assert!(!format!("{:?}", plain.lines).contains("trace path"));
+
+    // the click allocates the trace, not C's own path
+    ours.clear_flags();
+    ours.run(Command::AllocTracePath {
+        id: c,
+        path: vec![b, c],
+    })
+    .unwrap();
+    up.lua.globals().set("TRACE", vec![b, c]).unwrap();
+    let up_alloc: Vec<u32> = up.lua.load(UP_TRACE_ALLOC).eval().unwrap();
+    let mut alloc = ours.s.backend.tree_state_view().unwrap().allocated;
+    alloc.sort();
+    assert_eq!(alloc, up_alloc);
+    assert!(alloc.contains(&b) && alloc.contains(&c));
+    assert!(own.iter().filter(|n| **n != c).all(|n| !alloc.contains(n)));
+    assert!(ours.build().unsaved, "the allocation isn't marked unsaved");
+    let stats = same_stats(&mut ours, &up, "after the trace");
+    assert!(!stats.stats.is_empty());
+    // a path not ending at the node is refused
+    let err = ours
+        .run(Command::AllocTracePath {
+            id: c,
+            path: vec![c, b],
+        })
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("doesn't end at the node")
+            || err.to_string().contains("isn't connected"),
+        "{err}"
+    );
+}

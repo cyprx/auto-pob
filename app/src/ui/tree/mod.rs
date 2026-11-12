@@ -137,6 +137,8 @@ pub struct TreeTab {
     /// The node being pointed out, and when the pointing started
     pub(super) pulse: Option<(u32, f64)>,
     pub(crate) rects: Rects,
+    /// The path traced with Shift held, from the tree to its end (PoB's `tracePath`)
+    pub(super) trace: Vec<u32>,
 }
 
 impl TreeTab {
@@ -375,6 +377,9 @@ impl TreeTab {
         for action in actions {
             match action {
                 CanvasAction::Alloc(id) => out.commands.push(Command::AllocNode { id }),
+                CanvasAction::AllocTrace(id, path) => {
+                    out.commands.push(Command::AllocTracePath { id, path })
+                }
                 CanvasAction::Dealloc(id) => out.commands.push(Command::DeallocNode { id }),
                 CanvasAction::PickMastery(id) => self.picker = Some(id),
                 CanvasAction::ReplaceNode(node) => out
@@ -392,7 +397,14 @@ impl TreeTab {
         if let Some(id) = self.hover.filter(|&id| self.previewed != Some(id)) {
             let waited = now - self.hover_since;
             if waited >= PREVIEW_DELAY {
-                out.queries.push(Command::PreviewNode { id });
+                out.queries.push(if self.trace.is_empty() {
+                    Command::PreviewNode { id }
+                } else {
+                    Command::PreviewTrace {
+                        id,
+                        path: self.trace.clone(),
+                    }
+                });
                 self.previewed = Some(id);
             } else {
                 ui.ctx()
@@ -832,6 +844,7 @@ mod tests {
         h.tab
             .on_snapshot(&Snapshot::NodeTooltip(Arc::new(NodeTooltip {
                 id: 2,
+                trace: vec![],
                 lines: vec![],
             })));
         h.frame(vec![]);
@@ -931,5 +944,72 @@ mod tests {
         h.frame(vec![Event::ModifiersChanged(egui::Modifiers::NONE)]);
         let out = h.click_at(h.screen_of(2));
         assert_eq!(debug(&out.commands), ["AllocNode { id: 2 }"]);
+    }
+
+    /// 1 is allocated; 2 and 6 hang off it; 5 links 2 and 6, its own path runs through 6
+    fn trace_sample() -> (Arc<TreeLayout>, Arc<TreeState>) {
+        let layout = layout(
+            vec![
+                node(1, [0.0, 0.0], "Normal"),
+                node(2, [600.0, 0.0], "Normal"),
+                node(5, [600.0, 600.0], "Normal"),
+                node(6, [0.0, 600.0], "Normal"),
+            ],
+            vec![(0, 1), (1, 2), (2, 3), (3, 0)],
+        );
+        let state: TreeState = serde_json::from_value(serde_json::json!({
+            "version": "3_28", "version_label": "3.28", "class_id": 0, "ascendancy_id": 0,
+            "points": { "used": 1, "available": 122, "ascendancy_used": 0,
+                        "ascendancy_available": 8 },
+            "allocated": [1],
+            "paths": [ { "node": 2, "path": [2] }, { "node": 5, "path": [5, 6] },
+                       { "node": 6, "path": [6] } ],
+            "active_spec": 0, "can_undo": false, "can_redo": false,
+        }))
+        .unwrap();
+        (Arc::new(layout), Arc::new(state))
+    }
+
+    #[test]
+    fn shift_traces_a_path_and_a_click_on_its_end_allocates_it() {
+        let (l, s) = trace_sample();
+        let mut h = Harness::new(l, s);
+        h.frame(vec![Event::ModifiersChanged(egui::Modifiers::SHIFT)]);
+        h.frame(vec![Event::PointerMoved(h.screen_of(2))]);
+        assert_eq!(h.tab.trace_for_test(), [2]);
+        // 5 links to the trace's end: it is added, though its own path goes through 6
+        h.frame(vec![Event::PointerMoved(h.screen_of(5))]);
+        assert_eq!(h.tab.trace_for_test(), [2, 5]);
+        // the tooltip is asked with the trace, after the hover's wait
+        h.time += 1.0;
+        let out = h.frame(vec![Event::PointerMoved(h.screen_of(5))]);
+        assert_eq!(
+            debug(&out.queries),
+            ["PreviewTrace { id: 5, path: [2, 5] }"]
+        );
+        let out = h.click_at(h.screen_of(5));
+        assert_eq!(
+            debug(&out.commands),
+            ["AllocTracePath { id: 5, path: [2, 5] }"]
+        );
+        // without Shift the trace is gone and a click allocates the node's own path
+        h.frame(vec![Event::ModifiersChanged(egui::Modifiers::NONE)]);
+        assert!(h.tab.trace_for_test().is_empty());
+        let out = h.click_at(h.screen_of(5));
+        assert_eq!(debug(&out.commands), ["AllocNode { id: 5 }"]);
+    }
+
+    #[test]
+    fn a_node_the_trace_cant_take_isnt_hovered() {
+        let (l, s) = trace_sample();
+        let mut h = Harness::new(l, s);
+        h.frame(vec![Event::ModifiersChanged(egui::Modifiers::SHIFT)]);
+        h.frame(vec![Event::PointerMoved(h.screen_of(2))]);
+        // 6 isn't linked to 2: no hover, and the trace stays
+        h.frame(vec![Event::PointerMoved(h.screen_of(6))]);
+        assert_eq!(h.tab.trace_for_test(), [2]);
+        assert_eq!(h.tab.hover, None);
+        let out = h.click_at(h.screen_of(6));
+        assert!(out.commands.is_empty(), "{:?}", out.commands);
     }
 }

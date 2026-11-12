@@ -3632,8 +3632,7 @@ ported = "app/src/ui/tree/keys.rs Down selects the next tree unless the tree sel
 ported = "app/src/ui/tree/keys.rs Ctrl+F selects the tree search (tree/toolbar.rs)"
 
 [keys."tree.LEFTBUTTON"]
-gap = "Task 14"
-note = "click to allocate, drag to pan and Ctrl+click zoom ported (tree/canvas.rs); NF-17 Shift-held path tracing (PassiveTreeView.lua:284-350) is not: it needs an engine path allocation and a traced tooltip"
+ported = "app/src/ui/tree/canvas.rs click allocates and drag pans; Ctrl+click zooms; Shift traces a path (tree/keys.rs trace_step) that a click on its end allocates (AllocTracePath) and the tooltip counts (PreviewTrace)"
 
 [keys."tree.m"]
 ported = "app/src/ui/tree/keys.rs Ctrl+M opens the tree selector, our tree manager with its New, Rename and Delete"

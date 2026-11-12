@@ -59,6 +59,8 @@ pub struct PobBackend {
     timeless_job: bool,
     /// How long one timeless search step runs before it yields, in milliseconds (R17)
     pub timeless_budget_ms: u32,
+    /// The path traced with Shift that the next node tooltip is built with (empty: none)
+    trace: Vec<u32>,
 }
 
 /// R17: a timeless search step yields once this much of `GetTime()` has passed
@@ -184,6 +186,7 @@ impl PobBackend {
             net,
             timeless_job: false,
             timeless_budget_ms: TIMELESS_BUDGET_MS,
+            trace: Vec::new(),
         })
     }
 
@@ -632,6 +635,7 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::GroupTooltip { .. }
             | Command::CopySocketGroup { .. }
             | Command::PreviewNode { .. }
+            | Command::PreviewTrace { .. }
             | Command::ExportTreeLink
             // a shrink only reads the tree and asks the network (R20)
             | Command::ShrinkTreeLink
@@ -1026,10 +1030,24 @@ impl PobBackend {
                 self.cancel_request(id)?;
                 self.network_affected()
             }
-            Command::PreviewNode { id } => Ok(Affected {
-                preview: Some(id),
-                ..Affected::default()
-            }),
+            Command::PreviewNode { id } => {
+                self.trace.clear();
+                Ok(Affected {
+                    preview: Some(id),
+                    ..Affected::default()
+                })
+            }
+            Command::PreviewTrace { id, path } => {
+                self.trace = path;
+                Ok(Affected {
+                    preview: Some(id),
+                    ..Affected::default()
+                })
+            }
+            Command::AllocTracePath { id, path } => {
+                self.call::<_, ()>("alloc_trace", (id, path))?;
+                self.tree_edited()
+            }
             Command::Breakdown(cell) => Ok(Affected {
                 breakdown: Some(cell),
                 ..Affected::default()
@@ -2319,7 +2337,7 @@ impl Backend for PobBackend {
     }
 
     fn node_tooltip_view(&mut self, id: u32) -> Result<Option<NodeTooltip>> {
-        self.view("node_tooltip", id)
+        self.view("node_tooltip", (id, self.trace.clone()))
     }
 
     fn breakdown_view(&mut self, cell: &CellRef) -> Result<BreakdownView> {

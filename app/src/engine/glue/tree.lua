@@ -909,7 +909,10 @@ end
 -- What the tree draws when the mouse is over a node (PassiveTreeView.lua:1458), or nil when the
 -- node is gone. A plain hover has no trace path (PassiveTreeView.lua:286-289), which is what
 -- the tooltip reads besides the node; it doesn't read `hoverNode`.
-function glue.node_tooltip(id)
+--
+-- `trace` is the path traced with Shift held (ids from the tree to the end), or empty: PoB's
+-- trace mode then shows it (PassiveTreeView.lua:283-290, 1662, 1715-1716).
+function glue.node_tooltip(id, trace)
 	local build = pob.build
 	local node = build.spec.nodes[id]
 	if not node then
@@ -918,16 +921,28 @@ function glue.node_tooltip(id)
 	local tab = build.treeTab
 	local viewer = tab.viewer
 	local tooltip = glue.tooltip()
-	local tracePath, compareSpec = viewer.tracePath, viewer.compareSpec
+	local tracePath, compareSpec, traceMode = viewer.tracePath, viewer.compareSpec, viewer.traceMode
 	viewer.tracePath = nil
+	viewer.traceMode = false
+	if trace and #trace > 0 then
+		local nodes = {}
+		for i, nodeId in ipairs(trace) do
+			nodes[i] = build.spec.nodes[nodeId]
+			if not nodes[i] then
+				return nil
+			end
+		end
+		viewer.tracePath = nodes
+		viewer.traceMode = true
+	end
 	-- as TreeTab:Draw sets it (TreeTab.lua:445)
 	viewer.compareSpec = tab.isComparing and tab.specList[tab.activeCompareSpec] or nil
 	local ok, err = pcall(viewer.AddNodeTooltip, viewer, tooltip, node, build)
-	viewer.tracePath, viewer.compareSpec = tracePath, compareSpec
+	viewer.tracePath, viewer.compareSpec, viewer.traceMode = tracePath, compareSpec, traceMode
 	if not ok then
 		error(tostring(err):match("[^\n]+") or "couldn't build the tooltip", 0)
 	end
-	return { id = id, lines = tooltip:lines() }
+	return { id = id, lines = tooltip:lines(), trace = trace or {} }
 end
 
 -- ---- Keys ----
@@ -945,4 +960,30 @@ end
 -- Ctrl+D on the tree (PassiveTreeView.lua:206-207)
 function glue.set_tree_stat_differences(on)
 	pob.build.treeTab.viewer.showStatDifferences = on and true or false
+end
+
+-- A click with Shift held on the end of the traced path (PassiveTreeView.lua:500-506):
+-- spec:AllocNode with the traced path instead of the node's own. `trace` runs from the tree
+-- to `id`.
+function glue.alloc_trace(id, trace)
+	local spec = pob.build.spec
+	local node = node_by_id(id)
+	if node.alloc or not node.path then
+		error("that passive isn't connected to your tree", 0)
+	end
+	if node.type == "Mastery" and node.masteryEffects then
+		error("pick a mastery effect", 0)
+	end
+	local path = {}
+	for i, nodeId in ipairs(trace) do
+		path[i] = spec.nodes[nodeId]
+		if not path[i] then
+			error("that path isn't on your tree", 0)
+		end
+	end
+	if path[#path] ~= node then
+		error("that path doesn't end at the node", 0)
+	end
+	spec:AllocNode(node, path)
+	finish_edit(false)
 end

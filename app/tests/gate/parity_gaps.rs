@@ -1706,6 +1706,7 @@ fn no_silent_writes_longtail() {
          if not node.alloc and node.pathDist == 1 and node.type == 'Normal' and (not best or id < best) then best = id end \
          end return best",
     );
+    let attack_code = s.backend.share_code().unwrap();
     for command in [
         Command::SetConfig {
             var: "usePowerCharges".into(),
@@ -1785,11 +1786,140 @@ fn no_silent_writes_longtail() {
         Command::Undo(Tab::Items),
         Command::ExportShareCode,
         Command::SetImportCode {
-            text: s.backend.share_code().unwrap(),
+            text: attack_code.clone(),
         },
     ] {
         s.quiet(command);
     }
+    // the set managers, the rest of each tab's edits, and an import
+    s.quiet(Command::NewSkillSet {
+        title: "Quiet two".into(),
+    });
+    let skill_sets = s.backend.skills_view().unwrap().sets;
+    let (first, last) = (skill_sets[0].id, skill_sets.last().unwrap().id);
+    let config_sets = s.backend.config_view().unwrap().sets;
+    let item_sets = s.backend.items_view().unwrap().sets;
+    let specs = s.backend.tree_state_view().unwrap().specs.len();
+    let groups = s.backend.skills_view().unwrap().groups.len();
+    let text = s.backend.socket_group_text(0).unwrap().text;
+    for command in [
+        Command::RenameSkillSet {
+            id: last,
+            title: "Quiet three".into(),
+        },
+        Command::CopySkillSet {
+            id: last,
+            title: "Quiet copy".into(),
+        },
+        Command::SelectSkillSet { id: last },
+        Command::SelectSkillSet { id: first },
+        Command::DeleteSkillSet { id: last },
+        Command::RenameConfigSet {
+            id: config_sets.last().unwrap().id,
+            title: "Quiet two".into(),
+        },
+        Command::SelectConfigSet {
+            id: config_sets[0].id,
+        },
+        Command::DeleteConfigSet {
+            id: config_sets.last().unwrap().id,
+        },
+        Command::SetCustomModTitle {
+            group: 0,
+            title: "Quiet".into(),
+        },
+        Command::SetCustomModEnabled {
+            group: 0,
+            enabled: false,
+        },
+        Command::RemoveCustomModGroup { group: 0 },
+        Command::RenameSpec {
+            index: specs - 1,
+            title: "Quiet two".into(),
+        },
+        Command::DeleteSpec { index: specs - 1 },
+        Command::RenameItemSet {
+            id: item_sets.last().unwrap().id,
+            title: "Quiet two".into(),
+        },
+        Command::CopyItemSet {
+            id: item_sets.last().unwrap().id,
+            title: "Quiet copy".into(),
+        },
+        Command::MoveItemSet { from: 0, to: 1 },
+        Command::SelectItemSet {
+            id: item_sets.last().unwrap().id,
+        },
+        Command::SelectItemSet {
+            id: item_sets[0].id,
+        },
+        Command::DeleteItemSet {
+            id: item_sets.last().unwrap().id,
+        },
+        Command::SetCalcsCollapsed {
+            section: "HitDamage".into(),
+            sub: 0,
+            collapsed: true,
+        },
+        Command::SetMainSocketGroup { group: 0 },
+        Command::SetGroupLabel {
+            group: 0,
+            text: "Quiet".into(),
+        },
+        Command::SetGroupEnabled { group: 0, on: true },
+        Command::SetGroupFullDps { group: 0, on: true },
+        Command::SetGemEnabled {
+            group: 0,
+            slot: 0,
+            on: true,
+        },
+        Command::PasteSocketGroup { text },
+        Command::MoveSocketGroup {
+            from: groups,
+            to: 0,
+        },
+        Command::DeleteGem { group: 0, slot: 0 },
+        Command::DeleteSocketGroup { group: 0 },
+        Command::SetItemListFilter { index: 0 },
+        Command::EquipItem {
+            slot: slot.clone(),
+            id: None,
+        },
+        Command::EquipItem {
+            slot: slot.clone(),
+            id: Some(id),
+        },
+        Command::SelectWeaponSet { second: true },
+        Command::SelectWeaponSet { second: false },
+        Command::DeleteUnusedItems,
+        Command::ResetTree,
+        Command::Undo(Tab::Tree),
+    ] {
+        s.quiet(command);
+    }
+    s.quiet(Command::PasteItem {
+        text: "Rarity: RARE\nQuiet Visor\nRoyal Burgonet\nImplicits: 0\n+80 to maximum Life".into(),
+    });
+    s.quiet(Command::SetDisplayItemText {
+        rarity: 2,
+        text: "Quiet Visor\nRoyal Burgonet\nImplicits: 0\n+90 to maximum Life".into(),
+    });
+    s.quiet(Command::SaveDisplayItem);
+    let copied = s
+        .backend
+        .items_view()
+        .unwrap()
+        .items
+        .iter()
+        .map(|i| i.id)
+        .max()
+        .unwrap();
+    assert_ne!(copied, id, "the pasted item wasn't added");
+    s.quiet(Command::MoveItem { from: 0, to: 1 });
+    s.quiet(Command::DeleteItem {
+        id: copied,
+        confirmed: true,
+    });
     let calcs = s.backend.calcs_view().unwrap();
     let cell = calcs
         .sections
@@ -1839,6 +1969,9 @@ fn no_silent_writes_longtail() {
         kind: DeleteKind::Build,
     });
     s.check("the build list's own writes");
+    // a share code imports as a new build in memory, with no file until it is saved
+    s.quiet(Command::ImportShareCode { code: attack_code });
+    s.views("an imported build");
 
     // ---- R29's writers: Settings.xml only ----
     s.writer(Command::SetBuildSort {

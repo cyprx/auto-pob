@@ -684,6 +684,21 @@ fn exit_saves_what_pob_saves_at_shutdown() {
     );
 }
 
+/// A stray off-list `dpiScaleOverridePercent` (an older auto-pob's stub wrote 1) is PoB's "Use
+/// system default" in memory, so the next save writes 0 and classic PoB never applies it
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn an_off_list_ui_scale_is_saved_as_the_system_default() {
+    let _guard = lock();
+    let seed = "<PathOfBuilding>\n\t<Misc dpiScaleOverridePercent=\"1\"/>\n</PathOfBuilding>\n";
+    let mut s = LongtailSession::start("dpi-stray", &|_| seed.into());
+    let view = s.backend.settings_view().unwrap();
+    assert_eq!(row(&view, "dpiScaleOverridePercent").value, "0");
+    s.backend.shutdown();
+    let written = misc_attributes(&String::from_utf8(s.settings_bytes()).unwrap());
+    assert_eq!(written["dpiScaleOverridePercent"], "0");
+}
+
 /// A fresh user folder (no Settings.xml): PoB's DPI override default comes from our stub, which
 /// must be "Use system default" (0), so the app doesn't zoom, and the exit save writes 0
 #[test]

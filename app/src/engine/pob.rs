@@ -54,6 +54,10 @@ pub struct PobBackend {
     item_db_ended: bool,
     /// Lua's heap after the last memory release, in bytes
     released_lua_bytes: usize,
+    /// The UI shows the build list: it asked for a listing since it last opened or imported
+    /// a build, or no build was loaded at start. The exit save then records PoB's LIST mode,
+    /// as PoB's would after its CloseBuild (Build.lua:953-956), not the build left behind it.
+    on_list: bool,
     /// The subscripts of PoB's requests (R4, R9)
     net: NetHandle,
     /// A timeless search was started; whether it still runs is the glue's (R17)
@@ -175,6 +179,9 @@ impl PobBackend {
         // the build PoB opened at start, before the glue was there to see it
         let settle: mlua::Function = glue.get("settle_startup").map_err(lua_error)?;
         settle.call::<()>(()).map_err(lua_error)?;
+        // PoB reopened the build its last exit recorded: the UI shows it, as PoB does
+        let loaded: mlua::Function = glue.get("build_loaded").map_err(lua_error)?;
+        let on_list = !loaded.call::<bool>(()).map_err(lua_error)?;
         Ok(PobBackend {
             lua,
             game,
@@ -191,6 +198,7 @@ impl PobBackend {
             item_db_failed: false,
             item_db_ended: false,
             released_lua_bytes: 0,
+            on_list,
             net,
             timeless_job: false,
             timeless_budget_ms: TIMELESS_BUDGET_MS,
@@ -912,6 +920,7 @@ impl PobBackend {
                     anyhow::bail!("that isn't a valid folder");
                 }
                 self.folder = buildpaths::folder(&self.build_root()?, &folder, false, false)?;
+                self.on_list = true;
                 Ok(Affected {
                     list: true,
                     ..Affected::default()
@@ -997,16 +1006,19 @@ impl PobBackend {
                 Ok(list_changed())
             }
             Command::NewBuild => {
+                self.on_list = false;
                 self.reset_heatmap();
                 self.call::<_, ()>("new_build", ())?;
                 self.all_views()
             }
             Command::OpenBuild { path } => {
+                self.on_list = false;
                 self.reset_heatmap();
                 self.call::<_, ()>("open_build", path.to_string_lossy().into_owned())?;
                 self.all_views()
             }
             Command::ImportShareCode { code } => {
+                self.on_list = false;
                 self.reset_heatmap();
                 self.call::<_, ()>("import_code", code)?;
                 self.all_views()
@@ -1020,6 +1032,9 @@ impl PobBackend {
             }
             Command::ImportFromUrl { url, mode } => {
                 let comparison = mode == ImportMode::Comparison;
+                if !comparison {
+                    self.on_list = false;
+                }
                 let mode = mode_name(mode);
                 // a link is a request, finished by a later Network step; a code imports at once
                 let request: Option<u64> = self.call("import_from_url", (url, mode))?;
@@ -2227,7 +2242,8 @@ impl Backend for PobBackend {
     /// another program wrote the file since we last read or wrote it, or PoB couldn't read it
     /// (I-1). The build mode's own Shutdown only saves a build in PoB's dev mode, so it isn't run.
     fn shutdown(&mut self) {
-        match self.call::<_, Option<String>>("settings_exit_save", ()) {
+        let list = self.on_list.then(|| self.folder.clone());
+        match self.call::<_, Option<String>>("settings_exit_save", list) {
             Ok(None) => {}
             Ok(Some(reason)) => log::warn!("Settings.xml not saved at exit: {reason}"),
             Err(e) => log::warn!("Settings.xml not saved at exit: {e:#}"),
@@ -2244,6 +2260,7 @@ impl Backend for PobBackend {
         let root = self.build_root()?;
         view.tree = buildpaths::folder_tree(&root);
         view.root = PathBuf::from(root);
+        view.build_open = !self.on_list;
         Ok(view)
     }
 

@@ -81,6 +81,10 @@ pub struct BuildListView {
     /// PoB's `main.filterBuildList`: the search text the list is filtered by
     #[serde(default)]
     pub filter: String,
+    /// The engine has a build the UI should show: PoB reopened the build its last exit
+    /// recorded, so it starts on that build, not on its list. Filled in by the engine.
+    #[serde(default)]
+    pub build_open: bool,
 }
 
 /// A folder of the Builds tree

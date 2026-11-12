@@ -785,7 +785,7 @@ pub fn run_loop(
     commands: &Receiver<(u64, Command)>,
     send: &dyn Fn(Event),
 ) {
-    run_loop_with_delay(backend, commands, send, RELEASE_DELAY);
+    run_loop_with_delay(backend, commands, send, RELEASE_DELAY, None);
 }
 
 /// How long the loop waits, idle after work, before it releases memory. A release takes a
@@ -793,11 +793,14 @@ pub fn run_loop(
 /// rather than landing on the command that follows a job or a burst of edits.
 pub const RELEASE_DELAY: Duration = Duration::from_secs(2);
 
+/// `abandoned`: set once the [`Engine`]'s drop stopped waiting; the exit save then never starts,
+/// so no `Settings.xml` write begins after the app has given up on it.
 fn run_loop_with_delay(
     backend: &mut dyn Backend,
     commands: &Receiver<(u64, Command)>,
     send: &dyn Fn(Event),
     release_delay: Duration,
+    abandoned: Option<&AtomicBool>,
 ) {
     let mut last_seq = 0;
     // work has run since the last release; starting the backend counts
@@ -881,7 +884,9 @@ fn run_loop_with_delay(
         recalculate_if_asked(backend, &mut affected, last_seq, send);
         send_snapshots(backend, last_seq, affected, send);
         if shutdown {
-            backend.shutdown();
+            if !abandoned.is_some_and(|a| a.load(Ordering::SeqCst)) {
+                backend.shutdown();
+            }
             return;
         }
     }
@@ -912,6 +917,10 @@ pub struct Engine {
     commands: Sender<(u64, Command)>,
     next_seq: Cell<u64>,
     alive: Arc<AtomicBool>,
+    /// The drop gave up waiting: the thread must not start the exit save any more
+    abandoned: Arc<AtomicBool>,
+    /// How long the drop waits ([`SHUTDOWN_WAIT`]; shorter in tests)
+    shutdown_wait: Duration,
     pub events: Receiver<Event>,
 }
 
@@ -932,6 +941,8 @@ impl Engine {
         let wake_tx = command_tx.clone();
         let alive = Arc::new(AtomicBool::new(true));
         let thread_alive = alive.clone();
+        let abandoned = Arc::new(AtomicBool::new(false));
+        let thread_abandoned = abandoned.clone();
         std::thread::spawn(move || {
             // Declared inside the body so it drops before the captured `event_tx`: by the time
             // the UI sees the events channel disconnect, `is_alive` already reads false.
@@ -959,12 +970,20 @@ impl Engine {
                 ..Affected::ALL_VIEWS
             };
             send_snapshots(backend.as_mut(), 0, initial, &send);
-            run_loop(backend.as_mut(), &command_rx, &send);
+            run_loop_with_delay(
+                backend.as_mut(),
+                &command_rx,
+                &send,
+                RELEASE_DELAY,
+                Some(&thread_abandoned),
+            );
         });
         Engine {
             commands: command_tx,
             next_seq: Cell::new(1),
             alive,
+            abandoned,
+            shutdown_wait: SHUTDOWN_WAIT,
             events: event_rx,
         }
     }
@@ -996,10 +1015,12 @@ impl Drop for Engine {
     /// process ending mid-write would leave the shared file cut short.
     fn drop(&mut self) {
         self.send(Command::Shutdown);
-        let deadline = std::time::Instant::now() + SHUTDOWN_WAIT;
+        let deadline = std::time::Instant::now() + self.shutdown_wait;
         while self.alive.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(5));
         }
+        // gave up: a thread still busy must not begin the exit save after the app is gone
+        self.abandoned.store(true, Ordering::SeqCst);
     }
 }
 
@@ -2604,6 +2625,28 @@ mod tests {
     }
 
     #[test]
+    fn an_engine_given_up_on_never_starts_its_exit_save() {
+        let (fake, log) = Fake::new();
+        // the thread is still starting when the drop gives up
+        let mut engine = Engine::spawn_with(
+            move |_send| {
+                std::thread::sleep(Duration::from_millis(300));
+                Ok(Box::new(fake) as Box<dyn Backend>)
+            },
+            || {},
+        );
+        engine.shutdown_wait = Duration::from_millis(20);
+        let alive = engine.liveness();
+        drop(engine);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while alive.is_alive() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!alive.is_alive(), "the thread didn't end");
+        assert_eq!(log.lock().unwrap().shutdowns, 0, "the exit save ran");
+    }
+
+    #[test]
     fn only_shutdown_runs_the_exit_save() {
         let (mut fake, log) = Fake::new();
         run_queued(&mut fake, vec![Command::NewBuild]);
@@ -2684,7 +2727,7 @@ mod tests {
         }));
         tx.send((1, set_config())).unwrap();
         drop(tx);
-        run_loop_with_delay(&mut fake, &rx, &|_| {}, Duration::from_millis(20));
+        run_loop_with_delay(&mut fake, &rx, &|_| {}, Duration::from_millis(20), None);
         let during = during.load(Ordering::SeqCst);
         (log, during)
     }

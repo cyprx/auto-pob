@@ -481,6 +481,15 @@ impl AutoPobApp {
                 .unwrap_or_default()
                 .to_owned(),
         );
+        // a new open or import starts afresh: an earlier failure's check is for its own build
+        // view only, which may never have come (no build was loaded)
+        if matches!(
+            command,
+            Command::OpenBuild { .. } | Command::NewBuild | Command::ImportShareCode { .. }
+        ) || matches!(&command, Command::ImportFromUrl { mode, .. } if *mode != ImportMode::Comparison)
+        {
+            self.failed_open = None;
+        }
         let is_notes = matches!(command, Command::SetNotes { .. });
         // a comparison keeps the build: its answers never replace it
         let is_import = matches!(
@@ -625,7 +634,19 @@ impl AutoPobApp {
                             self.save_succeeded();
                         }
                     }
-                    Snapshot::BuildList(view) => self.list = Some(view),
+                    Snapshot::BuildList(view) => {
+                        // PoB reopened the build its last exit recorded: it starts on that
+                        // build, not on its list
+                        if seq == 0
+                            && view.build_open
+                            && self.screen == Screen::List
+                            && self.entering.is_none()
+                        {
+                            self.screen = Screen::Build;
+                            self.tab = BuildTab::default();
+                        }
+                        self.list = Some(view);
+                    }
                     Snapshot::Stats(view) => {
                         // a new calculation: the "what if" answers compared against the old one
                         self.skills.forget_hover();
@@ -1375,6 +1396,7 @@ impl AutoPobApp {
         // a Game Version window met on the list (the build PoB opened at start) is cancelled:
         // PoB's Cancel goes to the list, where the user already is (Build.lua:1344-1347)
         if matches!(self.popup.kind(), Some(PopupKind::GameVersion))
+            && self.list.as_ref().is_some_and(|l| !l.build_open)
             && let Some(command) = self.popup.close()
         {
             self.send(command);
@@ -4970,6 +4992,70 @@ mod tests {
         fail(&mut app, generation);
         assert_eq!(app.screen, Screen::Build);
         assert_eq!(app.tab, BuildTab::Import);
+    }
+
+    #[test]
+    fn the_app_starts_on_the_build_pob_reopened() {
+        // PoB starts on the build its last exit recorded, and on its list otherwise
+        for (open, screen) in [(true, Screen::Build), (false, Screen::List)] {
+            let (mut app, ctx) = started();
+            app.screen = Screen::List;
+            app.on_event(Event::Snapshot {
+                seq: 0,
+                snapshot: Snapshot::BuildList(Arc::new(BuildListView {
+                    build_open: open,
+                    ..(**app.list.as_ref().unwrap()).clone()
+                })),
+            });
+            frame(&mut app, &ctx, vec![]);
+            assert_eq!(app.screen, screen, "build_open {open}");
+        }
+        // only the start's listing: a later one never takes the user off the list
+        let (mut app, ctx) = started();
+        app.on_event(Event::Snapshot {
+            seq: app.last_sent.max(1),
+            snapshot: Snapshot::BuildList(Arc::new(BuildListView {
+                build_open: true,
+                ..(**app.list.as_ref().unwrap()).clone()
+            })),
+        });
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.screen, Screen::List);
+    }
+
+    #[test]
+    fn a_failure_with_no_build_loaded_doesnt_bounce_the_next_open() {
+        // no build loaded: the failed code's error comes with no Build view, so its check is
+        // never answered; the next good open must not take it for its own
+        let (mut app, ctx) = started();
+        app.build = None;
+        app.enter_build(Command::ImportShareCode { code: "bad".into() });
+        let bad = app.entering.expect("an import");
+        app.on_event(Event::Error {
+            seq: bad,
+            message: "that isn't a valid build code".into(),
+        });
+        assert_eq!(app.screen, Screen::List);
+        app.enter_build(Command::OpenBuild {
+            path: "/b/x.xml".into(),
+        });
+        let open = app.entering.expect("an open");
+        let view = BuildView {
+            name: "x".into(),
+            path: Some("/b/x.xml".into()),
+            generation: 1,
+            ..BuildView::default()
+        };
+        app.on_event(Event::Snapshot {
+            seq: open,
+            snapshot: Snapshot::Build(Arc::new(view)),
+        });
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(
+            app.screen,
+            Screen::Build,
+            "the good open bounced to the list"
+        );
     }
 
     #[test]

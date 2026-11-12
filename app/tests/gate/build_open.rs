@@ -515,6 +515,8 @@ fn starting_on_the_build_the_exit_save_recorded() {
     let mut next = restart(&s);
     assert!(next.build_loaded().unwrap());
     assert_eq!(next.build_view().unwrap().name, "attack");
+    // PoB starts on the build it reopened, and so does the UI
+    assert!(next.build_list_view().unwrap().build_open);
     let popups: usize = next
         .lua
         .load("return #pob.main.main.popups")
@@ -562,9 +564,37 @@ fn starting_on_the_build_the_exit_save_recorded() {
         .unwrap();
     assert_eq!(popups, 0, "the failed start's message stayed");
     assert!(!next.build_loaded().unwrap(), "PoB went to its list");
+    assert!(!next.build_list_view().unwrap().build_open);
     next.apply(Command::NewBuild, &|_| {})
         .expect("a new build after the failed start");
     next.apply(Command::OpenBuild { path: attack }, &|_| {})
         .expect("the good build after the failed start");
     assert_eq!(next.build_view().unwrap().name, "attack");
+    drop(next);
+
+    drop(s);
+
+    // quitting from the build list records PoB's LIST mode, as PoB's CloseBuild then exit
+    // does (Build.lua:953-956): the next start is on the list, with nothing open behind it.
+    // A new session: the file above was written by another program, so this one's exit
+    // would rightly refuse to write over it.
+    let mut s = LongtailSession::start("restart-list", &|_| {
+        "<PathOfBuilding>\n\t<Mode mode=\"LIST\"><Arg boolean=\"false\"/><Arg string=\"\"/></Mode>\n</PathOfBuilding>\n".into()
+    });
+    let attack = settings_folder(&s.user).join("Builds/attack.xml");
+    fs::copy(fixture_xml("attack"), &attack).unwrap();
+    s.run(Command::OpenBuild { path: attack }).unwrap();
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .unwrap();
+    s.backend.shutdown();
+    let xml = String::from_utf8(s.settings_bytes()).unwrap();
+    assert!(xml.contains("<Mode mode=\"LIST\">"), "{xml}");
+    let mut next = restart(&s);
+    assert!(
+        !next.build_loaded().unwrap(),
+        "a build was reopened behind the list"
+    );
+    assert!(!next.build_list_view().unwrap().build_open);
 }

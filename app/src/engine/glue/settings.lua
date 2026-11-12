@@ -188,12 +188,29 @@ end
 -- (the import history's accounts, the last account name, the open build as `<Mode>`) is
 -- written, through the wrapper below. A file another program wrote, or one PoB couldn't read,
 -- is left alone. Returns why nothing was written, or nil.
-function glue.settings_exit_save()
+-- `list_folder`: the UI shows the build list (on that folder), so `<Mode>` is PoB's LIST,
+-- as PoB writes after its CloseBuild (Build.lua:953-956), not the build left loaded behind it.
+function glue.settings_exit_save(list_folder)
 	local ok, err = pcall(glue.settings_check_writable, "save at exit")
 	if not ok then
 		return tostring(err)
 	end
-	local saved, failed = pcall(main().SaveSettings, main())
+	local m = main()
+	local saved_mode, own_call = m.mode, rawget(m, "CallMode")
+	if list_folder then
+		local call = m.CallMode
+		m.mode = "LIST"
+		-- ListMode:GetArgs with no row selected (BuildList.lua:131-133)
+		m.CallMode = function(self, name, ...)
+			if name == "GetArgs" then
+				return false, list_folder
+			end
+			return call(self, name, ...)
+		end
+	end
+	local saved, failed = pcall(m.SaveSettings, m)
+	m.mode = saved_mode
+	m.CallMode = own_call
 	if not saved then
 		return tostring(failed)
 	end
@@ -205,8 +222,17 @@ function glue.settings_exit_save()
 end
 
 -- Records `shared` after PoB's `LoadSettings` and wraps `main:SaveSettings` (R12)
+-- PoB's UI scaling choices (Main.lua:928-937): 0 is "Use system default"
+local DPI_CHOICES = { [0] = true, [100] = true, [125] = true, [150] = true, [175] = true,
+	[200] = true, [225] = true, [250] = true }
+
 function glue.settings_init()
 	known_bytes = file_bytes()
+	-- an off-list scale (an older auto-pob's stub wrote 1) is "Use system default" in memory,
+	-- so the next save writes 0 and classic PoB never applies it
+	if not DPI_CHOICES[main().dpiScaleOverridePercent] then
+		main().dpiScaleOverridePercent = 0
+	end
 	for _, spec in ipairs(SPEC) do
 		shared[spec.key] = read(spec)
 	end

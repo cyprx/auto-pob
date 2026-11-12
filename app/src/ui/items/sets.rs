@@ -20,7 +20,7 @@ enum Naming {
 pub(super) struct State {
     open: bool,
     /// The row the manager's buttons act on
-    selected: Option<u32>,
+    pub(super) selected: Option<u32>,
     naming: Option<(Naming, String)>,
     confirm_delete: Option<u32>,
     /// The shared set row the shared buttons act on (NF-2)
@@ -203,6 +203,8 @@ impl ItemsUi {
                         self.rects.note(row, || format!("sets_row_{i}"));
                         if row.clicked() {
                             self.sets.selected = Some(set.id);
+                            // the build list becomes the selected control
+                            row.request_focus();
                         }
                         if row.double_clicked() && set.id != view.active_set {
                             out.commands.push(Command::SelectItemSet { id: set.id });

@@ -280,4 +280,82 @@ mod tests {
             0.55
         ));
     }
+
+    /// `dropdown_step` on a dropped list of `len` entries, selected 0, with this frame's events
+    fn dropped(ctx: &egui::Context, len: usize, events: Vec<Event>) -> Option<usize> {
+        let mut out = None;
+        ctx.run_ui(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 200.0))),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                let r = ui.button("list");
+                out = dropdown_step(ui, &r, len, 0, true);
+            },
+        )
+        .drop_without_applying_deltas();
+        out
+    }
+
+    #[test]
+    fn a_short_dropped_list_steps_on_the_wheel_and_a_long_one_scrolls() {
+        let ctx = egui::Context::default();
+        // no scroll bar: the wheel steps (DropDownControl.lua:488-497)
+        assert_eq!(
+            dropped(&ctx, 3, vec![wheel(-1.0, Modifiers::NONE)]),
+            Some(1)
+        );
+        // a scroll bar: the wheel scrolls the list, the arrows still step
+        assert_eq!(dropped(&ctx, 60, vec![wheel(-1.0, Modifiers::NONE)]), None);
+        let down = Event::Key {
+            key: Key::ArrowDown,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        assert_eq!(dropped(&ctx, 60, vec![down]), Some(1));
+    }
+
+    #[test]
+    fn a_focused_slider_keeps_its_own_arrows() {
+        let ctx = egui::Context::default();
+        let up = Event::Key {
+            key: Key::ArrowUp,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        let mut seen = Vec::new();
+        for (focus, events) in [
+            (true, vec![]),
+            (false, vec![Event::PointerMoved(Pos2::new(60.0, 20.0))]),
+            (false, vec![up.clone()]),
+        ] {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 200.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut v = 0.5;
+                    let r = ui.add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false));
+                    if focus {
+                        r.request_focus();
+                    }
+                    seen.push(slider_step(ui, &r, 0.5));
+                },
+            )
+            .drop_without_applying_deltas();
+        }
+        // egui's own step moves a focused slider; PoB's isn't added on top (no stray command)
+        assert_eq!(seen.last().copied().flatten(), None);
+        // unfocused and pointed at, the arrows are PoB's
+        let unfocused = egui::Context::default();
+        assert!(slide(&unfocused, 0.5, vec![up]).is_some());
+    }
 }

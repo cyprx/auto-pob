@@ -1333,6 +1333,46 @@ mod tests {
         );
     }
 
+    fn wheel(y: f32) -> Event {
+        Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: Vec2::new(0.0, y),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    /// The hand-merged depth step (13a's Custom entry with Task 14's wheel): All, 5, 10, 15,
+    /// then Custom, which opens its box with the depth; off Custom the box goes and the depth
+    /// is sent
+    #[test]
+    fn the_wheel_steps_the_heat_depth_onto_and_off_custom() {
+        let mut h = heat_harness();
+        let mut state = (*h.tab.state.clone().unwrap()).clone();
+        state.max_depth = Some(15);
+        h.tab.on_snapshot(&Snapshot::Tree(Arc::new(state)));
+        h.frame(vec![]);
+        let depth = h.tab.rects.map["heat_depth"].center();
+        h.frame(vec![Event::PointerMoved(depth)]);
+        // from 15 down: Custom, its box holding 15, nothing sent yet
+        let out = h.frame(vec![wheel(-1.0)]);
+        assert!(out.commands.is_empty(), "{:?}", out.commands);
+        h.frame(vec![]);
+        assert_eq!(h.tab.toolbar.custom_depth_for_test(), Some("15"));
+        // back up: the box goes and 15 is sent again only if it changed (it didn't)
+        let out = h.frame(vec![wheel(1.0)]);
+        assert!(h.tab.toolbar.custom_depth_for_test().is_none());
+        assert!(out.commands.is_empty(), "{:?}", out.commands);
+        // and up again: 10
+        h.frame(vec![]);
+        let out = h.frame(vec![wheel(1.0)]);
+        assert_eq!(
+            debug(&out.commands),
+            ["SetHeatmap { stat: Some(\"Life\"), max_depth: Some(10) }"]
+        );
+    }
+
     #[test]
     fn version_pick_asks_and_converts() {
         let mut h = heat_harness();
@@ -1371,6 +1411,28 @@ mod tests {
         assert_eq!(
             debug(&out.commands),
             ["SetPowerReportFilter { filter: 2, masteries: true }"]
+        );
+    }
+
+    /// 13a's power report filter steps with the wheel (merge follow-up)
+    #[test]
+    fn the_wheel_steps_the_power_report_filter() {
+        let mut h = heat_harness();
+        h.tab
+            .on_snapshot(&Snapshot::PowerReport(Arc::new(PowerReport {
+                stat: "Life".into(),
+                rows: vec![],
+                listed: vec![],
+                filter: 0,
+                masteries: true,
+            })));
+        press(&mut h, "report_toggle");
+        let filter = h.tab.rects.map["report_filter"].center();
+        h.frame(vec![Event::PointerMoved(filter)]);
+        let out = h.frame(vec![wheel(-1.0)]);
+        assert_eq!(
+            debug(&out.commands),
+            ["SetPowerReportFilter { filter: 1, masteries: true }"]
         );
     }
 

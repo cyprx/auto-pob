@@ -234,6 +234,43 @@ fn items_tree_dropdown_selects_and_manages() {
     assert!(out.manage_trees && out.commands.is_empty());
 }
 
+/// 13b's Items tree dropdown steps with the wheel while enabled (merge follow-up)
+#[test]
+fn the_wheel_steps_the_items_tree_dropdown() {
+    let mut view = sample();
+    view.specs = Some(DropList {
+        labels: vec!["Main".into(), "[3.27] Old".into()],
+        selected: 0,
+        enabled: true,
+    });
+    let mut h = Harness::new(view.clone());
+    h.settle();
+    let combo = h.ui.rect("spec_combo").center();
+    h.frame(vec![Event::PointerMoved(combo)]);
+    let out = h.frame(vec![egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::Vec2::new(0.0, -1.0),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+        modifiers: egui::Modifiers::NONE,
+    }]);
+    assert_eq!(debug(&out.commands), ["SelectSpec { index: 1 }"]);
+    // disabled, it doesn't step
+    view.specs.as_mut().unwrap().enabled = false;
+    let mut h = Harness::new(view);
+    h.settle();
+    let combo = h.ui.rect("spec_combo").center();
+    h.frame(vec![Event::PointerMoved(combo)]);
+    let out = h.frame(vec![egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::Vec2::new(0.0, -1.0),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+        modifiers: egui::Modifiers::NONE,
+    }]);
+    assert!(out.commands.is_empty(), "{:?}", out.commands);
+}
+
 /// The Config tab's "Add Mod" on a custom modifier group opens PoB's Mod Browser for it (R28).
 /// Here with the Items gestures: it is the Items part's window.
 #[test]
@@ -512,4 +549,34 @@ fn delete_on_a_shared_set_row_asks_about_the_shared_set() {
         debug(&h.click("shared_sets_confirm_delete").commands),
         ["DeleteSharedItemSet { index: 0 }"]
     );
+}
+
+/// The hand-merged path: while a shared set row has the keyboard, the build set list's
+/// arrows, F2 and Delete wait (each list is its own control in PoB)
+#[test]
+fn the_build_set_list_keys_wait_while_a_shared_set_row_has_the_keyboard() {
+    let mut h = Harness::new(shared_sample());
+    h.click("manage");
+    h.settle();
+    h.click("sets_row_0");
+    let build_selected = h.ui.sets.selected;
+    h.click("shared_sets_row_0");
+    for key in [Key::ArrowDown, Key::End, Key::F2] {
+        h.key(key, Modifiers::NONE);
+        h.settle();
+    }
+    assert_eq!(h.ui.sets.selected, build_selected, "the build list moved");
+    assert!(
+        !h.ui.has_rect("sets_name") && !h.ui.has_rect("sets_confirm_delete"),
+        "the build list's F2 or Delete acted"
+    );
+    // back on the build list its keys work again
+    let mut h = Harness::new(shared_sample());
+    h.click("manage");
+    h.settle();
+    h.click("shared_sets_row_0");
+    h.click("sets_row_0");
+    h.key(Key::ArrowDown, Modifiers::NONE);
+    h.settle();
+    assert_ne!(h.ui.sets.selected, build_selected);
 }

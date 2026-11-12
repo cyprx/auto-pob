@@ -680,3 +680,171 @@ fn a_focused_box_holds_its_hosts_dropdowns_but_not_builds() {
     // Marauder asks first (needs_confirm)
     assert!(app.tree.has_dialog(), "the class dropdown didn't step");
 }
+
+/// Opens the dropdown at `combo`, types `search`, and checks that `hidden` is filtered out
+/// and `pick` is still there; then picks it (SearchHost, DropDownControl.lua:422-436)
+fn search_and_pick(
+    app: &mut AutoPobApp,
+    ctx: &egui::Context,
+    rect: &dyn Fn(&AutoPobApp, &str) -> egui::Rect,
+    combo: &str,
+    search: &str,
+    hidden: &str,
+    pick: &str,
+) {
+    let at = rect(app, combo).center();
+    let press = |pressed| Event::PointerButton {
+        pos: at,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    for events in [
+        vec![Event::PointerMoved(at)],
+        vec![press(true)],
+        vec![press(false)],
+        vec![],
+        vec![],
+    ] {
+        frame(app, ctx, events);
+    }
+    assert!(
+        ctx.text_edit_focused(),
+        "{combo}: typing doesn't go to its search"
+    );
+    frame(app, ctx, vec![Event::Text(search.into())]);
+    frame(app, ctx, vec![]);
+    assert_eq!(
+        rect(app, hidden).height(),
+        0.0,
+        "{combo}: {hidden} wasn't filtered out"
+    );
+    let target = rect(app, pick);
+    assert!(target.height() > 0.0, "{combo}: {pick} was filtered out");
+    let at = target.center();
+    let press = |pressed| Event::PointerButton {
+        pos: at,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    for events in [
+        vec![Event::PointerMoved(at)],
+        vec![press(true)],
+        vec![press(false)],
+        vec![],
+    ] {
+        frame(app, ctx, events);
+    }
+}
+
+#[test]
+fn every_tabs_dropdowns_search_as_pobs() {
+    // Tree: the heat map's stat
+    let (mut app, ctx) = tree_app();
+    let before = app.sent_full.len();
+    search_and_pick(
+        &mut app,
+        &ctx,
+        &rect_of,
+        "heat_stat",
+        "full",
+        "heat:Life",
+        "heat:Full DPS",
+    );
+    assert!(
+        sent_since(&app, before)
+            .iter()
+            .any(|c| c.contains("Full DPS"))
+    );
+
+    // Items: the item list filter
+    let (mut app, ctx) = items_app();
+    let before = app.sent_full.len();
+    let items = |a: &AutoPobApp, k: &str| a.items.rect(k);
+    search_and_pick(
+        &mut app,
+        &ctx,
+        &items,
+        "filter",
+        "cur",
+        "filter_item_0",
+        "filter_item_1",
+    );
+    assert_eq!(sent_since(&app, before), ["SetItemListFilter { index: 1 }"]);
+
+    // Skills: the skill set
+    let (mut app, ctx) = skills_app();
+    let before = app.sent_full.len();
+    let skills = |a: &AutoPobApp, k: &str| a.skills.rect(k);
+    search_and_pick(
+        &mut app,
+        &ctx,
+        &skills,
+        "set",
+        "alt",
+        "set_item_0",
+        "set_item_1",
+    );
+    assert_eq!(sent_since(&app, before), ["SelectSkillSet { id: 2 }"]);
+
+    // Config: the config set
+    let (mut app, ctx) = config_app(sample_config());
+    let before = app.sent_full.len();
+    search_and_pick(
+        &mut app,
+        &ctx,
+        &rect_of,
+        "set_combo",
+        "map",
+        "set:1",
+        "set:2",
+    );
+    assert_eq!(sent_since(&app, before), ["SelectConfigSet { id: 2 }"]);
+}
+
+#[test]
+fn a_right_click_on_a_read_only_box_reads_no_clipboard() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for (interactive, reads_wanted) in [(false, 0), (true, 1)] {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counted = reads.clone();
+        let (app, _) = started();
+        let mut app = app.with_clipboard_reader(Box::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Some("x".into())
+        }));
+        let ctx = egui::Context::default();
+        let mut text = String::from("fixed");
+        let mut run = |app: &mut AutoPobApp, events: Vec<Event>| {
+            ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    app.right_click_paste(ui.ctx());
+                    ui.add(egui::TextEdit::singleline(&mut text).interactive(interactive));
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        let at = Pos2::new(20.0, 10.0);
+        run(&mut app, vec![Event::PointerMoved(at)]);
+        run(&mut app, vec![]);
+        run(
+            &mut app,
+            vec![Event::PointerButton {
+                pos: at,
+                button: PointerButton::Secondary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            reads_wanted,
+            "interactive {interactive}"
+        );
+    }
+}

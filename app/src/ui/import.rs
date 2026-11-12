@@ -2047,6 +2047,51 @@ pub(crate) mod tests {
         );
     }
 
+    /// 13a's account history steps with the wheel, as a pick into the account box
+    #[test]
+    fn the_wheel_steps_the_account_history() {
+        let mut h = Harness::new();
+        let mut view = signed_in();
+        view.public.history = vec!["alice#1234".into(), "Bob#0001".into()];
+        h.account(view);
+        h.frame(vec![]);
+        h.click("mode:name");
+        let history = marked("history").expect("no history").center();
+        h.frame(vec![egui::Event::PointerMoved(history)]);
+        h.frame(vec![egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::Vec2::new(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        h.frame(vec![]);
+        h.click("start");
+        assert_eq!(
+            h.log,
+            ["ListPublicCharacters { account: \"Bob#0001\", realm: Pc }"]
+        );
+    }
+
+    /// The realm is one of PoB's searchable dropdowns (SearchHost)
+    #[test]
+    fn the_realm_dropdown_filters_as_typed() {
+        let mut h = Harness::new();
+        h.account(signed_in());
+        h.frame(vec![]);
+        h.click("realm_combo");
+        h.frame(vec![]);
+        h.frame(vec![egui::Event::Text("xb".into())]);
+        h.frame(vec![]);
+        assert_eq!(
+            marked("realm:PC").unwrap().height(),
+            0.0,
+            "PC wasn't filtered out"
+        );
+        h.click("realm:XBOX");
+        assert_eq!(h.ui.realm, Realm::Xbox);
+    }
+
     #[test]
     fn the_character_list_shows_pobs_bandit_tip() {
         let mut h = Harness::new();

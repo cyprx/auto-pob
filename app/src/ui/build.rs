@@ -754,4 +754,20 @@ mod tests {
         sent.extend(h.click("bloodline_1"));
         assert_eq!(sent, ["SelectSecondaryAscendancy { id: 8 }"]);
     }
+
+    /// The top bar's dropdowns are PoB's searchable ones too (SearchHost)
+    #[test]
+    fn the_bloodline_dropdown_filters_as_typed() {
+        let mut h = Harness::new(view());
+        h.open("bloodline");
+        h.frame(vec![Event::Text("aul".into())]);
+        h.frame(vec![]);
+        assert_eq!(
+            h.rect("bloodline_0").unwrap().height(),
+            0.0,
+            "None wasn't filtered out"
+        );
+        let sent = h.click("bloodline_1");
+        assert_eq!(sent, ["SelectSecondaryAscendancy { id: 8 }"]);
+    }
 }

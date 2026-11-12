@@ -1106,3 +1106,57 @@ fn long_rows_keep_one_height_to_the_end_of_the_list() {
         [set("listControl", PopupInput::Row("mod 299".into()))]
     );
 }
+
+/// The hand-merged path: 13b lays only the shown rows out (`show_rows`), Task 14 drags them.
+/// Scrolled down, a drag between shown rows sends the rows' own places in the whole list.
+#[test]
+fn a_drag_between_scrolled_rows_moves_by_their_place_in_the_whole_list() {
+    let mut list = three_rows(true);
+    list.rows = (0..60)
+        .map(|i| PopupRow {
+            key: format!("k{i}"),
+            label: format!("Row {i}"),
+        })
+        .collect();
+    let mut h = Harness::new(popup(vec![list]));
+    let top = h.rect("list_row_0").center();
+    for _ in 0..12 {
+        h.frame(vec![
+            Event::PointerMoved(top),
+            Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: Vec2::new(0.0, -3.0),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+                modifiers: Modifiers::NONE,
+            },
+        ]);
+    }
+    // only the rows laid out this frame are noted
+    h.popup.rects.map.clear();
+    h.frame(vec![]);
+    // the list scrolled: its first rows aren't laid out, later ones are
+    let shown: Vec<usize> = (0..60)
+        .filter(|i| h.popup.rects.map.contains_key(&format!("list_row_{i}")))
+        .collect();
+    let first = *shown.first().expect("no row shown");
+    assert!(first > 0, "the list didn't scroll: {shown:?}");
+    let (from, onto) = (shown[3], shown[1]);
+    let from_pos = h.rect(&format!("list_row_{from}")).center();
+    let onto_rect = h.rect(&format!("list_row_{onto}"));
+    let sent = drag(
+        &mut h,
+        from_pos,
+        Pos2::new(from_pos.x, onto_rect.top() + 2.0),
+    );
+    assert_eq!(
+        sent,
+        [set(
+            "list",
+            PopupInput::RowMove {
+                key: format!("k{from}"),
+                to: onto
+            }
+        )]
+    );
+}

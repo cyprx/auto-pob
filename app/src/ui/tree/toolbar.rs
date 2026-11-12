@@ -87,6 +87,12 @@ pub(super) struct Toolbar {
 }
 
 impl Toolbar {
+    /// The Custom depth box's text, for tests
+    #[cfg(test)]
+    pub(super) fn custom_depth_for_test(&self) -> Option<&str> {
+        self.custom_depth.as_deref()
+    }
+
     /// A click on another class's ascendancy node whose class needs the question: PoB asks
     /// "Class Change" before anything changes.
     pub(super) fn ask_class_change(&mut self, node: u32, class: String) {

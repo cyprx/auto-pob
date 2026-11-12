@@ -1493,6 +1493,25 @@ mod tests {
         assert_eq!(h.drag(up, sub), None);
     }
 
+    /// The sort is one of PoB's searchable dropdowns (SearchHost)
+    #[test]
+    fn the_sort_dropdown_filters_as_typed() {
+        let mut h = H::new(view(""));
+        h.click("sort_combo");
+        h.frame(vec![]);
+        h.frame(vec![Event::Text("level".into())]);
+        h.frame(vec![]);
+        assert_eq!(
+            marked("sort:NAME").unwrap().height(),
+            0.0,
+            "Name wasn't filtered out"
+        );
+        assert_eq!(
+            h.click("sort:LEVEL"),
+            Some(ListScreenAction::SetSort(BuildSort::Level))
+        );
+    }
+
     #[test]
     fn sort_combo_sends_set_build_sort() {
         let mut h = H::new(view(""));

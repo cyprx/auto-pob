@@ -352,6 +352,23 @@ fn compare_tab_hidden_until_a_build_is_open() {
     assert_eq!(debug(&out.commands), ["RemoveCompare { index: 0 }"]);
 }
 
+/// The entries dropdown is one of PoB's searchable dropdowns (SearchHost)
+#[test]
+fn the_entries_dropdown_filters_as_typed() {
+    let mut h = Harness::new(Some(sample()));
+    h.click("entries");
+    h.frame(vec![]);
+    h.frame(vec![Event::Text("imp".into())]);
+    h.frame(vec![]);
+    assert_eq!(
+        h.ui.rect("entry:0").height(),
+        0.0,
+        "dot wasn't filtered out"
+    );
+    let out = h.click("entry:1");
+    assert_eq!(debug(&out.commands), ["SelectCompare { index: 1 }"]);
+}
+
 #[test]
 fn load_menu_sends_each_source() {
     let mut h = Harness::new(None);

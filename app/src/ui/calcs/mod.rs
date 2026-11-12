@@ -829,6 +829,25 @@ mod tests {
         assert_eq!(debug(&sent), ["SetCalcsSelect { control: Part, index: 1 }"]);
     }
 
+    /// The Calcs selectors are PoB's searchable dropdowns (SearchHost)
+    #[test]
+    fn a_selector_filters_as_typed() {
+        let mut h = Harness::new(sample(Some(list(&["One", "Two"]))));
+        h.click("part");
+        for _ in 0..3 {
+            h.frame(vec![]);
+        }
+        h.frame(vec![egui::Event::Text("tw".into())]);
+        h.frame(vec![]);
+        assert_eq!(
+            h.ui.rects.map["part_item_0"].height(),
+            0.0,
+            "One wasn't filtered out"
+        );
+        let sent = h.click("part_item_1");
+        assert_eq!(debug(&sent), ["SetCalcsSelect { control: Part, index: 1 }"]);
+    }
+
     #[test]
     fn calcs_spectre_button_only_when_pob_shows_it() {
         let h = Harness::new(sample(None));

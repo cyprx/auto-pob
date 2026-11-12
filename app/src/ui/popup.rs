@@ -102,6 +102,33 @@ pub fn rows(view: &PopupView) -> Vec<Vec<usize>> {
         .collect()
 }
 
+/// Where a row dragged from `from` lands when dropped at height `y`: its 0-based place after
+/// the drop, counted over the other rows whose middle is above `y`.
+pub(crate) fn drop_place(rects: &[egui::Rect], from: usize, y: f32) -> usize {
+    rects
+        .iter()
+        .enumerate()
+        .filter(|&(i, r)| i != from && r.center().y < y)
+        .count()
+}
+
+/// The line that shows where a dragged row will land: across the row it goes before, or under
+/// the last one
+fn drop_line(rects: &[egui::Rect], from: usize, to: usize) -> Option<(egui::Rangef, f32)> {
+    let others: Vec<&egui::Rect> = rects
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| i != from)
+        .map(|(_, r)| r)
+        .collect();
+    let y = match others.get(to) {
+        Some(r) => r.top(),
+        None => others.last()?.bottom(),
+    };
+    let first = rects.first()?;
+    Some((first.x_range(), y))
+}
+
 /// Asks for a control's tooltip once the pointer has rested on it, and keeps the answer to the
 /// latest question only.
 #[derive(Default)]
@@ -810,11 +837,21 @@ impl PopupWindow {
                         (Some(a), Some(b)) => Some((a.min(b), a.max(b))),
                         _ => None,
                     };
+                    // a mutable list's rows are dragged to a new place, as in PoB
+                    let mut rects = Vec::with_capacity(c.rows.len());
+                    let mut dragged = None;
                     for (i, row) in c.rows.iter().enumerate() {
                         let selected = c.row_selected.as_deref() == Some(row.key.as_str())
                             || range.is_some_and(|(a, b)| a <= i && i <= b);
-                        let response =
+                        let mut response =
                             ui.selectable_label(selected, pob_text(&row.label, 14.0, default));
+                        if c.reorder {
+                            response = response.interact(egui::Sense::click_and_drag());
+                            rects.push(response.rect);
+                            if response.dragged() || response.drag_stopped() {
+                                dragged = Some((i, response.drag_stopped()));
+                            }
+                        }
                         self.rects.note(&response, || format!("{name}_row_{i}"));
                         self.tip.note(
                             &response,
@@ -842,6 +879,25 @@ impl PopupWindow {
                                 name: name.to_owned(),
                                 value,
                             });
+                        }
+                    }
+                    if let Some((from, dropped)) = dragged
+                        && let Some(pos) = ui.input(|i| i.pointer.latest_pos())
+                    {
+                        let to = drop_place(&rects, from, pos.y);
+                        if dropped {
+                            if to != from {
+                                out.commands.push(Command::SetPopupControl {
+                                    name: name.to_owned(),
+                                    value: PopupInput::RowMove {
+                                        key: c.rows[from].key.clone(),
+                                        to,
+                                    },
+                                });
+                            }
+                        } else if let Some(line) = drop_line(&rects, from, to) {
+                            let stroke = ui.visuals().selection.stroke;
+                            ui.painter().hline(line.0, line.1, stroke);
                         }
                     }
                     if c.rows.is_empty()

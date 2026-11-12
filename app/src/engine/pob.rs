@@ -589,6 +589,7 @@ fn ends_gem_search(command: &Command) -> bool {
             // a loadout picks or adds a skill set (R21)
             | Command::SelectLoadout { .. }
             | Command::NewLoadout { .. }
+            | Command::SyncLoadouts
             | Command::Undo(Tab::Skills)
             | Command::Redo(Tab::Skills)
             | Command::ListBuilds { .. }
@@ -1175,6 +1176,9 @@ impl PobBackend {
                     PopupInput::RowShiftClick(key) => {
                         self.call::<_, ()>("compare_set", (name, "row_shift", key, ()))?
                     }
+                    PopupInput::RowMove { key, to } => {
+                        self.call::<_, ()>("compare_set", (name, "row_move", key, to))?
+                    }
                 }
                 let mut affected = compare_changed();
                 // PoB's own item set selector, with an Items undo state (CompareTab.lua:781)
@@ -1749,6 +1753,9 @@ impl PobBackend {
                     }
                     PopupInput::RowShiftClick(key) => {
                         self.call::<_, ()>("popup_set", (name, "row_shift", key, ()))?
+                    }
+                    PopupInput::RowMove { key, to } => {
+                        self.call::<_, ()>("popup_set", (name, "row_move", key, to))?
                     }
                 }
                 if restart {
@@ -2578,6 +2585,19 @@ mod tests {
         let _ = fake.apply(command, &|_| {});
         assert_eq!(log.lock().unwrap().requests, [shown]);
         assert_eq!(fake.pending.len(), 2);
+    }
+
+    #[test]
+    fn loadout_commands_end_the_gem_search() {
+        // a loadout pick, a new loadout and Sync can each switch or add a skill set (R21)
+        for command in [
+            Command::SelectLoadout { label: "L2".into() },
+            Command::NewLoadout { name: "L3".into() },
+            Command::SyncLoadouts,
+        ] {
+            assert!(ends_gem_search(&command), "{command:?}");
+        }
+        assert!(!ends_gem_search(&Command::SetCharacterLevel { level: 75 }));
     }
 
     #[test]

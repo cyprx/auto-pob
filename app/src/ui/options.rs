@@ -432,6 +432,7 @@ pub(crate) mod testing {
             row_selected: None,
             row_highlight: None,
             note: None,
+            reorder: false,
         }
     }
 

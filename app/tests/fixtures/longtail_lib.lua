@@ -372,3 +372,42 @@ function libraryClose(button)
 	library = nil
 	upFrame()
 end
+
+-- A drag of the row inside "Spectres in Build" and its release (ListControl.lua:425-437): the
+-- drag state PoB's Draw would have set, then PoB's own release. `to` is the row's final place.
+function libraryMove(id, to)
+	local list = library.controls.list
+	assert(list.isMutable, "the list can't be reordered")
+	for index, value in ipairs(list.list) do
+		if value == id then
+			list:SelectIndex(index)
+			list.selDragging = true
+			list.selDragActive = true
+			list.selDragIndex = to > index and to + 1 or to
+			list:OnKeyUp("LEFTBUTTON")
+			return
+		end
+	end
+	error("no row " .. tostring(id))
+end
+
+-- The level box's tooltip, as hovering it builds: each line's text, "--" for a separator
+function levelTooltip()
+	local tooltip = new("Tooltip")
+	build.controls.characterLevel.tooltipFunc(tooltip)
+	local out = {}
+	for i, line in ipairs(tooltip.lines) do
+		out[i] = line.text or "--"
+	end
+	return out
+end
+
+-- "New Loadout", then its popup's Cancel
+function newLoadoutCancelled()
+	pickEntry(build.controls.buildLoadouts, "^7^7New Loadout", nil, "the loadouts dropdown")
+	local popup = main.popups[1]
+	assert(popup and popup.title == "Set Name", "New Loadout opened no name popup")
+	popup.controls.cancel.onClick()
+	assert(#main.popups == 0, "the name popup stayed open")
+	upFrame()
+end

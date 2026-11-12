@@ -968,6 +968,12 @@ pub enum PopupInput {
     /// A list row clicked with Shift held: the other end of a range (the timeless results'
     /// trade search, R17)
     RowShiftClick(String),
+    /// A row of a mutable list dragged to `to` (0-based, its place after the drop), as PoB's
+    /// list reorders on release (the Spectre Library's "Spectres in Build")
+    RowMove {
+        key: String,
+        to: usize,
+    },
 }
 
 /// An item database (Task 6)

@@ -31,7 +31,7 @@ note = "part of build.buildLoadouts"
 ported = "app/src/ui/build.rs top_bar name with unsaved marker"
 
 [controls."build.characterLevel"]
-ported = "app/src/ui/build.rs top_bar level box (EditBox: Enter or blur sends, Esc reverts; %D filter, 3 characters)"
+ported = "app/src/ui/build.rs top_bar level box (EditBox: Enter or blur sends, Esc reverts; %D filter, 3 characters; a keystroke in Auto is Manual) with PoB's Experience multiplier tooltip"
 
 [controls."build.characterLevel.buttonDown"]
 ported = "app/src/ui/build.rs top_bar level box"
@@ -3140,7 +3140,7 @@ ported = "app/src/ui/app.rs save_as_dialog with the folder list (app/src/ui/fold
 ported = "app/src/ui/unsaved.rs prompt"
 
 [popups."Set Name"]
-ported = "app/src/ui/build.rs New Loadout name window (R21); set-manager sites in items/sets.rs, skills/sets.rs, tree/toolbar.rs, config.rs"
+ported = "app/src/ui/build.rs New Loadout name window (R21; opens on New Loadout, Esc cancels); set-manager sites in items/sets.rs, skills/sets.rs, tree/toolbar.rs, config.rs"
 note = "the shared item set site is NF-2, tracked by the items.sharedItemList rows"
 
 [popups."Similar Builds"]
@@ -3152,7 +3152,7 @@ ported = "app/src/ui/skills/groups.rs"
 note = "Delete is disabled for item-granted groups, so the message can't arise"
 
 [popups."Spectre Library"]
-ported = "app/src/engine/glue/popups.lua Spectre Library session (R18), opened from the sidebar and the Calcs selector"
+ported = "app/src/engine/glue/popups.lua Spectre Library session (R18), opened from the sidebar and the Calcs selector; add, double-click add, remove, search and drag-reorder of Spectres in Build (ui/popup.rs list drag, PopupInput::RowMove)"
 
 [popups."Stat Weight Multipliers"]
 ruled_out = "D-005"

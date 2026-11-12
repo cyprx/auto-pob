@@ -668,6 +668,8 @@ local function control_view(name, control, kind, popup_x, popup_y)
 			view.row_highlight = row_key(far, control.highlightIndex)
 		end
 		view.note = control.defaultText and text_of(control:GetProperty("defaultText")) or nil
+		-- PoB lets the user drag rows to reorder this list
+		view.reorder = control.isMutable and true or false
 	end
 	return view
 end
@@ -758,6 +760,35 @@ function glue.set_control(control, control_kind, kind, value, label)
 			end
 		end
 		error("no such choice", 0)
+	elseif kind == "row_move" and control_kind == "List" then
+		-- a drag inside a mutable list, and the drop (ListControl.lua:425-437); `label` is the
+		-- row's 0-based place after it
+		if not control.isMutable then
+			error("PoB doesn't offer that here", 0)
+		end
+		local from
+		for i, entry in ipairs(control.list) do
+			if row_key(entry, i) == value then
+				from = i
+			end
+		end
+		if not from then
+			error("no such choice", 0)
+		end
+		local to = (tonumber(label) or -1) + 1
+		if to < 1 or to > #control.list then
+			error("no such place", 0)
+		end
+		if to ~= from then
+			local entry = control.list[from]
+			control:SelectIndex(from)
+			table.remove(control.list, from)
+			table.insert(control.list, to, entry)
+			if control.OnOrderChange then
+				control:OnOrderChange(from, to)
+			end
+			control.selValue = nil
+		end
 	else
 		error("no such control", 0)
 	end

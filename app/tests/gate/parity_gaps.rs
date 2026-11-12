@@ -4,6 +4,7 @@
 
 use super::{Session, fixture_xml, lock, pob_dir};
 use auto_pob::engine::upstream::{golden_of, load_xml, upstream_lua};
+use auto_pob::engine::views::ItemTooltipLine;
 use auto_pob::engine::{Backend, BuildView, Command, PopupInput, PopupKind, PopupView, StatsView};
 use auto_pob::game::Game;
 use mlua::LuaSerdeExt;
@@ -100,10 +101,8 @@ impl Upstream {
         self.lua.load("return #main.popups").eval().unwrap()
     }
 
-    fn stats(&self) -> BTreeMap<String, f64> {
-        golden_of(&self.lua, Game::Poe1.pob_version())
-            .expect("upstream stats")
-            .stats
+    fn golden(&self) -> auto_pob::engine::upstream::Golden {
+        golden_of(&self.lua, Game::Poe1.pob_version()).expect("upstream stats")
     }
 }
 
@@ -178,8 +177,18 @@ impl Ours {
 
 /// Both sides' state after the same act, and our top bar's view of it
 fn same(ours: &mut Ours, up: &Upstream, what: &str) -> Top {
+    same_state(ours, up, what, true)
+}
+
+/// `same`, with `unsaved` left out when our side ran no frame to refresh it: the modFlags it
+/// derives from are still compared
+fn same_state(ours: &mut Ours, up: &Upstream, what: &str, unsaved: bool) -> Top {
     let want = up.top();
-    assert_eq!(ours.top(), want, "{what}: PoB state");
+    let mut got = ours.top();
+    if !unsaved {
+        got.unsaved = want.unsaved;
+    }
+    assert_eq!(got, want, "{what}: PoB state");
     assert_eq!(up.popups(), 0, "{what}: upstream left a popup open");
     let view = ours.build();
     assert_eq!(view.level, want.level, "{what}: level");
@@ -198,19 +207,67 @@ fn same(ours: &mut Ours, up: &Upstream, what: &str) -> Top {
         view.progress, want.progress,
         "{what}: point display tooltip"
     );
+    let tooltip: Vec<String> = view
+        .level_tooltip
+        .as_ref()
+        .expect("no level tooltip")
+        .lines
+        .iter()
+        .map(|line| match line {
+            ItemTooltipLine::Line { text, .. } => text.clone(),
+            ItemTooltipLine::Separator { .. } => "--".into(),
+        })
+        .collect();
+    assert_eq!(
+        tooltip,
+        up.get::<Vec<String>>("levelTooltip", ()),
+        "{what}: level box tooltip"
+    );
     want
 }
 
-/// Our sidebar's stats against upstream's calculation, row by row
-fn same_stats(ours: &mut Ours, up: &Upstream, what: &str) -> StatsView {
-    let view = ours.stats();
-    let want = up.stats();
-    assert!(!view.stats.is_empty(), "{what}: no stats");
-    for row in &view.stats {
-        let value = want
+/// Our rows against upstream's values, then against the lines PoB's own sidebar drew, both
+/// ways
+fn same_rows(
+    what: &str,
+    rows: &[auto_pob::engine::StatRow],
+    values: &BTreeMap<String, f64>,
+    sidebar: &[auto_pob::engine::upstream::SidebarLine],
+) {
+    assert!(!rows.is_empty(), "{what}: no rows");
+    for row in rows {
+        let value = values
             .get(&row.key)
             .unwrap_or_else(|| panic!("{what}: {} isn't upstream's", row.key));
         assert_eq!(row.value, *value, "{what}: {}", row.key);
+    }
+    let got: Vec<(&str, &str)> = rows
+        .iter()
+        .map(|r| (r.label.as_str(), r.text.as_str()))
+        .collect();
+    let want: Vec<(&str, &str)> = sidebar
+        .iter()
+        .map(|l| (l.label.as_str(), l.text.as_str()))
+        .collect();
+    assert_eq!(got, want, "{what}: sidebar lines");
+}
+
+/// Our sidebar's stats against upstream's calculation: the player's, and the minion's when
+/// either side has one
+fn same_stats(ours: &mut Ours, up: &Upstream, what: &str) -> StatsView {
+    let view = ours.stats();
+    let want = up.golden();
+    same_rows(
+        &format!("{what}: player"),
+        &view.stats,
+        &want.stats,
+        &want.sidebar,
+    );
+    match (&want.minion_stats, &want.minion_sidebar) {
+        (Some(values), Some(sidebar)) => {
+            same_rows(&format!("{what}: minion"), &view.minion, values, sidebar)
+        }
+        _ => assert!(view.minion.is_empty(), "{what}: minion rows upstream lacks"),
     }
     let mut warnings = view.warnings.clone();
     warnings.sort();
@@ -284,7 +341,7 @@ fn open_and_search(ours: &mut Ours, up: &Upstream) -> Vec<(String, String)> {
     let mut up_keys: Vec<String> = up.get("librarySource", ());
     up_keys.sort_by(|a, b| (&label_of[a], a).cmp(&(&label_of[b], b)));
     assert_eq!(ours_keys, up_keys, "the search's rows");
-    assert!(found.len() >= 3, "\"Archer\" finds too little: {found:?}");
+    assert!(found.len() >= 4, "\"Archer\" finds too little: {found:?}");
     found
 }
 
@@ -365,6 +422,19 @@ fn spectre_and_top_bar_match_pob() {
     assert!(auto.auto);
     assert_ne!(auto.level, 75, "Auto left the typed level");
     same_stats(&mut ours, &up, "Auto");
+    // typed while in Auto: PoB's callback switches to Manual (Build.lua:223)
+    ours.clear_flags();
+    up.call::<()>("clearFlags", ());
+    ours.run(Command::SetCharacterLevel { level: 60 }).unwrap();
+    up.call::<()>("typeLevel", "60");
+    let manual = same(&mut ours, &up, "typed in Auto");
+    assert!(!manual.auto);
+    assert_eq!(manual.level, 60);
+    ours.clear_flags();
+    up.call::<()>("clearFlags", ());
+    ours.run(Command::SetLevelMode { auto: true }).unwrap();
+    up.call::<()>("pressLevelMode", ());
+    assert!(same(&mut ours, &up, "Auto pressed again").auto);
     // already Auto: nothing is pressed on either side
     ours.clear_flags();
     ours.run(Command::SetLevelMode { auto: true }).unwrap();
@@ -390,8 +460,8 @@ fn spectre_and_top_bar_match_pob() {
     );
     let before = up.top().spectres;
     let found = open_and_search(&mut ours, &up);
-    let (first, second, third) = (found[0].0.clone(), found[1].0.clone(), found[2].0.clone());
-    for key in [&first, &second] {
+    let [first, second, third, fourth] = [0, 1, 2, 3].map(|i| found[i].0.clone());
+    for key in [&first, &second, &third] {
         set(&mut ours, "source", PopupInput::Row(key.clone()));
         press(&mut ours, "source.add");
         up.call::<()>("libraryPress", ("source", key.as_str(), "add"));
@@ -399,9 +469,31 @@ fn spectre_and_top_bar_match_pob() {
     set(&mut ours, "list", PopupInput::Row(first.clone()));
     press(&mut ours, "list.delete");
     up.call::<()>("libraryPress", ("list", first.as_str(), "delete"));
+    // PoB's "Spectres in Build" is mutable: the last row dragged to the top
+    let view = ours.popup().unwrap();
+    assert!(
+        view.controls.iter().any(|c| c.name == "list" && c.reorder),
+        "the build's list isn't reorderable"
+    );
+    assert!(
+        !view
+            .controls
+            .iter()
+            .any(|c| c.name == "source" && c.reorder),
+        "the source list is reorderable"
+    );
+    set(
+        &mut ours,
+        "list",
+        PopupInput::RowMove {
+            key: third.clone(),
+            to: 0,
+        },
+    );
+    up.call::<()>("libraryMove", (third.as_str(), 1));
     let dest = keys(&rows(&ours.popup().unwrap(), "list"));
     assert_eq!(dest, up.get::<Vec<String>>("libraryDest", ()));
-    assert_eq!(dest, std::slice::from_ref(&second));
+    assert_eq!(dest, [third.clone(), second.clone()]);
     // nothing is committed before Save
     assert_eq!(ours.top().spectres, before);
     ours.clear_flags();
@@ -410,27 +502,34 @@ fn spectre_and_top_bar_match_pob() {
     up.call::<()>("libraryClose", "save");
     assert!(ours.popup().is_none(), "Save left the window open");
     let saved = same(&mut ours, &up, "library saved");
-    assert_eq!(saved.spectres, std::slice::from_ref(&second));
+    assert_eq!(saved.spectres, [third.clone(), second.clone()]);
     assert!(saved.flags["build"], "Save marked nothing unsaved");
     let minions = ours.stats().main_skill.minion.expect("no minion dropdown");
     assert_eq!(minions.labels, up.get::<Vec<String>>("minionLabels", ()));
-    assert_eq!(minions.labels.len(), 1);
-    same_stats(&mut ours, &up, "library saved");
-    // Cancel commits nothing
+    assert_eq!(minions.labels.len(), 2);
+    let stats = same_stats(&mut ours, &up, "library saved");
+    assert!(!stats.minion.is_empty(), "the spectre has no stats");
+    // Cancel commits nothing and marks nothing unsaved
     open_and_search(&mut ours, &up);
-    set(&mut ours, "source", PopupInput::Row(third.clone()));
+    set(&mut ours, "source", PopupInput::Row(fourth.clone()));
     press(&mut ours, "source.add");
-    up.call::<()>("libraryPress", ("source", third.as_str(), "add"));
-    // the flags stay as Save left them: Cancel runs no frame on our side to refresh `unsaved`
+    up.call::<()>("libraryPress", ("source", fourth.as_str(), "add"));
+    ours.clear_flags();
+    up.call::<()>("clearFlags", ());
     press(&mut ours, "cancel");
     up.call::<()>("libraryClose", "cancel");
     assert!(ours.popup().is_none(), "Cancel left the window open");
-    let cancelled = same(&mut ours, &up, "library cancelled");
+    // Cancel runs no frame on our side to refresh `unsaved`; the flags it derives from count
+    let cancelled = same_state(&mut ours, &up, "library cancelled", false);
     assert_eq!(cancelled.spectres, saved.spectres);
-    assert_eq!(cancelled.flags, saved.flags);
+    assert!(
+        cancelled.flags.values().all(|f| !f),
+        "Cancel marked something unsaved"
+    );
 
     // ---- Loadouts ----
-    let base = same(&mut ours, &up, "before loadouts");
+    // still no frame on our side since the Cancel
+    let base = same_state(&mut ours, &up, "before loadouts", false);
     ours.clear_flags();
     up.call::<()>("clearFlags", ());
     ours.run(Command::NewLoadout { name: "L2".into() }).unwrap();
@@ -488,7 +587,19 @@ fn spectre_and_top_bar_match_pob() {
         .run(Command::NewLoadout { name: "  ".into() })
         .unwrap_err();
     assert_eq!(err.to_string(), "the loadout needs a name");
-    assert_eq!(ours.top().specs, back.specs);
+    // a name PoB's Save won't take is its Cancel: the dropdown is left on its header, as PoB
+    // leaves it after New Loadout, and nothing else changes
+    up.call::<()>("newLoadoutCancelled", ());
+    let after = same_state(&mut ours, &up, "after the refusals", false);
+    assert_eq!(after.loadout_sel, 1);
+    assert_eq!(
+        Top {
+            loadout_sel: back.loadout_sel,
+            unsaved: back.unsaved,
+            ..after
+        },
+        back
+    );
 
     // ---- The library is build-owned (R18, R19): it outlives commands on its build only ----
     ours.run(Command::OpenPopup(PopupKind::SpectreLibrary))

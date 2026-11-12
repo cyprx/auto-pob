@@ -27,6 +27,7 @@ fn control(name: &str, kind: PopupControlKind) -> PopupControl {
         row_selected: None,
         row_highlight: None,
         note: None,
+        reorder: false,
     }
 }
 

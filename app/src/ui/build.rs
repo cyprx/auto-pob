@@ -3,7 +3,7 @@
 use super::tree::TreeTab;
 use crate::engine::Command;
 use crate::engine::views::{BuildView, is_loadout_marker};
-use crate::widgets::{EditBox, EditBoxOptions, pob_text};
+use crate::widgets::{EditBox, EditBoxOptions, item_tooltip_ui, pob_text};
 use eframe::egui;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +49,8 @@ impl BuildTab {
 #[derive(Default)]
 pub struct TopBarState {
     level: EditBox,
+    /// A keystroke went into the level box while the build was in Auto
+    typed_in_auto: bool,
     /// "New Loadout" was chosen: the name being typed
     new_loadout: Option<String>,
 }
@@ -61,17 +63,24 @@ impl TopBarState {
 
     /// A level typed but not sent: the build has changes the engine doesn't know about yet.
     pub fn has_pending(&self) -> bool {
-        self.level.has_pending()
+        self.level.has_pending() || self.typed_in_auto
     }
 
-    /// Takes the pending level as the command that sends it.
+    /// Takes the pending level as the command that sends it: also a level retyped unchanged
+    /// in Auto, which PoB takes as Manual.
     pub fn flush(&mut self) -> Option<Command> {
-        level_command(&self.level.take_pending()?)
+        let typed = std::mem::take(&mut self.typed_in_auto);
+        match self.level.take_pending() {
+            Some(text) => level_command(&text),
+            None if typed => level_command(&self.level.text),
+            None => None,
+        }
     }
 
     /// Drops the pending level (the user chose not to save).
     pub fn discard(&mut self) {
         self.level.discard();
+        self.typed_in_auto = false;
     }
 }
 
@@ -159,7 +168,10 @@ pub fn top_bar(
     out
 }
 
-/// The Auto/Manual button and the level box (`levelScalingButton`, `characterLevel`)
+/// The Auto/Manual button and the level box (`levelScalingButton`, `characterLevel`). PoB
+/// applies every keystroke, and its level callback switches to Manual (Build.lua:218-224):
+/// while a level is being typed the mode shows Manual, and a press of the button sends that
+/// level first.
 fn level(
     ui: &mut egui::Ui,
     view: &BuildView,
@@ -167,18 +179,19 @@ fn level(
     busy: bool,
     commands: &mut Vec<Command>,
 ) {
+    let typing = state.level.has_pending() || state.typed_in_auto;
+    let auto = view.level_auto && !typing;
     let mode = ui
-        .button(if view.level_auto { "Auto" } else { "Manual" })
-        .on_hover_text(if view.level_auto {
+        .button(if auto { "Auto" } else { "Manual" })
+        .on_hover_text(if auto {
             "The level follows the passive points spent"
         } else {
             "The level is the one typed"
         });
     note(ui, "level_mode", mode.rect);
     if mode.clicked() {
-        commands.push(Command::SetLevelMode {
-            auto: !view.level_auto,
-        });
+        commands.extend(state.flush());
+        commands.push(Command::SetLevelMode { auto: !auto });
     }
     ui.label("Level");
     let opts = EditBoxOptions {
@@ -187,13 +200,39 @@ fn level(
         filter: Some(|c| c.is_ascii_digit()),
         hint: None,
     };
+    let id = egui::Id::unique("top_bar_level");
+    // a keystroke in Auto is a Manual level in PoB, even one that retypes the shown level
+    let focused = ui.memory(|m| m.has_focus(id));
+    if view.level_auto
+        && focused
+        && ui.input(|i| {
+            i.events
+                .iter()
+                .any(|e| matches!(e, egui::Event::Text(_) | egui::Event::Paste(_)))
+        })
+    {
+        state.typed_in_auto = true;
+    }
     let current = view.level.to_string();
-    let (response, sent) =
-        state
-            .level
-            .show(ui, egui::Id::unique("top_bar_level"), &current, busy, &opts);
+    let (response, sent) = state.level.show(ui, id, &current, busy, &opts);
     note(ui, "level", response.rect);
-    commands.extend(sent.as_deref().and_then(level_command));
+    if let Some(tooltip) = &view.level_tooltip {
+        response.on_hover_ui(|ui| {
+            item_tooltip_ui(ui, tooltip);
+        });
+    }
+    match sent.as_deref().and_then(level_command) {
+        Some(command) => {
+            state.typed_in_auto = false;
+            commands.push(command);
+        }
+        None if state.typed_in_auto && !ui.memory(|m| m.has_focus(id)) => {
+            // Esc puts the text back, but PoB's keystrokes already made it Manual
+            state.typed_in_auto = false;
+            commands.extend(level_command(&state.level.text));
+        }
+        None => {}
+    }
 }
 
 /// The bloodline dropdown (`secondaryAscendDrop`); PoB enables it with more than "None"
@@ -261,7 +300,8 @@ fn loadouts(
                     "New Loadout" => {
                         let r = ui.button("New Loadout…");
                         if r.clicked() {
-                            state.new_loadout = Some(String::new());
+                            // PoB's box opens on "New Loadout" (Build.lua:318)
+                            state.new_loadout = Some("New Loadout".to_owned());
                         }
                         r
                     }
@@ -302,9 +342,14 @@ fn new_loadout_dialog(ctx: &egui::Context, state: &mut TopBarState, commands: &m
         .show(ctx, |ui| {
             ui.label("Enter name for this loadout:");
             let field = ui.add(egui::TextEdit::singleline(name).char_limit(100));
+            note(ui, "new_loadout_name", field.rect);
             // the window opens on its box, as PoB's does
             if ui.memory(|m| m.focused().is_none()) {
                 field.request_focus();
+            }
+            // Esc is PoB's Cancel (its popup closes on Escape)
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                close = true;
             }
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let valid = !name.trim().is_empty();
@@ -423,6 +468,40 @@ mod tests {
             all
         }
 
+        /// Selects everything in the focused box, then types `text`
+        fn retype(&mut self, text: &str) -> Vec<String> {
+            let mut sent = self.frame(vec![Event::Key {
+                key: Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            }]);
+            sent.extend(self.frame(vec![Event::Text(text.into())]));
+            sent
+        }
+
+        /// A click where nothing is drawn
+        fn click_away(&mut self) -> Vec<String> {
+            let pos = egui::pos2(1900.0, 700.0);
+            let button = |pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            let mut all = Vec::new();
+            for events in [
+                vec![Event::PointerMoved(pos)],
+                vec![button(true)],
+                vec![button(false)],
+                vec![],
+            ] {
+                all.extend(self.frame(events));
+            }
+            all
+        }
+
         /// Opens a combo box and lets its popup lay out
         fn open(&mut self, key: &str) -> Vec<String> {
             let mut sent = self.click(key);
@@ -516,10 +595,88 @@ mod tests {
         sent.extend(h.click("loadout_4"));
         assert!(sent.is_empty());
         assert!(h.state.has_dialog());
-        let mut sent = h.frame(vec![Event::Text("L3".into())]);
+        let mut sent = h.retype("L3");
         sent.extend(h.click("new_loadout_save"));
         assert_eq!(sent, ["NewLoadout { name: \"L3\" }"]);
         assert!(!h.state.has_dialog());
+    }
+
+    #[test]
+    fn new_loadout_window_opens_on_pobs_name_and_closes_on_escape() {
+        let mut h = Harness::new(view());
+        h.open("loadouts");
+        h.click("loadout_4");
+        assert_eq!(h.state.new_loadout.as_deref(), Some("New Loadout"));
+        // Save as it opened takes PoB's default name
+        let sent = h.click("new_loadout_save");
+        assert_eq!(sent, ["NewLoadout { name: \"New Loadout\" }"]);
+        // Esc cancels
+        h.open("loadouts");
+        h.click("loadout_4");
+        let sent = h.key(Key::Escape);
+        assert!(sent.is_empty(), "{sent:?}");
+        assert!(!h.state.has_dialog());
+    }
+
+    #[test]
+    fn mode_press_sends_the_typed_level_first() {
+        // PoB applies every keystroke and its callback switches to Manual, so the press that
+        // follows ends in Auto
+        let mut h = Harness::new(view());
+        h.click("level");
+        h.retype("75");
+        let sent = h.click("level_mode");
+        assert_eq!(
+            sent,
+            [
+                "SetCharacterLevel { level: 75 }",
+                "SetLevelMode { auto: true }"
+            ]
+        );
+        assert!(!h.state.has_pending());
+
+        // in Auto, typing shows Manual, and the press goes back to Auto
+        let mut h = Harness::new(BuildView {
+            level_auto: true,
+            ..view()
+        });
+        h.click("level");
+        h.retype("75");
+        let sent = h.click("level_mode");
+        assert_eq!(
+            sent,
+            [
+                "SetCharacterLevel { level: 75 }",
+                "SetLevelMode { auto: true }"
+            ]
+        );
+    }
+
+    #[test]
+    fn level_box_sends_on_blur() {
+        let mut h = Harness::new(view());
+        h.click("level");
+        h.retype("60");
+        assert_eq!(h.click_away(), ["SetCharacterLevel { level: 60 }"]);
+    }
+
+    #[test]
+    fn retyping_the_level_in_auto_makes_it_manual() {
+        // a keystroke in Auto is a Manual level in PoB, even the level already shown
+        let mut h = Harness::new(BuildView {
+            level_auto: true,
+            ..view()
+        });
+        h.click("level");
+        h.retype("90");
+        assert!(h.state.has_pending());
+        assert_eq!(h.click_away(), ["SetCharacterLevel { level: 90 }"]);
+        assert!(!h.state.has_pending());
+        // in Manual, an unchanged level sends nothing
+        let mut h = Harness::new(view());
+        h.click("level");
+        h.retype("90");
+        assert!(h.click_away().is_empty());
     }
 
     #[test]

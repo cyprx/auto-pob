@@ -27,6 +27,7 @@ fn control(name: &str, kind: PopupControlKind, pos: [f32; 2], size: [f32; 2]) ->
         row_selected: None,
         row_highlight: None,
         note: None,
+        reorder: false,
     }
 }
 
@@ -447,6 +448,76 @@ fn list_row_click_sends_row_key() {
         debug(&out.commands),
         [set("notes", PopupInput::Row("42".into()))]
     );
+}
+
+fn three_rows(reorder: bool) -> PopupControl {
+    PopupControl {
+        rows: ["a", "b", "c"]
+            .iter()
+            .map(|k| PopupRow {
+                key: (*k).into(),
+                label: k.to_uppercase(),
+            })
+            .collect(),
+        reorder,
+        ..control("list", PopupControlKind::List, [0.0, 0.0], [300.0, 200.0])
+    }
+}
+
+/// Presses on `from`, moves in steps to `to` and lets go there
+fn drag(h: &mut Harness, from: Pos2, to: Pos2) -> Vec<String> {
+    let mut all = Vec::new();
+    let button = |pos, pressed| Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    all.extend(debug(&h.frame(vec![Event::PointerMoved(from)]).commands));
+    all.extend(debug(&h.frame(vec![button(from, true)]).commands));
+    for step in 1..=6 {
+        let pos = from + (to - from) * (step as f32 / 6.0);
+        all.extend(debug(&h.frame(vec![Event::PointerMoved(pos)]).commands));
+    }
+    all.extend(debug(&h.frame(vec![button(to, false)]).commands));
+    all.extend(debug(&h.frame(vec![]).commands));
+    all
+}
+
+#[test]
+fn a_mutable_list_reorders_by_drag() {
+    let mut h = Harness::new(popup(vec![three_rows(true)]));
+    let last = h.rect("list_row_2").center();
+    let first = h.rect("list_row_0");
+    // dropped above the first row: the last row goes first
+    let sent = drag(&mut h, last, Pos2::new(last.x, first.top() + 2.0));
+    assert_eq!(
+        sent,
+        [set(
+            "list",
+            PopupInput::RowMove {
+                key: "c".into(),
+                to: 0
+            }
+        )]
+    );
+    // a list PoB doesn't let the user reorder only takes clicks
+    let mut h = Harness::new(popup(vec![three_rows(false)]));
+    let last = h.rect("list_row_2").center();
+    let first = h.rect("list_row_0");
+    let sent = drag(&mut h, last, Pos2::new(last.x, first.top() + 2.0));
+    assert!(sent.iter().all(|c| !c.contains("RowMove")), "{sent:?}");
+}
+
+#[test]
+fn drop_place_counts_the_other_rows_above() {
+    let rows: Vec<Rect> = (0..3)
+        .map(|i| Rect::from_min_size(Pos2::new(0.0, i as f32 * 20.0), Vec2::new(100.0, 20.0)))
+        .collect();
+    assert_eq!(drop_place(&rows, 2, 1.0), 0);
+    assert_eq!(drop_place(&rows, 0, 55.0), 2);
+    assert_eq!(drop_place(&rows, 0, 25.0), 0);
+    assert_eq!(drop_place(&rows, 0, 35.0), 1);
 }
 
 fn tip_for(control: &str, index: Option<usize>) -> Arc<ControlTooltipView> {

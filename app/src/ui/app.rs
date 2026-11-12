@@ -1576,6 +1576,11 @@ impl AutoPobApp {
         let Some(choice) = choice else {
             return;
         };
+        self.answer_prompt(pending, choice);
+    }
+
+    /// The unsaved prompt's answer for what was about to happen.
+    fn answer_prompt(&mut self, pending: Pending, choice: PromptChoice) {
         self.prompt = None;
         let has_path = self.build.as_ref().is_some_and(|b| b.path.is_some());
         match resolve(choice, has_path) {
@@ -3999,6 +4004,105 @@ mod tests {
             !sent.iter().any(|c| c.contains("SetMainSkillCount")),
             "{sent:?}"
         );
+    }
+
+    /// Where the top bar drew `key` last frame
+    fn top_rect(ctx: &egui::Context, key: &str) -> egui::Rect {
+        ctx.data(|d| d.get_temp(egui::Id::NULL.with(("top_bar_rect", key.to_owned()))))
+            .unwrap_or_else(|| panic!("the top bar drew no {key}"))
+    }
+
+    fn click_at(app: &mut AutoPobApp, ctx: &egui::Context, pos: egui::Pos2) {
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![],
+        ] {
+            frame(app, ctx, events);
+        }
+    }
+
+    /// Clicks the level box and types `text` over what it shows
+    fn type_level(app: &mut AutoPobApp, ctx: &egui::Context, text: &str) {
+        let pos = top_rect(ctx, "level").center();
+        click_at(app, ctx, pos);
+        frame(app, ctx, key_with(egui::Key::A, egui::Modifiers::COMMAND));
+        frame(app, ctx, vec![egui::Event::Text(text.into())]);
+    }
+
+    #[test]
+    fn a_level_being_typed_counts_as_unsaved_and_flushes_before_save() {
+        let (mut app, ctx) = notes_app();
+        frame(&mut app, &ctx, vec![]);
+        type_level(&mut app, &ctx, "75");
+        assert!(app.top_bar.has_pending());
+        assert!(app.current_unsaved());
+        let before = app.sent_full.len();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::S, egui::Modifiers::COMMAND),
+        );
+        assert_eq!(
+            sent_since(&app, before),
+            ["SetCharacterLevel { level: 75 }", "Save"]
+        );
+        assert!(!app.top_bar.has_pending());
+    }
+
+    #[test]
+    fn dont_save_drops_a_level_being_typed() {
+        let (mut app, ctx) = notes_app();
+        frame(&mut app, &ctx, vec![]);
+        type_level(&mut app, &ctx, "75");
+        assert!(app.top_bar.has_pending());
+        let before = app.sent_full.len();
+        app.answer_prompt(Pending::BackToList, PromptChoice::Discard);
+        assert!(!app.top_bar.has_pending());
+        let sent = sent_since(&app, before);
+        assert!(
+            !sent.iter().any(|c| c.contains("SetCharacterLevel")),
+            "{sent:?}"
+        );
+    }
+
+    #[test]
+    fn the_new_loadout_window_holds_the_shortcuts() {
+        let (mut app, ctx) = notes_app();
+        let mut build = (**app.build.as_ref().unwrap()).clone();
+        build.loadouts = [
+            "^7^7Loadouts:",
+            "Default",
+            "^7^7-----",
+            "^7^7New Loadout",
+            "^7^7Sync",
+            "^7^7Help >>",
+        ]
+        .map(String::from)
+        .to_vec();
+        build.loadout_selected = Some(1);
+        app.build = Some(Arc::new(build));
+        frame(&mut app, &ctx, vec![]);
+        let pos = top_rect(&ctx, "loadouts").center();
+        click_at(&mut app, &ctx, pos);
+        frame(&mut app, &ctx, vec![]);
+        let pos = top_rect(&ctx, "loadout_3").center();
+        click_at(&mut app, &ctx, pos);
+        assert!(app.top_bar.has_dialog());
+        let before = app.sent_full.len();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::S, egui::Modifiers::COMMAND),
+        );
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
     }
 
     #[test]

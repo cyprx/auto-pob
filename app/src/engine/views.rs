@@ -46,6 +46,10 @@ pub struct BuildView {
     /// progress, colour codes kept
     #[serde(default)]
     pub progress: String,
+    /// The level box's tooltip (`characterLevel.tooltipFunc`): the experience multiplier per
+    /// monster level
+    #[serde(default)]
+    pub level_tooltip: Option<ItemTooltip>,
 }
 
 /// Whether a `BuildView.loadouts` entry is one of PoB's headers or actions rather than a
@@ -1101,6 +1105,7 @@ mod tests {
                 row_selected: None,
                 row_highlight: None,
                 note: None,
+                reorder: false,
             }],
             summary: vec![
                 row("Life", "^x33FF77+20 (+20.0%)", Some(true)),
@@ -1629,6 +1634,9 @@ pub struct PopupControl {
     pub row_highlight: Option<String>,
     /// A list's `defaultText`
     pub note: Option<String>,
+    /// A list whose rows PoB lets the user drag into another order (`isMutable`)
+    #[serde(default)]
+    pub reorder: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

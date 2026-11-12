@@ -117,6 +117,16 @@ local function require_usable(control)
 	end
 end
 
+-- What hovering the level box shows (Build.lua:227-253)
+local function level_tooltip(control)
+	if not control.tooltipFunc then
+		return nil
+	end
+	local tooltip = new("Tooltip")
+	control.tooltipFunc(tooltip)
+	return glue.read_tooltip(tooltip)
+end
+
 function glue.build_view()
 	local build = pob.build
 	local spec = build.spec
@@ -151,6 +161,7 @@ function glue.build_view()
 		loadouts = loadouts,
 		loadout_selected = loadout_selected,
 		progress = controls.pointDisplay.req or "",
+		level_tooltip = level_tooltip(controls.characterLevel),
 	}
 end
 

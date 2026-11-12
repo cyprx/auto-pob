@@ -1667,7 +1667,9 @@ impl AutoPobApp {
         }
         // the Items tab's Manage Passive Trees window keeps its own dialogs
         if self.tab != BuildTab::Tree && !self.tree.spec_manager_open() {
-            self.tree.close_dialog();
+            // the Compare tab's tree view asks the Class Change question too
+            let compare_tree = self.tab == BuildTab::Compare && self.compare.tree_shown();
+            self.tree.close_dialog_off_tab(compare_tree);
         }
         if self.tab != BuildTab::Compare {
             // leaving the tab sends a count still being typed and closes its windows

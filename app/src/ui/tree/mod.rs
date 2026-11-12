@@ -172,6 +172,16 @@ impl TreeTab {
         self.toolbar.close_dialog();
     }
 
+    /// Off the Tree tab its questions close; on the Compare tab's tree view the Class Change
+    /// question stays, as that view asks it too (CompareTab.lua:3401, PassiveTreeView.lua:474)
+    pub fn close_dialog_off_tab(&mut self, compare_tree: bool) {
+        if compare_tree {
+            self.toolbar.close_dialog_but_class_change();
+        } else {
+            self.toolbar.close_dialog();
+        }
+    }
+
     /// The top bar's point display (PoB's `pointDisplay`), with PoB's progress tooltip
     pub fn top_bar_points(&self, ui: &mut egui::Ui, progress: &str) {
         if let Some(state) = &self.state {
@@ -408,10 +418,11 @@ impl TreeTab {
             self.toolbar
                 .search(ui, &state, &mut self.rects, &mut out.commands);
         });
-        // the compare view draws none of the Tree tab's windows, so a click that needs a
-        // Class Change does nothing (final-fix ruling I-4; PoB's overlay viewer would ask,
-        // CompareTab.lua:3401)
-        self.canvas(ui, &layout, &state, false, &mut out);
+        // PoB's overlay draws the build's own tree view (CompareTab.lua:3401), which asks
+        // the Class Change question (PassiveTreeView.lua:474); it asks nothing else here
+        self.canvas(ui, &layout, &state, true, &mut out);
+        self.toolbar
+            .compare_dialogs(ui.ctx(), &state, &mut self.rects, &mut out.commands);
         out
     }
 
@@ -1542,14 +1553,29 @@ mod tests {
                 { "id": 3, "name": "Necromancer", "ascend_id": "Necromancer" } ] },
         ]))
         .unwrap();
-        // the Compare tab's tree view asks nothing, and sends nothing
+        // the Compare tab's tree view asks it too: PoB's overlay is the build's own tree
+        // view (CompareTab.lua:3401, PassiveTreeView.lua:474)
         let mut h = Harness::new(Arc::new(layout.clone()), Arc::new(state.clone()));
         h.compare = true;
         h.frame(vec![]);
         h.frame(vec![]);
         let out = h.click_at(h.screen_of(4));
         assert!(out.commands.is_empty(), "{:?}", out.commands);
-        assert!(!h.tab.has_dialog(), "the compare view asked a question");
+        assert!(h.tab.has_question(), "the compare view didn't ask");
+        // the app keeps it on that view, and drops any other question there
+        h.tab.close_dialog_off_tab(true);
+        assert!(
+            h.tab.has_question(),
+            "the app dropped the compare view's question"
+        );
+        h.frame(vec![]);
+        let out = press(&mut h, "node_class_connect");
+        assert_eq!(
+            debug(&out.commands),
+            ["AllocNodeChangingClass { id: 4, connect: true }"]
+        );
+        h.tab.close_dialog_off_tab(false);
+        assert!(!h.tab.has_question());
         let mut h = Harness::new(Arc::new(layout.clone()), Arc::new(state.clone()));
         let out = h.click_at(h.screen_of(4));
         assert!(out.commands.is_empty(), "{:?}", out.commands);

@@ -135,6 +135,27 @@ impl Toolbar {
         self.dialog = None;
     }
 
+    /// Closes every question but the Class Change one, which the Compare tab's tree view asks
+    /// too
+    pub(super) fn close_dialog_but_class_change(&mut self) {
+        if !matches!(self.dialog, Some(Dialog::ClassChange { .. })) {
+            self.dialog = None;
+        }
+    }
+
+    /// The Compare tab's tree view: its Class Change question, the only one it asks
+    pub(super) fn compare_dialogs(
+        &mut self,
+        ctx: &egui::Context,
+        state: &TreeState,
+        rects: &mut Rects,
+        commands: &mut Vec<Command>,
+    ) {
+        if matches!(self.dialog, Some(Dialog::ClassChange { .. })) {
+            self.dialogs(ctx, state, rects, commands);
+        }
+    }
+
     /// A link snapshot arrived.
     pub(super) fn link_arrived(&mut self) {
         self.link_fresh = true;

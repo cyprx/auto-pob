@@ -40,6 +40,8 @@ enum Dialog {
     CopySpec {
         index: usize,
         title: String,
+        /// typed into: PoB's Save waits for it (PassiveSpecListControl.lua:44-46)
+        edited: bool,
     },
     /// The tree manager's list, whose rows drag to a new place (NF-3)
     OrderSpecs,
@@ -265,9 +267,10 @@ impl Toolbar {
             self.dialog = Some(Dialog::CopySpec {
                 index: state.active_spec,
                 title: spec.title.clone(),
+                edited: false,
             });
         }
-        let order = ui.add_enabled(state.specs.len() > 1, egui::Button::new("Order\u{2026}"));
+        let order = ui.button("Manage\u{2026}");
         rects.note(&order, || "spec_order".into());
         if order.clicked() {
             self.dialog = Some(Dialog::OrderSpecs);
@@ -734,6 +737,7 @@ impl Toolbar {
             return;
         };
         let mut close = false;
+        let mut next = None;
         let title = match dialog {
             Dialog::NewSpec(_) => "New tree",
             Dialog::RenameSpec { .. } => "Rename tree",
@@ -742,7 +746,7 @@ impl Toolbar {
             Dialog::RemoveTattoos => "Remove all tattoos",
             Dialog::Import { .. } => "Import tree link",
             Dialog::CopySpec { .. } => "Copy Tree",
-            Dialog::OrderSpecs => "Tree order",
+            Dialog::OrderSpecs => "Manage Passive Trees",
             Dialog::ConvertVersion { .. } => "Convert to Version",
             Dialog::ClassChange { .. } => "Class Change",
         };
@@ -839,12 +843,21 @@ impl Toolbar {
                         close |= ui.button("Cancel").clicked();
                     });
                 }
-                Dialog::CopySpec { index, title } => {
+                Dialog::CopySpec {
+                    index,
+                    title,
+                    edited,
+                } => {
                     ui.label("Enter name for this passive tree:");
                     let field = ui.add(egui::TextEdit::singleline(title));
+                    // PoB's name popup opens with its box focused
+                    if !*edited {
+                        field.request_focus();
+                    }
+                    *edited |= field.changed();
                     let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     ui.horizontal(|ui| {
-                        let valid = !title.trim().is_empty();
+                        let valid = *edited && !title.trim().is_empty();
                         if (button(ui, rects, "spec_copy_ok", "Save", valid) || (enter && valid))
                             && valid
                         {
@@ -858,7 +871,7 @@ impl Toolbar {
                     });
                 }
                 Dialog::OrderSpecs => {
-                    ui.label("Drag a tree to a new place.");
+                    ui.label("Click a tree to copy it; drag it to a new place.");
                     let rows = reorder_rows(
                         ui,
                         "tree_specs",
@@ -882,6 +895,14 @@ impl Toolbar {
                     );
                     for (i, row) in rows.rows.iter().enumerate() {
                         rects.note(row, || format!("spec_order_row:{i}"));
+                        // PoB's manager copies its selected row (PassiveSpecListControl.lua:13-21)
+                        if row.clicked() {
+                            next = Some(Dialog::CopySpec {
+                                index: i,
+                                title: state.specs[i].title.clone(),
+                                edited: false,
+                            });
+                        }
                     }
                     if let Some((from, to)) = rows.moved {
                         commands.push(Command::MoveSpec { from, to });
@@ -935,6 +956,9 @@ impl Toolbar {
             });
         if close {
             self.dialog = None;
+        }
+        if let Some(dialog) = next {
+            self.dialog = Some(dialog);
         }
     }
 }

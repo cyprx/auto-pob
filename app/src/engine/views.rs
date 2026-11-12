@@ -2012,6 +2012,9 @@ pub struct PublicView {
     /// PoB's tip under the character import (`siteCharBanditNote`)
     #[serde(default)]
     pub bandit_note: String,
+    /// The account PoB's history dropdown has selected, if any
+    #[serde(default)]
+    pub history_selected: Option<String>,
 }
 
 /// What PoB's account name box allows (ImportTab.lua:367-404): whether its "Missing
@@ -2041,6 +2044,7 @@ impl Default for PublicView {
             status: String::new(),
             missing_discriminator: String::new(),
             bandit_note: String::new(),
+            history_selected: None,
         }
     }
 }

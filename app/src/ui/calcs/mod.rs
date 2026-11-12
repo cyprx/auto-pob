@@ -394,7 +394,9 @@ impl CalcsUi {
     fn popout_windows(&mut self, ctx: &egui::Context, view: &CalcsView, out: &mut Vec<Command>) {
         let popped = self.popped.clone();
         for id in popped {
-            let Some(section) = view.sections.iter().find(|s| s.id == id) else {
+            // a section PoB disables isn't drawn (its `shown` needs `enabled`); it stays popped
+            // and comes back when PoB enables it again
+            let Some(section) = view.sections.iter().find(|s| s.id == id && s.enabled) else {
                 continue;
             };
             let mut open = true;

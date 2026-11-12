@@ -104,6 +104,7 @@ const CLEAR_FLAGS: &str = r#"
     b.itemsTab.modFlag = false
     b.configTab.modFlag = false
     b.calcsTab.modFlag = false
+    b.unsaved = false
 "#;
 
 /// Our side: an engine session with the same reader loaded into its Lua state
@@ -149,6 +150,24 @@ impl Ours {
             .unwrap_or_else(|e| panic!("{code}: {e}"))
     }
 
+    /// Every file under our user folder, with its length and modification time
+    fn files(&self) -> BTreeMap<PathBuf, (u64, std::time::SystemTime)> {
+        fn walk(dir: &std::path::Path, out: &mut BTreeMap<PathBuf, (u64, std::time::SystemTime)>) {
+            for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+                let path = entry.path();
+                let meta = entry.metadata().unwrap();
+                if meta.is_dir() {
+                    walk(&path, out);
+                } else {
+                    out.insert(path, (meta.len(), meta.modified().unwrap()));
+                }
+            }
+        }
+        let mut out = BTreeMap::new();
+        walk(&self.s.user, &mut out);
+        out
+    }
+
     fn state(&self) -> TabState {
         let value: mlua::Value = self.eval("return tabState(pob.build)");
         self.s.backend.lua.from_value(value).unwrap()
@@ -177,6 +196,12 @@ impl Ours {
         assert_eq!(popups, 0, "the hover left a popup open");
         view.lines
     }
+}
+
+/// Clears the flags and `unsaved` on both sides, so the next act's own flags show
+fn clear_flags(ours: &Ours, up: &Upstream) {
+    ours.s.backend.lua.load(CLEAR_FLAGS).exec().unwrap();
+    up.lua.load(CLEAR_FLAGS).exec().unwrap();
 }
 
 /// Both sides' sets, trees and flags after the same act
@@ -220,6 +245,16 @@ fn attack_xml() -> String {
         support,
         &support.replace("enabled=\"true\"", "enabled=\"false\""),
     );
+    // a second group, for a hover on a group other than the one shown
+    let skill_end = "\t\t\t</Skill>\n";
+    assert!(xml.contains(skill_end));
+    let xml = xml.replacen(
+        skill_end,
+        &format!(
+            "{skill_end}\t\t\t<Skill mainActiveSkill=\"1\" includeInFullDPS=\"nil\" enabled=\"true\" label=\"Second\">\n\t\t\t\t<Gem quality=\"0\" level=\"20\" count=\"1\" skillId=\"Clarity\" enableGlobal1=\"true\" enableGlobal2=\"true\" nameSpec=\"Clarity\" gemId=\"Metadata/Items/Gems/SkillGemClarity\" enabled=\"true\" variantId=\"Clarity\"/>\n\t\t\t</Skill>\n"
+        ),
+        1,
+    );
     let first = "<SkillSet id=\"1\">";
     assert!(xml.contains(first));
     let xml = xml.replace(first, "<SkillSet id=\"1\" title=\"One\">");
@@ -243,6 +278,7 @@ fn tab_gaps_skills_match_pob() {
     let mut ours = Ours::new();
     ours.open(&xml, "tabs");
     up.load(&xml, "tabs");
+    let written = ours.files();
     let start = same(&ours, &up, "opened");
     assert_eq!(
         start.skill_sets,
@@ -311,6 +347,25 @@ fn tab_gaps_skills_match_pob() {
             .is_none()
     );
 
+    // a group other than the shown one: our hover shows it only for the call and puts the
+    // shown group back; upstream's is a click on its row first
+    let shown = "local t = pob.build.skillsTab; for i, g in ipairs(t.socketGroupList) do if g == t.displayGroup then return i end end return 0";
+    let before: u32 = ours.eval(shown);
+    let lines = ours.hover(HoverTarget::GemQuality { group: 1, slot: 0 });
+    let want: Vec<TooltipLine> = up.get("upGemHover", (1, 0, "quality"));
+    assert_eq!(lines, want, "the second group's quality");
+    assert!(
+        texts(&lines).iter().any(|t| t.contains("Clarity")),
+        "{lines:?}"
+    );
+    assert_eq!(
+        ours.eval::<u32>(shown),
+        before,
+        "the shown group was put back"
+    );
+    same(&ours, &up, "after a hover on the second group");
+    same_stats(&mut ours, &up, "after a hover on the second group");
+
     // ---- Skill set reorder (R31) ----
     ours.run(Command::MoveSkillSet { from: 0, to: 2 })
         .expect("moving the set");
@@ -340,6 +395,8 @@ fn tab_gaps_skills_match_pob() {
     same(&ours, &up, "a refused move");
     let unsaved: bool = ours.eval("return pob.build.unsaved and true or false");
     assert!(unsaved, "a reorder marks the build unsaved");
+    // nothing the steps did wrote a file
+    assert_eq!(ours.files(), written, "files written");
 }
 
 /// `attack_xml` with a second config set and a second, titled tree
@@ -374,6 +431,7 @@ fn tab_gaps_config_match_pob() {
     let mut ours = Ours::new();
     ours.open(&xml, "tabs");
     up.load(&xml, "tabs");
+    let written = ours.files();
     let start = same(&ours, &up, "opened");
     assert_eq!(start.config_sets.len(), 2);
 
@@ -431,6 +489,7 @@ fn tab_gaps_config_match_pob() {
     );
 
     // ---- Config set Copy and reorder (NF-4) ----
+    clear_flags(&ours, &up);
     ours.run(Command::CopyConfigSet {
         id: 2,
         title: "Third".into(),
@@ -441,6 +500,7 @@ fn tab_gaps_config_match_pob() {
     assert_eq!(copied.config_sets.len(), 3);
     assert_eq!(copied.config_sets[2].1, "Third");
     assert_eq!(copied.active_config_set, 1, "a copy isn't switched to");
+    assert!(copied.flags["unsaved"], "CopyConfigSet: unsaved");
     assert_eq!(copied.undo["config"], before.undo["config"] + 1);
     // the copy keeps the set's inputs
     let onslaught = format!(
@@ -457,15 +517,19 @@ fn tab_gaps_config_match_pob() {
     assert_eq!(err.to_string(), "the config set needs a name");
     same(&ours, &up, "a refused copy");
 
+    clear_flags(&ours, &up);
     ours.run(Command::MoveConfigSet { from: 2, to: 0 })
         .expect("moving the set");
     up.call::<()>("upMoveConfigSet", (2, 0));
     let moved = same(&ours, &up, "MoveConfigSet{2, 0}");
     assert_eq!(moved.config_sets[0].1, "Third");
     assert!(moved.flags["config"]);
+    assert!(moved.flags["unsaved"], "MoveConfigSet: unsaved");
     assert_eq!(moved.undo, copied.undo, "a reorder adds no undo state");
     assert_eq!(moved.active_config_set, 1);
     same_stats(&mut ours, &up, "after the config sets");
+    // nothing the steps did wrote a file
+    assert_eq!(ours.files(), written, "files written");
 }
 
 #[test]
@@ -477,6 +541,7 @@ fn tab_gaps_tree_match_pob() {
     let mut ours = Ours::new();
     ours.open(&xml, "tabs");
     up.load(&xml, "tabs");
+    let written = ours.files();
     let start = same(&ours, &up, "opened");
     assert_eq!(
         start
@@ -500,6 +565,7 @@ fn tab_gaps_tree_match_pob() {
     assert_eq!(copied.specs[2].alloc, copied.specs[0].alloc);
     assert!(copied.specs[2].alloc.len() > 5, "the copy has the nodes");
     assert_eq!(copied.active_spec, 1, "a copy isn't selected");
+    assert!(copied.flags["unsaved"], "CopySpec: unsaved");
     assert_eq!(copied.items_spec_list, ["Main", "Bare", "Copied"]);
     let err = ours
         .run(Command::CopySpec {
@@ -510,6 +576,7 @@ fn tab_gaps_tree_match_pob() {
     assert_eq!(err.to_string(), "unknown tree 7");
 
     // moving the active tree down keeps it active, at its new place
+    clear_flags(&ours, &up);
     ours.run(Command::MoveSpec { from: 0, to: 2 })
         .expect("moving the tree");
     up.call::<()>("upMoveSpec", (0, 2));
@@ -525,11 +592,14 @@ fn tab_gaps_tree_match_pob() {
     assert_eq!(moved.active_spec, 3);
     assert_eq!(moved.items_spec_list, ["Bare", "Copied", "Main"]);
     assert!(moved.flags["tree"]);
+    assert!(moved.flags["unsaved"], "MoveSpec: unsaved");
     // the tree state view follows the order
     let view = ours.s.backend.tree_state_view().expect("tree view");
     assert_eq!(view.active_spec, 2);
     assert_eq!(view.specs[2].title, "Main");
     same_stats(&mut ours, &up, "after the trees");
+    // nothing the steps did wrote a file
+    assert_eq!(ours.files(), written, "files written");
 }
 
 /// What `upCalcsWidths` reads of one section
@@ -549,6 +619,7 @@ fn tab_gaps_calcs_match_pob() {
     let mut ours = Ours::new();
     ours.open(&xml, "attack");
     up.load(&xml, "attack");
+    let written = ours.files();
     let view = ours.s.backend.calcs_view().expect("calcs view");
     let want: Vec<UpSection> = up.get("upCalcsWidths", ());
     assert_eq!(view.sections.len(), want.len(), "sections");
@@ -596,6 +667,8 @@ fn tab_gaps_calcs_match_pob() {
     assert_eq!(up.popups(), 0);
     let popups: usize = ours.eval("return #pob.main.main.popups");
     assert_eq!(popups, 0);
+    // nothing the steps did wrote a file
+    assert_eq!(ours.files(), written, "files written");
 }
 
 #[test]
@@ -607,6 +680,7 @@ fn tab_gaps_power_match_pob() {
     let mut ours = Ours::new();
     ours.open(&xml, "attack");
     up.load(&xml, "attack");
+    let written = ours.files();
 
     // ---- Custom heat map depth (NF-6): a depth PoB's list doesn't have ----
     ours.run(Command::SetHeatmap {
@@ -685,6 +759,8 @@ fn tab_gaps_power_match_pob() {
     let popups: usize = ours.eval("return #pob.main.main.popups");
     assert_eq!(popups, 0);
     assert_eq!(up.popups(), 0);
+    // nothing the steps did wrote a file
+    assert_eq!(ours.files(), written, "files written");
 }
 
 #[derive(Debug, PartialEq, serde::Deserialize)]
@@ -702,6 +778,7 @@ fn tab_gaps_version_import_notes_match_pob() {
     let mut ours = Ours::new();
     ours.open(&xml, "tabs");
     up.load(&xml, "tabs");
+    let written = ours.files();
 
     // ---- Version dropdown (NF-7): PoB's list, and a conversion to an older version ----
     let state = ours.s.backend.tree_state_view().unwrap();
@@ -808,6 +885,10 @@ fn tab_gaps_version_import_notes_match_pob() {
     assert_eq!(history, ["alice#1234", "Bob#9999", "Zed#0001"]);
     let view = ours.s.backend.account_view().unwrap();
     assert_eq!(view.public.history, history);
+    // PoB's dropdown selects the last account saved; X works on it before any pick
+    let selected: Option<String> = up.get("accountSelected", ());
+    assert_eq!(selected.as_deref(), Some("Bob#9999"));
+    assert_eq!(view.public.history_selected, selected);
     ours.run(Command::RemoveAccountHistory {
         account: "Bob#9999".into(),
     })
@@ -846,6 +927,8 @@ fn tab_gaps_version_import_notes_match_pob() {
     let popups: usize = ours.eval("return #pob.main.main.popups");
     assert_eq!(popups, 0);
     assert_eq!(up.popups(), 0);
+    // nothing the steps did wrote a file
+    assert_eq!(ours.files(), written, "files written");
 }
 
 #[test]
@@ -857,6 +940,7 @@ fn tab_gaps_class_change_match_pob() {
     let mut ours = Ours::new();
     ours.open(&xml, "attack");
     up.load(&xml, "attack");
+    let written = ours.files();
     let start = same(&ours, &up, "opened");
     assert_eq!(start.specs[0].class_id, 1, "a Marauder");
 
@@ -921,4 +1005,6 @@ fn tab_gaps_class_change_match_pob() {
     ours.run(Command::AllocNode { id: juggernaut })
         .expect("the plain click");
     same(&ours, &up, "a click that needs no question");
+    // nothing the steps did wrote a file
+    assert_eq!(ours.files(), written, "files written");
 }

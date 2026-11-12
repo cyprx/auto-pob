@@ -265,12 +265,23 @@ impl NotesUi {
             });
         }
         if response.hovered() {
-            let zoom = ui.input(|i| i.zoom_delta());
-            if zoom > 1.0 {
-                keys.push('+');
-            } else if zoom < 1.0 {
-                keys.push('-');
-            }
+            // one step per wheel event, as PoB's WHEELUP/WHEELDOWN keys, not per frame of a
+            // smooth scroll
+            ui.input(|i| {
+                for event in &i.events {
+                    if let egui::Event::MouseWheel {
+                        delta, modifiers, ..
+                    } = event
+                        && modifiers.command
+                    {
+                        if delta.y > 0.0 {
+                            keys.push('+');
+                        } else if delta.y < 0.0 {
+                            keys.push('-');
+                        }
+                    }
+                }
+            });
         }
         for key in keys {
             self.line_height = zoom_line_height(self.line_height, key, NOTES_LINE_HEIGHT);
@@ -514,6 +525,44 @@ mod tests {
         // without the editor's focus the keys are left to the window
         ctx.memory_mut(|m| m.surrender_focus(ui.edit_id));
         run_events(&mut ui, &ctx, 0.5, vec![key(egui::Key::Plus)]);
+        assert_eq!(ui.line_height, NOTES_LINE_HEIGHT);
+    }
+
+    #[test]
+    fn ctrl_wheel_steps_once_per_wheel_event() {
+        let ctx = egui::Context::default();
+        let mut ui = NotesUi::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let run = |ui: &mut NotesUi, now: f64, events: Vec<egui::Event>| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(now),
+                    events,
+                    ..Default::default()
+                },
+                |ui_| {
+                    ui.show(ui_, now);
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        run(&mut ui, 0.0, vec![]);
+        let over = egui::Event::PointerMoved(egui::pos2(400.0, 500.0));
+        run(&mut ui, 0.1, vec![over.clone()]);
+        let wheel = |y: f32| egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, y),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::COMMAND,
+            source: egui::MouseWheelSource::Wheel,
+        };
+        run(&mut ui, 0.2, vec![over.clone(), wheel(1.0)]);
+        // frames without wheel events don't step again
+        run(&mut ui, 0.3, vec![over.clone()]);
+        run(&mut ui, 0.4, vec![over.clone()]);
+        assert_eq!(ui.line_height, NOTES_LINE_HEIGHT + 1);
+        run(&mut ui, 0.5, vec![over, wheel(-1.0)]);
         assert_eq!(ui.line_height, NOTES_LINE_HEIGHT);
     }
 }

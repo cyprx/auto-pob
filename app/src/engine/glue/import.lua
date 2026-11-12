@@ -775,5 +775,9 @@ function glue.account_view()
 	local controls = import_tab().controls
 	view.public.missing_discriminator = StripEscapes(controls.siteAccountNameMissingDiscriminator.label)
 	view.public.bandit_note = StripEscapes(controls.siteCharBanditNote.label)
+	-- the history dropdown's own selection: PoB starts it on the last account used
+	-- (ImportTab.lua:382), so X works on it before any pick
+	local history = controls.siteAccountHistory
+	view.public.history_selected = history.list[history.selIndex]
 	return view
 end

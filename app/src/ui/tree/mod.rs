@@ -1059,9 +1059,28 @@ mod tests {
         assert!(h.click_at(pos).commands.is_empty());
         h.frame(vec![]);
         let pos = h.tab.rects.map["spec_copy_ok"].center();
+        // PoB's Save waits for the name to be edited
+        assert!(h.click_at(pos).commands.is_empty());
+        h.frame(vec![Event::Text("2".into())]);
+        h.frame(vec![]);
+        let pos = h.tab.rects.map["spec_copy_ok"].center();
         assert_eq!(
             debug(&h.click_at(pos).commands),
-            ["CopySpec { index: 0, title: \"Main\" }"]
+            ["CopySpec { index: 0, title: \"Main2\" }"]
+        );
+        // a row clicked in the manager is copied
+        let pos = h.tab.rects.map["spec_order"].center();
+        h.click_at(pos);
+        h.frame(vec![]);
+        let pos = h.tab.rects.map["spec_order_row:1"].center();
+        h.click_at(pos);
+        h.frame(vec![]);
+        h.frame(vec![Event::Text("!".into())]);
+        h.frame(vec![]);
+        let pos = h.tab.rects.map["spec_copy_ok"].center();
+        assert_eq!(
+            debug(&h.click_at(pos).commands),
+            ["CopySpec { index: 1, title: \"Bare!\" }"]
         );
     }
 

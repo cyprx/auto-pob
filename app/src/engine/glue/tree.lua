@@ -1009,6 +1009,8 @@ function glue.copy_spec(index, title)
 		list.controls.copy.onClick()
 		save_name(title)
 	end)
+	-- Save sets only the tab's modFlag; a frame refreshes `unsaved` (Build.lua:1303)
+	glue.frame()
 end
 
 -- Dragging a row of the tree manager's list; its OnOrderChange (PassiveSpecListControl.lua:

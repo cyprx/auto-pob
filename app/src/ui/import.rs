@@ -608,12 +608,18 @@ impl ImportUi {
                     }
                     // PoB's recent accounts: a pick fills the box, X forgets the picked one
                     if !public.history.is_empty() {
+                        // a pick of ours, else PoB's own selection (its last account used)
+                        let current = self
+                            .history_pick
+                            .clone()
+                            .or_else(|| public.history_selected.clone())
+                            .filter(|a| public.history.contains(a));
                         let combo = egui::ComboBox::from_id_salt("import_history")
-                            .selected_text(self.history_pick.as_deref().unwrap_or("Recent"))
+                            .selected_text(current.as_deref().unwrap_or("Recent"))
                             .show_ui(ui, |ui| {
                                 for account in &public.history {
                                     let item = ui.selectable_label(
-                                        self.history_pick.as_ref() == Some(account),
+                                        current.as_ref() == Some(account),
                                         account,
                                     );
                                     mark(ui, &format!("history:{account}"), &item);
@@ -627,10 +633,7 @@ impl ImportUi {
                                 }
                             });
                         mark(ui, "history", &combo.response);
-                        let picked = self
-                            .history_pick
-                            .clone()
-                            .filter(|a| public.history.contains(a));
+                        let picked = current;
                         let remove = ui
                             .add_enabled(picked.is_some(), egui::Button::new("X"))
                             .on_hover_text("Removes account from the dropdown list");
@@ -2046,5 +2049,18 @@ pub(crate) mod tests {
         ] {
             assert_eq!(account_name_state(text), want, "{text:?}");
         }
+    }
+
+    #[test]
+    fn x_removes_pobs_selected_account_without_a_pick() {
+        let mut h = Harness::new();
+        let mut view = signed_in();
+        view.public.history = vec!["alice#1234".into(), "Bob#0001".into()];
+        view.public.history_selected = Some("alice#1234".into());
+        h.account(view);
+        h.frame(vec![]);
+        h.click("mode:name");
+        h.click("history_remove");
+        assert_eq!(h.log, ["RemoveAccountHistory { account: \"alice#1234\" }"]);
     }
 }

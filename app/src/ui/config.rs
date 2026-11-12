@@ -96,10 +96,12 @@ enum SetEdit {
         id: u32,
         title: String,
     },
-    /// PoB's manager Copy: the copy's name (NF-4)
+    /// PoB's manager Copy: the copy's name (NF-4); `edited` once it was typed into, as PoB's
+    /// Save stays disabled until then (ConfigSetListControl.lua:44-46)
     Copy {
         id: u32,
         title: String,
+        edited: bool,
     },
 }
 
@@ -147,8 +149,10 @@ pub struct ConfigUi {
     pub(crate) rects: HashMap<String, egui::Rect>,
     /// The options' and custom groups' "what if" tooltips (R22)
     pub(crate) hover_tip: HoverTip,
-    /// The set order window is open (NF-4)
+    /// The set manager window is open (NF-4)
     ordering: bool,
+    /// The manager's selected set, which Copy copies
+    order_selected: Option<u32>,
     /// Hover questions made this frame; `show` hands them out with the commands
     hover_queries: Vec<Command>,
 }
@@ -294,10 +298,11 @@ impl ConfigUi {
             return;
         }
         if let Some(edit) = &mut self.set_edit {
-            let title = match edit {
-                SetEdit::New(t)
-                | SetEdit::Rename { title: t, .. }
-                | SetEdit::Copy { title: t, .. } => t,
+            let (title, edited) = match edit {
+                SetEdit::New(t) | SetEdit::Rename { title: t, .. } => (t, None),
+                SetEdit::Copy {
+                    title: t, edited, ..
+                } => (t, Some(edited)),
             };
             let field = ui.add(
                 egui::TextEdit::singleline(title)
@@ -306,7 +311,14 @@ impl ConfigUi {
             );
             field.request_focus();
             let submit = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            let valid = !title.trim().is_empty();
+            let typed = match edited {
+                Some(edited) => {
+                    *edited |= field.changed();
+                    *edited
+                }
+                None => true,
+            };
+            let valid = typed && !title.trim().is_empty();
             let ok = ui.add_enabled(valid, theme::primary_button("OK"));
             let cancel = ui.button("Cancel");
             if (ok.clicked() || submit) && valid {
@@ -345,12 +357,23 @@ impl ConfigUi {
         let copy = ui.button("Copy");
         self.note("set_copy".into(), &copy);
         if copy.clicked() {
+            // the manager's selected row, else the current set
+            let id = self
+                .order_selected
+                .filter(|id| view.sets.iter().any(|s| s.id == *id))
+                .unwrap_or(view.active_set);
+            let title = view
+                .sets
+                .iter()
+                .find(|s| s.id == id)
+                .map_or(String::new(), |s| s.title.clone());
             self.set_edit = Some(SetEdit::Copy {
-                id: view.active_set,
-                title: active_title.unwrap_or_default().to_owned(),
+                id,
+                title,
+                edited: false,
             });
         }
-        let order = ui.add_enabled(view.sets.len() > 1, egui::Button::new("Order\u{2026}"));
+        let order = ui.button("Manage\u{2026}");
         self.note("set_order".into(), &order);
         if order.clicked() {
             self.ordering = !self.ordering;
@@ -368,12 +391,13 @@ impl ConfigUi {
             return;
         }
         let mut open = true;
-        egui::Window::new("Config set order")
+        egui::Window::new("Manage Config Sets")
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.label("Drag a set to a new place.");
+                ui.label("Click a set to pick it for Copy; drag it to a new place.");
+                let selected = self.order_selected;
                 let rows = reorder_rows(
                     ui,
                     "config_sets",
@@ -389,14 +413,25 @@ impl ConfigUi {
                         } else {
                             set.title.clone()
                         };
-                        egui::Frame::NONE.inner_margin(2.0).show(ui, |ui| {
-                            ui.set_min_width(220.0);
-                            ui.add(egui::Label::new(label).selectable(false));
-                        });
+                        let fill = if selected == Some(set.id) {
+                            ui.visuals().selection.bg_fill
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        egui::Frame::NONE
+                            .fill(fill)
+                            .inner_margin(2.0)
+                            .show(ui, |ui| {
+                                ui.set_min_width(220.0);
+                                ui.add(egui::Label::new(label).selectable(false));
+                            });
                     },
                 );
                 for (i, row) in rows.rows.iter().enumerate() {
                     self.note(format!("order_row:{i}"), row);
+                    if row.clicked() {
+                        self.order_selected = Some(view.sets[i].id);
+                    }
                 }
                 if let Some((from, to)) = rows.moved {
                     commands.push(Command::MoveConfigSet { from, to });
@@ -1035,8 +1070,21 @@ mod tests {
     fn copy_asks_for_a_name_and_sends_copy_config_set() {
         let mut h = Harness::new();
         assert!(h.click("set_copy").is_empty());
+        // PoB's Save waits for the name to be edited
+        assert!(h.click("set_ok").is_empty());
+        h.frame(vec![Event::Text("2".into())]);
         let sent = h.click("set_ok");
-        assert_eq!(debug(&sent), ["CopyConfigSet { id: 1, title: \"First\" }"]);
+        assert_eq!(debug(&sent), ["CopyConfigSet { id: 1, title: \"First2\" }"]);
+        // a row picked in the manager is what Copy copies
+        h.click("set_order");
+        h.frame(vec![]);
+        h.click("order_row:1");
+        h.click("set_copy");
+        h.frame(vec![Event::Text("!".into())]);
+        assert_eq!(
+            debug(&h.click("set_ok")),
+            ["CopyConfigSet { id: 2, title: \"Second!\" }"]
+        );
     }
 
     #[test]

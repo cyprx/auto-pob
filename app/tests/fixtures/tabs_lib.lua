@@ -46,6 +46,7 @@ function tabState(b)
 			config = b.configTab.modFlag and true or false,
 			calcs = b.calcsTab.modFlag and true or false,
 			build_flag = b.buildFlag and true or false,
+			unsaved = b.unsaved and true or false,
 		},
 		undo = {
 			spec = #b.spec.undo,
@@ -396,4 +397,10 @@ function upClickNode(nodeId, button)
 	end
 	runCallback("OnFrame")
 	return title
+end
+
+-- The history dropdown's selection
+function accountSelected()
+	local history = build.importTab.controls.siteAccountHistory
+	return history.list[history.selIndex]
 end

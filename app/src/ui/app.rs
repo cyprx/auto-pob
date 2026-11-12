@@ -1658,6 +1658,10 @@ impl AutoPobApp {
         for query in popup_out.queries {
             self.engine.send(query);
         }
+        // the Items tab's "Manage..." under its tree dropdown: our tree manager is the Tree tab's
+        if items_out.manage_trees {
+            self.tab = BuildTab::Tree;
+        }
         for command in items_out.commands {
             let is_text = matches!(command, Command::SetDisplayItemText { .. });
             let seq = self.send(command);

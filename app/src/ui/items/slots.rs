@@ -1,5 +1,6 @@
 //! The slots column: a dropdown per slot, flask boxes and the jewel sockets.
 
+use super::db::DbDrag;
 use super::{ItemDrag, ItemsOutput, ItemsUi};
 use crate::engine::views::{ItemsView, SlotKind, SlotView};
 use crate::engine::{BuySource, Command, ItemTooltipQuery, PopupKind};
@@ -116,7 +117,45 @@ impl ItemsUi {
                 }
                 // a slot that wasn't drawn (hidden) can't take the focus now, or later
                 self.focus_slot = None;
+                self.spec_select(ui, view, out);
             });
+    }
+
+    /// PoB's "Passive tree:" dropdown and "Manage..." under the slots (ItemsTab.lua:193-206)
+    fn spec_select(&mut self, ui: &mut egui::Ui, view: &ItemsView, out: &mut ItemsOutput) {
+        let Some(specs) = &view.specs else {
+            return;
+        };
+        let default = ui.visuals().text_color();
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label("Passive tree:");
+            let current = specs.labels.get(specs.selected).map_or("", String::as_str);
+            let combo = ui.add_enabled_ui(specs.enabled, |ui| {
+                egui::ComboBox::from_id_salt("items_spec")
+                    .width(200.0)
+                    .selected_text(pob_text(current, 14.0, default))
+                    .show_ui(ui, |ui| {
+                        for (i, label) in specs.labels.iter().enumerate() {
+                            let entry = ui.selectable_label(
+                                i == specs.selected,
+                                pob_text(label, 14.0, default),
+                            );
+                            self.rects.note(&entry, || format!("spec_{i}"));
+                            if entry.clicked() && i != specs.selected {
+                                out.commands.push(Command::SelectSpec { index: i });
+                            }
+                        }
+                    })
+            });
+            self.rects
+                .note(&combo.inner.response, || "spec_combo".into());
+            let manage = ui.button("Manage\u{2026}");
+            self.rects.note(&manage, || "spec_manage".into());
+            if manage.clicked() {
+                out.manage_trees = true;
+            }
+        });
     }
 
     fn slot_row(
@@ -128,7 +167,10 @@ impl ItemsUi {
         out: &mut ItemsOutput,
     ) {
         let default = ui.visuals().text_color();
-        let (zone, dropped) = ui.dnd_drop_zone::<ItemDrag, _>(egui::Frame::NONE, |ui| {
+        // egui's drop zone takes whatever payload is released on it, so the zone is typed by
+        // what is being dragged: a list row or a database row (R23)
+        let db_dragging = egui::DragAndDrop::has_payload_of_type::<DbDrag>(ui.ctx());
+        let contents = |ui: &mut egui::Ui| {
             ui.horizontal(|ui| {
                 let pad = if indent { 16.0 } else { 0.0 };
                 ui.add_space(pad);
@@ -192,6 +234,7 @@ impl ItemsUi {
                                         id,
                                         slot: Some(slot.name.clone()),
                                         theirs: false,
+                                        shift: false,
                                     },
                                 );
                             }
@@ -240,6 +283,7 @@ impl ItemsUi {
                             id: slot.selected,
                             slot: Some(slot.name.clone()),
                             theirs: false,
+                            shift: false,
                         },
                     );
                 }
@@ -257,9 +301,24 @@ impl ItemsUi {
                     }
                 }
             });
-        });
+        };
+        let (zone, dropped, db_dropped) = if db_dragging {
+            let (zone, dropped) = ui.dnd_drop_zone::<DbDrag, _>(egui::Frame::NONE, contents);
+            (zone, None, dropped)
+        } else {
+            let (zone, dropped) = ui.dnd_drop_zone::<ItemDrag, _>(egui::Frame::NONE, contents);
+            (zone, dropped, None)
+        };
         self.rects
             .note(&zone.response, || format!("slot_{}", slot.name));
+        // a database row dropped on the slot: PoB decides whether the slot takes it (R23)
+        if let Some(drag) = db_dropped {
+            out.commands.push(Command::DropDbItem {
+                db: drag.db,
+                name: drag.name.clone(),
+                slot: slot.name.clone(),
+            });
+        }
         // a dragged list row dropped on the slot equips it, if PoB's dropdown offers it
         if let Some(drag) = dropped
             && slot.choices.contains(&drag.id)

@@ -5,7 +5,7 @@
 //! picked, and goes back to showing the snapshot once the engine has caught up.
 
 use crate::engine::views::{ConfigKind, ConfigOption, ConfigSection, ConfigView, CustomModGroup};
-use crate::engine::{Command, ConfigValue, HoverTarget};
+use crate::engine::{Command, ConfigValue, HoverTarget, PopupKind};
 use crate::theme;
 use crate::ui::hover::HoverTip;
 use crate::ui::items::list::reorder_rows;
@@ -776,6 +776,12 @@ impl ConfigUi {
             self.note(format!("mod_title:{i}"), &response);
             if let Some(title) = title {
                 commands.push(Command::SetCustomModTitle { group: i, title });
+            }
+            // PoB's "Add Mod": its Mod Browser appends the picked modifier (R28)
+            let add_mod = ui.button("Add Mod\u{2026}");
+            self.note(format!("mod_add:{i}"), &add_mod);
+            if add_mod.clicked() {
+                commands.push(Command::OpenPopup(PopupKind::ModBrowser { group: i }));
             }
             if self.confirm_remove == Some(i) {
                 ui.colored_label(ui.visuals().warn_fg_color, "Remove this group?");

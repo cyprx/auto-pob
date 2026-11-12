@@ -19,6 +19,13 @@ const ROW_HEIGHT: f32 = 18.0;
 /// Filter dropdowns per line, so they fit a narrow column.
 const PER_ROW: usize = 3;
 
+/// The payload of a database row being dragged: onto a slot to add and equip it (R23)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DbDrag {
+    pub db: ItemDb,
+    pub name: String,
+}
+
 pub struct DbState {
     /// The panel is open; the engine has a database open while this is so and the tab shows
     pub expanded: bool,
@@ -372,6 +379,7 @@ fn body(
             out.commands.push(Command::AddDbItem {
                 db: state.query.db,
                 name,
+                second_slot: false,
             });
         }
     });
@@ -461,7 +469,12 @@ fn rows(ui: &mut egui::Ui, view: &ItemDbView, state: &mut DbState, out: &mut Ite
                         }
                     })
                     .response
-                    .interact(egui::Sense::click());
+                    .interact(egui::Sense::click_and_drag());
+                // PoB's drag of a row onto a slot (R23)
+                response.dnd_set_drag_payload(DbDrag {
+                    db,
+                    name: row.name.clone(),
+                });
                 if selected {
                     ui.painter().rect_filled(
                         response.rect,
@@ -471,6 +484,7 @@ fn rows(ui: &mut egui::Ui, view: &ItemDbView, state: &mut DbState, out: &mut Ite
                 }
                 state.rects.note(&response, || format!("db_row_{i}"));
                 let ctrl = ui.input(|inp| inp.modifiers.ctrl || inp.modifiers.command);
+                let shift = ui.input(|inp| inp.modifiers.shift);
                 if response.double_clicked() && !ctrl {
                     // PoB's double click: shows the item on the display panel (R15)
                     state.selected = Some(row.name.clone());
@@ -480,12 +494,14 @@ fn rows(ui: &mut egui::Ui, view: &ItemDbView, state: &mut DbState, out: &mut Ite
                     });
                 } else if response.clicked() {
                     state.selected = Some(row.name.clone());
-                    // PoB's Ctrl+click adds the item and equips it (R15)
+                    // PoB's Ctrl+click adds the item and equips it (R15), Ctrl+Shift+click
+                    // into the second slot (R23)
                     // (the second click of a double click is the same gesture: once)
                     if ctrl && !response.double_clicked() {
                         out.commands.push(Command::AddDbItem {
                             db,
                             name: row.name.clone(),
+                            second_slot: shift,
                         });
                     }
                 }

@@ -600,6 +600,7 @@ fn copy_item_sends_slot_and_use() {
         id: 0,
         slot: Some("Body Armour".into()),
         theirs: true,
+        shift: false,
     };
     assert_eq!(
         debug(&out.queries),
@@ -632,6 +633,7 @@ fn copy_item_sends_slot_and_use() {
             id: 2,
             slot: Some("Body Armour".into()),
             theirs: false,
+            shift: false,
         })])
     );
 }
@@ -756,6 +758,7 @@ fn expanded_mode_shows_both_tooltips_inline_one_question_at_a_time() {
         id,
         slot: Some(slot.into()),
         theirs,
+        shift: false,
     };
     // the rows' items in order, ours then theirs, each asked once the last is answered
     let expected = [

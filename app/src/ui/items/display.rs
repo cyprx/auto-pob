@@ -374,8 +374,11 @@ fn panel(
         state.discard_pending();
     }
 
-    // range lines
-    if !view.range_lines.is_empty() {
+    // range lines: PoB's stacked rows, one Foulborn box, slider and line each (the default
+    // `showAllItemAffixes` on a unique, ItemsTab.lua:1089-1173)
+    if view.stacked {
+        stacked_range_lines(ui, view, state, &mut out);
+    } else if !view.range_lines.is_empty() {
         let default = ui.visuals().text_color();
         state.range_line = state.range_line.min(view.range_lines.len() - 1);
         let line = state.range_line;
@@ -458,4 +461,63 @@ fn panel(
             }
         });
     out
+}
+
+/// PoB's colour for a mutated (Foulborn) line (`colorCodes.MUTATED`, Global.lua:46)
+const MUTATED: &str = "^xCD2285";
+
+/// One row per range line: the Foulborn box where the line can mutate, the slider where it has
+/// a range, then the line in PoB's colour.
+fn stacked_range_lines(
+    ui: &mut egui::Ui,
+    view: &DisplayItemView,
+    state: &mut DisplayState,
+    out: &mut Vec<Command>,
+) {
+    let default = ui.visuals().text_color();
+    for (line, current) in view.range_lines.iter().enumerate() {
+        // PoB hides the row's line when neither its slider nor its box shows
+        if !(current.mutable || (current.slider && current.range.is_some())) {
+            continue;
+        }
+        ui.horizontal(|ui| {
+            if current.mutable {
+                let mut on = current.mutated;
+                let mutated = ui.checkbox(&mut on, "");
+                state
+                    .rects
+                    .note(&mutated, || format!("stacked_mutated_{line}"));
+                if mutated.changed() {
+                    out.push(Command::SetRangeLineMutated { line, on });
+                }
+            }
+            if current.slider
+                && let Some(range) = current.range
+            {
+                let mut value = match state.slider {
+                    Some((l, v)) if l == line => v,
+                    _ => range,
+                };
+                let slider = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).show_value(false));
+                state
+                    .rects
+                    .note(&slider, || format!("stacked_slider_{line}"));
+                if slider.dragged() || slider.changed() {
+                    state.slider = Some((line, value));
+                }
+                if slider.drag_stopped()
+                    || (slider.changed() && !slider.is_pointer_button_down_on())
+                {
+                    out.push(Command::SetRangeLine { line, value });
+                }
+            }
+            let colour = if current.mutated { MUTATED } else { "^7" };
+            let label = ui.label(pob_text(
+                &format!("{colour}{}", current.label),
+                14.0,
+                default,
+            ));
+            state.rects.note(&label, || format!("stacked_line_{line}"));
+        });
+    }
 }

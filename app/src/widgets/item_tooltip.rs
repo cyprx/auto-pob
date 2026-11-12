@@ -45,6 +45,25 @@ pub fn item_tooltip_ui_with(
     tooltip: &ItemTooltip,
     seen: &mut dyn FnMut(usize, &egui::Response),
 ) -> Option<ModLineRef> {
+    if tooltip.children.is_empty() {
+        return single(ui, tooltip, seen);
+    }
+    // PoB draws the child tooltips (Shift's granted skills) beside the item's (R34)
+    ui.horizontal_top(|ui| {
+        let clicked = single(ui, tooltip, seen);
+        for child in &tooltip.children {
+            single(ui, child, &mut |_, _| {});
+        }
+        clicked
+    })
+    .inner
+}
+
+fn single(
+    ui: &mut egui::Ui,
+    tooltip: &ItemTooltip,
+    seen: &mut dyn FnMut(usize, &egui::Response),
+) -> Option<ModLineRef> {
     let default = ui.visuals().text_color();
     let border = tooltip
         .colour
@@ -182,6 +201,7 @@ mod tests {
                     }),
                 ),
             ],
+            children: Vec::new(),
         }
     }
 

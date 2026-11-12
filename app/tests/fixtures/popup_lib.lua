@@ -53,6 +53,18 @@ function act.tattoo_open(node)
 	record({ cmd = "OpenPopup", kind = popupKind })
 end
 
+-- The Config tab's "Add Mod" on custom modifier group `group` (1-based): the group's own
+-- button (ConfigTab.lua:42-44), which opens the Mod Browser (R28)
+function act.mod_browser_open(group)
+	local block = build.configTab.customModsBlockControls[group]
+	assert(block, "no custom modifier group " .. group)
+	local depth = #main.popups
+	block.controls.addModBtn.onClick()
+	assert(#main.popups == depth + 1, "Add Mod opened no window")
+	popupKind = { ModBrowser = { group = group - 1 } }
+	record({ cmd = "OpenPopup", kind = popupKind })
+end
+
 -- a control of the open popup by name; a list's children are `parent.child`
 local function popupControl(name)
 	local popup = main.popups[1]

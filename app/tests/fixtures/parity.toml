@@ -1263,15 +1263,13 @@ ported = "app/src/ui/import.rs import by account name"
 ported = "app/src/ui/import.rs X next to the recent accounts (RemoveAccountHistory, NF-8)"
 
 [controls."items.#ItemSlotControl"]
-gap = "Task 13"
-note = "slots ported (items/slots.rs); Ring 3 and Graft 1/2 are not yet checked against PoB (R30)"
+ported = "app/src/ui/items/slots.rs slots; Ring 3 and Graft 1/2 shown, equipped and round-tripped as PoB's slot.shown decides (R30, app/tests/gate/parity_gaps_items.rs ring3_graft)"
 
 [controls."items.#ItemSlotControl.activate"]
 ported = "app/src/ui/items/slots.rs flask active box"
 
 [controls."items.#ItemSlotControl.scrollBar"]
-gap = "Task 13"
-note = "part of items.#ItemSlotControl"
+ported = "app/src/ui/items/slots.rs slot dropdown lists (part of items.#ItemSlotControl)"
 
 [controls."items.addDisplayItem"]
 ported = "app/src/ui/items/display.rs Save / Add to build"
@@ -1681,244 +1679,184 @@ ported = "app/src/ui/items/display.rs socket colours"
 note = "part of items.displayItemSocket6"
 
 [controls."items.displayItemStackedMutatedCheckbox1"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 1: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedMutatedCheckbox10"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 10: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedMutatedCheckbox11"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 11: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedMutatedCheckbox12"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 12: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedMutatedCheckbox13"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 13: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedMutatedCheckbox14"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 14: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedMutatedCheckbox15"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 15: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedMutatedCheckbox16"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 16: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedMutatedCheckbox17"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 17: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedMutatedCheckbox18"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 18: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedMutatedCheckbox19"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 19: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedMutatedCheckbox2"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 2: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedMutatedCheckbox20"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 20: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedMutatedCheckbox3"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 3: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedMutatedCheckbox4"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 4: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedMutatedCheckbox5"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 5: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedMutatedCheckbox6"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 6: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedMutatedCheckbox7"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 7: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedMutatedCheckbox8"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 8: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedMutatedCheckbox9"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs Foulborn; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 9: its Foulborn box (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine1"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 1: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine10"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 10: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine11"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 11: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine12"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 12: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine13"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 13: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine14"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 14: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine15"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 15: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine16"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 16: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine17"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 17: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine18"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 18: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine19"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 19: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine2"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 2: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine20"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 20: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine3"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 3: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine4"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 4: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine5"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 5: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine6"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 6: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine7"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 7: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine8"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 8: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeLine9"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range line combo; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 9: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider1"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 1: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider10"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 10: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider11"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 11: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider12"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 12: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider13"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 13: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider14"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 14: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider15"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 15: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider16"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 16: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider17"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 17: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider18"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 18: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider19"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 19: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider2"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 2: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider20"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 20: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider3"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 3: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider4"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 4: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider5"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 5: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider6"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 6: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider7"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 7: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider8"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 8: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider9"]
-gap = "Task 13"
-note = "controller ruling: full parity; one slider per line under showAllItemAffixes, as PoB; today ported app/src/ui/items/display.rs range slider; PoB's one-slider-per-line layout (showAllItemAffixes); ours is a line combo plus one slider (SP5a R5)"
+ported = "app/src/ui/items/display.rs stacked range row 9: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemTip"]
 ported = "app/src/ui/items/display.rs empty-panel hint"
@@ -1944,8 +1882,7 @@ note = "part of items.displayItemVersion"
 ported = "app/src/ui/items/display.rs Edit (text_window.rs)"
 
 [controls."items.itemList"]
-gap = "Task 13"
-note = "list, sort, drag, Delete and Ctrl+C ported (items/list.rs); NF-16 (new finding, in scope by controller ruling): Ctrl+click equips a row into its slot and Ctrl+Shift+click into the second slot"
+ported = "app/src/ui/items/list.rs list, sort, drag, Delete, Ctrl+C; Ctrl+click equips into the item's slot and Ctrl+Shift+click into the second (QuickEquipItem, NF-16)"
 
 [controls."items.itemList.delete"]
 ported = "app/src/ui/items/list.rs Delete"
@@ -1960,12 +1897,10 @@ ported = "app/src/ui/items/list.rs Delete unused"
 ported = "app/src/ui/items/list.rs set filter combo"
 
 [controls."items.itemList.scrollBarH"]
-gap = "Task 13"
-note = "part of items.itemList"
+ported = "app/src/ui/items/list.rs scroll area (part of items.itemList)"
 
 [controls."items.itemList.scrollBarV"]
-gap = "Task 13"
-note = "part of items.itemList"
+ported = "app/src/ui/items/list.rs scroll area (part of items.itemList)"
 
 [controls."items.itemList.sort"]
 ported = "app/src/ui/items/list.rs Sort"
@@ -1978,16 +1913,13 @@ ruled_out = "D-005"
 note = "trade price queries out"
 
 [controls."items.rareDB"]
-gap = "Task 13"
-note = "as uniqueDB (R23)"
+ported = "app/src/ui/items/db.rs as uniqueDB: Ctrl+Shift+click adds into the second slot, a row dragged onto a slot is DropDbItem (R23)"
 
 [controls."items.rareDB.scrollBarH"]
-gap = "Task 13"
-note = "part of items.rareDB"
+ported = "app/src/ui/items/db.rs rows scroll area (part of items.rareDB)"
 
 [controls."items.rareDB.scrollBarV"]
-gap = "Task 13"
-note = "part of items.rareDB"
+ported = "app/src/ui/items/db.rs rows scroll area (part of items.rareDB)"
 
 [controls."items.rareDB.search"]
 ported = "app/src/ui/items/db.rs search"
@@ -2038,42 +1970,37 @@ note = "part of items.setSelect"
 
 [controls."items.sharedItemList"]
 gap = "Task 13"
-note = "NF-2 (new finding, in scope by controller ruling): PoB's shared items (kept in Settings.xml, across builds) are not shown"
+note = "NF-2 shared items: needs a controller ruling; PoB keeps them only in Settings.xml, written by main:SaveSettings (Main.lua:701-741, at exit, main:Shutdown Main.lua:337-340), and R29 allows no Settings.xml writer beyond Options Save, SetBuildSort and the token paths; was: NF-2 (new finding, in scope by controller ruling): PoB's shared items (kept in Settings.xml, across builds) are not shown"
 
 [controls."items.sharedItemList.delete"]
 gap = "Task 13"
-note = "NF-2 (new finding, in scope by controller ruling)"
+note = "NF-2 shared items: needs a controller ruling; PoB keeps them only in Settings.xml, written by main:SaveSettings (Main.lua:701-741, at exit, main:Shutdown Main.lua:337-340), and R29 allows no Settings.xml writer beyond Options Save, SetBuildSort and the token paths; was: NF-2 (new finding, in scope by controller ruling)"
 
 [controls."items.sharedItemList.scrollBarH"]
 gap = "Task 13"
-note = "part of items.sharedItemList"
+note = "NF-2 shared items: needs a controller ruling; PoB keeps them only in Settings.xml, written by main:SaveSettings (Main.lua:701-741, at exit, main:Shutdown Main.lua:337-340), and R29 allows no Settings.xml writer beyond Options Save, SetBuildSort and the token paths; was: part of items.sharedItemList"
 
 [controls."items.sharedItemList.scrollBarV"]
 gap = "Task 13"
-note = "part of items.sharedItemList"
+note = "NF-2 shared items: needs a controller ruling; PoB keeps them only in Settings.xml, written by main:SaveSettings (Main.lua:701-741, at exit, main:Shutdown Main.lua:337-340), and R29 allows no Settings.xml writer beyond Options Save, SetBuildSort and the token paths; was: part of items.sharedItemList"
 
 [controls."items.slotHeader"]
 ported = "app/src/ui/items/slots.rs"
 
 [controls."items.specButton"]
-gap = "Task 13"
-note = "controller ruling: full parity; PoB's tree selector on the Items tab; today ported app/src/ui/tree/toolbar.rs spec manager; as items.specSelect"
+ported = "app/src/ui/items/slots.rs Manage... shows the Tree tab, where our spec manager is (tree/toolbar.rs)"
 
 [controls."items.specLabel"]
-gap = "Task 13"
-note = "controller ruling: full parity; PoB's tree selector on the Items tab; today ported app/src/ui/tree/toolbar.rs; label of items.specSelect"
+ported = "app/src/ui/items/slots.rs \"Passive tree:\" label"
 
 [controls."items.specSelect"]
-gap = "Task 13"
-note = "controller ruling: full parity; PoB's tree selector on the Items tab; today ported app/src/ui/tree/toolbar.rs spec combo; PoB repeats the tree selector on the Items tab; ours is on the Tree tab only"
+ported = "app/src/ui/items/slots.rs Passive tree dropdown under the slots (ItemsView.specs, PoB's GetSpecList labels; SelectSpec)"
 
 [controls."items.specSelect.scrollBar"]
-gap = "Task 13"
-note = "part of items.specSelect"
+ported = "app/src/ui/items/slots.rs Passive tree dropdown list (part of items.specSelect)"
 
 [controls."items.uniqueDB"]
-gap = "Task 13"
-note = "list, hover, double-click and Ctrl+click ported (items/db.rs); Ctrl+Shift second-slot add and drag to a slot are R23"
+ported = "app/src/ui/items/db.rs list, hover, double-click, Ctrl+click; Ctrl+Shift+click adds into the second slot, a row dragged onto a slot is DropDbItem (R23)"
 
 [controls."items.uniqueDB.league"]
 ported = "app/src/ui/items/db.rs filters"
@@ -2085,12 +2012,10 @@ ported = "app/src/ui/items/db.rs filters (source)"
 ported = "app/src/ui/items/db.rs filters"
 
 [controls."items.uniqueDB.scrollBarH"]
-gap = "Task 13"
-note = "part of items.uniqueDB"
+ported = "app/src/ui/items/db.rs rows scroll area (part of items.uniqueDB)"
 
 [controls."items.uniqueDB.scrollBarV"]
-gap = "Task 13"
-note = "part of items.uniqueDB"
+ported = "app/src/ui/items/db.rs rows scroll area (part of items.uniqueDB)"
 
 [controls."items.uniqueDB.search"]
 ported = "app/src/ui/items/db.rs search"
@@ -2955,11 +2880,11 @@ ported = "app/src/ui/config.rs confirm"
 
 [popups."Delete Item"]
 gap = "Task 13"
-note = "item list sites ported (items/list.rs with PoB's texts); the shared-item site is NF-2"
+note = "NF-2 shared items: needs a controller ruling; PoB keeps them only in Settings.xml, written by main:SaveSettings (Main.lua:701-741, at exit, main:Shutdown Main.lua:337-340), and R29 allows no Settings.xml writer beyond Options Save, SetBuildSort and the token paths; was: item list sites ported (items/list.rs with PoB's texts); the shared-item site is NF-2"
 
 [popups."Delete Item Set"]
 gap = "Task 13"
-note = "item set and skill set sites ported (items/sets.rs, skills/sets.rs); the shared item set site is NF-2"
+note = "NF-2 shared items: needs a controller ruling; PoB keeps them only in Settings.xml, written by main:SaveSettings (Main.lua:701-741, at exit, main:Shutdown Main.lua:337-340), and R29 allows no Settings.xml writer beyond Options Save, SetBuildSort and the token paths; was: item set and skill set sites ported (items/sets.rs, skills/sets.rs); the shared item set site is NF-2"
 
 [popups."Delete Socket Group"]
 ported = "app/src/ui/skills/groups.rs confirm"
@@ -3062,7 +2987,7 @@ ported = "app/src/ui/config.rs set buttons and Order window (NF-4)"
 
 [popups."Manage Item Sets"]
 gap = "Task 13"
-note = "item sets ported (items/sets.rs); the popup's shared item set list is NF-2"
+note = "NF-2 shared items: needs a controller ruling; PoB keeps them only in Settings.xml, written by main:SaveSettings (Main.lua:701-741, at exit, main:Shutdown Main.lua:337-340), and R29 allows no Settings.xml writer beyond Options Save, SetBuildSort and the token paths; was: item sets ported (items/sets.rs); the popup's shared item set list is NF-2"
 
 [popups."Manage Passive Trees"]
 ported = "app/src/ui/tree/toolbar.rs tree buttons: New, Rename, Delete, Copy (CopySpec) and Order window (MoveSpec, NF-3)"
@@ -3071,8 +2996,7 @@ ported = "app/src/ui/tree/toolbar.rs tree buttons: New, Rename, Delete, Copy (Co
 ported = "app/src/ui/skills/sets.rs set manager window: New, Rename, Copy, Delete and drag-reorder (MoveSkillSet, R31)"
 
 [popups."Mod Browser"]
-gap = "Task 13"
-note = "R28"
+ported = "app/src/engine/glue/popups.lua PopupKind::ModBrowser, a build-owned session over the group's own Add Mod button (R28); opened from app/src/ui/config.rs Add Mod"
 
 [popups."New Folder"]
 ported = "app/src/ui/build_list.rs New Folder name dialog"
@@ -3094,7 +3018,7 @@ note = "trade query generator"
 
 [popups."Rename"]
 gap = "Task 13"
-note = "config, item and skill set sites ported; the shared item set site is NF-2"
+note = "NF-2 shared items: needs a controller ruling; PoB keeps them only in Settings.xml, written by main:SaveSettings (Main.lua:701-741, at exit, main:Shutdown Main.lua:337-340), and R29 allows no Settings.xml writer beyond Options Save, SetBuildSort and the token paths; was: config, item and skill set sites ported; the shared item set site is NF-2"
 
 [popups."Replace Modifier of Node"]
 ported = "app/src/ui/popup.rs session (tattoos, SP5b)"
@@ -3529,7 +3453,7 @@ ported = "app/src/widgets/search_combo.rs Esc empties a search and keeps the lis
 
 [keys."SharedItemSetListControl.F2"]
 gap = "Task 13"
-note = "NF-2 shared item sets, NF-14 F2"
+note = "NF-2 shared items: needs a controller ruling; PoB keeps them only in Settings.xml, written by main:SaveSettings (Main.lua:701-741, at exit, main:Shutdown Main.lua:337-340), and R29 allows no Settings.xml writer beyond Options Save, SetBuildSort and the token paths; was: NF-2 shared item sets, NF-14 F2"
 
 [keys."SkillListControl.LEFTBUTTON"]
 ported = "app/src/ui/skills/groups.rs click selects; Ctrl+click sends SetGroupEnabled"

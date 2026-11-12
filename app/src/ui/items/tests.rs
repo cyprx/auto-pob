@@ -150,6 +150,7 @@ impl Harness {
             let pass = self.ui.show(ui, time, busy);
             out.commands.extend(pass.commands);
             out.queries.extend(pass.queries);
+            out.manage_trees |= pass.manage_trees;
         });
         self.copied.extend(
             output
@@ -183,6 +184,7 @@ impl Harness {
             let o = self.frame(events);
             all.commands.extend(o.commands);
             all.queries.extend(o.queries);
+            all.manage_trees |= o.manage_trees;
         }
         all
     }
@@ -484,6 +486,7 @@ fn tip(id: u32, text: &str) -> Snapshot {
             id,
             slot: None,
             theirs: false,
+            shift: false,
         },
         tooltip: ItemTooltip {
             lines: vec![ItemTooltipLine::Line {
@@ -508,7 +511,7 @@ fn hovering_a_row_asks_for_its_tooltip_after_the_delay() {
     let o = h.frame(vec![]);
     assert_eq!(
         debug(&o.queries),
-        ["ItemTooltip(ItemTooltipQuery { id: 1, slot: None, theirs: false })"]
+        ["ItemTooltip(ItemTooltipQuery { id: 1, slot: None, theirs: false, shift: false })"]
     );
     let o = h.frame(vec![]);
     assert!(o.queries.is_empty(), "asked once");
@@ -525,7 +528,9 @@ fn hovering_a_dropdown_entry_asks_with_the_slot() {
     let all: Vec<_> = o.queries.iter().chain(&o2.queries).collect();
     assert_eq!(
         all.iter().map(|c| format!("{c:?}")).collect::<Vec<_>>(),
-        ["ItemTooltip(ItemTooltipQuery { id: 1, slot: Some(\"Ring 1\"), theirs: false })"]
+        [
+            "ItemTooltip(ItemTooltipQuery { id: 1, slot: Some(\"Ring 1\"), theirs: false, shift: false })"
+        ]
     );
 }
 
@@ -542,7 +547,7 @@ fn stale_item_tooltip_reply_ignored() {
     let o = h.frame(vec![]);
     assert_eq!(
         debug(&o.queries),
-        ["ItemTooltip(ItemTooltipQuery { id: 2, slot: None, theirs: false })"]
+        ["ItemTooltip(ItemTooltipQuery { id: 2, slot: None, theirs: false, shift: false })"]
     );
     h.ui.on_snapshot(&tip(1, "old"));
     assert!(
@@ -2164,14 +2169,14 @@ fn db_double_click_views_and_ctrl_click_adds() {
     let sent = h.click("db_row_2").commands;
     assert_eq!(
         debug(&sent),
-        ["AddDbItem { db: Uniques, name: \"Kaom's Heart\" }"]
+        ["AddDbItem { db: Uniques, name: \"Kaom's Heart\", second_slot: false }"]
     );
     h.modifiers = Modifiers::NONE;
     // so does the button, for the selected row
     let sent = h.click("db_add").commands;
     assert_eq!(
         debug(&sent),
-        ["AddDbItem { db: Uniques, name: \"Kaom's Heart\" }"]
+        ["AddDbItem { db: Uniques, name: \"Kaom's Heart\", second_slot: false }"]
     );
 }
 
@@ -2201,7 +2206,7 @@ fn ctrl_double_click_on_a_db_row_adds_once() {
     }
     assert_eq!(
         debug(&sent),
-        ["AddDbItem { db: Uniques, name: \"Tabula Rasa\" }"],
+        ["AddDbItem { db: Uniques, name: \"Tabula Rasa\", second_slot: false }"],
         "one add for the gesture"
     );
 }
@@ -2385,3 +2390,5 @@ fn set_list_keys_move_the_selection_and_delete_asks() {
     let o = h.click("sets_confirm_delete");
     assert_eq!(debug(&o.commands), ["DeleteItemSet { id: 2 }"]);
 }
+#[path = "parity_tests.rs"]
+mod parity_tests;

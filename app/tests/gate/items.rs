@@ -28,7 +28,7 @@ pub(crate) fn gear_sessions(test: &str) -> (Session, mlua::Lua) {
 }
 
 /// Runs `code` on both sides; `BUILD` stands for the build, `pob.build` here and `build` there.
-fn on_both(s: &Session, lua: &mlua::Lua, code: &str) {
+pub(crate) fn on_both(s: &Session, lua: &mlua::Lua, code: &str) {
     s.backend
         .lua
         .load(code.replace("BUILD", "pob.build") + "\nglue.frame()")
@@ -304,6 +304,7 @@ fn compare_tooltips(s: &mut Session, lua: &mlua::Lua, what: &str) -> Seen {
                 id: item.id,
                 slot,
                 theirs: false,
+                shift: false,
             };
             let ours = s.backend.item_tooltip_view(&query).unwrap();
             let theirs = upstream_tooltip(lua, &format!("return {code}"));
@@ -539,6 +540,7 @@ fn item_tooltips_match_pob() {
                 id,
                 slot: slot.map(str::to_string),
                 theirs: false,
+                shift: false,
             })
             .unwrap()
     };
@@ -603,6 +605,7 @@ fn tooltip_of_the_unique_jewel() {
             id: jewel.id,
             slot: Some(slot.name.clone()),
             theirs: false,
+            shift: false,
         };
         let start = std::time::Instant::now();
         let ours = s
@@ -1218,7 +1221,7 @@ fn item_set_errors() {
 
 const RING: &str = "Rarity: RARE\nDoom Loop\nIron Ring\nImplicits: 0\n+30 to maximum Life";
 
-fn display(s: &mut Session) -> Option<DisplayItemView> {
+pub(crate) fn display(s: &mut Session) -> Option<DisplayItemView> {
     s.backend.display_item_view().expect("display item view")
 }
 
@@ -1516,7 +1519,7 @@ const UNIQUE_JEWEL: &str = "Rarity: UNIQUE\nTester's Jewel\nCobalt Jewel\nQualit
 
 /// The first Foulborn unique (by name) with a mutable line that has no slider, with that line's
 /// 0-based index, and a line of the same item that has a slider but can't mutate.
-const FIND_NO_SLIDER: &str = r#"
+pub(crate) const FIND_NO_SLIDER: &str = r#"
 local titles = {}
 for title in pairs(data.foulbornMap) do titles[#titles + 1] = title end
 table.sort(titles)
@@ -1543,10 +1546,10 @@ error("no such unique")
 const GROUPED: &str = "Rarity: UNIQUE\nGrouped Charm\nPrismatic Ring\nVariant: A\nVariant: B\nVariant: C\nVersion: Old\nVersion: New\nImplicits: 0\n{version:1,2}{variant:1}{group:1}+10 to maximum Life\n{version:1,2}{variant:2}{group:2}+20 to maximum Mana\n{version:1,2}{variant:3}{group:2}+30 to maximum Mana";
 
 #[derive(serde::Deserialize)]
-struct NoSlider {
-    text: String,
-    bare: usize,
-    plain: usize,
+pub(crate) struct NoSlider {
+    pub(crate) text: String,
+    pub(crate) bare: usize,
+    pub(crate) plain: usize,
 }
 
 #[test]
@@ -1790,7 +1793,7 @@ fn a_conditional_cancel_only_cancels_the_item_it_names() {
 }
 
 /// One recipe saved, reloaded by upstream and compared with the recipe's result and ours.
-fn items_round_trip(name: &str) {
+pub(crate) fn items_round_trip(name: &str) {
     let _guard = lock();
     let (recipe, mut s) = run_items_recipe(name);
     s.run(Command::Save).unwrap();
@@ -1997,6 +2000,7 @@ fn no_silent_writes_items() {
                 id,
                 slot: None,
                 theirs: false,
+                shift: false,
             })
             .unwrap();
     }

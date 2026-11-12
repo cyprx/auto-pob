@@ -25,6 +25,9 @@ pub struct ItemsOutput {
     pub commands: Vec<Command>,
     /// Questions (tooltips, copy); the app sends them without waiting for the answer.
     pub queries: Vec<Command>,
+    /// The tree dropdown's "Manage..." (PoB's spec manager): the app shows the Tree tab, where
+    /// ours lives
+    pub manage_trees: bool,
 }
 
 /// The payload of a list row being dragged: onto a slot to equip, onto a row to reorder.
@@ -272,11 +275,14 @@ impl ItemsUi {
     }
 
     /// Notes what the pointer is over, and draws the tooltip once its reply is here.
-    pub(crate) fn note_hover(&mut self, response: &egui::Response, query: ItemTooltipQuery) {
-        let dragging = egui::DragAndDrop::has_payload_of_type::<ItemDrag>(&response.ctx);
+    pub(crate) fn note_hover(&mut self, response: &egui::Response, mut query: ItemTooltipQuery) {
+        let dragging = egui::DragAndDrop::has_payload_of_type::<ItemDrag>(&response.ctx)
+            || egui::DragAndDrop::has_payload_of_type::<db::DbDrag>(&response.ctx);
         if dragging {
             return;
         }
+        // Shift held asks for PoB's child tooltips (R34); a change of key is a new question
+        query.shift = response.ctx.input(|i| i.modifiers.shift);
         if response.hovered() {
             self.hovered_now = Some(query.clone());
         }

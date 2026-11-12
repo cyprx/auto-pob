@@ -767,8 +767,20 @@ impl PobBackend {
                 self.call::<_, ()>("item_db_view_item", (db_name(db), name))?;
                 Ok(display_changed())
             }
-            Command::AddDbItem { db, name } => {
-                self.call::<_, ()>("item_db_add", (db_name(db), name))?;
+            Command::AddDbItem {
+                db,
+                name,
+                second_slot,
+            } => {
+                self.call::<_, ()>("item_db_add", (db_name(db), name, second_slot))?;
+                self.items_edited()
+            }
+            Command::DropDbItem { db, name, slot } => {
+                self.call::<_, ()>("item_db_drop", (db_name(db), name, slot))?;
+                self.items_edited()
+            }
+            Command::QuickEquipItem { id, second_slot } => {
+                self.call::<_, ()>("item_quick_equip", (id, second_slot))?;
                 self.items_edited()
             }
             Command::ItemTooltip(query) => Ok(Affected {
@@ -1848,6 +1860,7 @@ impl PobBackend {
                     PopupKind::Options => ("options", 0),
                     PopupKind::TimelessJewel => ("timeless", 0),
                     PopupKind::SpectreLibrary => ("spectre_library", 0),
+                    PopupKind::ModBrowser { group } => ("mod_browser", group as i64 + 1),
                     PopupKind::BuySimilar { source } => {
                         let source = self.lua.to_value(&source).map_err(|e| anyhow!("{e}"))?;
                         self.call::<_, ()>("popup_open", ("buy_similar", source))?;
@@ -1868,32 +1881,32 @@ impl PobBackend {
                 let restart = std::mem::take(&mut self.anoint_failed);
                 // the timeless results' double click adds that jewel to the build (R17)
                 let adds = matches!(value, PopupInput::RowDoubleClick(_));
-                match value {
+                let flagged = match value {
                     PopupInput::Choice { index, label } => {
-                        self.call::<_, ()>("popup_set", (name, "choice", index, label))?
+                        self.call::<_, bool>("popup_set", (name, "choice", index, label))?
                     }
                     PopupInput::Number(value) => {
-                        self.call::<_, ()>("popup_set", (name, "number", value, ()))?
+                        self.call::<_, bool>("popup_set", (name, "number", value, ()))?
                     }
                     PopupInput::Check(on) => {
-                        self.call::<_, ()>("popup_set", (name, "check", on, ()))?
+                        self.call::<_, bool>("popup_set", (name, "check", on, ()))?
                     }
                     PopupInput::Text(text) => {
-                        self.call::<_, ()>("popup_set", (name, "text", text, ()))?
+                        self.call::<_, bool>("popup_set", (name, "text", text, ()))?
                     }
                     PopupInput::Row(key) => {
-                        self.call::<_, ()>("popup_set", (name, "row", key, ()))?
+                        self.call::<_, bool>("popup_set", (name, "row", key, ()))?
                     }
                     PopupInput::RowDoubleClick(key) => {
-                        self.call::<_, ()>("popup_set", (name, "row_double", key, ()))?
+                        self.call::<_, bool>("popup_set", (name, "row_double", key, ()))?
                     }
                     PopupInput::RowShiftClick(key) => {
-                        self.call::<_, ()>("popup_set", (name, "row_shift", key, ()))?
+                        self.call::<_, bool>("popup_set", (name, "row_shift", key, ()))?
                     }
                     PopupInput::RowMove { key, to } => {
-                        self.call::<_, ()>("popup_set", (name, "row_move", key, to))?
+                        self.call::<_, bool>("popup_set", (name, "row_move", key, to))?
                     }
-                }
+                };
                 if restart {
                     self.call::<_, ()>("anoint_sort_restart", ())?;
                 }
@@ -1902,6 +1915,12 @@ impl PobBackend {
                     // PoB's AddItem and PopulateSlots, no undo state (TimelessJewelListControl.lua:308-310)
                     affected.build = true;
                     affected.items = true;
+                }
+                // the Mod Browser's double click is its Add: the config changed (R28)
+                if flagged {
+                    affected.build = true;
+                    affected.config = true;
+                    affected.recalc = true;
                 }
                 Ok(affected)
             }
@@ -1919,6 +1938,8 @@ impl PobBackend {
                 };
                 affected.popup = true;
                 affected.display_item = true;
+                // the Mod Browser's Add edits a custom modifier group (R28)
+                affected.config |= pressed.build_flag;
                 // Options' Save changes the settings and may hand back overrides (R12)
                 affected.settings = true;
                 // a trade search the press opened (R20)
@@ -2382,7 +2403,7 @@ impl Backend for PobBackend {
         let found: Option<ItemTooltip> = if query.theirs {
             self.view("compare_item_tooltip", query.slot.clone())?
         } else {
-            self.view("item_tooltip", (query.id, query.slot.clone()))?
+            self.view("item_tooltip", (query.id, query.slot.clone(), query.shift))?
         };
         Ok(found.map(|tooltip| ItemTooltipView {
             query: query.clone(),
@@ -2562,6 +2583,7 @@ mod tests {
                 id: 1,
                 slot: None,
                 theirs: false,
+                shift: false,
             }),
             Command::ControlTooltip(ControlTooltipQuery::Popup {
                 control: "save".into(),
@@ -2645,6 +2667,7 @@ mod tests {
             Command::AddDbItem {
                 db: ItemDb::Uniques,
                 name: "x".into(),
+                second_slot: false,
             },
             Command::SetMainSkillCount {
                 control: crate::engine::CalcsCount::Stages,

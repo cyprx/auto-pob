@@ -52,6 +52,12 @@ local function live()
 		drop()
 		return false
 	end
+	-- a session over something PoB's modal popup would have kept still (the Mod Browser's
+	-- custom modifier group) is over once that thing is gone (R28)
+	if session.still_valid and not session.still_valid() then
+		drop()
+		return false
+	end
 	return true
 end
 
@@ -126,7 +132,8 @@ function glue.popup_end(keep_main)
 	end
 	-- a build-owned session ends with its build only (R19): a command that keeps the build
 	-- leaves it, and a timeless search in it, running
-	if not keep_main and session ~= nil and session.owner == "build" and session.gen == glue.build_generation() then
+	if not keep_main and session ~= nil and session.owner == "build" and session.gen == glue.build_generation()
+		and not (session.still_valid and not session.still_valid()) then
 		return false
 	end
 	-- not `live()`: the command that just ran may itself have replaced the item (R4)
@@ -474,6 +481,51 @@ function glue.popup_open(kind, arg)
 		session = { popup = top, kind = "SpectreLibrary", owner = "build", gen = glue.build_generation() }
 		return
 	end
+	if kind == "mod_browser" then
+		glue.popup_cancel_options()
+		-- the group's own "Add Mod" button (ConfigTab.lua:42-44); `arg` is 1-based
+		local tab = pob.build.configTab
+		local blocks = tab.customModsBlockControls
+		local block = blocks and blocks[arg]
+		local list = tab.configSets[tab.activeConfigSetId].customModsList
+		local data = list and list[arg]
+		if not (block and data and block.blockData == data) then
+			error("no custom modifier group " .. tostring(arg), 0)
+		end
+		local button = block.controls.addModBtn
+		if not (button:IsShown() and button:IsEnabled()) then
+			error("PoB doesn't offer that here", 0)
+		end
+		local popups = main().popups
+		local depth = #popups
+		local ok, err = pcall(button.onClick)
+		local count = #popups - depth
+		local top = popups[1]
+		close_above(depth)
+		if not ok then
+			error(err, 0)
+		end
+		if count == 0 then
+			error("PoB didn't open that window", 0)
+		end
+		drop()
+		-- the window's Add writes into the group's table it was opened with: an undo, a set
+		-- switch or a removed group replaces that table, which PoB's modal popup never lets
+		-- happen, so the session ends then
+		local function still_valid()
+			local now = pob.build.configTab
+			local set = now.configSets[now.activeConfigSetId]
+			return now == tab and set ~= nil and set.customModsList ~= nil and set.customModsList[arg] == data
+		end
+		session = {
+			popup = top,
+			kind = { ModBrowser = { group = arg - 1 } },
+			owner = "build",
+			gen = glue.build_generation(),
+			still_valid = still_valid,
+		}
+		return
+	end
 	if kind == "node_replacement" then
 		-- the right-click's body (PassiveTreeView.lua:519-533) without `buildFlag`, which
 		-- changes nothing: the node must pass PoB's rule; an allocated mastery is the effect
@@ -814,10 +866,12 @@ local function refuse_while_searching(name)
 	end
 end
 
--- Sets a control as the user would; see `glue.set_control`.
+-- Sets a control as the user would; see `glue.set_control`. Returns whether PoB asked for a
+-- recalculation (the Mod Browser's double click adds the mod, R28).
 function glue.popup_set(name, kind, value, label)
 	require_session()
 	refuse_while_searching(name)
+	local flag_before = pob.build and pob.build.buildFlag and true or false
 	local trading = is_trade(session)
 	if is_timeless(session) and name == "realmSelection" then
 		timeless_leagues(pob.build.treeTab)
@@ -837,6 +891,7 @@ function glue.popup_set(name, kind, value, label)
 			end
 		end)
 	end)
+	return (pob.build and pob.build.buildFlag and not flag_before) and true or false
 end
 
 -- Presses a button. Returns whether the session ended and whether PoB asked for a

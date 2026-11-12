@@ -37,15 +37,23 @@ pub enum Outcome {
 pub fn show(ctx: &egui::Context, window: &mut TextWindow, rects: &mut Rects) -> Outcome {
     let mut outcome = Outcome::Open;
     let mut open = true;
-    egui::Window::new(if window.creating {
-        "Create custom item"
-    } else {
-        "Edit item text"
-    })
-    .open(&mut open)
-    .collapsible(false)
-    .default_width(520.0)
-    .show(ctx, |ui| {
+    // modal, as PoB's popup: nothing behind it takes the mouse while it is open (R34)
+    egui::Modal::new(egui::Id::unique("items_text_window")).show(ctx, |ui| {
+        ui.set_width(520.0);
+        ui.horizontal(|ui| {
+            ui.heading(if window.creating {
+                "Create custom item"
+            } else {
+                "Edit item text"
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let x = ui.button("\u{d7}");
+                rects.note(&x, || "text_close".into());
+                if x.clicked() {
+                    open = false;
+                }
+            });
+        });
         ui.horizontal(|ui| {
             ui.label("Rarity:");
             let combo = egui::ComboBox::from_id_salt("items_text_rarity")

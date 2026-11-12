@@ -1310,6 +1310,7 @@ mod tests {
                     id: 1,
                     slot: None,
                     theirs: false,
+                    shift: false,
                 }),
                 Command::CopyItem { id: 1 },
             ]
@@ -1585,6 +1586,7 @@ mod tests {
             id,
             slot: Some("Ring 1".into()),
             theirs: false,
+            shift: false,
         }
     }
 

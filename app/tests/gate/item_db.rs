@@ -353,6 +353,7 @@ fn item_db_matches_pob() {
         Command::AddDbItem {
             db: ItemDb::Rares,
             name: name.clone(),
+            second_slot: false,
         },
         "no such item in the database",
     );
@@ -376,6 +377,7 @@ fn item_db_matches_pob() {
         Command::AddDbItem {
             db: ItemDb::Uniques,
             name: name.clone(),
+            second_slot: false,
         },
         Command::ViewDbItem {
             db: ItemDb::Uniques,
@@ -425,6 +427,7 @@ fn item_db_matches_pob() {
         .run(Command::AddDbItem {
             db: ItemDb::Uniques,
             name: name.clone(),
+            second_slot: false,
         })
         .unwrap();
     assert!(affected.items && affected.build && affected.recalc);
@@ -454,6 +457,7 @@ fn item_db_matches_pob() {
         .run(Command::AddDbItem {
             db: ItemDb::Uniques,
             name: name.clone(),
+            second_slot: false,
         })
         .expect_err("AddItem raised");
     assert!(format!("{err:#}").contains("boom from AddItem"), "{err:#}");

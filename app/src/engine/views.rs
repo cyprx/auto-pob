@@ -838,6 +838,10 @@ pub struct ItemsView {
     pub can_undo: bool,
     #[serde(default)]
     pub can_redo: bool,
+    /// PoB's "Passive tree:" dropdown on the Items tab (`specSelect`): `GetSpecList`'s labels,
+    /// the active tree selected
+    #[serde(default)]
+    pub specs: Option<DropList>,
 }
 
 /// One item of the build.
@@ -1437,6 +1441,10 @@ pub struct ItemTooltip {
     pub colour: Option<String>,
     #[serde(default)]
     pub lines: Vec<ItemTooltipLine>,
+    /// PoB's child tooltips beside it: the granted skills' gem tooltips, filled only while
+    /// Shift is held (R34)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<ItemTooltip>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1738,6 +1746,10 @@ pub struct DisplayItemView {
     #[serde(default)]
     pub custom_mods: Vec<CustomModView>,
     pub tooltip: ItemTooltip,
+    /// PoB shows one slider and Foulborn box per range line (`showAllItemAffixes` on a
+    /// unique) instead of the line dropdown
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stacked: bool,
 }
 
 /// One line of the display item's custom-mod list

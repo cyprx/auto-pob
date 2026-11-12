@@ -28,11 +28,13 @@ fn queries(row: &CompareItemRow) -> [Option<ItemTooltipQuery>; 2] {
             id,
             slot: Some(row.slot.clone()),
             theirs: false,
+            shift: false,
         }),
         row.theirs.as_ref().map(|_| ItemTooltipQuery {
             id: 0,
             slot: Some(row.slot.clone()),
             theirs: true,
+            shift: false,
         }),
     ]
 }

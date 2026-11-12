@@ -548,6 +548,7 @@ fn popup_session_lifecycle() {
             id,
             slot: None,
             theirs: false,
+            shift: false,
         })
         .unwrap()
         .expect("the item is listed");

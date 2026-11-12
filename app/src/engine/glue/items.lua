@@ -91,6 +91,10 @@ function glue.items_view()
 		can_undo = tab.undo[2] ~= nil,
 		can_redo = tab.redo[1] ~= nil,
 	}
+	-- the tree dropdown's list, as ItemsTab:Draw sets it (ItemsTab.lua:1562)
+	tab.controls.specSelect:SetList(tab.build.treeTab:GetSpecList())
+	view.specs = glue.drop_list(tab.controls.specSelect)
+	view.specs.enabled = tab.controls.specSelect:IsEnabled() and true or false
 	for i, id in ipairs(tab.itemOrderList) do
 		view.items[i] = item_entry(tab, list, i, id)
 	end
@@ -152,6 +156,13 @@ function glue.read_tooltip(tt, item)
 	if type(tt.color) == "string" then
 		out.colour = tt.color
 	end
+	-- the granted skills' tooltips, which PoB fills only while Shift is held (R34)
+	for _, child in ipairs(tt.childTooltips or {}) do
+		if child.lines and #child.lines > 0 then
+			out.children = out.children or {}
+			table.insert(out.children, glue.read_tooltip(child))
+		end
+	end
 	for i, line in ipairs(tt.lines) do
 		if line.text then
 			out.lines[i] = {
@@ -181,7 +192,20 @@ end
 
 -- What hovering an item shows: in the item list when `slot_name` is nil, else over the slot or
 -- one of its dropdown entries. Nil when the item, the slot or the entry is gone.
-function glue.item_tooltip(id, slot_name)
+function glue.item_tooltip(id, slot_name, shift)
+	if shift then
+		-- Shift held over the item: the key state is swapped for the call (R34)
+		local saved = IsKeyDown
+		IsKeyDown = function(key)
+			return key == "SHIFT"
+		end
+		local ok, result = pcall(glue.item_tooltip, id, slot_name, false)
+		IsKeyDown = saved
+		if not ok then
+			error(result, 0)
+		end
+		return result
+	end
 	local tab = items_tab()
 	local list = tab.controls.itemList
 	-- the updates the tab's Draw runs before a hover can happen (R16)
@@ -350,6 +374,27 @@ function glue.items_equip(slot_name, id)
 		end
 	end
 	slot.selFunc(index, slot.list[index])
+end
+
+-- Ctrl+click on a list row (ItemListControl.lua:290-314): equips the item into its slot, or
+-- takes it out when it is there; Ctrl+Shift+click aims at the second slot. A row the filter
+-- hides can't be clicked (R8). The key state is swapped for the call and always put back.
+function glue.item_quick_equip(id, second_slot)
+	local tab = items_tab()
+	local list = synced_list()
+	local index = tab.items[id] and position(list.list, id)
+	if not index then
+		error("no such item", 0)
+	end
+	local saved = IsKeyDown
+	IsKeyDown = function(key)
+		return key == "CTRL" or (second_slot and key == "SHIFT")
+	end
+	local ok, err = pcall(list.OnSelClick, list, index, id, false)
+	IsKeyDown = saved
+	if not ok then
+		error(err, 0)
+	end
 end
 
 -- A flask's own checkbox
@@ -595,8 +640,10 @@ table.insert(display_sections, function(tab, item, out)
 	end
 end)
 
--- the lines with a range slider or a Foulborn box
+-- the lines with a range slider or a Foulborn box; `stacked` when PoB shows one slider and
+-- box per line (`showAllItemAffixes` on a unique) instead of the line dropdown
 table.insert(display_sections, function(tab, item, out)
+	out.stacked = (item.rangeLineList[1] ~= nil and not tab.controls.displayItemRangeLine:IsShown()) and true or false
 	out.range_lines = {}
 	for i, mod_line in ipairs(item.rangeLineList) do
 		out.range_lines[i] = {
@@ -834,6 +881,10 @@ local function range_controls(tab, line, want)
 	end
 	local c = tab.controls
 	if stacked(tab) then
+		-- PoB has 20 stacked rows (ItemsTab.lua:1091); a line past them has no controls
+		if not c["displayItemStackedRangeSlider" .. line] then
+			error(NOT_SHOWN, 0)
+		end
 		return c["displayItemStackedRangeSlider" .. line], c["displayItemStackedMutatedCheckbox" .. line]
 	end
 	local drop = c.displayItemRangeLine

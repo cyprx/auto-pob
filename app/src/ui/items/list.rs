@@ -209,11 +209,25 @@ impl ItemsUi {
         for (i, row) in reordered.rows.iter().enumerate() {
             let entry = rows[i];
             self.rects.note(row, || format!("row_{}", entry.id));
+            let (ctrl, shift) = ui.input(|inp| {
+                (
+                    inp.modifiers.ctrl || inp.modifiers.command,
+                    inp.modifiers.shift,
+                )
+            });
             if row.clicked() {
                 self.selected = Some(entry.id);
                 row.request_focus();
+                // PoB's Ctrl+click equips the item into its slot or takes it out, Ctrl+Shift
+                // into the second slot (ItemListControl.lua:290-314); once per double click
+                if ctrl && !row.double_clicked() {
+                    out.commands.push(Command::QuickEquipItem {
+                        id: entry.id,
+                        second_slot: shift,
+                    });
+                }
             }
-            if row.double_clicked() {
+            if row.double_clicked() && !ctrl {
                 out.commands.push(Command::EditItem { id: entry.id });
             }
             self.note_hover(
@@ -222,6 +236,7 @@ impl ItemsUi {
                     id: entry.id,
                     slot: None,
                     theirs: false,
+                    shift: false,
                 },
             );
             if row.has_focus() {

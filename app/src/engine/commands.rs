@@ -751,10 +751,12 @@ pub enum Command {
         db: ItemDb,
         name: String,
     },
-    /// Ctrl+click on a database row: adds the item and equips it (R15).
+    /// Ctrl+click on a database row: adds the item and equips it (R15). `second_slot` is
+    /// Ctrl+Shift+click, which equips into the second slot where the item fits it (R23).
     AddDbItem {
         db: ItemDb,
         name: String,
+        second_slot: bool,
     },
 
     /// Adds a comparison build (R5); it becomes the active one. A build PoB can't load is
@@ -900,6 +902,21 @@ pub enum Command {
         id: u32,
         connect: bool,
     },
+    /// A database row dragged onto a slot (R23): PoB's `CanReceiveDrag`, then `ReceiveDrag`,
+    /// which adds the item, equips it and records an undo state. A slot that can't take the
+    /// item is `that item can't go in that slot`.
+    DropDbItem {
+        db: ItemDb,
+        name: String,
+        slot: String,
+    },
+    /// Ctrl+click on an item list row (`ItemListControl:OnSelClick`): equips the item into its
+    /// slot, or takes it out when it is already there; `second_slot` is Ctrl+Shift+click,
+    /// the second slot where the item fits it.
+    QuickEquipItem {
+        id: u32,
+        second_slot: bool,
+    },
 }
 
 /// A control whose hover tooltip PoB computes (R22). Gem positions are 0-based.
@@ -994,6 +1011,10 @@ pub struct ItemTooltipQuery {
     /// Compare tab's Items view shows
     #[serde(default)]
     pub theirs: bool,
+    /// Shift is held: PoB's tooltip then fills the granted skills' child tooltips, and a list
+    /// hover reads the item's second-slot mods (R34)
+    #[serde(default)]
+    pub shift: bool,
 }
 
 /// A window PoB opens from the Items tab's buttons (R3).
@@ -1030,6 +1051,12 @@ pub enum PopupKind {
     /// PoB's "Spectre Library" (`build:OpenSpectreLibrary`, R18), a build-owned session opened
     /// by the sidebar's or the Calcs selector's "Manage Spectres..." button; its Save commits
     SpectreLibrary,
+    /// The Config tab's "Add Mod" on custom modifier group `group` (0-based):
+    /// `configTab:OpenAddModPopup(blockData)` as a build-owned session (R28). Its "Add" appends
+    /// the picked modifier to the group's text.
+    ModBrowser {
+        group: usize,
+    },
 }
 
 /// Where a "Buy similar" search starts from (R10): PoB's own three entry points

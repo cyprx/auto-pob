@@ -997,6 +997,7 @@ fn same_their_tooltip(s: &mut NetSession, up: &Upstream, slot: &str) {
             id: 0,
             slot: Some(slot.into()),
             theirs: true,
+            shift: false,
         })
         .unwrap()
         .unwrap_or_else(|| panic!("their item in {slot}"));
@@ -1122,6 +1123,7 @@ fn compare_views_and_copies_match_pob() {
                 id: 0,
                 slot: Some(slot.into()),
                 theirs: true,
+                shift: false,
             })
             .unwrap();
         assert!(none.is_none(), "{slot}");

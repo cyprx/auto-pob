@@ -37,6 +37,11 @@ function itemsDump()
 		can_redo = t.redo[1] ~= nil,
 	}
 	for i, label in ipairs(filter.list) do out.list_filter.labels[i] = label end
+	-- the "Passive tree:" dropdown, its list set as the tab's Draw sets it
+	local specSelect = t.controls.specSelect
+	specSelect:SetList(build.treeTab:GetSpecList())
+	out.specs = { labels = {}, selected = specSelect.selIndex - 1, enabled = specSelect:IsEnabled() and true or false }
+	for i, label in ipairs(specSelect.list) do out.specs.labels[i] = label end
 	for i, id in ipairs(list.list) do out.listed[i] = id end
 
 	for i, id in ipairs(t.itemOrderList) do
@@ -105,6 +110,13 @@ function tooltipDump(tt)
 			if type(line.background) == "string" then out.lines[i].background = line.background end
 		end
 	end
+	-- the child tooltips PoB draws beside it (the granted skills under Shift), the empty ones
+	-- drawing nothing
+	local children = {}
+	for _, child in ipairs(tt.childTooltips or {}) do
+		if #child.lines > 0 then children[#children + 1] = tooltipDump(child) end
+	end
+	if #children > 0 then out.children = children end
 	return out
 end
 
@@ -243,6 +255,8 @@ function displayDump()
 			max = item.clusterJewel.maxNodes,
 		}
 	end
+	-- one slider and box per line instead of the line dropdown (showAllItemAffixes)
+	if item.rangeLineList[1] and not c.displayItemRangeLine:IsShown() then out.stacked = true end
 	out.tooltip = tooltipDump(t.displayItemTooltip)
 	for i, line in ipairs(t.displayItemTooltip.lines) do
 		if line.modLine then out.tooltip.lines[i].mod_line = modLineRef(item, line.modLine) end
@@ -1064,13 +1078,53 @@ function act.db_view(db, name)
 	record({ cmd = "ViewDbItem", db = db, name = name })
 end
 
--- Ctrl+click: the key state is swapped for the call, as the Ctrl+V and Copy hooks are
-function act.db_add(db, name)
+-- Ctrl+click (Ctrl+Shift+click with `second`): the key state is swapped for the call, as the
+-- Ctrl+V and Copy hooks are
+function act.db_add(db, name, second)
 	local c, item, index = dbRow(db, name)
 	local saved = IsKeyDown
-	IsKeyDown = function(key) return key == "CTRL" end
+	IsKeyDown = function(key) return key == "CTRL" or (second and key == "SHIFT") end
 	local ok, err = pcall(c.OnSelClick, c, index, item, false)
 	IsKeyDown = saved
 	assert(ok, err)
-	record({ cmd = "AddDbItem", db = db, name = name })
+	record({ cmd = "AddDbItem", db = db, name = name, second_slot = second or false })
+end
+
+-- A row dragged onto a slot and released there: the row is picked up, the drag starts as the
+-- list's Draw starts it (ListControl.lua:146-156), the slot under the cursor becomes the target
+-- (ListControl.lua:166-176) and the button's release is PoB's own (ListControl.lua:423-452)
+function act.db_drop(db, name, slotName)
+	local c, item, index = dbRow(db, name)
+	local slot = tab().slots[slotName]
+	tab().controls.itemList:UpdateList()
+	tab():UpdateSockets()
+	c:SelectIndex(index)
+	c.selDragging = true
+	c.selDragActive = true
+	c.dragType, c.dragValue = c:GetDragValue(c.selIndex, c.selValue)
+	for _, target in ipairs(c.dragTargetList) do
+		if not target.CanReceiveDrag or target:CanReceiveDrag(c.dragType, c.dragValue) then
+			target.otherDragSource = c
+		end
+	end
+	assert(slot:IsShown() and slot.otherDragSource == c, slotName .. " doesn't take " .. name)
+	c.dragTarget = slot
+	c:OnKeyUp("LEFTBUTTON")
+	record({ cmd = "DropDbItem", db = db, name = name, slot = slotName })
+end
+
+-- Ctrl+click on an item list row (Ctrl+Shift+click with `second`), keys swapped for the call
+function act.quick_equip(id, second)
+	local list = itemList()
+	local index
+	for i, listed in ipairs(list.list) do
+		if listed == id then index = i end
+	end
+	assert(index, "item " .. id .. " is not listed")
+	local saved = IsKeyDown
+	IsKeyDown = function(key) return key == "CTRL" or (second and key == "SHIFT") end
+	local ok, err = pcall(list.OnSelClick, list, index, id, false)
+	IsKeyDown = saved
+	assert(ok, err)
+	record({ cmd = "QuickEquipItem", id = id, second_slot = second or false })
 end

@@ -6150,6 +6150,53 @@ mod tests {
         );
     }
 
+    /// The Items tab's "Manage..." under its tree dropdown shows the Tree tab (our spec manager)
+    #[test]
+    fn items_manage_trees_shows_the_tree_tab() {
+        let (mut app, ctx) = tree_app();
+        let mut view = crate::ui::items::tests::sample();
+        view.specs = Some(crate::engine::views::DropList {
+            labels: vec!["Main".into()],
+            selected: 0,
+            enabled: false,
+        });
+        app.on_event(Event::Snapshot {
+            seq: 90,
+            snapshot: Snapshot::Items(Arc::new(view)),
+        });
+        app.tab = BuildTab::Items;
+        for _ in 0..4 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        click_item_key(&mut app, &ctx, "spec_manage");
+        assert_eq!(app.tab, BuildTab::Tree);
+    }
+
+    /// "Add Mod" on the Config tab opens the Mod Browser there; leaving the tab ends it (R28)
+    #[test]
+    fn add_mod_opens_the_mod_browser_on_the_config_tab() {
+        let (mut app, ctx) = config_app(sample_config());
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "mod_add:0");
+        assert_eq!(
+            sent_since(&app, before),
+            ["OpenPopup(ModBrowser { group: 0 })"]
+        );
+        assert_eq!(app.popup_tab, Some(BuildTab::Config));
+        app.on_event(Event::Snapshot {
+            seq: app.last_sent,
+            snapshot: Snapshot::Popup(Some(Arc::new(popup_view(
+                crate::engine::PopupKind::ModBrowser { group: 0 },
+            )))),
+        });
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.popup.is_open());
+        let before = app.sent_full.len();
+        app.tab = BuildTab::Items;
+        frame(&mut app, &ctx, vec![]);
+        assert!(sent_since(&app, before).contains(&"ClosePopup"));
+    }
+
     // the shortcuts' tests (R25), with this module's helpers
     mod shortcut_tests {
         include!("app_shortcut_tests.rs");

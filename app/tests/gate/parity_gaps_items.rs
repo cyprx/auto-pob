@@ -5,8 +5,8 @@
 
 use super::items::{FIND_NO_SLIDER, NoSlider, display, gear_sessions, items_round_trip, on_both};
 use super::items_harness::{
-    ItemsAction, ItemsCheckpoint, assert_same, checkpoints, json_of, open_popups, run_items_recipe,
-    strip_nulls, upstream_with_items_lib,
+    ItemsAction, ItemsCheckpoint, assert_same, checkpoints, json, json_of, open_popups,
+    run_items_recipe, strip_nulls, upstream_json, upstream_with_items_lib,
 };
 use super::{Session, fixtures_dir, lock, lua_value, snapshot_dir};
 use auto_pob::engine::{Backend, Command, ItemDb, ItemTooltipQuery, PopupInput, PopupKind, Tab};
@@ -353,6 +353,16 @@ fn mod_browser_matches_pob() {
     assert!(affected.popup);
     lua.load(OPEN_MOD_BROWSER).exec().unwrap();
     compare(&mut s, "opened");
+    let rows = s
+        .backend
+        .popup_view()
+        .unwrap()
+        .expect("open")
+        .controls
+        .iter()
+        .find(|c| c.name == "listControl")
+        .map_or(0, |c| c.rows.len());
+    eprintln!("mod browser rows: {rows}");
     s.run(Command::SetPopupControl {
         name: "search".into(),
         value: PopupInput::Text("life regen".into()),
@@ -440,5 +450,54 @@ fn mod_browser_matches_pob() {
         "{error}"
     );
     assert_eq!(open_popups(&s), 0);
+    assert_eq!(snapshot_dir(&s.user), files, "a file was written");
+}
+
+// ---- The Items tab's tree dropdown (specSelect) ----
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn items_tree_dropdown_matches_pob() {
+    let _guard = lock();
+    let xml = fixtures_dir().join("attack.xml");
+    let lua = upstream_with_items_lib(&xml, "attack");
+    let mut s = Session::start("items-tree-dropdown");
+    s.open_fixture("attack", &xml);
+    let files = snapshot_dir(&s.user);
+    let compare = |s: &mut Session, what: &str| -> serde_json::Value {
+        let ours = json(&s.backend.items_view().unwrap());
+        assert_same(&ours, &upstream_json(&lua), what);
+        assert_eq!(open_popups(s), 0, "{what}: a popup was left open");
+        ours["specs"].clone()
+    };
+    let specs = compare(&mut s, "one tree");
+    assert_eq!(specs["enabled"], false, "one tree: the dropdown is enabled");
+    // a second tree: PoB's own New on the tree manager; the Items view must be sent again
+    let affected = s
+        .run(Command::NewSpec {
+            title: "Second".into(),
+        })
+        .unwrap();
+    assert!(affected.items, "a new tree leaves the Items dropdown stale");
+    lua.load(r#"act.new_spec("Second")"#).exec().unwrap();
+    let specs = compare(&mut s, "two trees");
+    assert_eq!(specs["enabled"], true);
+    assert_eq!(specs["labels"].as_array().unwrap().len(), 2);
+    // PoB's Items tab dropdown picks each tree in turn
+    for index in [0usize, 1] {
+        let affected = s.run(Command::SelectSpec { index }).unwrap();
+        assert!(
+            affected.items,
+            "a tree switch leaves the Items dropdown stale"
+        );
+        lua.load(format!(
+            "build.itemsTab.controls.specSelect:SetSel({}) runCallback('OnFrame')",
+            index + 1
+        ))
+        .exec()
+        .unwrap();
+        let specs = compare(&mut s, &format!("tree {index} picked"));
+        assert_eq!(specs["selected"], index);
+    }
     assert_eq!(snapshot_dir(&s.user), files, "a file was written");
 }

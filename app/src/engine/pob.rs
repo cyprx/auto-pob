@@ -247,6 +247,8 @@ impl PobBackend {
         Ok(Affected {
             build: rebuild,
             recalc: rebuild,
+            // the Items tab's tree dropdown and its jewel sockets follow the spec list
+            items: rebuild,
             tree: true,
             tree_layout: self.layout_changed()?,
             ..Affected::default()

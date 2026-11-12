@@ -126,7 +126,25 @@ pub fn dropdown_step(
     selected: usize,
     open: bool,
 ) -> Option<usize> {
-    if len == 0 || !response.enabled() || !(response.hovered() || open) {
+    dropdown_step_in(ui, response, len, selected, open, None)
+}
+
+/// `dropdown_step` over the entries a search kept (`visible`, one flag an entry): PoB steps
+/// through the matches only, in its drop list (DropDownControl.lua:57-107, 156-165)
+pub fn dropdown_step_in(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    len: usize,
+    selected: usize,
+    open: bool,
+    visible: Option<&[bool]>,
+) -> Option<usize> {
+    // the drop list: the matches, or every entry with no search
+    let drop: Vec<usize> = match visible.filter(|v| v.len() == len) {
+        Some(v) => (0..len).filter(|&i| v[i]).collect(),
+        None => (0..len).collect(),
+    };
+    if drop.is_empty() || !response.enabled() || !(response.hovered() || open) {
         return None;
     }
     // a dropped list is the selected control itself: its own search box has the keyboard
@@ -138,7 +156,7 @@ pub fn dropdown_step(
     let spacing = ui.spacing();
     let rows = spacing.combo_height / (spacing.interact_size.y + spacing.item_spacing.y);
     // the search box takes a row
-    let scrolls = open && len as f32 > rows - 1.0;
+    let scrolls = open && drop.len() as f32 > rows - 1.0;
     let arrows: &[(Key, i32)] = if scrolls {
         &DROPDOWN_KEYS[2..]
     } else {
@@ -152,8 +170,11 @@ pub fn dropdown_step(
         return None;
     }
     take(ui, if scrolls { arrows } else { &DROPDOWN_KEYS });
-    // SetSel clamps to the list
-    let to = (selected as i64 + i64::from(step)).clamp(0, len as i64 - 1) as usize;
+    // ListIndexToDropIndex: a selection the search hides is before the first match
+    let at = drop.iter().position(|&i| i == selected);
+    let from = at.map_or(-1, |a| a as i64);
+    // SetSel clamps to the drop list
+    let to = drop[(from + i64::from(step)).clamp(0, drop.len() as i64 - 1) as usize];
     (to != selected).then_some(to)
 }
 
@@ -207,7 +228,11 @@ pub fn combo_step(
     selected: usize,
 ) -> Option<usize> {
     let open = egui::Popup::is_id_open(ui.ctx(), response.id.with("popup"));
-    dropdown_step(ui, response, len, selected, open)
+    // a dropped list's search keeps some entries (`Dropdown` notes them)
+    let visible = open
+        .then(|| ui.data(|d| d.get_temp::<Vec<bool>>(response.id.with("visible"))))
+        .flatten();
+    dropdown_step_in(ui, response, len, selected, open, visible.as_deref())
 }
 
 #[cfg(test)]

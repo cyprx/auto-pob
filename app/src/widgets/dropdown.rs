@@ -14,23 +14,51 @@ fn current_id() -> egui::Id {
     egui::Id::NULL.with("pob_dropdown_search")
 }
 
-/// What the search keeps: every word, in any case, as PoB's caseless word match
-fn matches(text: &str) -> impl Fn(&egui::Ui) -> bool + '_ {
-    move |ui| {
-        let search: String = ui
-            .ctx()
-            .data(|d| d.get_temp(current_id()))
-            .unwrap_or_default();
-        let text = text.to_lowercase();
-        search
-            .split_whitespace()
-            .all(|word| text.contains(&word.to_lowercase()))
+/// Whether `text` matches PoB's search: every word, in any case, each after the one before
+/// (SearchHost.lua:41-57 `matchWords`; no PoB dropdown sets `ignoreSearchOrder`)
+pub fn search_matches(search: &str, text: &str) -> bool {
+    let text = text.to_lowercase();
+    let mut from = 0;
+    for word in search.split_whitespace() {
+        let word = word.to_lowercase();
+        match text[from..].find(&word) {
+            Some(at) => from += at + word.len(),
+            None => return false,
+        }
     }
+    true
 }
 
-/// An entry hidden by the search: nothing drawn, nothing clicked
+/// Which entries of the list being drawn the search kept, in the order they were added
+fn visible_id() -> egui::Id {
+    egui::Id::NULL.with("pob_dropdown_visible")
+}
+
+/// Whether the search keeps `text`; noted for the list's stepping (DropDownControl.lua:57-107)
+fn matches(ui: &egui::Ui, text: &str) -> bool {
+    let search: String = ui
+        .ctx()
+        .data(|d| d.get_temp(current_id()))
+        .unwrap_or_default();
+    let keep = search_matches(&search, text);
+    ui.ctx().data_mut(|d| {
+        d.get_temp_mut_or_default::<Vec<bool>>(visible_id())
+            .push(keep)
+    });
+    keep
+}
+
+/// An entry hidden by the search: nothing drawn, no room taken, nothing clicked
 fn hidden(ui: &mut egui::Ui) -> egui::Response {
-    ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover())
+    let n = ui
+        .ctx()
+        .data(|d| d.get_temp::<Vec<bool>>(visible_id()).map_or(0, |v| v.len()));
+    let rect = egui::Rect::from_min_size(ui.cursor().min, egui::Vec2::ZERO);
+    ui.interact(
+        rect,
+        ui.scope_id().with(("dropdown_hidden", n)),
+        egui::Sense::hover(),
+    )
 }
 
 fn picked(ui: &mut egui::Ui, response: egui::Response) -> egui::Response {
@@ -43,7 +71,7 @@ fn picked(ui: &mut egui::Ui, response: egui::Response) -> egui::Response {
 /// A selectable entry
 pub fn item(ui: &mut egui::Ui, selected: bool, text: impl Into<WidgetText>) -> egui::Response {
     let text = text.into();
-    if !matches(text.text())(ui) {
+    if !matches(ui, text.text()) {
         return hidden(ui);
     }
     let response = ui.selectable_label(selected, text);
@@ -58,7 +86,7 @@ pub fn value<V: PartialEq>(
     text: impl Into<WidgetText>,
 ) -> egui::Response {
     let text = text.into();
-    if !matches(text.text())(ui) {
+    if !matches(ui, text.text()) {
         return hidden(ui);
     }
     let response = ui.selectable_value(current, selected_value, text);
@@ -68,7 +96,7 @@ pub fn value<V: PartialEq>(
 /// An action entry (PoB's loadout actions)
 pub fn button(ui: &mut egui::Ui, text: impl Into<WidgetText>) -> egui::Response {
     let text = text.into();
-    if !matches(text.text())(ui) {
+    if !matches(ui, text.text()) {
         return hidden(ui);
     }
     let response = ui.button(text);
@@ -79,7 +107,7 @@ pub fn button(ui: &mut egui::Ui, text: impl Into<WidgetText>) -> egui::Response 
 /// PoB's does (DropDownControl.lua:476-484)
 pub fn label(ui: &mut egui::Ui, text: impl Into<WidgetText>) -> egui::Response {
     let text = text.into();
-    if !matches(text.text())(ui) {
+    if !matches(ui, text.text()) {
         return hidden(ui);
     }
     let response = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
@@ -134,6 +162,9 @@ impl<'a> Dropdown<'a> {
             .is_some_and(|s| !s.is_empty());
         if open && searching && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
             ui.data_mut(|d| d.insert_temp(search_id, String::new()));
+            // egui dropped the box's focus on Esc; the list stays the selected control, so
+            // typing goes on searching (DropDownControl.lua:422-436)
+            ui.memory_mut(|m| m.request_focus(search_id));
         }
         let shown = self.combo.show_ui(ui, |ui| {
             let mut search: String = ui.data(|d| d.get_temp(search_id)).unwrap_or_default();
@@ -150,12 +181,24 @@ impl<'a> Dropdown<'a> {
                 edit.request_focus();
             }
 
+            let active = !search.trim().is_empty();
             ui.data_mut(|d| {
                 d.insert_temp(search_id, search.clone());
                 d.insert_temp(current_id(), search);
+                d.insert_temp(visible_id(), Vec::<bool>::new());
             });
             let inner = add_contents(ui);
-            ui.data_mut(|d| d.remove::<String>(current_id()));
+            ui.data_mut(|d| {
+                d.remove::<String>(current_id());
+                let seen = d.get_temp::<Vec<bool>>(visible_id()).unwrap_or_default();
+                d.remove::<Vec<bool>>(visible_id());
+                // the matches the wheel and the arrows step through
+                if active {
+                    d.insert_temp(button.with("visible"), seen);
+                } else {
+                    d.remove::<Vec<bool>>(button.with("visible"));
+                }
+            });
             inner
         });
         if shown.inner.is_none() {
@@ -163,6 +206,7 @@ impl<'a> Dropdown<'a> {
             ui.data_mut(|d| {
                 d.insert_temp(open_id, false);
                 d.insert_temp(search_id, String::new());
+                d.remove::<Vec<bool>>(button.with("visible"));
             });
         }
         shown
@@ -187,15 +231,34 @@ mod tests {
         button: Rect,
         entries: HashMap<usize, Rect>,
         picks: Vec<usize>,
+        /// What the wheel and the arrows stepped to
+        steps: Vec<usize>,
+        /// The entry the dropdown shows as selected
+        selected: usize,
     }
 
     const LIST: [&str; 4] = ["Alpha", "Beta", "Gamma", "Delta"];
 
     impl Harness {
+        fn new() -> Self {
+            let mut h = Harness {
+                ctx: egui::Context::default(),
+                button: Rect::NOTHING,
+                entries: HashMap::new(),
+                picks: Vec::new(),
+                steps: Vec::new(),
+                selected: 0,
+            };
+            h.frame(vec![]);
+            h
+        }
+
         fn frame(&mut self, events: Vec<Event>) {
             let mut entries = HashMap::new();
             let mut picks = Vec::new();
             let mut button = Rect::NOTHING;
+            let mut steps = Vec::new();
+            let selected = self.selected;
             self.ctx
                 .run_ui(
                     RawInput {
@@ -209,7 +272,7 @@ mod tests {
                                 .selected_text("Alpha")
                                 .show_ui(ui, |ui| {
                                     for (i, text) in LIST.iter().enumerate() {
-                                        let r = item(ui, i == 0, *text);
+                                        let r = item(ui, i == selected, *text);
                                         if r.rect.height() > 0.0 {
                                             entries.insert(i, r.rect);
                                         }
@@ -219,11 +282,18 @@ mod tests {
                                     }
                                 });
                         button = r.response.rect;
+                        steps.extend(crate::widgets::scroll_step::combo_step(
+                            ui,
+                            &r.response,
+                            LIST.len(),
+                            selected,
+                        ));
                     },
                 )
                 .drop_without_applying_deltas();
             self.entries = entries;
             self.picks.extend(picks);
+            self.steps.extend(steps);
             self.button = button;
         }
 
@@ -259,12 +329,7 @@ mod tests {
 
     #[test]
     fn typing_filters_backspace_edits_and_esc_clears_then_closes() {
-        let mut h = Harness {
-            ctx: egui::Context::default(),
-            button: Rect::NOTHING,
-            entries: HashMap::new(),
-            picks: Vec::new(),
-        };
+        let mut h = Harness::new();
         h.frame(vec![]);
         h.click(h.button.center());
         assert_eq!(h.entries.len(), 4, "the list didn't drop");
@@ -295,5 +360,73 @@ mod tests {
         h.click(gamma);
         assert_eq!(h.picks, [2]);
         assert!(h.entries.is_empty(), "a pick closes the list");
+    }
+
+    fn text(h: &mut Harness, t: &str) {
+        h.frame(vec![Event::Text(t.into())]);
+        h.frame(vec![]);
+    }
+
+    #[test]
+    fn after_esc_empties_the_search_typing_searches_again() {
+        let mut h = Harness::new();
+        h.click(h.button.center());
+        text(&mut h, "gam");
+        assert_eq!(h.entries.len(), 1);
+        h.key(Key::Escape);
+        assert_eq!(h.entries.len(), 4, "the list closed");
+        // the list is still the selected control: typing goes on searching
+        // (DropDownControl.lua:422-436)
+        text(&mut h, "del");
+        assert_eq!(h.entries.keys().copied().collect::<Vec<_>>(), [3]);
+    }
+
+    #[test]
+    fn search_words_match_in_order() {
+        let mut h = Harness::new();
+        h.click(h.button.center());
+        // PoB's matchWords: each word after the one before (SearchHost.lua:41-57)
+        text(&mut h, "ga ma");
+        assert_eq!(h.entries.keys().copied().collect::<Vec<_>>(), [2]);
+        let mut h = Harness::new();
+        h.click(h.button.center());
+        text(&mut h, "ma ga");
+        assert!(h.entries.is_empty(), "words out of order matched");
+        assert!(!search_matches("ta de", "Delta Data"));
+        assert!(search_matches("de ta", "Delta"));
+    }
+
+    #[test]
+    fn hidden_rows_leave_no_gap() {
+        let mut h = Harness::new();
+        h.click(h.button.center());
+        let first = h.entries[&0].top();
+        let spacing = h.entries[&1].top() - h.entries[&0].bottom();
+        text(&mut h, "del");
+        // the one match sits where the first row was
+        assert_eq!(h.entries[&3].top(), first);
+        // Beta and Delta, with Gamma hidden between them, are as close as any two rows
+        text(&mut h, "\u{8}\u{8}\u{8}");
+        let mut h = Harness::new();
+        h.click(h.button.center());
+        text(&mut h, "ta");
+        assert_eq!(h.entries[&3].top() - h.entries[&1].bottom(), spacing);
+    }
+
+    #[test]
+    fn stepping_goes_through_the_matches_only() {
+        let mut h = Harness::new();
+        h.click(h.button.center());
+        // Beta and Delta match; Alpha, the selection, is hidden
+        text(&mut h, "ta");
+        h.key(Key::ArrowDown);
+        h.selected = 1;
+        h.frame(vec![]);
+        h.key(Key::ArrowDown);
+        h.selected = 3;
+        h.frame(vec![]);
+        h.key(Key::ArrowUp);
+        // Alpha hidden: Down goes to the first match (DropDownControl.lua:57-107)
+        assert_eq!(h.steps, [1, 3, 1]);
     }
 }

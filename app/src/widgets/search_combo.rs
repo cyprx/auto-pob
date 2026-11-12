@@ -43,6 +43,9 @@ pub fn search_combo_ui(
         && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
     {
         ui.data_mut(|d| d.insert_temp(filter_id, String::new()));
+        // egui dropped the box's focus on Esc; typing goes on searching
+        // (DropDownControl.lua:422-436)
+        ui.memory_mut(|m| m.request_focus(filter_id));
     }
     let mut combo = egui::ComboBox::from_id_salt(id)
         .selected_text(pob_text(current, 14.0, default))
@@ -65,7 +68,6 @@ pub fn search_combo_ui(
         if first {
             edit.request_focus();
         }
-        let needle = filter.to_lowercase();
         let mut first_match = None;
         egui::ScrollArea::vertical()
             .max_height(320.0)
@@ -73,7 +75,7 @@ pub fn search_combo_ui(
             .show(ui, |ui| {
                 for (i, label) in list.iter().enumerate() {
                     let text = pob_text(label, 14.0, default);
-                    if !needle.is_empty() && !text.text.to_lowercase().contains(&needle) {
+                    if !super::dropdown::search_matches(&filter, &text.text) {
                         continue;
                     }
                     first_match.get_or_insert(i);
@@ -109,13 +111,20 @@ pub fn search_combo_ui(
         });
     }
     // the wheel and the arrows step it, as PoB's dropdown (DropDownControl.lua:476-516)
+    // through the search's matches only (DropDownControl.lua:57-107)
     if picked.is_none() {
-        picked = crate::widgets::scroll_step::dropdown_step(
+        let filter: String = ui.data(|d| d.get_temp(filter_id)).unwrap_or_default();
+        let visible: Vec<bool> = list
+            .iter()
+            .map(|l| super::dropdown::search_matches(&filter, &pob_text(l, 14.0, default).text))
+            .collect();
+        picked = crate::widgets::scroll_step::dropdown_step_in(
             ui,
             &shown.response,
             list.len(),
             selected,
             shown.inner.is_some(),
+            Some(&visible),
         );
     }
     (shown.response, picked)
@@ -278,6 +287,14 @@ mod tests {
         h.frame(vec![key(Key::Escape)]);
         h.frame(vec![]);
         assert_eq!(h.entries.len(), 4);
+        // the box keeps the keyboard: typing goes on searching (DropDownControl.lua:422-436)
+        h.frame(vec![Event::Text("del".into())]);
+        h.frame(vec![]);
+        assert_eq!(h.entries.len(), 1, "typing after Esc searched nothing");
+        h.frame(vec![key(Key::Backspace)]);
+        h.frame(vec![key(Key::Backspace)]);
+        h.frame(vec![key(Key::Backspace)]);
+        h.frame(vec![]);
         // with no search, Esc closes it
         h.frame(vec![key(Key::Escape)]);
         h.frame(vec![]);

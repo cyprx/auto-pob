@@ -848,3 +848,25 @@ fn a_right_click_on_a_read_only_box_reads_no_clipboard() {
         );
     }
 }
+
+/// The Config tab's list options are PoB's searchable dropdowns: typing filters, and a pick
+/// sends the choice and closes the list
+#[test]
+fn a_config_list_option_filters_picks_and_closes() {
+    let (mut app, ctx) = config_app(sample_config());
+    let before = app.sent_full.len();
+    search_and_pick(
+        &mut app,
+        &ctx,
+        &rect_of,
+        "list:enemyIsBoss",
+        "pin",
+        "list:enemyIsBoss:None",
+        "list:enemyIsBoss:Pinnacle",
+    );
+    assert_eq!(
+        sent_since(&app, before),
+        ["SetConfig { var: \"enemyIsBoss\", value: Choice(\"Pinnacle\") }"]
+    );
+    assert!(!egui::Popup::is_any_open(&ctx), "the list stayed dropped");
+}

@@ -635,8 +635,11 @@ impl ConfigUi {
                     .show_ui(ui, |ui| {
                         for choice in &option.choices {
                             let selected = choice.value == current;
-                            let item = ui
-                                .selectable_label(selected, pob_text(&choice.label, 14.0, default));
+                            let item = crate::widgets::dropdown::item(
+                                ui,
+                                selected,
+                                pob_text(&choice.label, 14.0, default),
+                            );
                             self.note(format!("list:{var}:{}", choice.value), &item);
                             if item.clicked() && !selected {
                                 self.picks.insert(var.to_owned(), choice.value.clone());

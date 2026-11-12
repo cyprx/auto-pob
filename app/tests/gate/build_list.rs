@@ -1335,6 +1335,40 @@ fn build_list_data_loss_guards() {
         fs::remove_file(sub.join("a.xml")).unwrap();
     }
 
+    // F1: PoB's name[2], name[3] probe: the first name it can't open is replaced by a move
+    fs::write(sub.join("a.xml"), "readable").unwrap();
+    fs::write(sub.join("a[2].xml"), "second").unwrap();
+    symlink(outside.join("gone.xml"), sub.join("a[3].xml")).unwrap();
+    assert_eq!(
+        err(
+            &mut s,
+            Command::MoveBuild {
+                path: builds.join("a.xml"),
+                folder: "sub/".into()
+            }
+        ),
+        taken,
+        "a dangling link at a[3]"
+    );
+    fs::remove_file(sub.join("a[3].xml")).unwrap();
+    if !is_root() {
+        fs::write(sub.join("a[3].xml"), "hidden").unwrap();
+        set_mode(&sub.join("a[3].xml"), 0o000);
+        let result = s.run(Command::MoveBuild {
+            path: builds.join("a.xml"),
+            folder: "sub/".into(),
+        });
+        set_mode(&sub.join("a[3].xml"), 0o644);
+        assert_eq!(result.expect_err("refused").to_string(), taken);
+        assert_eq!(fs::read(sub.join("a[3].xml")).unwrap(), b"hidden");
+        fs::remove_file(sub.join("a[3].xml")).unwrap();
+    }
+    assert!(builds.join("a.xml").is_file());
+    for name in ["a.xml", "a[2].xml"] {
+        fs::remove_file(sub.join(name)).unwrap();
+    }
+    assert_eq!(tree(&outside), outside_before);
+
     // N5: a.xml and A.xml both exist, a -> A
     fs::copy(builds.join("a.xml"), builds.join("A.xml")).unwrap();
     fs::write(builds.join("A.xml"), "the other one").unwrap();
@@ -1369,6 +1403,21 @@ fn build_list_data_loss_guards() {
         assert_eq!(err(&mut s, command), "that Builds folder isn't allowed");
     }
     assert!(builds.join("sub/b.xml").is_file());
+    s.backend
+        .lua
+        .globals()
+        .set("NEWROOT", format!("{}/nowhere/", user.display()))
+        .unwrap();
+    s.eval::<()>("pob.main.main.buildPath = NEWROOT");
+    assert_eq!(
+        err(
+            &mut s,
+            Command::ListBuilds {
+                folder: String::new()
+            }
+        ),
+        "the Builds folder doesn't exist"
+    );
     s.backend.lua.globals().set("NEWROOT", real).unwrap();
     s.eval::<()>("pob.main.main.buildPath = NEWROOT");
     s.run(Command::ListBuilds {

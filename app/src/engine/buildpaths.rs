@@ -184,20 +184,29 @@ pub(crate) fn name_free(entry: &str, new_name: &str, rename: bool) -> Result<()>
     Ok(())
 }
 
-/// Refuses a move onto a name that PoB's probe (`io.open`) can't see and `os.rename` would then
-/// replace: a link, or a file that can't be read. A readable file is PoB's `name[2]` case.
+/// Refuses a move that PoB's `GetDestName` would turn into a replacement. It tries `name`,
+/// `name[2]`, `name[3]` and so on while `io.open` succeeds (a readable file or a folder) and
+/// takes the first it can't open; `os.rename` then replaces whatever is there, a link or an
+/// unreadable file included.
 pub(crate) fn move_target_free(entry: &str, root: &str, dest_folder: &str) -> Result<()> {
-    let Some(name) = Path::new(entry).file_name() else {
+    let Some(file) = Path::new(entry).file_name().and_then(|n| n.to_str()) else {
         return Err(anyhow!("no such build"));
     };
-    let target = Path::new(&root_dir(root)).join(dest_folder).join(name);
-    let Ok(meta) = fs::symlink_metadata(&target) else {
-        return Ok(());
-    };
-    if meta.file_type().is_symlink() || (meta.is_file() && fs::File::open(&target).is_err()) {
-        return Err(anyhow!("a build with that name already exists"));
+    let dir = Path::new(&root_dir(root)).join(dest_folder);
+    let base = file.strip_suffix(".xml").unwrap_or(file);
+    let mut candidate = file.to_string();
+    let mut i = 2;
+    loop {
+        let target = dir.join(&candidate);
+        if fs::File::open(&target).is_err() {
+            return match fs::symlink_metadata(&target) {
+                Ok(_) => Err(anyhow!("a build with that name already exists")),
+                Err(_) => Ok(()),
+            };
+        }
+        candidate = format!("{base}[{i}].xml");
+        i += 1;
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -376,11 +385,14 @@ mod tests {
             "a readable file is PoB's [2]"
         );
         symlink(
-            tree.0.join("outside/s.xml"),
+            tree.0.join("outside/gone.xml"),
             tree.0.join("Builds/sub/a.xml"),
         )
         .unwrap();
-        assert!(move_target_free(&a, &root, "sub/").is_err(), "a link");
+        assert!(
+            move_target_free(&a, &root, "sub/").is_err(),
+            "a dangling link"
+        );
         fs::remove_file(tree.0.join("Builds/sub/a.xml")).unwrap();
         let hidden = tree.0.join("Builds/sub/a.xml");
         fs::write(&hidden, "h").unwrap();
@@ -397,6 +409,30 @@ mod tests {
             move_target_free(&a, &root, "sub/").is_ok(),
             "a folder: PoB's probe sees it"
         );
+        fs::remove_dir_all(&hidden).unwrap();
+        // PoB's name[2], name[3]: the first it can't open is replaced, so it must be free
+        fs::write(&hidden, "readable").unwrap();
+        assert!(move_target_free(&a, &root, "sub/").is_ok(), "a[2] is free");
+        let second = tree.0.join("Builds/sub/a[2].xml");
+        fs::write(&second, "h2").unwrap();
+        assert!(
+            move_target_free(&a, &root, "sub/").is_ok(),
+            "a[2] readable, a[3] free"
+        );
+        fs::set_permissions(&second, fs::Permissions::from_mode(0o000)).unwrap();
+        let can_read = fs::File::open(&second).is_ok();
+        assert!(
+            can_read || move_target_free(&a, &root, "sub/").is_err(),
+            "unreadable a[2]"
+        );
+        fs::set_permissions(&second, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::remove_file(&second).unwrap();
+        symlink(tree.0.join("outside/gone.xml"), &second).unwrap();
+        assert!(
+            move_target_free(&a, &root, "sub/").is_err(),
+            "a dangling link at a[2]"
+        );
+        assert!(tree.0.join("outside/gone.xml").symlink_metadata().is_err());
     }
 
     #[test]

@@ -112,7 +112,7 @@ fn locate(root: Option<&(PathBuf, PathBuf)>, path: &Path) -> Option<(PathBuf, bo
 /// unlinked, never followed (`remove_dir_all` does not traverse them).
 fn recursive_remove(root: Option<&(PathBuf, PathBuf)>, path: &Path) -> std::io::Result<()> {
     match locate(root, path) {
-        Some((walk, true)) => fs::remove_file(walk),
+        Some((walk, true)) if walk.is_dir() => fs::remove_file(walk),
         Some((walk, false)) if walk.is_dir() => fs::remove_dir_all(walk),
         _ => {
             log::warn!("refused a recursive delete outside the Builds folder");
@@ -180,7 +180,7 @@ pub fn register(lua: &Lua, pob_dir: &Path, user_dir: &Path) -> mlua::Result<()> 
                 // a link to a folder that PoB lists is removed as a link, below the root only
                 let root = lua.app_data_ref::<BuildsRoot>().and_then(|r| r.0.clone());
                 match locate(root.as_ref(), Path::new(&path)) {
-                    Some((walk, true)) => fs::remove_file(walk),
+                    Some((walk, true)) if walk.is_dir() => fs::remove_file(walk),
                     _ => fs::remove_dir(path),
                 }
             };
@@ -616,6 +616,29 @@ mod tests {
         let plain: (Option<bool>, Option<String>) = lua.load("return RemoveDir(p)").eval().unwrap();
         assert_eq!(plain, (Some(true), None));
         assert!(!builds.join("lnk2").exists() && builds.join("real/b.xml").is_file());
+    }
+
+    #[test]
+    fn only_a_link_to_a_folder_is_unlinked() {
+        use std::os::unix::fs::symlink;
+        let tmp = TempDir::new("rmfilelink");
+        let builds = tmp.0.join("Builds");
+        fs::create_dir_all(&builds).unwrap();
+        fs::write(builds.join("f.xml"), "f").unwrap();
+        symlink(builds.join("f.xml"), builds.join("to_file")).unwrap();
+        symlink(builds.join("none"), builds.join("dangling")).unwrap();
+        let lua = lua();
+        set_builds_root(&lua, Some(&builds));
+        for name in ["to_file", "dangling"] {
+            assert_eq!(remove(&lua, &builds.join(name)).0, None, "{name}");
+            lua.globals()
+                .set("p", builds.join(name).to_string_lossy().into_owned())
+                .unwrap();
+            let plain: (Option<bool>, Option<String>) =
+                lua.load("return RemoveDir(p)").eval().unwrap();
+            assert_eq!(plain.0, None, "{name}");
+            assert!(fs::symlink_metadata(builds.join(name)).is_ok());
+        }
     }
 
     #[test]

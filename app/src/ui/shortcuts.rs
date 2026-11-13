@@ -129,14 +129,18 @@ pub fn mark_right_click_paste(ctx: &egui::Context) {
     ctx.data_mut(|d| d.insert_temp(right_paste_id(), pass));
 }
 
+/// This frame's paste is a right-click's into a box
+pub fn right_click_pasted(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<u64>(right_paste_id())) == Some(ctx.cumulative_pass_nr())
+}
+
 /// The text Ctrl+V pastes this frame, for a tab that reads the key before its controls, so
 /// even while a box of its own has the keyboard and takes the paste too (ItemsTab.lua:1454,
 /// SkillsTab.lua:628). A right-click's paste into a box isn't the key; a box of the top bar or
 /// the sidebar takes the key before the tab (Build.lua:1230).
 pub fn ctrl_v_text(ui: &egui::Ui) -> Option<String> {
     let ctx = ui.ctx();
-    let right = ctx.data(|d| d.get_temp::<u64>(right_paste_id())) == Some(ctx.cumulative_pass_nr());
-    if right || crate::widgets::scroll_step::build_box_typing(ctx) {
+    if right_click_pasted(ctx) || crate::widgets::scroll_step::build_box_typing(ctx) {
         return None;
     }
     ui.input(|i| {

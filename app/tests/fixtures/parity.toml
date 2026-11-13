@@ -2077,7 +2077,7 @@ ported = "app/src/ui/build_list.rs row menu Rename…, F2 and name dialog"
 note = "R16"
 
 [controls."list.searchText"]
-ported = "app/src/ui/build_list.rs search_box, sent 200 ms after typing stops"
+ported = "app/src/ui/build_list.rs search_box, sent 200 ms after typing stops; PoB's %c%(%) filter and 100-byte limit (BuildList.lua:96)"
 note = "search filter (R16)"
 
 [controls."list.searchText.buttonClear"]
@@ -3367,11 +3367,11 @@ ported = "app/src/ui/build_list.rs keys folder forward"
 note = "folder forward (R25)"
 
 [keys."list.n"]
-ported = "app/src/ui/build_list.rs keys Ctrl+N new build"
+ported = "app/src/ui/build_list.rs keys Ctrl+N new build, read before the controls, so also while a box has the keyboard (BuildList.lua:171)"
 note = "Ctrl+N (R25)"
 
 [keys."list.v"]
-ported = "app/src/ui/build_list.rs keys: Ctrl+V after Ctrl+X moves (MoveBuild), after Ctrl+C copies (CopyBuildTo), or opens the Copy box in the same folder; works on an empty clipboard"
+ported = "app/src/ui/build_list.rs keys: Ctrl+V after Ctrl+X moves (MoveBuild), after Ctrl+C copies (CopyBuildTo), or opens the Copy box in the same folder; works on an empty clipboard; read before the controls, so wherever the keyboard is (BuildList.lua:136-170), but not on a right-click paste"
 
 [keys."ListControl.BACK"]
 ported = "app/src/ui/shortcuts.rs list_delete: Backspace deletes in the build, item, shared item, socket group and set lists (the item, skill, shared, tree and config set managers)"

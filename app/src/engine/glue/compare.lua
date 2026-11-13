@@ -427,8 +427,28 @@ local function item_slots(tab, entry)
 	return rows
 end
 
+-- One side's card in PoB's expanded mode, as `DrawItemExpanded` draws it: the name, the base's
+-- figures, the mod lines marked against the other side's mods ("+ " only here, "> " higher,
+-- "< " lower, by `buildModMap`), and Corrupted, Split, Mirrored. Colour codes kept, in order.
+local function item_card(tab, item, other_mods)
+	local lines = {}
+	local draw_string = DrawString
+	DrawString = function(x, y, align, height, font, text)
+		lines[#lines + 1] = text
+	end
+	local ok, err = pcall(tab.DrawItemExpanded, tab, item, 0, 0, 0, other_mods)
+	DrawString = draw_string
+	if not ok then
+		error(err, 0)
+	end
+	return lines
+end
+
 local function item_rows(tab, entry)
 	local helpers = trade_helpers()
+	-- the cards are drawn only in expanded mode (CompareTab.lua:3819-3846), so they are sent
+	-- only then
+	local expanded = tab.itemsExpandedMode
 	local out = {}
 	for i, row in ipairs(item_slots(tab, entry)) do
 		out[i] = {
@@ -447,6 +467,10 @@ local function item_rows(tab, entry)
 			ours_colour = helpers.getRarityColor(row.pItem),
 			theirs_colour = helpers.getRarityColor(row.cItem),
 		}
+		if expanded then
+			out[i].ours_card = item_card(tab, row.pItem, helpers.buildModMap(row.cItem))
+			out[i].theirs_card = item_card(tab, row.cItem, helpers.buildModMap(row.pItem))
+		end
 	end
 	return out
 end

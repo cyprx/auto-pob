@@ -857,25 +857,10 @@ fn switched_is_taken_once() {
     assert!(!ui.take_switched());
 }
 
-fn tooltip_reply(query: &ItemTooltipQuery, text: &str) -> Snapshot {
-    Snapshot::ItemTooltip(Arc::new(ItemTooltipView {
-        query: query.clone(),
-        tooltip: crate::engine::views::ItemTooltip {
-            lines: vec![crate::engine::views::ItemTooltipLine::Line {
-                size: 14,
-                text: format!("^7{text}"),
-                font: None,
-                center: false,
-                background: None,
-                mod_line: None,
-            }],
-            ..Default::default()
-        },
-    }))
-}
-
+/// PoB's expanded mode draws each row's two cards as `DrawItemExpanded` does, the mods marked
+/// against the other side's in PoB's colours; it asks the engine nothing more
 #[test]
-fn expanded_mode_shows_both_tooltips_inline_one_question_at_a_time() {
+fn expanded_mode_draws_pobs_cards_with_their_marks() {
     let mut h = Harness::new(Some(sample()));
     h.click("sub:items");
     // PoB's box, sent as a check
@@ -890,64 +875,72 @@ fn expanded_mode_shows_both_tooltips_inline_one_question_at_a_time() {
         .find(|c| c.name == EXPANDED_CHECK)
         .unwrap()
         .checked = true;
-    h.ui.on_snapshot(&Snapshot::Compare(Some(Arc::new(view.clone()))));
-    let q = |id, slot: &str, theirs| ItemTooltipQuery {
-        id,
-        slot: Some(slot.into()),
-        theirs,
-        shift: false,
-        shared: None,
-    };
-    // the rows' items in order, ours then theirs, each asked once the last is answered
-    let expected = [
-        q(2, "Body Armour", false),
-        q(0, "Body Armour", true),
-        q(0, "Ring 3", true),
-        q(1, "Ring 1", false),
-        q(4, "Jewel 100", false),
-        q(0, "Jewel 100", true),
+    view.items[0].ours_card = vec![
+        "^xAF6025Doom Loop".into(),
+        "^x7F7F7FArmour: ^x8888FF500".into(),
+        "^x33FF77+ ^x8888FF+40 to maximum Life".into(),
+        "^x33FF77> ^x8888FF+30% to Fire Resistance".into(),
     ];
-    for (i, query) in expected.iter().enumerate() {
+    view.items[0].theirs_card = vec![
+        "^xAF6025Tabula Rasa".into(),
+        "^xDD0022< ^x8888FF+20% to Fire Resistance".into(),
+        "^xDD0022Corrupted".into(),
+    ];
+    view.items[2].theirs_card = vec!["^8(empty)".into()];
+    h.ui.on_snapshot(&Snapshot::Compare(Some(Arc::new(view))));
+    for _ in 0..3 {
         let out = h.frame(vec![]);
-        assert_eq!(
-            debug(&out.queries),
-            debug(&[Command::ItemTooltip(query.clone())]),
-            "question {i}"
-        );
-        // nothing more until it is answered
-        assert!(h.frame(vec![]).queries.is_empty(), "question {i} twice");
-        h.ui.on_snapshot(&tooltip_reply(query, &format!("card {i}")));
+        assert!(out.queries.is_empty(), "{:?}", out.queries);
     }
-    let out = h.frame(vec![]);
-    assert!(out.queries.is_empty(), "{:?}", out.queries);
-    h.frame(vec![]);
-    assert!(
-        h.drew("card 0") && h.drew("card 5"),
-        "the cards aren't inline"
+    let colour = |code: &str| crate::widgets::pob_colour(code, egui::Color32::WHITE);
+    assert_eq!(
+        h.colour_of("+ +40 to maximum Life"),
+        Some(colour("^x33FF77"))
     );
-    assert!(h.ui.expanded.has_card(&expected[3]));
+    assert_eq!(
+        h.colour_of("> +30% to Fire Resistance"),
+        Some(colour("^x33FF77"))
+    );
+    assert_eq!(
+        h.colour_of("< +20% to Fire Resistance"),
+        Some(colour("^xDD0022"))
+    );
+    assert_eq!(h.colour_of("Corrupted"), Some(colour("^xDD0022")));
+    assert!(h.drew("Armour: 500") && h.drew("(empty)"));
+    // the name heads its card, larger; ours on the left, theirs on the right
+    let size = |text: &str| {
+        h.texts
+            .iter()
+            .find(|g| g.job.text == text)
+            .and_then(|g| g.job.sections.first())
+            .map(|s| s.format.font_id.size)
+    };
+    assert_eq!(size("Doom Loop"), Some(16.0));
+    assert_eq!(size("+ +40 to maximum Life"), Some(14.0));
+    // the mod after PoB's mark keeps its own colour
+    let line = h
+        .texts
+        .iter()
+        .find(|g| g.job.text == "+ +40 to maximum Life")
+        .unwrap();
+    assert_eq!(
+        line.job.sections.last().unwrap().format.color,
+        colour("^x8888FF")
+    );
+    assert!(h.ui.rect("card:ours:Body Armour").max.x <= h.ui.rect("card:theirs:Body Armour").min.x);
+    // the names aren't drawn twice
+    assert_eq!(
+        h.texts
+            .iter()
+            .filter(|g| g.job.text == "Tabula Rasa")
+            .count(),
+        1
+    );
     // the buttons stay
     let out = h.click("equip:Body Armour");
     assert_eq!(
         debug(&out.commands),
         ["CopyCompareItem { slot: \"Body Armour\", and_use: true }"]
-    );
-    // a new view asks again
-    let mut changed = view;
-    changed.items.pop();
-    h.ui.on_snapshot(&Snapshot::Compare(Some(Arc::new(changed))));
-    assert!(!h.ui.expanded.has_card(&expected[0]));
-    let out = h.frame(vec![]);
-    assert_eq!(
-        debug(&out.queries),
-        debug(&[Command::ItemTooltip(expected[0].clone())])
-    );
-    // an item the engine never answers for is given up on
-    h.time += 3.0;
-    let out = h.frame(vec![]);
-    assert_eq!(
-        debug(&out.queries),
-        debug(&[Command::ItemTooltip(expected[1].clone())])
     );
 }
 

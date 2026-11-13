@@ -1208,6 +1208,8 @@ mod tests {
                     ours_name: Some("Doom Loop".into()),
                     ours_colour: "^xFFFF77".into(),
                     theirs_colour: "^xAF6025".into(),
+                    ours_card: vec!["^xAF6025Doom Loop".into(), "^x33FF77+ +10 to Life".into()],
+                    theirs_card: vec!["^8(empty)".into()],
                 },
                 CompareItemRow {
                     slot: "Ring 2".into(),
@@ -1223,6 +1225,8 @@ mod tests {
                     ours_name: None,
                     ours_colour: "^7".into(),
                     theirs_colour: "^7".into(),
+                    ours_card: vec![],
+                    theirs_card: vec![],
                 },
             ],
             skills: vec![CompareSkillRow {
@@ -1263,7 +1267,9 @@ mod tests {
                   differ = true, can_copy = true, can_equip = true,
                   diff_label = "^xFFFF77(different)", ours_unallocated = false,
                   theirs_unallocated = true, ours_name = "Doom Loop", ours_colour = "^xFFFF77",
-                  theirs_colour = "^xAF6025" },
+                  theirs_colour = "^xAF6025",
+                  ours_card = { "^xAF6025Doom Loop", "^x33FF77+ +10 to Life" },
+                  theirs_card = { "^8(empty)" } },
                 { slot = "Ring 2", label = "Ring 2", differ = false, can_copy = false,
                   can_equip = false, diff_label = "^8(both empty)", ours_unallocated = false,
                   theirs_unallocated = false, ours_colour = "^7", theirs_colour = "^7" },
@@ -1619,6 +1625,14 @@ pub struct CompareItemRow {
     pub ours_colour: String,
     #[serde(default)]
     pub theirs_colour: String,
+    /// PoB's expanded-mode card of each side (`DrawItemExpanded`), one string per line drawn,
+    /// colour codes kept: the name, the base's figures, the mods marked against the other
+    /// side's ("+ " only on this side, "> " a higher value, "< " a lower one), Corrupted and
+    /// the like; "(empty)" for no item. Empty while expanded mode is off.
+    #[serde(default)]
+    pub ours_card: Vec<String>,
+    #[serde(default)]
+    pub theirs_card: Vec<String>,
 }
 
 /// One pair of socket groups of the Compare tab's Skills view, matched as PoB's view matches

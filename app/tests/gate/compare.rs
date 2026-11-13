@@ -811,6 +811,8 @@ impl Upstream {
                     ours_name,
                     ours_colour,
                     theirs_colour,
+                    ours_card: vec![],
+                    theirs_card: vec![],
                 }
             })
             .collect()
@@ -1477,6 +1479,49 @@ fn compare_views_and_copies_match_pob() {
         .expect("their jewel in an unallocated socket")
         .slot
         .clone();
+    // ---- Expanded mode: PoB's cards, each mod marked against the other side's (the rings
+    // carry the same mods with other values) ----
+    let expand = |s: &mut NetSession, on: bool| {
+        run(
+            s,
+            Command::SetCompareControl {
+                name: "itemsExpandedCheck".into(),
+                value: PopupInput::Check(on),
+            },
+        )
+        .unwrap();
+        up.call::<()>("setItemsExpanded", on);
+    };
+    expand(&mut s, true);
+    let rows = view(&mut s).items;
+    let cards: Vec<Vec<String>> = up.json("return itemsExpandedFrame()");
+    let ours_cards: Vec<Vec<String>> = rows
+        .iter()
+        .flat_map(|r| [r.ours_card.clone(), r.theirs_card.clone()])
+        .collect();
+    assert_eq!(ours_cards, cards, "expanded cards");
+    assert!(
+        rows.iter()
+            .all(|r| !r.ours_card.is_empty() && !r.theirs_card.is_empty())
+    );
+    let marked = |mark: &str| {
+        ours_cards.iter().flatten().any(|l| {
+            l.starts_with(&format!("^x33FF77{mark}")) || l.starts_with(&format!("^xDD0022{mark}"))
+        })
+    };
+    assert!(marked("+ "), "no mod only on one side: {ours_cards:?}");
+    assert!(
+        marked("> ") || marked("< "),
+        "no mod with another value: {ours_cards:?}"
+    );
+    // the compact rows again, with no cards
+    expand(&mut s, false);
+    assert!(
+        same_views(&mut s, &up, "gear, ring3 compact")
+            .items
+            .iter()
+            .all(|r| r.ours_card.is_empty() && r.theirs_card.is_empty())
+    );
     assert_eq!(
         err(
             &mut s,

@@ -248,6 +248,43 @@ function itemsFrame()
 	return { rows = rows, drawn = strings, warning = colorCodes.WARNING .. "  (tree missing allocated node)" }
 end
 
+-- PoB's "Expanded mode" box
+function setItemsExpanded(on)
+	local check = build.compareTab.controls.itemsExpandedCheck
+	check.state = on
+	check.changeFunc(on)
+end
+
+-- The cards a whole ITEMS frame draws in expanded mode: the strings of each DrawItemExpanded
+-- call that draws (the measuring ones left out), in call order, so each slot's ours then theirs
+function itemsExpandedFrame()
+	local tab = build.compareTab
+	local cards = {}
+	compareFrame("ITEMS", function(on)
+		if on then
+			local draw = tab.DrawItemExpanded
+			tab.DrawItemExpanded = function(self, item, x, y, width, other, measure)
+				if measure then
+					return draw(self, item, x, y, width, other, measure)
+				end
+				local lines = {}
+				local outer = DrawString
+				DrawString = function(_, _, _, _, _, text)
+					lines[#lines + 1] = text
+				end
+				local ok, result = pcall(draw, self, item, x, y, width, other, measure)
+				DrawString = outer
+				assert(ok, result)
+				cards[#cards + 1] = lines
+				return result
+			end
+		else
+			tab.DrawItemExpanded = nil
+		end
+	end)
+	return cards
+end
+
 -- What DrawSkills draws in a whole SKILLS frame: { x, y, height, text }, the build names first
 function skillsFrame()
 	local tab = build.compareTab

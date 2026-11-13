@@ -98,9 +98,8 @@ pub fn show(
         None => (None, PATH),
     };
     let highlight: HashSet<u32> = highlight.into_iter().flatten().copied().collect();
-    let current = tab.derived.current_ascendancy.as_deref();
     let fade = |node: &TreeNode| match &node.ascendancy {
-        Some(a) if Some(a.as_str()) != current => OTHER_ASCENDANCY,
+        Some(a) if !tab.derived.is_chosen(a) => OTHER_ASCENDANCY,
         _ => 1.0,
     };
 
@@ -293,12 +292,12 @@ pub fn show(
                 actions.push(CanvasAction::PickMastery(node.id));
             }
         } else if tab.derived.paths.contains_key(&node.id)
-            // a node of another ascendancy has no path, but the click switches to it
-            // (PassiveTreeView.lua:416); the engine says if that isn't possible
+            // a node of another ascendancy or bloodline has no path, but the click switches
+            // to it (PassiveTreeView.lua:398-416); the engine says if that isn't possible
             || node
                 .ascendancy
                 .as_ref()
-                .is_some_and(|a| tab.derived.current_ascendancy.as_ref() != Some(a))
+                .is_some_and(|a| !tab.derived.is_chosen(a))
         {
             // the trace's end allocates the trace (PassiveTreeView.lua:504)
             actions.push(match tab.trace.last() {

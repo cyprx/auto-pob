@@ -2877,6 +2877,46 @@ fn tree_recipes_match_pob() {
     }
 }
 
+/// A click on a bloodline node chooses that bloodline, from none or from another one, and
+/// allocates the node (PassiveTreeView.lua:398-411, 499-505)
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_bloodline_node_click_chooses_the_bloodline() {
+    let _guard = lock();
+    // the top bar's bloodline at each checkpoint, by the id its nodes carry
+    let mut chosen = Vec::new();
+    let recipe = check_recipe_with("bloodline", &mut |s, check| {
+        if check.is_some() {
+            let id = s.backend.build_view().unwrap().secondary_selected;
+            let name: Option<String> = s
+                .backend
+                .lua
+                .load(format!(
+                    "local a = pob.build.spec.tree.alternate_ascendancies[{id}] return a and a.id"
+                ))
+                .eval()
+                .unwrap();
+            chosen.push(name);
+        }
+    });
+    // PoB's undo state reads `secondaryAscendClassId`, which no spec has, so an undo drops
+    // the bloodline (PassiveSpec.lua:2289); the checkpoint's nodes show upstream did too
+    let at = |name: &str| Some(name.to_owned());
+    assert_eq!(chosen, [at("Trialmaster"), at("Farrul"), None]);
+    let checks: Vec<&Checkpoint> = recipe
+        .actions
+        .iter()
+        .filter_map(|a| match a {
+            TreeAction::Check { check } => Some(check),
+            _ => None,
+        })
+        .collect();
+    // the clicks changed the tree, and the undo took the last one back
+    assert_eq!(checks.len(), 3);
+    assert_ne!(checks[0].allocated, checks[1].allocated);
+    assert_ne!(checks[1].allocated, checks[2].allocated);
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn spec_recipes_match_pob() {

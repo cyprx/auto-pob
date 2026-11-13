@@ -483,6 +483,7 @@ function glue.tree_state(fresh, held)
 		convertible_to = convertible,
 		class_id = spec.curClassId,
 		ascendancy_id = spec.curAscendClassId,
+		bloodline = spec.curSecondaryAscendClass and spec.curSecondaryAscendClass.id or nil,
 		classes = class_choices(spec),
 		points = points(spec),
 		allocated = glue.alloc_ids(),
@@ -537,12 +538,22 @@ local function finish_edit(withTitle)
 end
 
 -- The ascendancy part of a left click on an unallocated node (PassiveTreeView.lua:397-495):
--- clicking a node of another ascendancy switches to it first. Bloodlines aren't supported, and
--- the cross-class confirmation is replaced by an error: the UI asks through `SelectClass`.
+-- clicking a node of another ascendancy or bloodline switches to it first. The cross-class
+-- confirmation is replaced by an error: the UI asks through `SelectClass`.
 local function switch_to_clicked_ascendancy(node)
 	local spec = pob.build.spec
-	if node.isBloodline then
-		error("secondary ascendancies aren't supported yet", 0)
+	-- a bloodline other than the chosen one is chosen (PassiveTreeView.lua:398-411)
+	if node.isBloodline and spec.tree.alternate_ascendancies then
+		if not spec.curSecondaryAscendClass or node.ascendancyName ~= spec.curSecondaryAscendClass.id then
+			for bloodlineId, bloodline in pairs(spec.tree.alternate_ascendancies) do
+				if bloodline.id == node.ascendancyName then
+					spec:SelectSecondaryAscendClass(bloodlineId)
+					finish_edit(true)
+					break
+				end
+			end
+		end
+		return
 	end
 	if not (spec.curAscendClassId == 0 or node.ascendancyName ~= spec.curAscendClassBaseName) then
 		return

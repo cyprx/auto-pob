@@ -519,6 +519,9 @@ pub struct TreeState {
     pub convertible_to: Option<String>,
     pub class_id: u32,
     pub ascendancy_id: u32,
+    /// The id (not the name) the chosen bloodline's nodes carry (`curSecondaryAscendClass.id`)
+    #[serde(default)]
+    pub bloodline: Option<String>,
     /// Sorted by name, like the class dropdown
     #[serde(default)]
     pub classes: Vec<ClassChoice>,

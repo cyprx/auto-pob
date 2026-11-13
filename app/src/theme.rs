@@ -111,7 +111,14 @@ fn visuals() -> egui::Visuals {
     for (widget, fill, border, text) in [
         (&mut widgets.noninteractive, PANEL, BRONZE_DIM, TEXT),
         (&mut widgets.inactive, WIDGET, BRONZE, TEXT),
-        (&mut widgets.hovered, WIDGET_HOVERED, GOLD_DIM, TEXT_BRIGHT),
+        // PoB's controls draw their border white under the pointer (EditControl.lua:246-248,
+        // ButtonControl.lua:45-46, CheckBoxControl.lua:40-41)
+        (
+            &mut widgets.hovered,
+            WIDGET_HOVERED,
+            Color32::WHITE,
+            TEXT_BRIGHT,
+        ),
         (&mut widgets.active, WIDGET_ACTIVE, GOLD, TEXT_BRIGHT),
         (&mut widgets.open, WIDGET, GOLD_DIM, TEXT),
     ] {
@@ -124,4 +131,57 @@ fn visuals() -> egui::Visuals {
         widget.expansion = 0.0;
     }
     visuals
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::egui::{Event, Pos2, RawInput, Rect};
+
+    fn rect_strokes(shape: &egui::Shape, out: &mut Vec<(Rect, Color32)>) {
+        match shape {
+            egui::Shape::Rect(r) if r.stroke.width > 0.0 => out.push((r.rect, r.stroke.color)),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| rect_strokes(s, out)),
+            _ => {}
+        }
+    }
+
+    /// PoB's EditControl draws its border white while the pointer is over it, grey otherwise
+    /// (EditControl.lua:246-254): every edit box of ours does too
+    #[test]
+    fn a_hovered_edit_box_has_pobs_white_border() {
+        let ctx = egui::Context::default();
+        ctx.set_theme(ThemePreference::Dark);
+        ctx.set_visuals_of(Theme::Dark, visuals());
+        let mut rect = Rect::NOTHING;
+        let mut strokes = Vec::new();
+        for events in [
+            vec![],
+            vec![],
+            vec![Event::PointerMoved(Pos2::new(40.0, 20.0))],
+            vec![],
+        ] {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(300.0, 200.0))),
+                events,
+                ..Default::default()
+            };
+            let mut text = String::from("abc");
+            let output = ctx.run_ui(input, |ui| {
+                rect = ui.add(egui::TextEdit::singleline(&mut text)).rect;
+            });
+            strokes.clear();
+            for clipped in &output.shapes {
+                rect_strokes(&clipped.shape, &mut strokes);
+            }
+            output.drop_without_applying_deltas();
+        }
+        assert!(rect.contains(Pos2::new(40.0, 20.0)), "{rect:?}");
+        assert!(
+            strokes
+                .iter()
+                .any(|(r, c)| *c == Color32::WHITE && r.intersects(rect)),
+            "{rect:?} {strokes:?}"
+        );
+    }
 }

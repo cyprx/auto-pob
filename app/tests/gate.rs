@@ -141,6 +141,25 @@ fn golden(name: &str) -> Golden {
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("parsing {}: {e}", path.display()))
 }
 
+/// The golden files hold PoB's numbers as serde_json wrote them, the shortest text that reads
+/// back as the same double; reading must give that double back, or an exact comparison fails
+/// on a number PoB and the engine agree on (10.296650000000001 read as 10.29665 without
+/// serde_json's `float_roundtrip`)
+#[test]
+fn golden_numbers_read_back_exactly() {
+    for value in [
+        10.296650000000001_f64,
+        0.1 + 0.2,
+        1.0 / 3.0,
+        673.412_836_640_095_4,
+        1e-7,
+    ] {
+        let text = serde_json::to_string(&value).unwrap();
+        let back: f64 = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.to_bits(), value.to_bits(), "{text}");
+    }
+}
+
 /// Builds the fixture in upstream PoB: from its recipe, or from its XML when it has none.
 fn upstream_golden(xml: &Path, name: &str) -> Golden {
     let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");

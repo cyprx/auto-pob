@@ -83,14 +83,18 @@ pub fn wiki_url(name: &str) -> String {
     format!("https://www.poewiki.net/wiki/{}", name.replace(' ', "_"))
 }
 
+/// A press of `key`, with Ctrl when `command`. PoB reads a plain key whatever modifiers are
+/// held (TreeTab.lua:367, PassiveTreeView.lua:203, ItemsTab.lua:1459, ListControl.lua:375):
+/// Ctrl+P is P to it.
 fn pressed(input: &egui::InputState, key: Key, command: bool) -> bool {
     input.events.iter().any(|e| {
         matches!(e, Event::Key { key: k, pressed: true, modifiers, .. }
-            if *k == key && modifiers.command == command && !modifiers.alt)
+            if *k == key && (!command || (modifiers.command && !modifiers.alt)))
     })
 }
 
-/// A press of `key` without Ctrl: whether Shift was held, PoB's three zoom steps
+/// A press of `key`, whatever else is held: whether Shift was, PoB's three zoom steps
+/// (PassiveTreeView.lua:214-217)
 fn pressed_shift(input: &egui::InputState, key: Key) -> Option<bool> {
     input.events.iter().find_map(|e| match e {
         Event::Key {
@@ -98,7 +102,7 @@ fn pressed_shift(input: &egui::InputState, key: Key) -> Option<bool> {
             pressed: true,
             modifiers,
             ..
-        } if *k == key && !modifiers.command && !modifiers.alt => Some(modifiers.shift),
+        } if *k == key => Some(modifiers.shift),
         _ => None,
     })
 }
@@ -397,6 +401,14 @@ mod tests {
             action(&tree, key(Key::ArrowUp, Modifiers::NONE)),
             Some(A::PrevSpec)
         );
+        // PoB checks no modifier on its plain keys: Ctrl or Shift held, they still act
+        assert_eq!(action(&tree, key(Key::P, cmd)), Some(A::Heatmap));
+        assert_eq!(action(&tree, key(Key::ArrowDown, cmd)), Some(A::NextSpec));
+        assert_eq!(
+            action(&tree, key(Key::PageUp, cmd | Modifiers::SHIFT)),
+            Some(A::Zoom(3))
+        );
+        assert_eq!(action(&items, key(Key::E, cmd)), Some(A::EditSlot));
     }
 
     #[test]

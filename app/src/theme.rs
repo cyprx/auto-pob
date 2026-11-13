@@ -18,7 +18,6 @@ const WIDGET_HOVERED: Color32 = Color32::from_rgb(60, 48, 34);
 const WIDGET_ACTIVE: Color32 = Color32::from_rgb(80, 62, 40);
 pub const BRONZE_DIM: Color32 = Color32::from_rgb(58, 46, 32);
 const BRONZE: Color32 = Color32::from_rgb(120, 92, 58);
-const GOLD_DIM: Color32 = Color32::from_rgb(150, 118, 62);
 const GOLD: Color32 = Color32::from_rgb(200, 160, 80);
 const TEXT: Color32 = Color32::from_rgb(200, 192, 176);
 const TEXT_BRIGHT: Color32 = Color32::from_rgb(235, 225, 205);
@@ -69,6 +68,23 @@ pub fn apply(ctx: &egui::Context) {
 }
 
 /// A gold Fontin heading.
+/// Draws `add` with the look of a row of PoB's lists: a hovered row of a dropped list gets a
+/// grey fill and no border (DropDownControl.lua:373-376), a ListControl row no white box
+/// (ListControl.lua:236-241). The border stays 1 px wide, unseen, so nothing moves.
+pub fn list_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let old = ui.visuals().widgets.hovered.bg_stroke;
+    ui.visuals_mut().widgets.hovered.bg_stroke = ROW_HOVER;
+    let out = add(ui);
+    ui.visuals_mut().widgets.hovered.bg_stroke = old;
+    out
+}
+
+/// A list row's border under the pointer: none to see
+const ROW_HOVER: Stroke = Stroke {
+    width: 1.0,
+    color: Color32::TRANSPARENT,
+};
+
 pub fn heading(ui: &mut egui::Ui, text: &str) {
     ui.heading(RichText::new(text).color(HEADING));
 }
@@ -120,7 +136,8 @@ fn visuals() -> egui::Visuals {
             TEXT_BRIGHT,
         ),
         (&mut widgets.active, WIDGET_ACTIVE, GOLD, TEXT_BRIGHT),
-        (&mut widgets.open, WIDGET, GOLD_DIM, TEXT),
+        // a dropped dropdown's border is white (DropDownControl.lua:250, 274)
+        (&mut widgets.open, WIDGET, Color32::WHITE, TEXT),
     ] {
         widget.bg_fill = fill;
         widget.weak_bg_fill = fill;
@@ -183,5 +200,83 @@ mod tests {
                 .any(|(r, c)| *c == Color32::WHITE && r.intersects(rect)),
             "{rect:?} {strokes:?}"
         );
+    }
+
+    /// Runs `draw` with the theme for `events`, frame by frame; the last frame's outlined
+    /// rectangles and the rectangle `draw` returned
+    fn run(
+        frames: Vec<Vec<Event>>,
+        mut draw: impl FnMut(&mut egui::Ui) -> Rect,
+    ) -> (Rect, Vec<(Rect, Color32)>) {
+        let ctx = egui::Context::default();
+        ctx.set_theme(ThemePreference::Dark);
+        ctx.set_visuals_of(Theme::Dark, visuals());
+        let mut rect = Rect::NOTHING;
+        let mut strokes = Vec::new();
+        for events in frames {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(300.0, 300.0))),
+                events,
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| rect = draw(ui));
+            strokes.clear();
+            for clipped in &output.shapes {
+                rect_strokes(&clipped.shape, &mut strokes);
+            }
+            output.drop_without_applying_deltas();
+        }
+        (rect, strokes)
+    }
+
+    fn white_around(rect: Rect, strokes: &[(Rect, Color32)]) -> bool {
+        strokes
+            .iter()
+            .any(|(r, c)| *c == Color32::WHITE && (r.center() - rect.center()).length() < 2.0)
+    }
+
+    /// A hovered row of a list or a dropped list gets no white box (DropDownControl.lua:
+    /// 373-376, ListControl.lua:236-241); a hovered tab, a ButtonControl, does
+    #[test]
+    fn a_hovered_list_row_has_no_white_border() {
+        let at = Pos2::new(20.0, 10.0);
+        let frames = || vec![vec![], vec![Event::PointerMoved(at)], vec![]];
+        let (rect, strokes) = run(frames(), |ui| {
+            list_row(ui, |ui| ui.selectable_label(false, "a row")).rect
+        });
+        assert!(rect.contains(at), "{rect:?}");
+        assert!(!white_around(rect, &strokes), "{strokes:?}");
+        let (rect, strokes) = run(frames(), |ui| ui.selectable_label(false, "a tab").rect);
+        assert!(white_around(rect, &strokes), "{strokes:?}");
+    }
+
+    /// A dropped dropdown draws its border white (DropDownControl.lua:250, 274)
+    #[test]
+    fn a_dropped_dropdown_has_a_white_border() {
+        let at = Pos2::new(30.0, 10.0);
+        let press = |pressed| Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let frames = vec![
+            vec![],
+            vec![Event::PointerMoved(at)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![Event::PointerMoved(Pos2::new(250.0, 250.0))],
+            vec![],
+        ];
+        let (rect, strokes) = run(frames, |ui| {
+            egui::ComboBox::from_id_salt("dd")
+                .selected_text("one")
+                .show_ui(ui, |ui| {
+                    ui.label("two");
+                })
+                .response
+                .rect
+        });
+        assert!(white_around(rect, &strokes), "{rect:?} {strokes:?}");
     }
 }

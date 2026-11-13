@@ -202,7 +202,8 @@ impl FolderPicker {
                 }
                 for f in &list {
                     let on = self.selected.as_deref() == Some(f.path.as_str());
-                    let r = ui.selectable_label(on, format!("{}/", last_segment(&f.path)));
+                    let label = format!("{}/", last_segment(&f.path));
+                    let r = crate::theme::list_row(ui, |ui| ui.selectable_label(on, label));
                     mark(ui, &format!("picker_row:{}", f.path), &r);
                     if r.clicked() {
                         self.selected = Some(f.path.clone());

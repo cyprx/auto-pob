@@ -293,9 +293,17 @@ fn buy_similar_offered_on_display_slot_menu_and_compare() {
     settle(&mut app, &ctx);
 
     // the Compare tab's Items rows: Buy where the comparison has an item
-    // entering it asks the engine for the view (`compare_sample()`)
+    // entering it asks the engine for the view (`compare_sample()`); leaving Items also
+    // closes the popup session, which the fake doesn't answer, so wait for the view alone
     app.tab = BuildTab::Compare;
-    settle(&mut app, &ctx);
+    frame(&mut app, &ctx, vec![]);
+    let start = Instant::now();
+    while app.compare_waiting() {
+        assert!(start.elapsed() < Duration::from_secs(10), "no Compare view");
+        std::thread::sleep(Duration::from_millis(5));
+        frame(&mut app, &ctx, vec![]);
+    }
+    frame(&mut app, &ctx, vec![]);
     let pos = app.compare.rect("sub:items").center();
     click_at(&mut app, &ctx, pos, PointerButton::Primary);
     assert!(

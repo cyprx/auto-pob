@@ -44,6 +44,10 @@ pub struct DisplayState {
     text_verdict: Option<Arc<ControlTooltipView>>,
     /// Questions for the engine from the last frame
     pub(super) queries: Vec<Command>,
+    /// A text box had the keyboard or a dropdown list was open as the frame began: PoB's
+    /// selected control takes the press then, so a mod line under it doesn't toggle
+    /// (ControlHost.lua:4-8, ItemsTab.lua:1487, 1521-1539)
+    pub(super) control_selected: bool,
 }
 
 impl DisplayState {
@@ -586,7 +590,9 @@ fn panel(
         .show(ui, |ui| {
             let rects = &mut state.rects;
             let mut note = |i: usize, r: &egui::Response| rects.note(r, || format!("tip_line_{i}"));
-            if let Some(line) = item_tooltip_ui_with(ui, &view.tooltip, &mut note) {
+            if let Some(line) = item_tooltip_ui_with(ui, &view.tooltip, &mut note)
+                && !state.control_selected
+            {
                 out.push(Command::ToggleModLine { line });
             }
         });

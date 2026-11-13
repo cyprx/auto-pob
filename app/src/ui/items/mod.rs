@@ -349,6 +349,12 @@ impl ItemsUi {
         }
         self.hovered_now = None;
         self.hovered_slot = None;
+        // read before anything is drawn: a box gives up the keyboard, and a list closes, while
+        // it draws; a repeated pass keeps the first pass's answer
+        if ui.ctx().current_pass_index() == 0 {
+            self.display.control_selected =
+                ui.ctx().text_edit_focused() || egui::Popup::is_any_open(ui.ctx());
+        }
         self.shortcuts(ui, &view, &mut out);
 
         self.set_bar(ui, &view, &mut out);

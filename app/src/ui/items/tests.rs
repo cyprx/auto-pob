@@ -985,6 +985,47 @@ fn clicking_a_mod_line_sends_toggle_mod_line() {
     assert!(o.commands.is_empty(), "{:?}", o.commands);
 }
 
+/// The press that leaves a focused box goes to the box in PoB (ControlHost.lua:4-8): the mod
+/// line under it stays as it is (ItemsTab.lua:1487, 1521-1539)
+#[test]
+fn a_press_that_leaves_the_quality_box_toggles_no_mod_line() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    h.type_into("quality", "15");
+    assert!(h.ctx.text_edit_focused());
+    let o = h.click("tip_line_0");
+    assert!(
+        !debug(&o.commands).iter().any(|c| c.starts_with("ToggleModLine")),
+        "{:?}",
+        o.commands
+    );
+    // the next press is the line's
+    let o = h.click("tip_line_0");
+    assert!(
+        debug(&o.commands).iter().any(|c| c.starts_with("ToggleModLine")),
+        "{:?}",
+        o.commands
+    );
+}
+
+/// The press that closes a dropped list goes to the list in PoB, as a box's does
+#[test]
+fn a_press_that_closes_a_dropdown_toggles_no_mod_line() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    // a slot's list, which drops down well away from the tooltip
+    h.click("slot_combo_Ring 1");
+    assert!(egui::Popup::is_any_open(&h.ctx));
+    let o = h.click("tip_line_0");
+    assert!(o.commands.is_empty(), "{:?}", o.commands);
+    assert!(!egui::Popup::is_any_open(&h.ctx));
+    let o = h.click("tip_line_0");
+    assert_eq!(
+        debug(&o.commands),
+        ["ToggleModLine { line: ModLineRef { list: Explicit, index: 1 } }"]
+    );
+}
+
 #[test]
 fn hidden_editors_are_not_drawn() {
     let mut h = Harness::new(sample());

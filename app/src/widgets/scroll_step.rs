@@ -232,30 +232,43 @@ const NUMBER_KEYS: [(Key, i32); 2] = [(Key::ArrowUp, -1), (Key::ArrowDown, 1)];
 /// (ControlHost.lua:56-71); the wheel is off with "Disable control scroll interaction"
 /// (EditControl.lua:680-700).
 pub fn number_step(ui: &egui::Ui, response: &egui::Response) -> i32 {
-    if !response.enabled() || behind_window(ui.ctx(), response) {
+    let ctx = ui.ctx();
+    if !response.enabled() || behind_window(ctx, response) {
         return 0;
     }
-    if !response.has_focus() && (!response.hovered() || held(ui.ctx())) {
-        return 0;
+    let focused = response.has_focus();
+    if !focused {
+        if !response.hovered() || held(ctx) {
+            return 0;
+        }
+        // the hovered box gets the key only when its host has no selected control
+        // (ControlHost.lua:68-73): a tab's box, while another widget of the tab has the
+        // keyboard, gets nothing. Build's host is apart from the tab's, so its box still steps.
+        let scope: FocusScope = ctx.data(|d| d.get_temp(scope_id())).unwrap_or_default();
+        if !scope.build_host && ctx.memory(|m| m.focused()).is_some() {
+            return 0;
+        }
     }
     let (total, wheel, _, _) = ui.input(|i| steps(i, &NUMBER_KEYS));
-    if options(ui.ctx()).disable {
-        // the wheel is left to what is around the box; the keys still step it
-        let keys = total - wheel;
-        if keys != 0 {
-            ui.input_mut(|i| {
-                i.events.retain(|e| {
-                    !matches!(e, Event::Key { key, .. }
-                        if NUMBER_KEYS.iter().any(|(k, _)| k == key))
-                });
+    let keys = total - wheel;
+    let wheel = if options(ctx).disable { 0 } else { wheel };
+    if keys != 0 && focused {
+        // the selected box takes its keys (ControlHost.lua:57-66); a hovered one leaves them to
+        // whatever has the keyboard, as its OnKeyUp returns nil (EditControl.lua:720)
+        ui.input_mut(|i| {
+            i.events.retain(|e| {
+                !matches!(e, Event::Key { key, .. }
+                    if NUMBER_KEYS.iter().any(|(k, _)| k == key))
             });
-        }
-        return -keys;
+        });
     }
-    if total != 0 {
-        take(ui, &NUMBER_KEYS);
+    if wheel != 0 {
+        ui.input_mut(|i| {
+            i.smooth_scroll_delta = egui::Vec2::ZERO;
+            i.events.retain(|e| !matches!(e, Event::MouseWheel { .. }));
+        });
     }
-    -total
+    -(keys + wheel)
 }
 
 const SLIDER_KEYS: [(Key, i32); 4] = [
@@ -518,5 +531,74 @@ mod tests {
         // unfocused and pointed at, the arrows are PoB's
         let unfocused = egui::Context::default();
         assert!(slide(&unfocused, 0.5, vec![up]).is_some());
+    }
+
+    /// A hovered top bar box steps on Down while a tab's box has the keyboard, as PoB's
+    /// ControlHost gives it the KeyUp (ControlHost.lua:68-73), but leaves the key to the focused
+    /// box, whose caret PoB moves on the KeyDown
+    #[test]
+    fn a_hovered_build_box_steps_but_leaves_the_arrows_to_the_focused_box() {
+        let ctx = egui::Context::default();
+        let down = Event::Key {
+            key: Key::ArrowDown,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        let mut result = (0, false);
+        let mut rect = Rect::NOTHING;
+        for (step, events) in [
+            (0, vec![]),
+            (1, vec![Event::PointerMoved(Pos2::new(30.0, 10.0))]),
+            (2, vec![down]),
+        ] {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let typing = step > 0;
+                    set_scope(
+                        ui.ctx(),
+                        FocusScope {
+                            typing,
+                            build_box: false,
+                            build_host: true,
+                            modal: false,
+                        },
+                    );
+                    let mut level = "5".to_owned();
+                    let r = ui.add(egui::TextEdit::singleline(&mut level).desired_width(60.0));
+                    rect = r.rect;
+                    let n = number_step(ui, &r);
+                    let left = ui.input(|i| {
+                        i.events.iter().any(|e| {
+                            matches!(
+                                e,
+                                Event::Key {
+                                    key: Key::ArrowDown,
+                                    ..
+                                }
+                            )
+                        })
+                    });
+                    set_build_host(ui.ctx(), false);
+                    let mut notes = "a\nb".to_owned();
+                    let notes = ui.add(egui::TextEdit::multiline(&mut notes));
+                    if step == 0 {
+                        notes.request_focus();
+                    }
+                    if step == 2 {
+                        result = (n, left);
+                    }
+                },
+            )
+            .drop_without_applying_deltas();
+        }
+        assert!(rect.contains(Pos2::new(30.0, 10.0)), "{rect:?}");
+        assert_eq!(result, (-1, true));
     }
 }

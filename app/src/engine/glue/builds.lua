@@ -375,8 +375,14 @@ function glue.save_as(subPath, name, overwrite)
 	if not name:match("%S") or name:find('[\\/:%*%?"<>|%c]') then
 		error("that isn't a valid build name", 0)
 	end
-	if subPath:find("%.%.") or subPath:sub(1, 1) == "/" then
+	if subPath:sub(1, 1) == "/" then
 		error("that isn't a valid folder", 0)
+	end
+	-- a `..` part, not any two dots: "v1..2" is a folder like any other
+	for part in subPath:gmatch("[^/\\]+") do
+		if part == ".." then
+			error("that isn't a valid folder", 0)
+		end
 	end
 	subPath = normalise_folder(subPath)
 	local build = pob.build

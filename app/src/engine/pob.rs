@@ -887,6 +887,13 @@ fn compare_changed() -> Affected {
     }
 }
 
+/// A folder below the Builds folder as the list and Save As spell it: never absolute and no
+/// `..` part. A name with dots in it ("v1..2") is a folder like any other: PoB's name boxes
+/// refuse only `.` and `..`.
+fn folder_allowed(folder: &str) -> bool {
+    !folder.starts_with('/') && !folder.split(['/', '\\']).any(|part| part == "..")
+}
+
 /// Commands that leave or replace the build (R14).
 pub(crate) fn leaves_build(command: &Command) -> bool {
     matches!(
@@ -1242,7 +1249,7 @@ impl PobBackend {
                     self.heatmap_on = false;
                     self.power_failed = false;
                 }
-                if folder.contains("..") || folder.starts_with('/') {
+                if !folder_allowed(&folder) {
                     anyhow::bail!("that isn't a valid folder");
                 }
                 self.folder = buildpaths::folder(&self.build_root()?, &folder, false, false)?;
@@ -1458,7 +1465,7 @@ impl PobBackend {
                 if name.is_empty() || name.contains(['/', '\\']) {
                     anyhow::bail!("that isn't a valid build name");
                 }
-                if folder.contains("..") || folder.starts_with('/') {
+                if !folder_allowed(&folder) {
                     anyhow::bail!("that isn't a valid folder");
                 }
                 let root: String = self.call("build_root", ())?;

@@ -1616,3 +1616,67 @@ fn a_class_that_isnt_utf8_leaves_the_build_list_working() {
     assert_eq!(entry("bad").ascendancy.as_deref(), Some("Ju\u{F7E9}"));
     assert_eq!(entry("good").class.as_deref(), Some("Marauder"));
 }
+
+/// Odd names through every list command, each checked against PoB's own list mode: Lua
+/// pattern characters, PoB's own clash suffix, a leading dot, spaces at either end, `&`,
+/// non-ASCII, a long name, and a folder with dots in its name (only `.` and
+/// `..` are refused), which lists, takes a move and a Save As like any other
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn odd_names_work_as_in_pob() {
+    let _guard = lock();
+    let mut t = start_pair("odd_names", LIST_MODE);
+    // the name box takes 100 bytes (BuildListControl.lua:91)
+    let long = "x".repeat(96);
+    let names = [
+        "100% crit",
+        "a[2]",
+        "(.)+$^-%d",
+        ".hidden",
+        " spaced ",
+        "R&D",
+        "caf\u{e9} \u{1f525}",
+        long.as_str(),
+        "v1..2",
+        "wip...",
+    ];
+    for name in names {
+        t.copy("a.xml", name).expect(name);
+        t.same(&format!("copy to {name:?}"));
+        let file = format!("{name}.xml");
+        let renamed = format!("{name}-r");
+        t.rename(&file, &renamed).expect(name);
+        t.same(&format!("rename {name:?}"));
+        t.new_folder("", name).expect(name);
+        t.same(&format!("new folder {name:?}"));
+        t.mv(&format!("{renamed}.xml"), &format!("{name}/"))
+            .expect(name);
+        t.same(&format!("move into {name:?}"));
+        t.copy_to("dot.xml", &format!("{name}/")).expect(name);
+        t.same(&format!("copy into {name:?}"));
+        t.delete(&format!("{name}/{renamed}.xml"));
+        t.same(&format!("delete in {name:?}"));
+    }
+    // Save As into a folder with dots in its name
+    t.s.run(Command::OpenBuild {
+        path: t.path("a.xml"),
+    })
+    .expect("open");
+    t.s.run(Command::SaveAs {
+        folder: "v1..2/".into(),
+        name: "saved".into(),
+        overwrite: false,
+    })
+    .expect("save as into v1..2");
+    assert!(t.path("v1..2/saved.xml").is_file());
+    // the parent folder is still refused
+    for folder in ["../", "v1..2/../../", ".."] {
+        assert!(
+            t.s.run(Command::ListBuilds {
+                folder: folder.into(),
+            })
+            .is_err(),
+            "{folder}"
+        );
+    }
+}

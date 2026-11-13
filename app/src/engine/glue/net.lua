@@ -122,7 +122,9 @@ function glue.settle_startup()
 		glue.frame()
 		glue.popup_adopt_game_version(conversion, convert)
 	elseif m.mode ~= "BUILD" then
-		build.treeTab = nil
+		-- a start-up open that failed, or raised, left half-loaded tabs; PoB's tab
+		-- constructors run SyncLoadouts against them on the next Init (Build.lua:601-604)
+		build.treeTab, build.skillsTab, build.itemsTab, build.configTab = nil, nil, nil, nil
 	end
 end
 

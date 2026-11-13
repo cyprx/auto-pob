@@ -219,6 +219,16 @@ runCallback("OnInit")
 mainObject.main.SetManifestBranch = function() end
 runCallback("OnFrame") -- Need at least one frame for everything to initialise
 
+-- PoB reopens the last build at start. A build whose load raises (Build:Init) leaves PoB in
+-- BUILD mode with its error prompt up; PoB's prompt offers F4, back to the build list
+-- (Launch.lua:386). Starting would otherwise fail on every launch until Settings.xml changed.
+-- The half-loaded tabs are dropped once the glue is in (glue.settle_startup).
+if mainObject.promptMsg and mainObject.main and mainObject.main.mode == "BUILD" then
+	mainObject.promptMsg = nil
+	mainObject.main:SetMode("LIST")
+	runCallback("OnFrame")
+end
+
 if mainObject.promptMsg then
 	error(mainObject.promptMsg)
 end

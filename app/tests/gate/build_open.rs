@@ -504,7 +504,7 @@ fn starting_on_the_build_the_exit_save_recorded() {
     fs::write(&old, old_xml()).unwrap();
     let restart = |s: &LongtailSession| {
         PobBackend::start_with(Game::Poe1, &s.pob, &s.user, canned(&canned_web()))
-            .expect("starting on the recorded build")
+            .unwrap_or_else(|e| panic!("starting on the recorded build: {e:#}"))
     };
 
     s.run(Command::OpenBuild {
@@ -569,6 +569,36 @@ fn starting_on_the_build_the_exit_save_recorded() {
         .expect("a new build after the failed start");
     next.apply(Command::OpenBuild { path: attack }, &|_| {})
         .expect("the good build after the failed start");
+    assert_eq!(next.build_view().unwrap().name, "attack");
+    drop(next);
+
+    // a recorded build whose load raises in Build:Init (a gem level that isn't a number:
+    // CalcTools.lua:46): the half-loaded tabs go, so the first open after the start works
+    let raising = builds.join("raising.xml");
+    fs::write(
+        &raising,
+        fs::read_to_string(fixture_xml("attack"))
+            .unwrap()
+            .replace("quality=\"0\" level=\"", "quality=\"0\" level=\"x"),
+    )
+    .unwrap();
+    fs::write(
+        s.settings_path(),
+        format!(
+            "<PathOfBuilding>\n\t<Mode mode=\"BUILD\"><Arg string=\"{}\"/><Arg string=\"raising\"/></Mode>\n</PathOfBuilding>\n",
+            raising.display()
+        ),
+    )
+    .unwrap();
+    let mut next = restart(&s);
+    assert!(!next.build_loaded().unwrap(), "PoB went to its list");
+    next.apply(
+        Command::OpenBuild {
+            path: builds.join("attack.xml"),
+        },
+        &|_| {},
+    )
+    .expect("the first open after a start on a raising build");
     assert_eq!(next.build_view().unwrap().name, "attack");
     drop(next);
 

@@ -3835,6 +3835,31 @@ fn a_build_that_raises_while_loading_leaves_the_engine_working() {
     s.run(Command::OpenBuild { path }).expect("open");
     assert!(!s.backend.skills_view().unwrap().groups.is_empty());
     s.run(Command::NewBuild).expect("new");
+    // a load by another way in than an open or a code (a link's answer lands through PoB's
+    // own SetMode): the Init wrapper itself puts a new build in place, with its tabs
+    s.backend
+        .lua
+        .globals()
+        .set("RAISING_XML", bad.as_str())
+        .unwrap();
+    let state: String = s
+        .backend
+        .lua
+        .load(
+            r#"local ok = pcall(function()
+                pob.main.main:SetMode("BUILD", false, "Landed", RAISING_XML)
+                glue.frame()
+            end)
+            local b = pob.build
+            return tostring(ok) .. " " .. tostring(b.skillsTab ~= nil and b.treeTab ~= nil
+                and b.itemsTab ~= nil and b.configTab ~= nil) .. " " .. tostring(b.buildName)"#,
+        )
+        .eval()
+        .unwrap();
+    assert_eq!(
+        state, "false true Unnamed build",
+        "the raising load left no build"
+    );
 }
 
 /// PoB pastes into its Import Comparison box at once (EditControl:Insert); ours typed the

@@ -466,10 +466,12 @@ local function skill_rows(tab, entry)
 	if not ok then
 		error(err, 0)
 	end
-	-- the first two are the builds' names, drawn `colWidth` apart in the tab's own coordinates
-	-- (CompareTab.lua:4370-4371); the rows are drawn in the list's viewport, the comparison's
-	-- column from `colWidth` on (CompareTab.lua:4446-4454)
-	local right = strings[2] and (strings[2].x - strings[1].x) or 0
+	-- the first two are the builds' names: the comparison's at `vp.x - offset + colWidth + 10`,
+	-- with `offset` the skills scrollbar's (CompareTab.lua:4358-4371); the rows are drawn in
+	-- the list's viewport, the comparison's column from `colWidth - offset` on
+	-- (CompareTab.lua:4446-4454). `vp.x` is 0 here, so the split holds however far PoB's bar
+	-- is scrolled.
+	local right = strings[2] and (strings[2].x - 10) or 0
 	local rows, row = {}, nil
 	for i = 3, #strings do
 		local s = strings[i]

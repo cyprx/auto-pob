@@ -1112,6 +1112,38 @@ fn compare_views_and_copies_match_pob() {
             .iter()
             .any(|r| !r.differ && r.theirs_label.is_some())
     );
+    // PoB's skills scrollbar scrolled past the columns' gap: each side keeps its lines. The
+    // bar only scrolls when the columns are wider than the screen, so the text is made wide
+    // for this check (headless widths are 1).
+    s.backend
+        .lua
+        .load("glue_width = DrawStringWidth DrawStringWidth = function() return 1500 end")
+        .exec()
+        .unwrap();
+    let unscrolled = view(&mut s).skills;
+    s.backend
+        .lua
+        .load("pob.build.compareTab.controls.skillsHScrollBar.offset = 900")
+        .exec()
+        .unwrap();
+    let scrolled = view(&mut s).skills;
+    let offset: i64 = s
+        .backend
+        .lua
+        .load("return pob.build.compareTab.controls.skillsHScrollBar.offset")
+        .eval()
+        .unwrap();
+    s.backend
+        .lua
+        .load(
+            "DrawStringWidth = glue_width glue_width = nil \
+             pob.build.compareTab.controls.skillsHScrollBar.offset = 0",
+        )
+        .exec()
+        .unwrap();
+    assert_eq!(offset, 900, "PoB's bar didn't keep the scroll");
+    assert_eq!(scrolled, unscrolled, "a scrolled bar moved lines across");
+    assert_eq!(view(&mut s).skills, ours.skills);
 
     // ---- Their items' tooltips: a base slot and a jewel socket ----
     same_their_tooltip(&mut s, &up, "Body Armour");

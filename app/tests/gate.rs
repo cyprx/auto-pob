@@ -1654,6 +1654,62 @@ fn invalid_options_are_flagged() {
     );
 }
 
+/// A Boss Skill Preset greys out "Enemy Damage Type" (ConfigOptions.lua:2286-2289), and
+/// "None" gives it back (2319-2323). Ours shows it greyed out as PoB does and refuses a choice
+/// there, which PoB's preset would put back anyway.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_greyed_out_option_is_greyed_out_as_in_pob() {
+    let _guard = lock();
+    let mut s = Session::start("config-greyed");
+    let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "attack").unwrap();
+    s.open_fixture("attack", &xml);
+    let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
+    load_xml(&lua, &attack_xml(), "attack").unwrap();
+    let upstream_enabled = |preset: &str| -> bool {
+        lua.load(format!(
+            r#"
+            local preset = build.configTab.varControls.presetBossSkills
+            for index, item in ipairs(preset.list) do
+                if item.val == "{preset}" then preset:SetSel(index) end
+            end
+            build.buildFlag = true
+            runCallback("OnFrame")
+            return build.configTab.varControls.enemyDamageType:IsEnabled() and true or false
+            "#
+        ))
+        .eval()
+        .unwrap()
+    };
+    let var = "enemyDamageType";
+    assert!(option(&s.config(), var).enabled);
+    let preset = option(&s.config(), "presetBossSkills")
+        .choices
+        .iter()
+        .find(|c| c.value != "None")
+        .expect("a boss skill")
+        .value
+        .clone();
+    s.run(set("presetBossSkills", ConfigValue::Choice(preset.clone())))
+        .unwrap();
+    let view = s.config();
+    assert!(!upstream_enabled(&preset), "upstream greys it out");
+    assert!(!option(&view, var).enabled, "ours shows it greyed out");
+    let before = option(&view, var).value.clone();
+    let err = s
+        .run(set(var, ConfigValue::Choice("Untyped".into())))
+        .unwrap_err();
+    assert!(err.to_string().contains("isn't available"), "{err}");
+    assert_eq!(option(&s.config(), var).value, before);
+
+    s.run(set("presetBossSkills", ConfigValue::Choice("None".into())))
+        .unwrap();
+    assert!(upstream_enabled("None"));
+    assert!(option(&s.config(), var).enabled);
+    s.run(set(var, ConfigValue::Choice("Untyped".into())))
+        .unwrap();
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn undo_redo() {

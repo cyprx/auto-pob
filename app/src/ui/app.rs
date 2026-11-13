@@ -3777,6 +3777,7 @@ mod tests {
             allow_zero: false,
             label: label.into(),
             shown: true,
+            enabled: true,
             invalid: false,
             value: None,
             placeholder: None,

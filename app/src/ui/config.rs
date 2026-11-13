@@ -340,11 +340,9 @@ pub struct ConfigUi {
     /// sends it. PoB's custom modifier boxes change the build at each key (ConfigTab.lua:
     /// 35-40, 70-75), so a save, a tab switch or a close sends it first.
     pending: HashMap<String, Command>,
-    /// Each text field's view text when last drawn unfocused, and what was last typed into
-    /// it: other text from the view (another config set) starts the box's undo over, as
-    /// PoB's `SetText` does; the echo of the box's own edit doesn't
-    shown: HashMap<String, String>,
-    typed: HashMap<String, String>,
+    /// Whether text from the view (another config set) starts a field's undo over, as PoB's
+    /// `SetText` does; the echo of the field's own edit doesn't
+    undo: HashMap<String, crate::widgets::edit_box::UndoWatch>,
 }
 
 impl ConfigUi {
@@ -1086,11 +1084,7 @@ impl ConfigUi {
         } else if self.field_focus.as_deref() == Some(key.as_str()) {
             self.field_focus = None;
         }
-        if !response.has_focus()
-            && self.shown.get(&key).map(String::as_str) != Some(current)
-            && self.shown.insert(key.clone(), current.to_owned()).is_some()
-            && self.typed.get(&key).map(String::as_str) != Some(current)
-        {
+        if !response.has_focus() && self.undo.entry(key.clone()).or_default().follow(current) {
             crate::widgets::edit_box::forget_undo(ui.ctx(), response.id);
         }
         crate::widgets::url_click::open_on_ctrl_click(ui, &response, &text);
@@ -1148,8 +1142,6 @@ impl ConfigUi {
         }
         if changed {
             self.drafts.insert(key.clone(), text.clone());
-            // the echo of this edit is the box's own text: it keeps the undo
-            self.typed.insert(key.clone(), text.clone());
         }
         let send = match send_on {
             SendOn::Change => changed,
@@ -1161,6 +1153,10 @@ impl ConfigUi {
         };
         if send && send_on == SendOn::Blur {
             self.sent.insert(key.clone(), text.clone());
+        }
+        if send {
+            // the echo of this edit is the field's own text: it keeps the undo
+            self.undo.entry(key.clone()).or_default().sent(&text);
         }
         if !response.has_focus() && !behind && !send {
             self.drafts.remove(&key);

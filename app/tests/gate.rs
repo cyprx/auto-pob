@@ -3060,6 +3060,82 @@ fn search_matches_again_after_other_commands() {
     assert_eq!(matches(&mut s).len(), 1);
 }
 
+/// A session with a copy of the tree in which only one node reads as "qzxv", and a fresh
+/// search for it on the first tree (no match)
+fn search_on_two_trees(test: &str) -> Session {
+    let mut s = attack_session(test);
+    s.run(Command::CopySpec {
+        index: 0,
+        title: "Copy".into(),
+    })
+    .unwrap();
+    s.backend
+        .lua
+        .load(
+            "local spec = pob.build.treeTab.specList[2]
+            assert(spec ~= pob.build.spec, 'the copy is active')
+            for _, n in pairs(spec.nodes[spec.curClass.startNodeId].linked) do
+                if n.type == 'Normal' then n.dn = 'Qzxv' return end
+            end
+            error('no neighbour')",
+        )
+        .exec()
+        .unwrap();
+    s.backend.apply(search("qzxv"), &|_| {}).unwrap();
+    assert!(
+        s.backend
+            .tree_state_view()
+            .unwrap()
+            .search_matches
+            .is_empty()
+    );
+    s
+}
+
+/// The same search again, as its only command, and its matches
+fn search_again(s: &mut Session) -> usize {
+    s.backend.apply(search("qzxv"), &|_| {}).unwrap();
+    s.backend.tree_state_view().unwrap().search_matches.len()
+}
+
+/// Switches to the copy behind the engine's back, with no command
+fn switch_behind(s: &mut Session) {
+    s.backend
+        .lua
+        .load("pob.build.treeTab:SetActiveSpec(2)")
+        .exec()
+        .unwrap();
+}
+
+/// Each way the engine learns the nodes may have changed clears the fresh search on its own:
+/// a command with no recalculation after it, a recalculation alone, and a background step
+/// alone.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn search_matches_again_after_each_kind_of_change() {
+    let _guard = lock();
+    // a command alone: the tree switch, with no recalculation
+    let mut s = search_on_two_trees("tree-search-apply");
+    s.backend
+        .apply(Command::SelectSpec { index: 1 }, &|_| {})
+        .unwrap();
+    assert_eq!(search_again(&mut s), 1, "after a command");
+    drop(s);
+    // a recalculation alone
+    let mut s = search_on_two_trees("tree-search-recalc");
+    switch_behind(&mut s);
+    s.backend.recalculate().unwrap();
+    assert_eq!(search_again(&mut s), 1, "after a recalculation");
+    drop(s);
+    // a background step alone
+    let mut s = search_on_two_trees("tree-search-step");
+    switch_behind(&mut s);
+    s.backend
+        .background_step(BackgroundTask::ItemDb, &|_| {})
+        .unwrap();
+    assert_eq!(search_again(&mut s), 1, "after a background step");
+}
+
 /// The spec's reachable paths and dependants, built from scratch as the tree state lists them
 fn paths_from_scratch(
     s: &Session,

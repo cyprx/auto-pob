@@ -89,6 +89,15 @@ fn add_byte_twins(fonts: &mut FontDefinitions) {
             }
         }
     }
+    // a twin maps only what its font has: the Ubuntu twin ends every family, for the rest
+    let last = "Ubuntu-Light-bytes".to_owned();
+    if fonts.font_data.contains_key(&last) {
+        for list in fonts.families.values_mut() {
+            if !list.contains(&last) {
+                list.push(last.clone());
+            }
+        }
+    }
 }
 
 /// A gold Fontin heading.
@@ -334,6 +343,24 @@ mod tests {
             assert_eq!(glyph("\u{F792}"), glyph("\u{2019}"), "{family:?}: ’");
             // and not the missing glyph a character no font has gets
             assert_ne!(glyph("\u{F7E9}"), glyph("\u{F700}"), "{family:?}: missing");
+            // a reading the family's font lacks comes from the Ubuntu twin: Fontin has no Š
+            let ubuntu = |text: &str| {
+                let galley = ctx.fonts_mut(|f| {
+                    f.layout_no_wrap(
+                        text.to_owned(),
+                        FontId::new(14.0, FontFamily::Proportional),
+                        Color32::WHITE,
+                    )
+                });
+                let g = galley.rows[0].glyphs[0];
+                (g.uv_rect.size, g.uv_rect.offset, g.advance_width)
+            };
+            if family == FontFamily::Name(HEADING_FONT.into()) {
+                assert_eq!(glyph("\u{F78A}"), ubuntu("\u{160}"), "heading: Š");
+            }
+            // an undefined byte is the missing-glyph box, not a "?"
+            assert_eq!(glyph("\u{F781}"), glyph("\u{F700}"), "{family:?}: 0x81");
+            assert_ne!(glyph("\u{F781}"), glyph("?"), "{family:?}: 0x81");
         }
     }
 }

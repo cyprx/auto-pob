@@ -661,6 +661,8 @@ impl ImportUi {
         let public = &account.public;
         match public.stage {
             PublicStage::EnterAccount => {
+                // PoB's line above the box (ImportTab.lua:333-337)
+                ui.label("To start importing a character, enter the character's account name:");
                 ui.horizontal(|ui| {
                     let opts = EditBoxOptions {
                         width: 220.0,
@@ -843,6 +845,8 @@ impl ImportUi {
             }
             self.list_seen = Some(key);
         }
+        // PoB's line above the list (ImportTab.lua:166, 410)
+        ui.label("Choose character to import data from:");
         ui.horizontal(|ui| {
             ui.label("League:");
             let combo = crate::widgets::dropdown::Dropdown::from_id_salt("import_league")
@@ -2557,6 +2561,7 @@ pub(crate) mod tests {
         h.account(view);
         h.frame(vec![]);
         assert!(h.has_text("Character import status: Authenticated"));
+        assert!(h.has_text("Choose character to import data from:"));
         assert!(h.has_text("Error: Could not import character"));
     }
 
@@ -2570,6 +2575,7 @@ pub(crate) mod tests {
         h.click("account_name");
         h.frame(vec![egui::Event::Text("Someone".into())]);
         h.idle_for(1.0);
+        assert!(h.has_text("To start importing a character, enter the character's account name:"));
         let pos = marked("start").unwrap().center();
         h.frame(vec![egui::Event::PointerMoved(pos)]);
         for _ in 0..40 {

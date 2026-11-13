@@ -1072,7 +1072,7 @@ ported = "app/src/ui/import.rs sign-in import"
 note = "part of import.charSelect"
 
 [controls."import.charSelectHeader"]
-ported = "app/src/ui/import.rs sign-in import"
+ported = "app/src/ui/import.rs sign-in import: PoB's 'Choose character to import data from:' above the list"
 
 [controls."import.charSelectLeague"]
 ported = "app/src/ui/import.rs sign-in import league combo, starting on PoB's pick (OAuthView.league_selected)"
@@ -1193,7 +1193,7 @@ note = "part of import.siteAccountName"
 ported = "app/src/ui/import.rs import by account name Start: enabled on %S[#-]dddd$ (account_name_state), PoB's 'Missing discriminator e.g. NAME#1234' tip"
 
 [controls."import.siteAccountNameHeader"]
-ported = "app/src/ui/import.rs import by account name"
+ported = "app/src/ui/import.rs import by account name: PoB's 'To start importing a character, enter the character's account name:' above the box"
 
 [controls."import.siteAccountNameMissingDiscriminator"]
 ported = "app/src/ui/import.rs PoB's label under the name box and Start disabled as PoB's (PublicView.missing_discriminator, account_name_state)"
@@ -1247,7 +1247,7 @@ ported = "app/src/ui/import.rs import by account name"
 note = "part of import.siteCharSelect"
 
 [controls."import.siteCharSelectHeader"]
-ported = "app/src/ui/import.rs import by account name"
+ported = "app/src/ui/import.rs import by account name: PoB's 'Choose character to import data from:' above the list"
 
 [controls."import.siteCharSelectLeague"]
 ported = "app/src/ui/import.rs import by account name league combo, starting on PoB's pick (PublicView.league_selected)"

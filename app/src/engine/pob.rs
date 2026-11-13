@@ -236,6 +236,18 @@ impl PobBackend {
     fn call<A: IntoLuaMulti, R: FromLuaMulti>(&self, name: &str, args: A) -> Result<R> {
         let glue: mlua::Table = self.lua.globals().get("glue").map_err(|e| anyhow!("{e}"))?;
         let function: mlua::Function = glue.get(name).map_err(|e| anyhow!("{e}"))?;
+        // text the views showed with escapes for bytes that aren't UTF-8 goes back as those
+        // bytes (`bytes_text`)
+        let args = if super::bytes_text::seen() {
+            let values = args.into_lua_multi(&self.lua).map_err(|e| anyhow!("{e}"))?;
+            values
+                .into_iter()
+                .map(|v| super::bytes_text::encode_value(&self.lua, v, 0))
+                .collect::<mlua::Result<mlua::MultiValue>>()
+                .map_err(|e| anyhow!("{e}"))?
+        } else {
+            args.into_lua_multi(&self.lua).map_err(|e| anyhow!("{e}"))?
+        };
         function.call(args).map_err(|e| match e {
             // errors raised with `error(message, 0)` arrive as the bare message
             mlua::Error::RuntimeError(message) => {
@@ -245,11 +257,11 @@ impl PobBackend {
         })
     }
 
-    /// A glue function's string, any bytes that aren't UTF-8 as U+FFFD: PoB's strings are
-    /// bytes, and a build's text can hold some from a Windows-1252 editor
+    /// A glue function's string, any bytes that aren't UTF-8 escaped (`bytes_text`): PoB's
+    /// strings are bytes, and a build's text can hold some from a Windows-1252 editor
     fn call_text<A: IntoLuaMulti>(&self, name: &str, args: A) -> Result<String> {
         let text: mlua::LuaString = self.call(name, args)?;
-        Ok(String::from_utf8_lossy(&text.as_bytes()).into_owned())
+        Ok(super::bytes_text::decode(&text.as_bytes()).into_owned())
     }
 
     /// Whether the layout the UI holds no longer matches what the tree draws.
@@ -454,7 +466,7 @@ impl PobBackend {
             Err(e) => {
                 // PoB's strings are bytes: a build's notes, names or item text can hold bytes
                 // that aren't UTF-8 (a file from a Windows-1252 editor), which serde refuses.
-                // Such a view shows them as U+FFFD instead of failing.
+                // Such a view shows them escaped (`bytes_text`) instead of failing.
                 match lossy_strings(&self.lua, &value, 0).map_err(|e| anyhow!("{e}"))? {
                     Some(fixed) => self.lua.from_value(fixed).map_err(|e| anyhow!("{e}")),
                     None => Err(anyhow!("{e}")),
@@ -464,7 +476,8 @@ impl PobBackend {
     }
 }
 
-/// `value` with every string that isn't UTF-8 replaced by its lossy UTF-8 form, keys
+/// `value` with every string that isn't UTF-8 (or holds an escape character) replaced by its
+/// escaped form (`bytes_text`), keys
 /// included; `None` when every string already was
 fn lossy_strings(
     lua: &mlua::Lua,
@@ -472,8 +485,8 @@ fn lossy_strings(
     depth: usize,
 ) -> mlua::Result<Option<mlua::Value>> {
     match value {
-        mlua::Value::String(text) if text.to_str().is_err() => {
-            let fixed = String::from_utf8_lossy(&text.as_bytes()).into_owned();
+        mlua::Value::String(text) if super::bytes_text::needs_decode(&text.as_bytes()) => {
+            let fixed = super::bytes_text::decode(&text.as_bytes()).into_owned();
             Ok(Some(mlua::Value::String(lua.create_string(fixed)?)))
         }
         // a view is a tree of plain tables; the depth guards against a cycle
@@ -519,7 +532,9 @@ fn popup_rows(control: &mlua::Table) -> mlua::Result<Vec<super::views::PopupRow>
     };
     let text = |list: &mlua::Table, i: usize| -> mlua::Result<String> {
         match list.raw_get::<mlua::Value>(i)? {
-            mlua::Value::String(text) => Ok(String::from_utf8_lossy(&text.as_bytes()).into_owned()),
+            mlua::Value::String(text) => {
+                Ok(super::bytes_text::decode(&text.as_bytes()).into_owned())
+            }
             other => Err(mlua::Error::external(format!(
                 "row {i} is a {}",
                 other.type_name()

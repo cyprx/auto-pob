@@ -3596,8 +3596,9 @@ fn spike_tree_numbers() {
 }
 
 /// PoB's strings are bytes: a build saved by a Windows-1252 editor keeps bytes that aren't
-/// UTF-8 in its notes, labels and items. PoB shows such a build; every view of ours shows it
-/// too, those bytes as U+FFFD, where serde refused the whole view.
+/// UTF-8 in its notes, labels, items and custom modifiers. PoB shows such a build; every view
+/// of ours shows it too, each such byte as a private-use escape (`bytes_text`), where serde
+/// refused the whole view. An edit to such a field keeps the bytes on save, as PoB's does.
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn a_build_with_bytes_that_are_not_utf8_shows_in_every_view() {
@@ -3620,7 +3621,8 @@ fn a_build_with_bytes_that_are_not_utf8_shows_in_every_view() {
         )
         .replace(
             "<ConfigSet id=\"1\">",
-            "<ConfigSet id=\"1\" title=\"Tr\u{1}e\">",
+            "<ConfigSet id=\"1\" title=\"Tr\u{1}e\">\n<Input name=\"customMods\" \
+             string=\"+5 to Strength&#10;Caf\u{1} line\"/>",
         )
         .replace(
             "<ItemSet useSecondWeaponSet=\"nil\" id=\"1\">",
@@ -3634,22 +3636,87 @@ fn a_build_with_bytes_that_are_not_utf8_shows_in_every_view() {
     let path = s.builds_dir().join("latin.xml");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, bytes).unwrap();
-    s.run(Command::OpenBuild { path }).expect("open");
+    s.run(Command::OpenBuild { path: path.clone() })
+        .expect("open");
+    // the byte 0xE9 as the views show it
+    const E: char = '\u{F7E9}';
     let notes = s.backend.notes_view().expect("notes view");
-    assert!(notes.text.contains("caf\u{fffd} notes"), "{:?}", notes.text);
+    assert!(
+        notes.text.contains(&format!("caf{E} notes")),
+        "{:?}",
+        notes.text
+    );
     let skills = s.backend.skills_view().expect("skills view");
-    assert_eq!(skills.groups[0].label, "Caf\u{fffd}");
+    assert_eq!(skills.groups[0].label, format!("Caf{E}"));
     s.backend.items_view().expect("items view");
     let item = s.backend.item_text(1).expect("item text");
-    assert!(item.text.contains("Caf\u{fffd} Smasher"), "{}", item.text);
+    assert!(
+        item.text.contains(&format!("Caf{E} Smasher")),
+        "{}",
+        item.text
+    );
     let group = s.backend.socket_group_text(0).expect("group text");
-    assert!(group.text.contains("Caf\u{fffd}"), "{}", group.text);
+    assert!(group.text.contains(&format!("Caf{E}")), "{}", group.text);
+    let mods = s.config().custom_mods[0].text.clone();
+    assert!(mods.contains(&format!("Caf{E} line")), "{mods:?}");
+
+    // edits to each field, as the UI sends them: the text it showed, changed
+    s.run(Command::SetNotes {
+        text: format!("{} more", notes.text),
+    })
+    .expect("notes");
+    s.run(Command::SetGroupLabel {
+        group: 0,
+        text: format!("Caf{E}!"),
+    })
+    .expect("label");
+    s.run(Command::SetCustomModText {
+        group: 0,
+        text: format!("{mods}\n+1 to Dexterity"),
+    })
+    .expect("custom mods");
+    s.run(Command::EditItem { id: 1 }).expect("edit the item");
+    let body = item
+        .text
+        .lines()
+        .filter(|l| !l.starts_with("Rarity:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    s.run(Command::SetDisplayItemText {
+        rarity: 2,
+        text: body.replacen("Smasher", "Smashers", 1),
+    })
+    .expect("item text");
+    s.run(Command::SaveDisplayItem).expect("save the item");
+    s.run(Command::Save).expect("save");
+    let saved = fs::read(&path).unwrap();
+    let has = |needle: &[u8]| saved.windows(needle.len()).any(|w| w == needle);
+    assert!(
+        !has("\u{fffd}".as_bytes()) && !has("\u{F7E9}".as_bytes()),
+        "an edit wrote the byte as text"
+    );
+    for needle in [
+        &b"caf\xE9 notes"[..],
+        b"Caf\xE9!",
+        b"Caf\xE9 line",
+        b"+1 to Dexterity",
+        // PoB's Save makes the item through sanitiseText (Item.lua:93): one byte, one "?"
+        b"Caf? Smashers",
+        b"Tr\xE9e",
+    ] {
+        assert!(
+            has(needle),
+            "{:?} isn't in the saved file",
+            String::from_utf8_lossy(needle)
+        );
+    }
+    let skills = s.backend.skills_view().expect("skills view");
     // what the UI shows is what it sends back: lookups by that text find the entry
     let build = s.backend.build_view().expect("build view");
     let loadout = build
         .loadouts
         .iter()
-        .find(|l| l.contains('\u{fffd}'))
+        .find(|l| l.contains(E))
         .unwrap_or_else(|| panic!("no loadout: {:?}", build.loadouts))
         .clone();
     s.run(Command::SelectLoadout { label: loadout })

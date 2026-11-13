@@ -2,8 +2,10 @@
 
 glue = glue or {}
 
--- Whether PoB's string `ours` is the text `sent` the UI showed for it: the views show bytes that
--- aren't UTF-8 as U+FFFD, so a lookup by text compares in that form too
+-- Whether PoB's string `ours` is the text `sent` the UI showed for it. The views show bytes that
+-- aren't UTF-8 escaped, and the engine turns the escapes back into those bytes on the way in
+-- (bytes_text.rs), so `sent` is PoB's own bytes; the escaped form is compared too in case it
+-- isn't
 function glue.same_text(ours, sent)
 	if ours == sent then
 		return true

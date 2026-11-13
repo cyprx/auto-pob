@@ -572,6 +572,7 @@ fn control<'a>(view: &'a CompareView, name: &str) -> Option<&'a PopupControl> {
 fn readdress(command: Command) -> Command {
     match command {
         Command::SetPopupControl { name, value } => Command::SetCompareControl { name, value },
+        Command::Step(inner) => Command::Step(Box::new(readdress(*inner))),
         other => other,
     }
 }

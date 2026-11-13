@@ -345,7 +345,8 @@ impl SkillsUi {
                 self.pending_commands.remove(key);
             }
         }
-        out.extend(sent.map(make));
+        let stepped = self.boxes.stepped(&key.to_owned());
+        out.extend(sent.map(|text| crate::widgets::edit_box::as_step(make(text), stepped)));
         response
     }
 

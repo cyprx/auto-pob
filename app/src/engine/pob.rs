@@ -773,6 +773,8 @@ fn popup_changed() -> Affected {
 impl PobBackend {
     fn apply_command(&mut self, command: Command, send: &dyn Fn(Event)) -> Result<Affected> {
         match command {
+            // `apply` unwraps a step before it gets here
+            Command::Step(inner) => self.apply_command(*inner, send),
             Command::SearchGems(query) => {
                 let target = lua_target(&self.lua, query.target)?;
                 self.call::<_, ()>(
@@ -2193,6 +2195,12 @@ const RELEASE_GROWTH_BYTES: usize = 32 << 20;
 
 impl Backend for PobBackend {
     fn apply(&mut self, command: Command, send: &dyn Fn(Event)) -> Result<Affected> {
+        if let Command::Step(inner) = command {
+            self.call::<_, ()>("set_stepping", true)?;
+            let result = self.apply(*inner, send);
+            self.call::<_, ()>("set_stepping", false)?;
+            return result;
+        }
         // a structural command ends the search only when it went through (R13); one that
         // failed changed nothing, and a changed group table ends the search on its own
         let ends = ends_gem_search(&command);

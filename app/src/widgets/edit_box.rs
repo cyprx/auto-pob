@@ -56,6 +56,15 @@ impl EditBoxOptions {
     }
 }
 
+/// `command` as a step's when `stepped` (`Command::Step`), else as it is
+pub fn as_step(command: crate::engine::Command, stepped: bool) -> crate::engine::Command {
+    if stepped {
+        crate::engine::Command::Step(Box::new(command))
+    } else {
+        command
+    }
+}
+
 /// A clearable box's "x" (EditControl.lua:73-77): shown while the box holds text; a click
 /// empties it. True when it was clicked.
 pub fn clear_button(ui: &mut egui::Ui, text: &mut String) -> Option<egui::Response> {
@@ -93,6 +102,8 @@ pub struct EditBox {
     /// The last frame's edit was refused whole by the filter or the limit: PoB made no edit
     /// and called no change function
     pub(crate) refused: bool,
+    /// What `show` returned last came from a step, to be sent as `Command::Step`
+    pub(crate) stepped: bool,
 }
 
 impl EditBox {
@@ -105,6 +116,7 @@ impl EditBox {
         busy: bool,
         opts: &EditBoxOptions,
     ) -> (egui::Response, Option<String>) {
+        self.stepped = false;
         if !opts.numeric {
             return self.show_box(ui, id, current, busy, opts);
         }
@@ -128,6 +140,7 @@ impl EditBox {
                 }
                 self.sent.clone_from(&self.text);
                 self.pending = false;
+                self.stepped = true;
                 send = Some(self.text.clone());
             }
             (response, send)
@@ -253,6 +266,11 @@ impl<K: Hash + Eq + Clone> EditBoxes<K> {
             .entry(key)
             .or_default()
             .show(ui, id, current, busy, opts)
+    }
+
+    /// What the box `key` sent last came from a step: send it as `Command::Step`
+    pub fn stepped(&self, key: &K) -> bool {
+        self.boxes.get(key).is_some_and(|b| b.stepped)
     }
 
     /// The pending edit of the box with focus (at most one has), once.

@@ -1001,6 +1001,46 @@ fn overlong_level_is_refused() {
     assert_eq!(s.backend.skills_view().unwrap(), before);
 }
 
+/// A step goes past the box's limit, as PoB's SetText does (EditControl.lua:686-699): 99 then
+/// + on a 2-character level box sets 100, where typed text that long is refused
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_step_sets_a_level_past_the_box_limit() {
+    let _guard = lock();
+    let (mut s, _) = session_on("attack", "step-level");
+    // PoB clamps the level to the gem's own maximum afterwards; the quality it keeps
+    s.run(Command::SetGemQuality {
+        group: 0,
+        slot: 0,
+        text: "99".into(),
+    })
+    .unwrap();
+    s.run(Command::Step(Box::new(Command::SetGemQuality {
+        group: 0,
+        slot: 0,
+        text: "100".into(),
+    })))
+    .expect("a step past the limit");
+    let view = s.backend.skills_view().unwrap();
+    assert_eq!(view.groups[0].gems[0].quality, 100);
+    // a level step past the limit goes through too
+    s.run(Command::Step(Box::new(Command::SetGemLevel {
+        group: 0,
+        slot: 0,
+        text: "100".into(),
+    })))
+    .expect("a level step past the limit");
+    // the step is over: typing that long is refused again
+    let err = s
+        .run(Command::SetGemLevel {
+            group: 0,
+            slot: 0,
+            text: "101".into(),
+        })
+        .expect_err("typed past the limit");
+    assert!(err.to_string().contains("too long"), "{err}");
+}
+
 // ---- Skill sets and gem options ----
 
 #[test]

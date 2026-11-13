@@ -1205,10 +1205,14 @@ fn a_popup_digits_box_filters_and_steps() {
     h.frame(vec![Event::Text("x".into())]);
     h.frame(vec![]);
     assert_eq!(h.popup.box_text("count"), Some("4"));
+    // sent as a step, which PoB makes with SetText past the box's limit (EditControl.lua:686-699)
     let sent = h.key(Key::ArrowUp);
     assert_eq!(
         debug(&sent.commands),
-        [set("count", PopupInput::Text("5".into()))]
+        [format!(
+            "Step({})",
+            set("count", PopupInput::Text("5".into()))
+        )]
     );
 }
 

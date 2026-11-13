@@ -807,10 +807,14 @@ impl PopupWindow {
                 let (response, sent) = inner.inner;
                 self.rects.note(&response, || format!("edit_{name}"));
                 if let Some(text) = sent {
-                    out.commands.push(Command::SetPopupControl {
-                        name: name.to_owned(),
-                        value: PopupInput::Text(text),
-                    });
+                    let stepped = self.boxes.stepped(&name.to_owned());
+                    out.commands.push(crate::widgets::edit_box::as_step(
+                        Command::SetPopupControl {
+                            name: name.to_owned(),
+                            value: PopupInput::Text(text),
+                        },
+                        stepped,
+                    ));
                 }
             }
             PopupControlKind::List => self.list(ui, view, c, out),

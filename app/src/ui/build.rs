@@ -953,25 +953,29 @@ mod tests {
     const BAND: egui::Color32 = egui::Color32::from_rgb(11, 9, 7);
 
     /// [`strip_at`] on a 1200 pt wide screen
-    fn strip(
-        tab: &mut BuildTab,
-        frames: Vec<Vec<Event>>,
-    ) -> (Vec<Rect>, Vec<(Rect, egui::Color32)>) {
+    fn strip(tab: &mut BuildTab, frames: Vec<Vec<Event>>) -> (Vec<Rect>, Vec<Painted>) {
         strip_at(1200.0, tab, frames)
     }
 
+    /// A painted rectangle: where, its fill, its border's colour (transparent when none)
+    type Painted = (Rect, egui::Color32, egui::Color32);
+
     /// Draws the main tab strip, with the app's fonts, in a central panel `width` wide, frame
-    /// by frame; the last frame's tab rectangles and the rectangles it filled with gold or the
-    /// band's colour
+    /// by frame; the last frame's tab rectangles and painted rectangles
     fn strip_at(
         width: f32,
         tab: &mut BuildTab,
         frames: Vec<Vec<Event>>,
-    ) -> (Vec<Rect>, Vec<(Rect, egui::Color32)>) {
-        fn gold(shape: &egui::Shape, out: &mut Vec<(Rect, egui::Color32)>) {
+    ) -> (Vec<Rect>, Vec<Painted>) {
+        fn gold(shape: &egui::Shape, out: &mut Vec<Painted>) {
             match shape {
-                egui::Shape::Rect(r) if r.fill == GOLD || r.fill == BAND => {
-                    out.push((r.rect, r.fill))
+                egui::Shape::Rect(r) => {
+                    let border = if r.stroke.width > 0.0 {
+                        r.stroke.color
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+                    out.push((r.rect, r.fill, border))
                 }
                 egui::Shape::Vec(v) => v.iter().for_each(|s| gold(s, out)),
                 _ => {}
@@ -1094,5 +1098,33 @@ mod tests {
             );
             assert_eq!(tab, BuildTab::Import, "{width}");
         }
+    }
+
+    /// A main tab reached with the keyboard shows the hovered outline, so Enter's target shows
+    #[test]
+    fn a_focused_main_tab_has_the_hover_outline() {
+        let border = egui::Color32::from_rgb(236, 204, 134);
+        let tab_key = Event::Key {
+            key: Key::Tab,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        let outlined = |tab: BuildTab, t: usize| {
+            let mut tab = tab;
+            let (tabs, painted) = strip(
+                &mut tab,
+                vec![vec![], vec![tab_key.clone()], vec![], vec![]],
+            );
+            painted.iter().any(|p| p.0 == tabs[t] && p.2 == border)
+        };
+        // Tree, the first tab, takes the focus: unselected, then selected
+        assert!(outlined(BuildTab::Items, 0));
+        assert!(outlined(BuildTab::Tree, 0));
+        // without focus no tab has it
+        let mut tab = BuildTab::Items;
+        let (_, painted) = strip(&mut tab, vec![vec![], vec![]]);
+        assert!(painted.iter().all(|p| p.2 != border));
     }
 }

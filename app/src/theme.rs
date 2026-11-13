@@ -235,13 +235,20 @@ const TAB_TEXT: Color32 = Color32::from_rgb(165, 155, 138);
 /// The central panel's margin (`Frame::central_panel`), which the band spans
 const PANEL_MARGIN: f32 = 8.0;
 
-/// The colours of a main tab: (fill, border, text)
+/// The colours of a main tab: (fill, border, text). A tab with keyboard focus looks hovered;
+/// the selected one keeps its fill and takes the hovered border.
 fn tab_colours(selected: bool, response: &egui::Response) -> (Color32, Color32, Color32) {
+    let focused = response.has_focus();
     if selected {
-        (PANEL, Color32::TRANSPARENT, TEXT_HOVERED)
+        let border = if focused {
+            BORDER_HOVERED
+        } else {
+            Color32::TRANSPARENT
+        };
+        (PANEL, border, TEXT_HOVERED)
     } else if response.is_pointer_button_down_on() {
         (WIDGET_ACTIVE, BORDER_ACTIVE, TEXT_ACTIVE)
-    } else if response.hovered() {
+    } else if response.hovered() || focused {
         (WIDGET_HOVERED, BORDER_HOVERED, TEXT_HOVERED)
     } else {
         (TAB, Color32::TRANSPARENT, TAB_TEXT)

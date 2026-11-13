@@ -3191,8 +3191,7 @@ ported = "app/src/ui"
 note = "egui's own widget behaviour"
 
 [keys."DropDownControl.RIGHTBUTTON"]
-ported = "app/src/ui"
-note = "egui's own widget behaviour"
+ported = "app/src/widgets/dropdown.rs toggle_on_right_click and either_button, at every dropdown (Dropdown and search_combo): a right-click drops or closes the list and picks a row, as the left (DropDownControl.lua:446-487)"
 
 [keys."DropDownControl.UP"]
 ported = "app/src/widgets/scroll_step.rs dropdown_step, at every dropdown (search_combo and each ComboBox): Up steps a pointed-at or dropped dropdown (DropDownControl.lua:512-515)"

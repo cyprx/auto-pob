@@ -80,7 +80,8 @@ pub fn search_combo_ui(
                         continue;
                     }
                     first_match.get_or_insert(i);
-                    let item = ui.selectable_label(i == selected, text);
+                    let item =
+                        super::dropdown::either_button(ui.selectable_label(i == selected, text));
                     entry(i, &item);
                     if item.clicked() {
                         if i == selected {
@@ -104,6 +105,7 @@ pub fn search_combo_ui(
         }
         ui.data_mut(|d| d.insert_temp(filter_id, filter));
     });
+    super::dropdown::toggle_on_right_click(ui, &shown.response, button.with("popup"));
     if shown.inner.is_none() {
         // closed: the next opening starts with an empty filter and the focus in it
         ui.data_mut(|d| {
@@ -197,9 +199,13 @@ mod tests {
         }
 
         fn click(&mut self, pos: Pos2) {
+            self.click_with(pos, PointerButton::Primary);
+        }
+
+        fn click_with(&mut self, pos: Pos2, which: PointerButton) {
             let button = |pressed| Event::PointerButton {
                 pos,
-                button: PointerButton::Primary,
+                button: which,
                 pressed,
                 modifiers: Modifiers::NONE,
             };
@@ -353,5 +359,17 @@ mod tests {
         assert_eq!(h.entries.len(), 2);
         h.click(h.entries[&0].center());
         assert_eq!(h.picks, [0]);
+    }
+
+    /// The right button drops the list and picks a row, as the left (DropDownControl.lua:446-487)
+    #[test]
+    fn a_right_click_drops_the_list_and_picks_a_row() {
+        let mut h = Harness::new(&["Alpha", "Beta", "Gamma"], 0);
+        h.click_with(h.combo.center(), PointerButton::Secondary);
+        h.frame(vec![]);
+        assert_eq!(h.entries.len(), 3, "a right-click didn't drop the list");
+        let gamma = h.entries[&2].center();
+        h.click_with(gamma, PointerButton::Secondary);
+        assert_eq!(h.picks, [2]);
     }
 }

@@ -9,8 +9,8 @@ use auto_pob::engine::pob::PobBackend;
 use auto_pob::engine::upstream::golden_of;
 use auto_pob::engine::{
     Affected, Backend, BackgroundTask, CharacterEntry, CharacterPart, Command, CompareSource,
-    ConfigValue, Engine, Event, FinishedRequest, ImportMode, OAuthView, PopupKind, PublicStage,
-    PublicView, Realm, RequestsView, Snapshot, send_snapshots,
+    ConfigValue, Engine, Event, FinishedRequest, ImportMode, OAuthView, PopupInput, PopupKind,
+    PublicStage, PublicView, Realm, RequestsView, Snapshot, send_snapshots,
 };
 use auto_pob::game::Game;
 use pob_runtime::net::Canned;
@@ -602,6 +602,91 @@ fn finish_request(s: &mut super::net_harness::NetSession) -> FinishedRequest {
     let mut view = s.requests();
     assert_eq!(view.finished.len(), 1, "{view:?}");
     view.finished.remove(0)
+}
+
+/// A link request whose popup PoB closes from its callback (the Compare tab's Import popup,
+/// CompareTab.lua:1488-1497; the tree's PoEURL import, TreeTab.lua:763-771, R20) closes that
+/// popup only: a session window the user opened while it ran stays open, its edits kept.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn link_requests_leave_an_open_session_popup_alone() {
+    let _guard = lock();
+    let attack_url = super::upstream_link("attack");
+    let web = canned_web();
+    let mut s = net_session("session-popup", canned(&web), None);
+    s.open_fixture("attack");
+    let attack_code = s.backend.share_code().expect("share code");
+    let download: String = s.eval(
+        "for _, site in ipairs(buildSites.websiteList) do \
+         if site.id == 'POBBin' then return site.downloadURL end end",
+    );
+    let download = format!(
+        "https://{}",
+        download.replace("%1", "gate").replace("%.", ".")
+    );
+    web.route("GET", &download, Canned::ok(attack_code));
+    web.route(
+        "GET",
+        "http://poeurl.com/gAtE",
+        Canned::status(302, "").header("Location", &attack_url),
+    );
+    let run = |s: &mut super::net_harness::NetSession, command: Command| {
+        s.backend.apply(command, &|_| {}).expect("command");
+    };
+    for (what, command) in [
+        (
+            "compare link",
+            Command::LoadCompare {
+                source: CompareSource::Import {
+                    text: "https://pobb.in/gate".into(),
+                    name: None,
+                },
+            },
+        ),
+        (
+            "tree short link",
+            Command::ImportTreeLink {
+                title: "Short".into(),
+                url: "http://poeurl.com/gAtE".into(),
+            },
+        ),
+    ] {
+        run(&mut s, command);
+        assert_eq!(s.requests().pending.len(), 1, "{what}: the request is out");
+        // the user opens Options while it runs, and edits it
+        run(&mut s, Command::OpenPopup(PopupKind::Options));
+        run(
+            &mut s,
+            Command::SetPopupControl {
+                name: "showAnimations".into(),
+                value: PopupInput::Check(false),
+            },
+        );
+        let open = s.backend.popup_view().unwrap().expect("the Options window");
+        let entry = finish_request(&mut s);
+        assert_eq!(entry.error, None, "{what}");
+        assert_eq!(
+            s.backend.popup_view().unwrap().as_ref(),
+            Some(&open),
+            "{what}: the session window was closed or changed"
+        );
+        assert_eq!(s.eval::<usize>("return #main.popups"), 0, "{what}");
+        run(&mut s, Command::ClosePopup);
+    }
+    // a request's press or callback that closes a popup it never opened takes nothing below
+    // it: a popup already on the stack survives `main:ClosePopup()` run inside the request
+    let kept: bool = s.eval(
+        "local mine = { controls = {} } table.insert(main.popups, 1, mine) \
+         glue.net_begin('closing', {}, function() main:ClosePopup() end) \
+         local kept = main.popups[1] == mine table.remove(main.popups, 1) return kept",
+    );
+    assert!(kept, "a request closed a popup it didn't own");
+    let compare = s.backend.compare_view().unwrap().expect("the comparison");
+    assert_eq!(compare.entries, ["Imported from pobb.in"]);
+    assert!(
+        s.backend.tree_state_view().unwrap().specs.len() > 1,
+        "the tree was added"
+    );
 }
 
 #[test]

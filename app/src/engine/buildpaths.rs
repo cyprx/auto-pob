@@ -253,10 +253,13 @@ thread_local! {
     static WALK_COUNTS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
-/// How many folders the tree walk has read, for the gate's cost checks
+/// How many folders the tree walk has read, for the gate's cost checks (only in a build
+/// with `gate-probes`, which `scripts/gate.sh` turns on)
+#[cfg(feature = "gate-probes")]
 static TREE_READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// How many folders the tree walk has read since the process started
+#[cfg(feature = "gate-probes")]
 pub fn tree_reads() -> usize {
     TREE_READS.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -264,6 +267,7 @@ pub fn tree_reads() -> usize {
 fn walk_read(dir: &Path) -> std::io::Result<fs::ReadDir> {
     #[cfg(test)]
     WALK_COUNTS.with(|c| c.set((c.get().0 + 1, c.get().1)));
+    #[cfg(feature = "gate-probes")]
     TREE_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     fs::read_dir(dir)
 }

@@ -12,6 +12,9 @@ release = false
 [features]
 # Build LuaJIT from source (release tarballs) instead of linking a system installation.
 vendored-lua = ["mlua/vendored"]
+# Counters the gate's cost checks read (`engine::tree_reads`); `scripts/gate.sh` turns it on.
+# Never on in a release build.
+gate-probes = []
 
 [dependencies]
 anyhow = "1.0"

@@ -1,5 +1,6 @@
 mod buildpaths;
 /// How many folders the Builds tree walk has read (the gate's cost checks)
+#[cfg(feature = "gate-probes")]
 pub use buildpaths::tree_reads;
 pub mod bytes_text;
 pub mod commands;

@@ -2020,11 +2020,22 @@ fn an_escaped_list_view_walks_the_tree_once() {
         folder: String::new(),
     })
     .expect("list");
-    let before = auto_pob::engine::tree_reads();
+    let before = tree_reads();
     let view = s.backend.build_list_view().expect("the list view");
     assert!(view.tree.iter().any(|f| f.path == "d\u{F7E9}p/"));
     // the root, a/, a/b/ and d\xE9p/, each once
-    assert_eq!(auto_pob::engine::tree_reads() - before, 4);
+    assert_eq!(tree_reads() - before, 4);
+}
+
+/// The engine's count of folder reads, which only a gate build (`gate-probes`) keeps
+#[cfg(feature = "gate-probes")]
+fn tree_reads() -> usize {
+    auto_pob::engine::tree_reads()
+}
+
+#[cfg(not(feature = "gate-probes"))]
+fn tree_reads() -> usize {
+    panic!("this check needs the gate-probes feature; run it through scripts/gate.sh")
 }
 
 /// A list view spelled escaped doesn't mark a build's text as escaped (review M3): its names

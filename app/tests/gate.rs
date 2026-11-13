@@ -1,7 +1,7 @@
 //! Gate tests: our engine against reference data from unmodified upstream PoB.
 //!
 //! Run with
-//! `AUTO_POB_POB_DIR=<pinned PoB> cargo test -p auto-pob --test gate -- --ignored --test-threads=1`.
+//! `AUTO_POB_POB_DIR=<pinned PoB> cargo test -p auto-pob --features gate-probes --test gate -- --ignored --test-threads=1`.
 
 use auto_pob::engine::pob::PobBackend;
 use auto_pob::engine::upstream::{Golden, golden_of, load_xml, run_recipe, upstream_lua};

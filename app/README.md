@@ -336,7 +336,7 @@ save round trip, share codes, and so on). It needs a PoB folder and is `#[ignore
 
 ```bash
 AUTO_POB_POB_DIR=$HOME/.local/share/auto-pob/poe1/pob-2.67.2 \
-  cargo test -p auto-pob --test gate -- --ignored --test-threads=1
+  cargo test -p auto-pob --features gate-probes --test gate -- --ignored --test-threads=1
 ```
 
 `scripts/gate.sh [-j N] [-f FILTER]` runs each gate test in its own process, N at a time,

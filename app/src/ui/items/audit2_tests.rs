@@ -177,6 +177,16 @@ fn ctrl_shift_c_copies_the_selected_row() {
         .filter(|q| q.starts_with("Copy"))
         .collect();
     assert_eq!(copies, ["CopyItem { id: 1 }"]);
+    // the shared list's too (SharedItemListControl.lua:62-64, a ListControl)
+    let mut h = Harness::new(super::parity_tests::shared_sample());
+    h.settle();
+    h.click("shared_row_1");
+    let o = h.key(Key::C, ctrl_shift);
+    assert!(
+        debug(&o.queries).contains(&"CopySharedItem { index: 1 }".to_owned()),
+        "{:?}",
+        o.queries
+    );
 }
 
 /// The search box is PoB's: `%c`, 100 bytes, and an "x" that empties it and searches at once
@@ -438,6 +448,46 @@ fn the_text_window_asks_pob_whether_save_is_enabled() {
         debug(&h.click("text_save").commands),
         ["SetDisplayItemText { rarity: 2, text: \"\" }"]
     );
+}
+
+/// The engine answers only the latest control tooltip question. Save hovered while the text
+/// is new asks for the item's tooltip, whose answer carries the verdict too: the check isn't
+/// asked over it, so that answer is not lost.
+#[test]
+fn a_text_hovered_on_save_is_asked_once() {
+    let mut h = Harness::new(sample());
+    h.settle();
+    h.click("create");
+    h.settle();
+    let save = h.ui.rect("text_save").center();
+    h.click("text_edit");
+    h.frame(vec![Event::PointerMoved(save)]);
+    let mut queries = h.frame(vec![Event::Text("hello".into())]).queries;
+    for _ in 0..4 {
+        queries.extend(h.frame(vec![]).queries);
+    }
+    let full = ControlTooltipQuery::ItemText {
+        rarity: 2,
+        text: "hello".into(),
+    };
+    let hello: Vec<_> = debug(&queries)
+        .into_iter()
+        .filter(|q| q.contains("hello"))
+        .collect();
+    assert_eq!(hello, [format!("ControlTooltip({full:?})")]);
+    // only that answer arrives: it disables Save
+    h.ui.on_snapshot(&Snapshot::ControlTooltip(Arc::new(
+        crate::engine::views::ControlTooltipView {
+            query: full,
+            tooltip: ItemTooltip {
+                lines: vec![tip_line("The item is invalid.", None)],
+                ..ItemTooltip::default()
+            },
+        },
+    )));
+    h.frame(vec![]);
+    let sent = h.click("text_save").commands;
+    assert!(sent.is_empty(), "Save is disabled: {sent:?}");
 }
 
 /// The set row and the slot column carry PoB's labels: "Item set:", "Equipped items:" and

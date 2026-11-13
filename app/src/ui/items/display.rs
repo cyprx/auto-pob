@@ -142,7 +142,11 @@ impl DisplayState {
             rarity,
             text: window.text.clone(),
         };
-        self.ask_about_text(ctx, check.clone());
+        // the engine answers only the latest of these questions: once the full tooltip is asked
+        // for this text, its answer carries the verdict, so the check isn't asked over it
+        if self.text_tip_asked.as_ref() != Some(&full) {
+            self.ask_about_text(ctx, check.clone());
+        }
         let verdict = self.text_verdict.clone().filter(|v| v.query == check);
         // PoB builds Save's tooltip, the item's with a calculation a comparable slot, only while
         // Save is hovered (ItemsTab.lua:2637-2640); an invalid text's hint came with the check

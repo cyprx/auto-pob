@@ -72,9 +72,10 @@ local function item_entry(tab, list, index, id)
 	return entry
 end
 
--- One set list a tab, kept: its GetRowValue reads the tab alone (ItemSetListControl.lua:72-77),
--- so a kept list answers as a new one would
-local set_lists = setmetatable({}, { __mode = "k" })
+-- The set list of the tab last viewed, kept: its GetRowValue reads the tab alone
+-- (ItemSetListControl.lua:72-77), so a kept list answers as a new one would. One slot, not a
+-- weak table: the list holds its tab, which LuaJIT's weak keys would never let go.
+local kept_set_list = { tab = nil, list = nil }
 
 function glue.items_view()
 	local tab = items_tab()
@@ -112,11 +113,11 @@ function glue.items_view()
 	-- the manager's rows and the tooltips of the rows and of the set dropdown's entries
 	-- (ItemSetListControl.lua:79-90, ItemsTab.lua:106-111), read through a list made for the
 	-- purpose, never shown, and kept for the next view
-	local set_list = set_lists[tab]
-	if not set_list then
-		set_list = new("ItemSetListControl", nil, { 0, 0, 300, 200 }, tab)
-		set_lists[tab] = set_list
+	if kept_set_list.tab ~= tab then
+		kept_set_list.tab = tab
+		kept_set_list.list = new("ItemSetListControl", nil, { 0, 0, 300, 200 }, tab)
 	end
+	local set_list = kept_set_list.list
 	for i, id in ipairs(tab.itemSetOrderList) do
 		local title = tab.itemSets[id].title
 		local tooltip = new("Tooltip")

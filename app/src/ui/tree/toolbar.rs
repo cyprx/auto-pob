@@ -626,6 +626,7 @@ impl Toolbar {
             self.search =
                 name_box::spliced_by(&before, &self.search, |c| !c.is_control(), 100, pasted);
         }
+        crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &field, &self.search);
         rects.note(&field, || "search".into());
         if std::mem::take(&mut self.focus_search) {
             field.request_focus();
@@ -796,6 +797,7 @@ impl Toolbar {
                         .hint_text("depth"),
                 );
                 rects.note(&field, || "depth_custom".into());
+                crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &field, text);
                 // PoB's box takes digits only ("%D")
                 text.retain(|c| c.is_ascii_digit());
                 // and, as every %D box, steps on + and -, Up, Down and the wheel, sending at
@@ -1218,7 +1220,8 @@ impl Toolbar {
                 Dialog::Export { link, shrink } => {
                     ui.label("Passive tree link:");
                     let mut shown = link.as_str();
-                    ui.add(egui::TextEdit::singleline(&mut shown).desired_width(350.0));
+                    let field = ui.add(egui::TextEdit::singleline(&mut shown).desired_width(350.0));
+                    crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &field, link);
                     ui.horizontal(|ui| {
                         let label = match shrink {
                             Shrink::Idle => "Shrink with PoEURL",

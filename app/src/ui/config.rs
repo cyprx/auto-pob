@@ -421,6 +421,7 @@ impl ConfigUi {
                     .desired_width(160.0),
             );
             self.note("search".into(), &search);
+            crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &search, &self.search);
             // PoB's box drops control characters and takes 100 bytes (ConfigTab.lua:165)
             if search.changed() {
                 self.search =
@@ -934,6 +935,9 @@ impl ConfigUi {
         };
         let response = ui.add(edit.hint_text(hint));
         crate::widgets::url_click::open_on_ctrl_click(ui, &response, &text);
+        if matches!(style, FieldStyle::Single { .. }) {
+            crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &response, &text);
+        }
         if matches!(style, FieldStyle::Multi { .. }) {
             crate::widgets::edit_box::page_keys(ui, &response, &text);
         }

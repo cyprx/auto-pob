@@ -3249,7 +3249,7 @@ ported = "app/src/ui"
 note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
 
 [keys."EditControl.LEFTBUTTON"]
-ported = "app/src/ui egui TextEdit editing; app/src/widgets/url_click.rs: Ctrl+click on a box that holds a link (EditControl.lua:485-486), at the shared EditBox, the name boxes, the Import code box, Notes and the Config fields"
+ported = "app/src/ui egui TextEdit editing; app/src/widgets/edit_box.rs select_all_on_double_click: a double click selects a single-line box's whole text (EditControl.lua:455-483) at every PoB single-line box (test a_double_click_selects_the_whole_single_line); app/src/widgets/url_click.rs: Ctrl+click on a box that holds a link (EditControl.lua:485-486), at the shared EditBox, the name boxes, the Import code box, Notes and the Config fields"
 note = "egui TextEdit editing; Enter and Esc as in our shared EditBox. Deliberate safety deviation (review I3): PoB opens the whole text for any scheme; ours opens only the first http(s) URL in it, alone, and webbrowser is built hardened (http(s) only)"
 
 [keys."EditControl.PAGEDOWN"]

@@ -148,6 +148,7 @@ pub fn edit(
     let pasted = pasted(ui);
     let response = ui.add(build(egui::TextEdit::singleline(text)));
     crate::widgets::url_click::open_on_ctrl_click(ui, &response, text);
+    crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &response, text);
     let mut changed = response.changed();
     if changed {
         let same = *text == before;

@@ -659,9 +659,11 @@ impl ImportUi {
                         .show(ui, self.account_id, &current, false, &opts);
                     mark(ui, "account_name", &r);
                     // its "x" empties it (ImportTab.lua:341, clearable)
-                    if let Some(x) =
-                        crate::widgets::edit_box::clear_button(ui, &mut self.account_box.text)
-                    {
+                    if let Some(x) = crate::widgets::edit_box::clear_button(
+                        ui,
+                        self.account_id,
+                        &mut self.account_box.text,
+                    ) {
                         mark(ui, "account_clear", &x);
                         if x.clicked() {
                             // the box keeps the keyboard, so the view doesn't refill it
@@ -1013,7 +1015,7 @@ impl ImportUi {
             r.request_focus();
         }
         // its "x" empties it (ImportTab.lua:670, clearable)
-        let cleared = crate::widgets::edit_box::clear_button(ui, &mut self.code);
+        let cleared = crate::widgets::edit_box::clear_button(ui, r.id, &mut self.code);
         if let Some(x) = &cleared {
             mark(ui, "code_clear", x);
         }

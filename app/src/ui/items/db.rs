@@ -383,7 +383,7 @@ fn body(
             response.request_focus();
         }
         // its "x" empties it and searches at once (EditControl.lua:73-77, SetText(.., true))
-        let cleared = crate::widgets::edit_box::clear_button(ui, &mut state.search.text)
+        let cleared = crate::widgets::edit_box::clear_button(ui, id, &mut state.search.text)
             .is_some_and(|x| {
                 state.rects.note(&x, || "db_search_clear".into());
                 x.clicked()

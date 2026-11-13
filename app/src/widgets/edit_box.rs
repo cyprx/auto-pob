@@ -70,15 +70,17 @@ pub fn as_step(command: crate::engine::Command, stepped: bool) -> crate::engine:
     }
 }
 
-/// A clearable box's "x" (EditControl.lua:73-77): shown while the box holds text; a click
-/// empties it. True when it was clicked.
-pub fn clear_button(ui: &mut egui::Ui, text: &mut String) -> Option<egui::Response> {
+/// A clearable box's "x" (EditControl.lua:73-77): shown while the box `id` holds text; a
+/// click empties it with `SetText("", true)`, which starts the box's undo over
+/// (EditControl.lua:103). The button's response, when shown.
+pub fn clear_button(ui: &mut egui::Ui, id: egui::Id, text: &mut String) -> Option<egui::Response> {
     if text.is_empty() {
         return None;
     }
     let x = ui.small_button("x");
     if x.clicked() {
         text.clear();
+        forget_undo(ui.ctx(), id);
     }
     Some(x)
 }

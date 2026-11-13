@@ -152,6 +152,12 @@ impl ItemsUi {
         commands
     }
 
+    /// Drops a quality box still being typed in (the user chose not to save): its item goes
+    /// with the build.
+    pub fn discard(&mut self) {
+        self.display.discard_pending();
+    }
+
     /// Leaving the tab closes the engine's database; the panel is as it was on the return.
     pub fn leave(&mut self) -> Option<Command> {
         self.focus_slot = None;

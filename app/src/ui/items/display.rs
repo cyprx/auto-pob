@@ -67,7 +67,7 @@ impl DisplayState {
     }
 
     /// Forgets the typed edits waiting for Enter or blur: the item they were for is going.
-    fn discard_pending(&mut self) {
+    pub(super) fn discard_pending(&mut self) {
         self.quality.discard();
         self.catalyst_quality.discard();
     }

@@ -2183,6 +2183,7 @@ impl AutoPobApp {
                 self.top_bar.discard();
                 self.calcs.discard();
                 self.config_ui.discard();
+                self.items.discard();
                 self.ready_actions.push(pending);
             }
             Resolution::Stay => {}
@@ -4291,6 +4292,36 @@ mod tests {
         app.tab = BuildTab::Notes;
         frame(&mut app, &ctx, vec![]);
         assert_eq!(sent_since(&app, before), [QUALITY]);
+    }
+
+    /// Don't Save drops a quality still being typed, as it drops every other box's edit
+    #[test]
+    fn dont_save_drops_a_quality_being_typed() {
+        for leave in [
+            Pending::BackToList,
+            Pending::Close,
+            Pending::Open("/b/other.xml".into()),
+            Pending::New,
+        ] {
+            let (mut app, ctx) = items_app_typing();
+            app.build = Some(Arc::new(BuildView {
+                unsaved: true,
+                ..(**app.build.as_ref().unwrap()).clone()
+            }));
+            let before = app.sent_full.len();
+            app.request(leave.clone());
+            frame(&mut app, &ctx, vec![]);
+            assert_eq!(app.prompt, Some(leave.clone()), "no question");
+            app.answer_prompt(leave.clone(), PromptChoice::Discard);
+            for _ in 0..3 {
+                frame(&mut app, &ctx, vec![]);
+            }
+            let sent = sent_since(&app, before);
+            assert!(
+                !sent.iter().any(|c| c.starts_with("SetItemQuality")),
+                "{leave:?}: {sent:?}"
+            );
+        }
     }
 
     #[test]

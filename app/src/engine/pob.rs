@@ -317,12 +317,6 @@ impl PobBackend {
         }
     }
 
-    /// A new name for an entry (Rename, Copy), as PoB's bytes: over an escaped list its
-    /// escapes are the bytes the list showed (`bytes_text`), else it is its own UTF-8
-    fn entry_name(&self, name: &str) -> Vec<u8> {
-        Self::name_bytes(name, self.list_escaped)
-    }
-
     /// `name` as PoB's bytes: its escapes turned back when the view it came from was escaped
     fn name_bytes(name: &str, escaped: bool) -> Vec<u8> {
         use std::os::unix::ffi::OsStringExt;
@@ -1340,9 +1334,13 @@ impl PobBackend {
                     ..Affected::default()
                 })
             }
-            Command::RenameBuild { path, name } => {
+            Command::RenameBuild {
+                path,
+                name,
+                escaped,
+            } => {
                 let path = self.build_entry(&path, false)?;
-                let name = self.entry_name(&name);
+                let name = Self::name_bytes(&name, escaped);
                 buildpaths::name_free(&path, &name, true)?;
                 let args = (
                     self.bytes_arg(path.as_os_str().as_bytes())?,
@@ -1351,9 +1349,13 @@ impl PobBackend {
                 self.call_path::<_, ()>("rename_build", args)?;
                 Ok(list_changed())
             }
-            Command::CopyBuild { path, name } => {
+            Command::CopyBuild {
+                path,
+                name,
+                escaped,
+            } => {
                 let path = self.build_entry(&path, true)?;
-                let name = self.entry_name(&name);
+                let name = Self::name_bytes(&name, escaped);
                 buildpaths::name_free(&path, &name, false)?;
                 let args = (
                     self.bytes_arg(path.as_os_str().as_bytes())?,
@@ -2837,6 +2839,7 @@ impl Backend for PobBackend {
             self.folder = buildpaths::spell(&bytes, escaped);
         }
         self.list_escaped = escaped;
+        view.escaped = escaped;
         view.tree = tree;
         view.root = PathBuf::from(root);
         view.build_open = !self.on_list;

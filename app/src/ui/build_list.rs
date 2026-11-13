@@ -28,13 +28,17 @@ pub enum ListScreenAction {
     Import,
     Options,
     NewFolder(String),
+    /// `escaped`: the spelling of the list view the name was typed over (`BuildListView::
+    /// escaped`)
     Rename {
         path: PathBuf,
         name: String,
+        escaped: bool,
     },
     Copy {
         path: PathBuf,
         name: String,
+        escaped: bool,
     },
     Delete {
         path: PathBuf,
@@ -67,6 +71,9 @@ enum Dialog {
         focus: bool,
         /// typed into: PoB's Save waits for it (BuildListControl.lua:93-115)
         edited: bool,
+        /// the list view the name came from was escaped: its escapes are bytes, whatever the
+        /// views are spelled like by the time Save is pressed
+        escaped: bool,
     },
     NewFolder {
         text: String,
@@ -83,6 +90,8 @@ enum Dialog {
 #[derive(Debug, Clone)]
 struct Menu {
     entry: BuildListEntry,
+    /// the spelling of the view the entry came from (`BuildListView::escaped`)
+    escaped: bool,
     pos: egui::Pos2,
     /// The "Move to…" list is unfolded
     move_open: bool,
@@ -96,6 +105,8 @@ struct Mark {
     entry: BuildListEntry,
     /// Ctrl+C (the entry is copied), not Ctrl+X
     copy: bool,
+    /// the spelling of the view the entry came from (`BuildListView::escaped`)
+    escaped: bool,
 }
 
 /// The folder (below Builds, with a closing slash) an entry stands for when it is a folder
@@ -263,7 +274,8 @@ fn move_targets(view: &BuildListView, entry: &BuildListEntry) -> Vec<(String, St
         .collect()
 }
 
-fn dialog_for(entry: &BuildListEntry, copy: bool) -> Dialog {
+/// The name box over `entry`, read from a view spelled `escaped`
+fn dialog_for(entry: &BuildListEntry, copy: bool, escaped: bool) -> Dialog {
     Dialog::Name {
         copy,
         path: entry.path.clone(),
@@ -272,6 +284,7 @@ fn dialog_for(entry: &BuildListEntry, copy: bool) -> Dialog {
         text: entry.name.clone(),
         focus: true,
         edited: false,
+        escaped,
     }
 }
 
@@ -552,7 +565,11 @@ impl BuildListUi {
 
     #[cfg(test)]
     pub(crate) fn mark_for_test(&mut self, entry: BuildListEntry) {
-        self.cut = Some(Mark { entry, copy: false });
+        self.cut = Some(Mark {
+            entry,
+            copy: false,
+            escaped: false,
+        });
     }
 
     #[cfg(test)]
@@ -635,7 +652,7 @@ impl BuildListUi {
             if mark.copy && *from == view.folder {
                 // in its own folder PoB asks for a name
                 self.cut = None;
-                self.dialog = Some(dialog_for(&mark.entry, true));
+                self.dialog = Some(dialog_for(&mark.entry, true, mark.escaped));
             } else if mark.copy {
                 // PoB clears the mark after every paste (BuildList.lua:153)
                 self.cut = None;
@@ -686,10 +703,11 @@ impl BuildListUi {
             self.cut = Some(Mark {
                 entry: e.clone(),
                 copy: copy && !cut,
+                escaped: view.escaped,
             });
         }
         if f2 && let Some(e) = entry {
-            self.dialog = Some(dialog_for(e, false));
+            self.dialog = Some(dialog_for(e, false, view.escaped));
         }
         if delete && let Some(e) = entry {
             self.dialog = Some(delete_dialog(e));
@@ -839,6 +857,7 @@ impl BuildListUi {
             ui.memory_mut(|m| m.request_focus(self.id));
             self.menu = Some(Menu {
                 entry: (*e).clone(),
+                escaped: view.escaped,
                 pos,
                 move_open: false,
                 fresh: true,
@@ -889,6 +908,7 @@ impl BuildListUi {
         let mut close = false;
         let mut dialog = None;
         let entry = menu.entry.clone();
+        let escaped = menu.escaped;
         let targets = move_targets(view, &entry);
         let shown = egui::Area::new(self.menu_id)
             .order(egui::Order::Foreground)
@@ -910,11 +930,11 @@ impl BuildListUi {
                         close = true;
                     }
                     if item(ui, "menu:copy", "Copy…") {
-                        dialog = Some(dialog_for(&entry, true));
+                        dialog = Some(dialog_for(&entry, true, escaped));
                         close = true;
                     }
                     if item(ui, "menu:rename", "Rename…") {
-                        dialog = Some(dialog_for(&entry, false));
+                        dialog = Some(dialog_for(&entry, false, escaped));
                         close = true;
                     }
                     if item(ui, "menu:delete", "Delete…") {
@@ -975,6 +995,7 @@ impl BuildListUi {
                     focus,
                     edited,
                     path,
+                    escaped,
                 } => {
                     let what = if *is_folder { "Folder" } else { "Build" };
                     ui.heading(format!("{} {what}", if *copy { "Copy" } else { "Rename" }));
@@ -992,11 +1013,19 @@ impl BuildListUi {
                     let (save, cancelled) = buttons(ui, "Save", valid);
                     cancel |= cancelled;
                     if (save || ok) && valid {
-                        let (path, name) = (path.clone(), text.clone());
+                        let (path, name, escaped) = (path.clone(), text.clone(), *escaped);
                         done = Some(if *copy {
-                            ListScreenAction::Copy { path, name }
+                            ListScreenAction::Copy {
+                                path,
+                                name,
+                                escaped,
+                            }
                         } else {
-                            ListScreenAction::Rename { path, name }
+                            ListScreenAction::Rename {
+                                path,
+                                name,
+                                escaped,
+                            }
                         });
                     }
                 }
@@ -1517,9 +1546,40 @@ mod tests {
             Some(ListScreenAction::Rename {
                 path: "/b/one.xml".into(),
                 name: "new name".into(),
+                escaped: false,
             })
         );
         assert_eq!(h.ui.dialog, None);
+    }
+
+    /// A name box opened over an escaped list sends its name as escaped even when a plain
+    /// view came while it was up, and the other way round (hunt 6 review M2): the name is
+    /// in the spelling of the view it was typed over
+    #[test]
+    fn a_name_box_keeps_the_spelling_of_the_view_it_opened_over() {
+        for (over, then) in [(true, false), (false, true)] {
+            let mut v = view("");
+            v.escaped = over;
+            let mut h = H::new(v);
+            h.select(1);
+            assert_eq!(h.key(Key::F2, Modifiers::NONE), None);
+            h.focus = false;
+            h.frame(vec![]);
+            h.click("name_edit");
+            h.key(Key::A, Modifiers::COMMAND);
+            h.text("n\u{F7E9}");
+            h.view.escaped = then;
+            h.frame(vec![]);
+            assert_eq!(
+                h.click("name_ok"),
+                Some(ListScreenAction::Rename {
+                    path: "/b/one.xml".into(),
+                    name: "n\u{F7E9}".into(),
+                    escaped: over,
+                }),
+                "opened over escaped={over}"
+            );
+        }
     }
 
     #[test]
@@ -1540,6 +1600,7 @@ mod tests {
             Some(ListScreenAction::Copy {
                 path: "/b/one.xml".into(),
                 name: "one copy".into(),
+                escaped: false,
             })
         );
         // Open
@@ -1641,6 +1702,7 @@ mod tests {
             Some(ListScreenAction::Rename {
                 path: "/b/sub".into(),
                 name: "sub".into(),
+                escaped: false,
             })
         );
         // a build edited back to its name can't be saved
@@ -1689,6 +1751,7 @@ mod tests {
             Some(ListScreenAction::Rename {
                 path: dir.join("one.xml"),
                 name: "ONE".into(),
+                escaped: false,
             })
         );
         // a free name

@@ -88,6 +88,11 @@ pub struct BuildListView {
     /// PoB's `main.filterBuildList`: the search text the list is filtered by
     #[serde(default)]
     pub filter: String,
+    /// Names and folders are escaped: the Builds tree holds a name that isn't UTF-8, whose
+    /// bytes show as U+F780+ (`bytes_text`). A Rename or Copy sends it back with the name.
+    /// Filled in by the engine.
+    #[serde(default)]
+    pub escaped: bool,
     /// The engine has a build the UI should show: PoB reopened the build its last exit
     /// recorded, so it starts on that build, not on its list. Filled in by the engine.
     #[serde(default)]

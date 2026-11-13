@@ -2022,6 +2022,7 @@ fn no_silent_writes_longtail() {
         Command::CopyBuild {
             path: s.builds().join("dot.xml"),
             name: "dot2".into(),
+            escaped: false,
         },
         &["dot2.xml"],
     );
@@ -2029,6 +2030,7 @@ fn no_silent_writes_longtail() {
         Command::RenameBuild {
             path: s.builds().join("dot2.xml"),
             name: "dot3".into(),
+            escaped: false,
         },
         &["dot2.xml", "dot3.xml"],
     );

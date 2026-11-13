@@ -330,6 +330,7 @@ impl Pair {
         let result = self.s.run(Command::RenameBuild {
             path: self.path(rel),
             name: name.into(),
+            escaped: false,
         });
         let up: Option<String> = self.up.call("listRename", (self.up.path(rel), name, false));
         self.outcome(up, &result);
@@ -340,6 +341,7 @@ impl Pair {
         let result = self.s.run(Command::CopyBuild {
             path: self.path(rel),
             name: name.into(),
+            escaped: false,
         });
         let up: Option<String> = self.up.call("listRename", (self.up.path(rel), name, true));
         self.outcome(up, &result);
@@ -594,11 +596,13 @@ fn build_list_ops() {
     t.s.run(Command::RenameBuild {
         path: t.path("a2.xml"),
         name: "a2x".into(),
+        escaped: false,
     })
     .expect("rename an entry the search hides");
     t.s.run(Command::RenameBuild {
         path: t.path("a2x.xml"),
         name: "a2".into(),
+        escaped: false,
     })
     .unwrap();
     assert_eq!(t.list("").filter, "class:witch");
@@ -633,6 +637,7 @@ fn build_list_ops() {
         Command::RenameBuild {
             path: open.clone(),
             name: "x".into(),
+            escaped: false,
         },
         Command::MoveBuild {
             path: open.clone(),
@@ -649,6 +654,7 @@ fn build_list_ops() {
         Command::RenameBuild {
             path: t.path("n"),
             name: "n9".into(),
+            escaped: false,
         },
         Command::MoveBuild {
             path: t.path("n"),
@@ -662,6 +668,7 @@ fn build_list_ops() {
     t.s.run(Command::CopyBuild {
         path: open.clone(),
         name: "a3copy".into(),
+        escaped: false,
     })
     .expect("copy of the open build");
     assert!(t.path("n/a3copy.xml").is_file());
@@ -835,6 +842,7 @@ fn build_list_ops() {
             Command::RenameBuild {
                 path: a2.clone(),
                 name: name.into(),
+                escaped: false,
             },
         );
         assert_eq!(err, not_allowed, "{what}");
@@ -843,6 +851,7 @@ fn build_list_ops() {
             Command::CopyBuild {
                 path: a2.clone(),
                 name: name.into(),
+                escaped: false,
             },
         );
         assert_eq!(err, not_allowed, "{what}");
@@ -883,10 +892,12 @@ fn build_list_ops() {
         Command::RenameBuild {
             path: sentinel.clone(),
             name: "x".into(),
+            escaped: false,
         },
         Command::CopyBuild {
             path: sentinel.clone(),
             name: "x".into(),
+            escaped: false,
         },
         Command::MoveBuild {
             path: sentinel.clone(),
@@ -945,10 +956,12 @@ fn build_list_ops() {
         Command::RenameBuild {
             path: t.path("escape"),
             name: "z".into(),
+            escaped: false,
         },
         Command::CopyBuild {
             path: t.path("esc.xml"),
             name: "z".into(),
+            escaped: false,
         },
         Command::MoveBuild {
             path: a2.clone(),
@@ -965,6 +978,7 @@ fn build_list_ops() {
         Command::CopyBuild {
             path: t.path("trap"),
             name: "trap2".into(),
+            escaped: false,
         },
         Command::ListBuilds {
             folder: "escape/".into(),
@@ -1067,14 +1081,17 @@ fn build_list_no_silent_writes() {
         Command::RenameBuild {
             path: builds.join("a.xml"),
             name: "dot".into(),
+            escaped: false,
         },
         Command::CopyBuild {
             path: builds.join("a.xml"),
             name: "a".into(),
+            escaped: false,
         },
         Command::RenameBuild {
             path: builds.join("a.xml"),
             name: "..".into(),
+            escaped: false,
         },
         Command::DeleteBuild {
             path: builds.join("gone.xml"),
@@ -1191,11 +1208,13 @@ fn build_list_data_loss_guards() {
     s.run(Command::RenameBuild {
         path: builds.join("dot.xml"),
         name: "Dot".into(),
+        escaped: false,
     })
     .expect("a case-only rename of its own name");
     s.run(Command::RenameBuild {
         path: builds.join("Dot.xml"),
         name: "dot".into(),
+        escaped: false,
     })
     .unwrap();
     for path in [
@@ -1260,7 +1279,8 @@ fn build_list_data_loss_guards() {
             &mut s,
             Command::RenameBuild {
                 path: builds.join("dot.xml"),
-                name: "zed".into()
+                name: "zed".into(),
+                escaped: false
             }
         ),
         taken
@@ -1270,7 +1290,8 @@ fn build_list_data_loss_guards() {
             &mut s,
             Command::CopyBuild {
                 path: builds.join("dot.xml"),
-                name: "ZED".into()
+                name: "ZED".into(),
+                escaped: false
             }
         ),
         taken
@@ -1281,10 +1302,12 @@ fn build_list_data_loss_guards() {
         Command::CopyBuild {
             path: builds.join("dot.xml"),
             name: "dang".into(),
+            escaped: false,
         },
         Command::RenameBuild {
             path: builds.join("dot.xml"),
             name: "dang".into(),
+            escaped: false,
         },
     ] {
         assert_eq!(err(&mut s, command), taken);
@@ -1335,6 +1358,7 @@ fn build_list_data_loss_guards() {
         Command::CopyBuild {
             path: builds.join("x"),
             name: "x2".into(),
+            escaped: false,
         },
         Command::MoveBuild {
             path: builds.join("a.xml"),
@@ -1347,6 +1371,7 @@ fn build_list_data_loss_guards() {
         Command::CopyBuild {
             path: builds.join("inner/b.xml"),
             name: "b2".into(),
+            escaped: false,
         },
         Command::MoveBuild {
             path: builds.join("inner"),
@@ -1385,7 +1410,8 @@ fn build_list_data_loss_guards() {
             &mut s,
             Command::RenameBuild {
                 path: builds.join("lnk"),
-                name: "plain".into()
+                name: "plain".into(),
+                escaped: false
             }
         ),
         taken
@@ -1468,7 +1494,8 @@ fn build_list_data_loss_guards() {
             &mut s,
             Command::RenameBuild {
                 path: builds.join("a.xml"),
-                name: "A".into()
+                name: "A".into(),
+                escaped: false
             }
         ),
         taken
@@ -1732,6 +1759,7 @@ fn a_build_named_with_bytes_that_arent_utf8_works_as_in_pob() {
     let result = t.s.run(Command::CopyBuild {
         path: file(&t.builds, b"caf\xE9.xml"),
         name: "caf\u{F7E9} 2".into(),
+        escaped: true,
     });
     let up: Option<String> = t.up.call(
         "listRename",
@@ -1747,6 +1775,7 @@ fn a_build_named_with_bytes_that_arent_utf8_works_as_in_pob() {
     let result = t.s.run(Command::RenameBuild {
         path: file(&t.builds, b"caf\xE9.xml"),
         name: "caf\u{F7E9}-r".into(),
+        escaped: true,
     });
     let up: Option<String> = t.up.call(
         "listRename",
@@ -1767,6 +1796,7 @@ fn a_build_named_with_bytes_that_arent_utf8_works_as_in_pob() {
         t.s.run(Command::RenameBuild {
             path: file(&t.builds, b"caf\xE9-r.xml"),
             name: "CAF\u{F7E9} 2".into(),
+            escaped: true,
         })
         .expect_err("a case variant");
     assert_eq!(taken.to_string(), TAKEN);
@@ -1922,6 +1952,7 @@ fn a_folder_named_with_bytes_that_arent_utf8_works_as_in_pob() {
     let result = t.s.run(Command::RenameBuild {
         path: file(&t.builds, b"d\xE9p"),
         name: "d\u{F7E9}p-r".into(),
+        escaped: true,
     });
     let up: Option<String> = t.up.call(
         "listRename",
@@ -2116,4 +2147,70 @@ fn a_folder_read_before_the_spelling_changed_is_still_found() {
     .expect("list with the old spelling");
     let view = s.backend.build_list_view().expect("the list view");
     assert_eq!(view.entries.len(), 2, "{:?}", view.entries);
+}
+
+/// A Rename or Copy name typed over one list view, sent after the engine's next view is
+/// spelled the other way (a name that isn't UTF-8 came or went outside the app): the name is
+/// read in the spelling of the view it was typed over (hunt 6 review M2).
+/// - Over a plain view, a real U+F7E9 stays that character: the file is its UTF-8.
+/// - Over an escaped view, an escape is the byte that view showed: the file has byte E9.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_name_typed_before_the_spelling_changed_keeps_its_bytes() {
+    use std::os::unix::ffi::OsStrExt;
+    let _guard = lock();
+    let mut s = super::Session::start("name-old-spelling");
+    let builds = s.builds_dir();
+    let file = |rel: &[u8]| builds.join(std::ffi::OsStr::from_bytes(rel));
+    fs::copy(super::fixture_xml("attack"), builds.join("a.xml")).unwrap();
+    fs::copy(super::fixture_xml("attack"), builds.join("b.xml")).unwrap();
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .expect("list");
+
+    // typed over a plain view; then a name that isn't UTF-8 appears
+    let plain = s.backend.build_list_view().expect("the list view");
+    assert!(!plain.escaped);
+    fs::copy(super::fixture_xml("attack"), file(b"z\xE9.xml")).unwrap();
+    assert!(s.backend.build_list_view().unwrap().escaped);
+    s.run(Command::RenameBuild {
+        path: builds.join("a.xml"),
+        name: "x\u{F7E9}".into(),
+        escaped: plain.escaped,
+    })
+    .expect("rename");
+    assert!(
+        builds.join("x\u{F7E9}.xml").is_file(),
+        "the character's UTF-8"
+    );
+    assert!(!file(b"x\xE9.xml").exists());
+    s.run(Command::CopyBuild {
+        path: builds.join("b.xml"),
+        name: "y\u{F7E9}".into(),
+        escaped: plain.escaped,
+    })
+    .expect("copy");
+    assert!(builds.join("y\u{F7E9}.xml").is_file());
+
+    // typed over an escaped view; then the name that isn't UTF-8 goes
+    let escaped = s.backend.build_list_view().expect("the list view");
+    assert!(escaped.escaped);
+    fs::remove_file(file(b"z\xE9.xml")).unwrap();
+    assert!(!s.backend.build_list_view().unwrap().escaped);
+    s.run(Command::RenameBuild {
+        path: builds.join("b.xml"),
+        name: "c\u{F7E9}".into(),
+        escaped: escaped.escaped,
+    })
+    .expect("rename");
+    assert!(file(b"c\xE9.xml").is_file(), "the byte the view showed");
+    assert!(!builds.join("c\u{F7E9}.xml").exists());
+    s.run(Command::CopyBuild {
+        path: file(b"c\xE9.xml"),
+        name: "d\u{F7E9}".into(),
+        escaped: escaped.escaped,
+    })
+    .expect("copy");
+    assert!(file(b"d\xE9.xml").is_file());
 }

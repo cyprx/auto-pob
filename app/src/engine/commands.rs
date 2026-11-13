@@ -100,11 +100,16 @@ pub enum Command {
     RenameBuild {
         path: PathBuf,
         name: String,
+        /// The list view the name was typed over was escaped (`BuildListView::escaped`): its
+        /// escapes are the bytes that view showed. A later view may be spelled the other way.
+        escaped: bool,
     },
-    /// PoB's Copy button: the entry copied under `name` in its own folder (R16)
+    /// PoB's Copy button: the entry copied under `name` in its own folder (R16); `escaped` as
+    /// for `RenameBuild`
     CopyBuild {
         path: PathBuf,
         name: String,
+        escaped: bool,
     },
     /// PoB's permanent delete (R16). The UI asks first, with `BuildListEntry::delete_prompt`;
     /// a folder goes with everything in it. Refuses the open build (or a folder holding it).

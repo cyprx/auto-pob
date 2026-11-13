@@ -923,3 +923,22 @@ fn item_databases_preload_ends_after_an_early_uniques_open() {
         .unwrap();
     assert!(rares_loaded, "the rest of the load never ran");
 }
+
+/// An item database step with no panel open and no Items tab shown loads nothing: only the
+/// panel or the Items tab may start PoB's load.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn an_item_db_step_without_a_preload_loads_nothing() {
+    let _guard = lock();
+    let mut s = Session::start("item-db-no-preload");
+    s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+    for _ in 0..30 {
+        s.backend
+            .background_step(BackgroundTask::ItemDb, &|_| {})
+            .unwrap();
+    }
+    assert!(
+        databases_loading(&mut s),
+        "a stray step loaded the databases"
+    );
+}

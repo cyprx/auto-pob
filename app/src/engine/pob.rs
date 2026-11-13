@@ -488,6 +488,8 @@ impl PobBackend {
             // a slice of the load ahead of a panel open (`PreloadItemDbs`). Nothing
             // shows it: a failure only stops it, and the panel's own job reports the
             // load's failure when it opens (`glue.item_db_step`).
+            // Only once the Items tab asked for it: no other caller may load the databases.
+            None if !self.item_db_preload => return Ok(Affected::default()),
             None => {
                 if let Err(e) = self.call::<_, ()>("item_db_preload_step", ()) {
                     log::warn!("item database load: {e:#}");

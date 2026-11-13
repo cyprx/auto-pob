@@ -35,7 +35,7 @@ pub(crate) fn settings_folder(user: &Path) -> PathBuf {
 
 /// A folder that looks like the pinned PoB folder but can be written to where it matters:
 /// every entry links to the pinned one, `manifest.xml` is a copy.
-fn pob_farm(test: &str) -> PathBuf {
+pub(crate) fn pob_farm(test: &str) -> PathBuf {
     let farm = std::env::temp_dir().join(format!("auto-pob-lt-pob-{test}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&farm);
     fs::create_dir_all(&farm).unwrap();

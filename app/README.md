@@ -297,10 +297,11 @@ colorPositive = "^x33FF77"
 Precedence for the user folder: `AUTO_POB_USER_DIR`, then `user_dir`, then the default. For the
 release notice: `AUTO_POB_UPDATE_CHECK=1` forces it on, otherwise `update_check`.
 
-On the first start with no `auto-pob.toml`, no `AUTO_POB_USER_DIR` and an existing classic app
-folder, auto-pob asks whether to use that folder or another one, and writes the answer. Without
-the classic folder it uses the default and writes nothing until you save Options. A file that
-cannot be parsed is renamed to `auto-pob.toml.bad` and the app says so.
+On the first start with no `auto-pob.toml`, no `AUTO_POB_USER_DIR` and an installed classic app
+with its user folder, auto-pob asks whether to use that folder or another one, and writes the
+answer. Otherwise it uses the default and writes nothing until you save Options. The default is
+the classic app's folder, so a later start doesn't ask about the folder auto-pob made there. A
+file that cannot be parsed is renamed to `auto-pob.toml.bad` and the app says so.
 
 auto-pob shares `Builds/` and `Settings.xml` with the classic app
 (`rusty-path-of-building`), so builds saved by one open in the other.

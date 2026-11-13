@@ -1,6 +1,6 @@
 //! The first-run screen (R15): shown before the engine starts when there is no
-//! `auto-pob.toml`, no `AUTO_POB_USER_DIR`, and the classic app's folder exists. The answer is
-//! written to the settings file; nothing else on disk is touched.
+//! `auto-pob.toml`, no `AUTO_POB_USER_DIR`, and the classic app is installed with its folder.
+//! The answer is written to the settings file; nothing else on disk is touched.
 
 use super::app::AutoPobApp;
 use crate::settings::{
@@ -323,5 +323,81 @@ mod tests {
         );
         assert_eq!(settings.user_dir, Some(PathBuf::from("/x")));
         assert!(notice.unwrap().contains("Couldn't save"));
+    }
+
+    /// Every path below `dir`, relative to it, sorted
+    fn files(dir: &Path) -> Vec<String> {
+        fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                out.push(path.strip_prefix(base).unwrap().display().to_string());
+                if path.is_dir() {
+                    walk(base, &path, out);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(dir, dir, &mut out);
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn each_choice_leaves_only_its_files() {
+        for other in [false, true] {
+            let root = crate::test_dir::TestDir::new(&format!("fr-files-{other}"));
+            // the classic app installed, with its user folder and a build
+            let data = root.join("data");
+            let classic = crate::game::Game::Poe1.default_user_dir(&data);
+            std::fs::create_dir_all(classic.join("Path of Building/Builds")).unwrap();
+            std::fs::write(classic.parent().unwrap().join("Launch.lua"), "").unwrap();
+            std::fs::write(classic.join("Path of Building/Builds/a.xml"), "a").unwrap();
+            let config = root.join("cfg").join("auto-pob.toml");
+            assert_eq!(
+                crate::settings::first_run(None, &data, false),
+                Some(FirstRun::Ask {
+                    classic: classic.clone()
+                })
+            );
+            let before = files(&root);
+
+            let mut h = Harness::with(classic.clone(), Some(root.to_path_buf()));
+            let mut made = vec!["cfg".to_string(), "cfg/auto-pob.toml".to_string()];
+            let folder = if other {
+                h.click("first_run_other");
+                type_path(&mut h, "~/mine/builds");
+                made.extend(["mine".into(), "mine/builds".into()]);
+                root.join("mine/builds")
+            } else {
+                h.click("first_run_classic");
+                classic.clone()
+            };
+            let choice = h.choice.clone().expect("an answer");
+            let (settings, notice) = answer(&classic, choice, &config);
+            assert_eq!(notice, None);
+            assert_eq!(
+                settings,
+                AppSettings {
+                    user_dir: Some(folder),
+                    ..AppSettings::default()
+                }
+            );
+            assert_eq!(crate::settings::load(&config).unwrap().unwrap(), settings);
+            // the answer and the folder it names; no probe or temporary file stays, and the
+            // classic folder is as it was
+            let mut want = before.clone();
+            want.extend(made);
+            want.sort();
+            assert_eq!(files(&root), want, "other folder: {other}");
+            assert_eq!(
+                std::fs::read(classic.join("Path of Building/Builds/a.xml")).unwrap(),
+                b"a"
+            );
+            // the next start asks nothing
+            assert_eq!(
+                crate::settings::first_run(Some(&settings), &data, false),
+                None
+            );
+        }
     }
 }

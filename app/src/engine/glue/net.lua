@@ -357,6 +357,8 @@ local function guarded(req, open, fn, ...)
 	-- what this request put on the stack may go, never a popup below it (a session window the
 	-- user opened while the request ran is kept off the stack, and stays so)
 	local mainObject = main()
+	-- the instance's own field, nil when the class method serves: put back as it was
+	local ownClose = rawget(mainObject, "ClosePopup")
 	local closePopup = mainObject.ClosePopup
 	mainObject.ClosePopup = function(self, ...)
 		if #self.popups > depth then
@@ -376,7 +378,7 @@ local function guarded(req, open, fn, ...)
 		end
 	end)
 	current = outer
-	mainObject.ClosePopup = closePopup
+	rawset(mainObject, "ClosePopup", ownClose)
 	if not ok then
 		record_error(req, err)
 	end

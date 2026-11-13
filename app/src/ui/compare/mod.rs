@@ -178,8 +178,6 @@ pub struct CompareUi {
     config: Option<Arc<ConfigView>>,
     /// The Config view's search text (PoB's `configSearchEdit`)
     config_filter: String,
-    /// The open build has a file: PoB offers a link comparison only then
-    has_file: bool,
     /// The builds of the folder the saved-build picker shows
     browse: Option<Arc<BuildBrowseView>>,
     /// Our tree sets' titles and the active one (PoB's `primaryTreeSetSelect` on Items)
@@ -200,10 +198,9 @@ pub struct CompareUi {
 impl CompareUi {
     /// Forgets the build's comparisons, as for another build.
     pub fn reset(&mut self) {
-        let (list, has_file) = (self.list.take(), self.has_file);
+        let list = self.list.take();
         *self = Self::default();
         self.list = list;
-        self.has_file = has_file;
     }
 
     pub fn sub_tab(&self) -> SubTab {
@@ -341,7 +338,6 @@ impl CompareUi {
                 self.renderer.reset();
                 self.config_filter.clear();
             }
-            Snapshot::Build(view) => self.has_file = view.path.is_some(),
             Snapshot::BuildList(view) => self.list = Some(view.clone()),
             Snapshot::Config(view) => self.config = Some(view.clone()),
             Snapshot::BuildBrowse(view) => self.browse = Some(view.clone()),

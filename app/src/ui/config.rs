@@ -82,10 +82,13 @@ pub fn matches_search(option: &ConfigOption, query: &str) -> bool {
     let label = pob_text(&option.label, 14.0, default)
         .text
         .to_ascii_lowercase();
-    // a parenthesis left over is an unbalanced capture, which Lua refuses: no match
-    or_patterns(&query)
-        .iter()
-        .any(|p| !p.contains(['(', ')']) && label.contains(p.as_str()))
+    // a parenthesis left over is an unbalanced capture: Lua raises, which fails the whole
+    // matchOrPattern (PCall), whatever the other alternatives say
+    let patterns = or_patterns(&query);
+    if patterns.iter().any(|p| p.contains(['(', ')'])) {
+        return false;
+    }
+    patterns.iter().any(|p| label.contains(p.as_str()))
 }
 
 /// `matchOrPattern`'s alternatives of `pattern` (its `generateOrPatterns`)
@@ -1189,6 +1192,7 @@ mod tests {
         assert!(!matches_search(&o, "s.ocked"));
         // a parenthesis left open is an error to Lua: nothing matches
         assert!(!matches_search(&o, "enemy (shocked"));
+        assert!(!matches_search(&o, "shocked|(x"), "the whole match fails");
     }
 
     #[test]

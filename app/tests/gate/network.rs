@@ -681,6 +681,13 @@ fn link_requests_leave_an_open_session_popup_alone() {
          local kept = main.popups[1] == mine table.remove(main.popups, 1) return kept",
     );
     assert!(kept, "a request closed a popup it didn't own");
+    // and the guard leaves main as it found it: its own ClosePopup field, or none
+    let same: bool = s.eval(
+        "local before = rawget(main, 'ClosePopup') \
+         glue.net_begin('closing', {}, function() end) \
+         return rawget(main, 'ClosePopup') == before",
+    );
+    assert!(same, "the guard changed main.ClosePopup");
     let compare = s.backend.compare_view().unwrap().expect("the comparison");
     assert_eq!(compare.entries, ["Imported from pobb.in"]);
     assert!(

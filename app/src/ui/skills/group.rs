@@ -100,16 +100,19 @@ impl SkillsUi {
                     index,
                     entry,
                 };
-                for (i, item) in &items {
-                    self.hover_tip
-                        .track(item, target(*i, true), self.now, &mut out.queries);
+                // PoB draws no tooltip on a disabled dropdown (an item's group)
+                if g.source.is_none() {
+                    for (i, item) in &items {
+                        self.hover_tip
+                            .track(item, target(*i, true), self.now, &mut out.queries);
+                    }
+                    self.hover_tip.track(
+                        &combo.response,
+                        target(at, false),
+                        self.now,
+                        &mut out.queries,
+                    );
                 }
-                self.hover_tip.track(
-                    &combo.response,
-                    target(at, false),
-                    self.now,
-                    &mut out.queries,
-                );
                 // the wheel and the arrows step it (DropDownControl.lua:476-516)
                 if let Some(i) = crate::widgets::scroll_step::combo_step(
                     ui,

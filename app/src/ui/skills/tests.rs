@@ -327,7 +327,14 @@ fn item_group_offers_only_pob_fields() {
     ] {
         assert!(h.ui.rects.map.contains_key(present), "{present} missing");
     }
-    // the slot shows, disabled (SkillsTab.lua:204-206)
+    // the slot shows, disabled (SkillsTab.lua:204-206), with no tooltip (a disabled
+    // dropdown draws none)
+    let slot = h.ui.rects.map["slot"].center();
+    let mut asked = Vec::new();
+    for _ in 0..3 {
+        asked.extend(debug(&h.frame(vec![Event::PointerMoved(slot)]).queries));
+    }
+    assert!(asked.is_empty(), "{asked:?}");
     h.click("slot");
     h.frame(vec![]);
     assert!(

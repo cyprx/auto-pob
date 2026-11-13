@@ -294,6 +294,29 @@ impl PobBackend {
         self.bytes_arg(&Self::name_bytes(folder, self.list_escaped))
     }
 
+    /// A folder the UI sent, in the spelling of the views now. It was spelled in the views'
+    /// spelling when the UI read it, which a newer view may have changed (a name that isn't
+    /// UTF-8 came or went in the Builds tree). The two spellings differ only for a folder
+    /// whose name holds escape characters: when the folder isn't there as read now but is as
+    /// read the other way, the other way is what the UI showed (review M2).
+    fn ui_folder(&self, root: &str, folder: &str) -> String {
+        if !folder.chars().any(super::bytes_text::is_escape) {
+            return folder.to_owned();
+        }
+        let here = |escaped: bool| {
+            let bytes = Self::name_bytes(folder, escaped);
+            Path::new(root)
+                .join(std::ffi::OsStr::from_bytes(&bytes))
+                .is_dir()
+        };
+        let now = self.list_escaped;
+        if !here(now) && here(!now) {
+            buildpaths::spell(&Self::name_bytes(folder, !now), now)
+        } else {
+            folder.to_owned()
+        }
+    }
+
     /// A new name for an entry (Rename, Copy), as PoB's bytes: over an escaped list its
     /// escapes are the bytes the list showed (`bytes_text`), else it is its own UTF-8
     fn entry_name(&self, name: &str) -> Vec<u8> {
@@ -1308,13 +1331,9 @@ impl PobBackend {
                 if !folder_allowed(&folder) {
                     anyhow::bail!("that isn't a valid folder");
                 }
-                self.folder = buildpaths::folder(
-                    &self.build_root()?,
-                    &folder,
-                    false,
-                    false,
-                    self.list_escaped,
-                )?;
+                let root = self.build_root()?;
+                let folder = self.ui_folder(&root, &folder);
+                self.folder = buildpaths::folder(&root, &folder, false, false, self.list_escaped)?;
                 self.on_list = true;
                 Ok(Affected {
                     list: true,
@@ -1376,6 +1395,7 @@ impl PobBackend {
             Command::MoveBuild { path, folder } => {
                 let root = self.build_root()?;
                 let path = self.build_entry(&path, true)?;
+                let folder = self.ui_folder(&root, &folder);
                 let folder = buildpaths::folder(&root, &folder, true, true, self.list_escaped)?;
                 buildpaths::move_target_free(&path, &root, &folder, self.list_escaped)?;
                 let path = self.bytes_arg(path.as_os_str().as_bytes())?;
@@ -1386,6 +1406,7 @@ impl PobBackend {
             Command::CopyBuildTo { path, folder } => {
                 let root = self.build_root()?;
                 let path = self.build_entry(&path, true)?;
+                let folder = self.ui_folder(&root, &folder);
                 let folder = buildpaths::folder(&root, &folder, true, true, self.list_escaped)?;
                 buildpaths::move_target_free(&path, &root, &folder, self.list_escaped)?;
                 let path = self.bytes_arg(path.as_os_str().as_bytes())?;
@@ -1406,13 +1427,9 @@ impl PobBackend {
                 Ok(list_changed())
             }
             Command::NewFolderIn { folder, name } => {
-                let folder = buildpaths::folder(
-                    &self.build_root()?,
-                    &folder,
-                    true,
-                    true,
-                    self.list_escaped,
-                )?;
+                let root = self.build_root()?;
+                let folder = self.ui_folder(&root, &folder);
+                let folder = buildpaths::folder(&root, &folder, true, true, self.list_escaped)?;
                 let folder = self.folder_arg(&folder)?;
                 self.call_path::<_, ()>("new_folder", (folder, name))?;
                 Ok(list_changed())
@@ -1562,6 +1579,7 @@ impl PobBackend {
                     anyhow::bail!("that isn't a valid folder");
                 }
                 let root: String = self.call("build_root", ())?;
+                let folder = self.ui_folder(&root, &folder);
                 let folder = buildpaths::folder(&root, &folder, false, true, self.list_escaped)?;
                 // the name the build view showed escaped goes back as its file's bytes
                 let name = Self::name_bytes(&name, self.save_as_escaped);
@@ -3300,7 +3318,8 @@ impl Backend for PobBackend {
     fn browse_view(&mut self, folder: &str) -> Result<BuildBrowseView> {
         // PoB's `main.buildPath`, read only: unlike `build_root` nothing is set up
         let root: String = self.call("build_root", ())?;
-        buildpaths::browse(&root, folder, self.list_escaped)
+        let folder = self.ui_folder(&root, folder);
+        buildpaths::browse(&root, &folder, self.list_escaped)
     }
 
     fn set_waker(&mut self, wake: Waker) {

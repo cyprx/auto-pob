@@ -2054,3 +2054,55 @@ fn an_escaped_list_view_leaves_text_unescaped() {
         "the list marked text as escaped"
     );
 }
+
+/// A folder the UI read in one spelling still reaches its folder after a newer view changed
+/// the spelling (review M2): the list was plain when the UI took "x\u{F780}/" from it, then a
+/// folder whose name isn't UTF-8 appeared and the engine's next view was escaped. A move,
+/// a copy into and a listing with the old spelling all go to "x\u{F780}".
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_folder_read_before_the_spelling_changed_is_still_found() {
+    use std::os::unix::ffi::OsStrExt;
+    let _guard = lock();
+    let mut s = super::Session::start("folder-old-spelling");
+    let builds = s.builds_dir();
+    let inner = builds.join("x\u{F780}");
+    fs::create_dir_all(&inner).unwrap();
+    fs::copy(super::fixture_xml("attack"), builds.join("a.xml")).unwrap();
+    fs::copy(super::fixture_xml("attack"), builds.join("b.xml")).unwrap();
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .expect("list");
+    let plain = s.backend.build_list_view().expect("the list view");
+    let folder = plain
+        .tree
+        .iter()
+        .map(|f| f.path.clone())
+        .find(|p| p.starts_with('x'))
+        .expect("the folder");
+    assert_eq!(folder, "x\u{F780}/", "a plain tree");
+    // outside the app, then the engine's next view
+    fs::create_dir_all(builds.join(std::ffi::OsStr::from_bytes(b"d\xE9p"))).unwrap();
+    let escaped = s.backend.build_list_view().expect("the list view");
+    assert!(escaped.tree.iter().any(|f| f.path == "d\u{F7E9}p/"));
+    // the UI's command, spelled from the plain view
+    s.run(Command::MoveBuild {
+        path: builds.join("a.xml"),
+        folder: folder.clone(),
+    })
+    .expect("move with the old spelling");
+    assert!(inner.join("a.xml").is_file());
+    s.run(Command::CopyBuildTo {
+        path: builds.join("b.xml"),
+        folder: folder.clone(),
+    })
+    .expect("copy into with the old spelling");
+    assert!(inner.join("b.xml").is_file());
+    s.run(Command::ListBuilds {
+        folder: folder.clone(),
+    })
+    .expect("list with the old spelling");
+    let view = s.backend.build_list_view().expect("the list view");
+    assert_eq!(view.entries.len(), 2, "{:?}", view.entries);
+}

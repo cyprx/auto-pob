@@ -52,6 +52,9 @@ pub struct PobBackend {
     item_db_failed: bool,
     /// The database closed or the build changed; `ItemDb(None)` is still to be sent (R21)
     item_db_ended: bool,
+    /// The Items tab was shown (`PreloadItemDbs`): PoB's item database load runs as
+    /// background work until it ends, with no panel open
+    item_db_preload: bool,
     /// A save PoB made by itself cancelled the Options window; the next settings view says so
     options_lost: bool,
     /// Lua's heap after the last memory release, in bytes
@@ -203,6 +206,7 @@ impl PobBackend {
             item_db: None,
             item_db_failed: false,
             item_db_ended: false,
+            item_db_preload: false,
             options_lost: false,
             released_lua_bytes: 0,
             on_list,
@@ -758,6 +762,7 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::ControlTooltip(_)
             | Command::SetItemDb(_)
             | Command::CloseItemDb
+            | Command::PreloadItemDbs
             | Command::ItemTooltip(_)
             | Command::CopyItem { .. }
             | Command::CopySharedItem { .. }
@@ -900,6 +905,10 @@ impl PobBackend {
             }
             // ended above
             Command::CloseItemDb => Ok(Affected::default()),
+            Command::PreloadItemDbs => {
+                self.item_db_preload = true;
+                Ok(Affected::default())
+            }
             Command::ViewDbItem { db, name } => {
                 self.call::<_, ()>("item_db_view_item", (db_name(db), name))?;
                 Ok(display_changed())
@@ -2515,6 +2524,14 @@ impl Backend for PobBackend {
         {
             return Some(BackgroundTask::ItemDb);
         }
+        // the load ahead of a panel open, at the same rank; it ends once PoB's load has
+        if self.item_db_preload
+            && self
+                .call::<_, bool>("item_db_preload_pending", ())
+                .unwrap_or(false)
+        {
+            return Some(BackgroundTask::ItemDb);
+        }
         let power = self.heatmap_on
             && !self.power_failed
             && self.call::<_, bool>("power_pending", ()).unwrap_or(false);
@@ -2605,8 +2622,18 @@ impl Backend for PobBackend {
                 })
             }
             BackgroundTask::ItemDb => {
-                let Some(query) = &self.item_db else {
-                    return Ok(Affected::default());
+                let query = match &self.item_db {
+                    Some(query) if !self.item_db_failed => query,
+                    // a slice of the load ahead of a panel open (`PreloadItemDbs`). Nothing
+                    // shows it: a failure only stops it, and the panel's own job reports the
+                    // load's failure when it opens (`glue.item_db_step`).
+                    _ => {
+                        if let Err(e) = self.call::<_, ()>("item_db_preload_step", ()) {
+                            log::warn!("item database load: {e:#}");
+                            self.item_db_preload = false;
+                        }
+                        return Ok(Affected::default());
+                    }
                 };
                 let step: Step = match self.view("item_db_step", db_name(query.db)) {
                     Ok(step) => step,

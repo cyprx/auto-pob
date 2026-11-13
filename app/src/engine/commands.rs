@@ -770,6 +770,10 @@ pub enum Command {
     SetItemDb(ItemDbQuery),
     /// Closes the item database search.
     CloseItemDb,
+    /// The Items tab is shown: PoB's item database load (Main.lua:270-282) runs in the
+    /// background from now on, so the panel's first open needn't wait for it. A frame never
+    /// runs it (`glue.frame`), so a session that never shows the tab never holds the databases.
+    PreloadItemDbs,
     /// The double click on a database row: shows the item on the display panel (R15).
     ViewDbItem {
         db: ItemDb,

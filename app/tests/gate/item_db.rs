@@ -785,3 +785,102 @@ fn item_databases_load_only_for_the_panel() {
         .unwrap();
     assert!(!left, "the load is still listed");
 }
+
+/// Whether PoB's item database load is still to run (both databases still loading)
+fn databases_loading(s: &mut Session) -> bool {
+    s.backend
+        .lua
+        .load(
+            "local m = pob.main.main
+            return (m.onFrameFuncs.LoadItems ~= nil and m.uniqueDB.loading and m.rareDB.loading)
+                and true or false",
+        )
+        .eval()
+        .unwrap()
+}
+
+/// Once the Items tab is shown the load runs as background work, so the first panel open
+/// finds the databases loaded; the work ends with the load, so the loop goes idle again.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn item_databases_preload_once_the_items_tab_shows() {
+    let _guard = lock();
+    let mut s = Session::start("item-db-preload");
+    s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+    assert!(
+        databases_loading(&mut s),
+        "the databases were loaded already"
+    );
+    assert_eq!(
+        s.backend.next_background(),
+        None,
+        "work before the tab showed"
+    );
+    let affected = s.run(Command::PreloadItemDbs).unwrap();
+    assert_eq!(affected, auto_pob::engine::Affected::default());
+    let mut steps = 0;
+    while let Some(task) = s.backend.next_background() {
+        assert_eq!(task, BackgroundTask::ItemDb);
+        let affected = s.backend.background_step(task, &|_| {}).unwrap();
+        assert_eq!(affected, auto_pob::engine::Affected::default());
+        steps += 1;
+        assert!(steps < 1000, "the load never ends");
+    }
+    assert!(steps > 1, "{steps} steps");
+    let done: bool = s
+        .backend
+        .lua
+        .load(
+            "local m = pob.main.main
+            return m.onFrameFuncs.LoadItems == nil and not m.uniqueDB.loading
+                and not m.rareDB.loading",
+        )
+        .eval()
+        .unwrap();
+    assert!(done, "the load did not end");
+    // the panel's first view has its rows, with no load to wait for
+    for db in [ItemDb::Uniques, ItemDb::Rares] {
+        s.run(Command::SetItemDb(ItemDbQuery {
+            db,
+            slot: 0,
+            kind: 0,
+            league: 0,
+            requirement: 0,
+            obtainable: 0,
+            sort: 0,
+            search: String::new(),
+            search_mode: 0,
+        }))
+        .unwrap();
+        let view = panel(&mut s);
+        assert!(!view.loading && !view.rows.is_empty(), "{db:?}");
+    }
+}
+
+/// Edits and a panel open that land while the load runs ahead leave it to finish as it would:
+/// the panel's job takes it over, and its rows are those of a panel that loaded on its own.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn item_databases_preload_survives_edits_and_an_early_open() {
+    let _guard = lock();
+    let want = {
+        let mut s = Session::start("item-db-preload-ref");
+        s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+        json_of(&lists(&mut s, ItemDb::Rares))
+    };
+    let mut s = Session::start("item-db-preload-early");
+    s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+    s.run(Command::PreloadItemDbs).unwrap();
+    for i in 0..3 {
+        let task = s.backend.next_background().expect("no load work");
+        s.backend.background_step(task, &|_| {}).unwrap();
+        s.run(Command::SetConfig {
+            var: "conditionFullLife".into(),
+            value: ConfigValue::Bool(i % 2 == 0),
+        })
+        .unwrap();
+    }
+    assert!(databases_loading(&mut s), "the load ended already");
+    assert_eq!(json_of(&lists(&mut s, ItemDb::Rares)), want);
+    assert_eq!(s.backend.next_background(), None);
+}

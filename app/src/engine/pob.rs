@@ -215,12 +215,7 @@ impl PobBackend {
     fn build_root(&self) -> Result<String> {
         let root: String = self.call("build_root", ())?;
         // a recursive RemoveDir may delete only below it (R16)
-        if std::fs::canonicalize(&root).is_err() {
-            anyhow::bail!("the Builds folder doesn't exist");
-        }
-        if !super::native::set_builds_root(&self.lua, Some(Path::new(&root))) {
-            anyhow::bail!("that Builds folder isn't allowed");
-        }
+        super::native::arm_builds_root(&self.lua, &root)?;
         Ok(root)
     }
 

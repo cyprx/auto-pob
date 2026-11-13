@@ -80,6 +80,20 @@ pub fn set_builds_root(lua: &Lua, root: Option<&Path>) -> bool {
     allowed
 }
 
+/// Arms the recursive `RemoveDir` for the Builds folder `root` as PoB holds it (R16), or says
+/// why not. A root that can't be resolved or isn't allowed disarms it first: a refused root never
+/// leaves an earlier one armed.
+pub(crate) fn arm_builds_root(lua: &Lua, root: &str) -> anyhow::Result<()> {
+    if fs::canonicalize(root).is_err() {
+        set_builds_root(lua, None);
+        anyhow::bail!("the Builds folder doesn't exist");
+    }
+    if !set_builds_root(lua, Some(Path::new(root))) {
+        anyhow::bail!("that Builds folder isn't allowed");
+    }
+    Ok(())
+}
+
 /// Where `path` is below the root, and whether it is a link: every part above it must be a real
 /// folder, the root itself is never it.
 fn locate(root: Option<&(PathBuf, PathBuf)>, path: &Path) -> Option<(PathBuf, bool)> {
@@ -594,6 +608,22 @@ mod tests {
         fs::create_dir_all(builds.join("again")).unwrap();
         assert!(!set_builds_root(&lua, Some(&user)));
         assert_eq!(remove(&lua, &builds.join("again")), (None, refused));
+    }
+
+    #[test]
+    fn a_root_that_cant_be_resolved_disarms_the_old_one() {
+        let tmp = TempDir::new("rmgone");
+        let (old, gone) = (tmp.0.join("Builds"), tmp.0.join("Gone"));
+        fs::create_dir_all(old.join("victim/inner")).unwrap();
+        let lua = lua();
+        arm_builds_root(&lua, old.to_str().unwrap()).unwrap();
+        let error = arm_builds_root(&lua, gone.to_str().unwrap()).unwrap_err();
+        assert_eq!(error.to_string(), "the Builds folder doesn't exist");
+        assert_eq!(
+            remove(&lua, &old.join("victim")),
+            (None, Some("refused: outside the builds folder".to_string()))
+        );
+        assert!(old.join("victim/inner").is_dir());
     }
 
     #[test]

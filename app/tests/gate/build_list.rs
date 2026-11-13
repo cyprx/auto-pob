@@ -1494,6 +1494,17 @@ fn build_list_data_loss_guards() {
         assert_eq!(err(&mut s, command), "that Builds folder isn't allowed");
     }
     assert!(builds.join("sub/b.xml").is_file());
+    // M1: a root that can't be resolved disarms the one armed before it
+    s.backend
+        .lua
+        .globals()
+        .set("NEWROOT", real.clone())
+        .unwrap();
+    s.eval::<()>("pob.main.main.buildPath = NEWROOT");
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .expect("the real root arms");
     s.backend
         .lua
         .globals()
@@ -1509,6 +1520,12 @@ fn build_list_data_loss_guards() {
         ),
         "the Builds folder doesn't exist"
     );
+    assert_eq!(
+        try_remove(&s, &builds.join("sub")).1.as_deref(),
+        Some(refused),
+        "the old root is disarmed"
+    );
+    assert!(builds.join("sub/b.xml").is_file());
     s.backend.lua.globals().set("NEWROOT", real).unwrap();
     s.eval::<()>("pob.main.main.buildPath = NEWROOT");
     s.run(Command::ListBuilds {

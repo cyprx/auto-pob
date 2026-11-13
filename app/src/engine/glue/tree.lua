@@ -262,6 +262,64 @@ local function node_paths(spec, field, filter)
 	return records
 end
 
+local function unallocated(node) return not node.alloc end
+local function allocated(node) return node.alloc end
+
+-- Whether `node_paths(spec, field, filter)` would give `records` again: every node it lists
+-- is there with the same path (`by_id`: the paths by node id), and no other. A walk over the
+-- paths costs far less than building them anew, and the view resends them after every edit.
+local function same_paths(spec, field, filter, records, by_id)
+	local count = 0
+	for id, node in pairs(spec.nodes) do
+		local nodes = node[field]
+		if nodes and filter(node) then
+			local held = by_id[id]
+			if not held then
+				return false
+			end
+			local n = 0
+			for i, other in ipairs(nodes) do
+				if held[i] ~= other.id then
+					return false
+				end
+				n = i
+			end
+			if n ~= #held then
+				return false
+			end
+			count = count + 1
+		end
+	end
+	return count == #records
+end
+
+local function by_node(records)
+	local by_id = {}
+	for _, record in ipairs(records) do
+		by_id[record.node] = record.path
+	end
+	return by_id
+end
+
+-- The tree state's reachable paths and dependants as last built, and their token: a new one
+-- whenever they differ from the last ones
+local paths_cache = { token = 0 }
+
+local function current_paths(spec)
+	local c = paths_cache
+	if c.paths
+		and same_paths(spec, "path", unallocated, c.paths, c.paths_by)
+		and same_paths(spec, "depends", allocated, c.depends, c.depends_by) then
+		return c
+	end
+	c.paths = node_paths(spec, "path", unallocated)
+	c.depends = node_paths(spec, "depends", allocated)
+	c.paths_by = by_node(c.paths)
+	c.depends_by = by_node(c.depends)
+	c.token = c.token + 1
+	return c
+end
+
 -- The colours the tree view gives the nodes when comparing with another spec: TreeTab.lua:445
 -- picks the spec, PassiveTreeView.lua:808 and :936 colour each node. A node that keeps its
 -- default colour (nil) isn't listed.
@@ -410,9 +468,13 @@ local function version_choices(tab)
 end
 
 -- The build's state on the active tree. `fresh`: see `search_matches`.
-function glue.tree_state(fresh)
+-- `held`: the token of the paths the caller holds. When they are still current they are left
+-- out; the second and third results are their token and whether they were sent.
+function glue.tree_state(fresh, held)
 	local build = pob.build
 	local spec = build.spec
+	local paths = current_paths(spec)
+	local send = held ~= paths.token
 	local masteries, masteryOptions = mastery_state(spec)
 	local compare, compareSpec = compare_state(build)
 
@@ -434,9 +496,9 @@ function glue.tree_state(fresh)
 		masteries = masteries,
 		mastery_options = masteryOptions,
 		-- reachable nodes
-		paths = node_paths(spec, "path", function(node) return not node.alloc end),
+		paths = send and paths.paths or nil,
 		-- allocated nodes: what deallocating each one drops
-		depends = node_paths(spec, "depends", function(node) return node.alloc end),
+		depends = send and paths.depends or nil,
 		search = build.treeTab.viewer.searchStr,
 		search_matches = search_matches(build, fresh),
 		compare = compare,
@@ -452,7 +514,7 @@ function glue.tree_state(fresh)
 		heatmap_shown = build.treeTab.viewer.showHeatMap and true or false,
 		show_stat_differences = build.treeTab.viewer.showStatDifferences and true or false,
 		versions = version_choices(build.treeTab),
-	}
+	}, paths.token, send
 end
 
 -- ---- Editing ----

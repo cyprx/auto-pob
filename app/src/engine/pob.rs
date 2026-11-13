@@ -82,6 +82,15 @@ pub struct PobBackend {
     /// reports the old spec's matches. The glue's `searchStrCached` check only covers a rebuild
     /// of depends and paths (PassiveSpec.lua:1793), not a direct edit of a node.
     fresh_search: bool,
+    /// The tree state's paths and dependants as last sent, with the glue's token for them
+    tree_paths: Option<TreePaths>,
+}
+
+/// `TreeState.paths` and `TreeState.depends` as the glue last sent them
+struct TreePaths {
+    token: i64,
+    paths: Vec<crate::engine::views::NodePath>,
+    depends: Vec<crate::engine::views::NodePath>,
 }
 
 /// R17: a timeless search step yields once this much of `GetTime()` has passed
@@ -220,6 +229,7 @@ impl PobBackend {
             net,
             timeless_job: false,
             fresh_search: false,
+            tree_paths: None,
             timeless_budget_ms: TIMELESS_BUDGET_MS,
             trace: Vec::new(),
         })
@@ -460,6 +470,11 @@ impl PobBackend {
         args: impl IntoLuaMulti,
     ) -> Result<T> {
         let value: mlua::Value = self.call(name, args)?;
+        self.view_of(value)
+    }
+
+    /// A view from a glue function's result (see `view`)
+    fn view_of<T: serde::de::DeserializeOwned>(&self, value: mlua::Value) -> Result<T> {
         match self.lua.from_value(value.clone()) {
             Ok(view) => Ok(view),
             Err(e) => {
@@ -2464,7 +2479,28 @@ impl Backend for PobBackend {
     }
 
     fn tree_state_view(&mut self) -> Result<TreeState> {
-        self.view("tree_state", self.fresh_search)
+        // the paths come only when they differ from the ones held: building and converting
+        // them was most of the view, which every edit resends
+        let held = self.tree_paths.as_ref().map(|p| p.token);
+        let (value, token, sent): (mlua::Value, i64, bool) =
+            self.call("tree_state", (self.fresh_search, held))?;
+        let mut state: TreeState = self.view_of(value)?;
+        if sent {
+            self.tree_paths = Some(TreePaths {
+                token,
+                paths: state.paths.clone(),
+                depends: state.depends.clone(),
+            });
+        } else {
+            let held = self
+                .tree_paths
+                .as_ref()
+                .filter(|p| p.token == token)
+                .ok_or_else(|| anyhow!("the tree's paths went missing"))?;
+            state.paths = held.paths.clone();
+            state.depends = held.depends.clone();
+        }
+        Ok(state)
     }
 
     fn calcs_view(&mut self) -> Result<CalcsView> {

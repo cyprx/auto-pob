@@ -3060,6 +3060,130 @@ fn search_matches_again_after_other_commands() {
     assert_eq!(matches(&mut s).len(), 1);
 }
 
+/// The spec's reachable paths and dependants, built from scratch as the tree state lists them
+fn paths_from_scratch(
+    s: &Session,
+) -> (
+    Vec<auto_pob::engine::views::NodePath>,
+    Vec<auto_pob::engine::views::NodePath>,
+) {
+    let value: mlua::Value = s
+        .backend
+        .lua
+        .load(
+            "local function list(field, alloc)
+                local out = {}
+                for id, node in pairs(pob.build.spec.nodes) do
+                    if node[field] and (not node.alloc) == (not alloc) then
+                        local path = {}
+                        for i, n in ipairs(node[field]) do path[i] = n.id end
+                        out[#out + 1] = { node = id, path = path }
+                    end
+                end
+                table.sort(out, function(a, b) return a.node < b.node end)
+                return out
+            end
+            return { list('path', false), list('depends', true) }",
+        )
+        .eval()
+        .unwrap();
+    s.backend.lua.from_value(value).unwrap()
+}
+
+/// The tree state keeps its paths and dependants while they stay the same, and they are never
+/// stale: after each change they equal a list built from scratch.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tree_paths_are_kept_but_never_stale() {
+    let _guard = lock();
+    let mut s = attack_session("tree-paths-cache");
+    let check = |s: &mut Session, what: &str| {
+        let state = s.backend.tree_state_view().unwrap();
+        let (paths, depends) = paths_from_scratch(s);
+        assert!(!paths.is_empty(), "{what}");
+        assert!(state.paths == paths, "{what}: stale paths");
+        assert!(state.depends == depends, "{what}: stale dependants");
+        state
+    };
+    let state = check(&mut s, "open");
+    // an edit that leaves the tree alone: the glue doesn't send them again
+    s.run(set("conditionFullLife", ConfigValue::Bool(true)))
+        .unwrap();
+    let sent: bool = s
+        .backend
+        .lua
+        .load(
+            "local _, token = glue.tree_state(false, nil)
+            local _, again, sent = glue.tree_state(false, token)
+            assert(again == token)
+            return sent",
+        )
+        .eval()
+        .unwrap();
+    assert!(!sent, "unchanged paths were sent again");
+    check(&mut s, "config edit");
+    // every kind of change
+    let reachable = state.paths.iter().find(|p| p.path.len() == 1).unwrap().node;
+    s.run(Command::AllocNode { id: reachable }).unwrap();
+    check(&mut s, "alloc");
+    s.run(Command::DeallocNode { id: reachable }).unwrap();
+    check(&mut s, "dealloc");
+    s.run(Command::Undo(Tab::Tree)).unwrap();
+    check(&mut s, "undo");
+    s.run(Command::Redo(Tab::Tree)).unwrap();
+    check(&mut s, "redo");
+    s.run(Command::CopySpec {
+        index: 0,
+        title: "Copy".into(),
+    })
+    .unwrap();
+    s.run(Command::SelectSpec { index: 1 }).unwrap();
+    s.run(Command::AllocNode { id: reachable }).unwrap();
+    check(&mut s, "alloc on the copy");
+    s.run(Command::SelectSpec { index: 0 }).unwrap();
+    check(&mut s, "back to the first tree");
+    let other = state
+        .classes
+        .iter()
+        .find(|c| c.id != state.class_id)
+        .unwrap()
+        .id;
+    s.run(Command::SelectClass {
+        id: other,
+        connect: false,
+    })
+    .unwrap();
+    check(&mut s, "class change");
+    // a path or an allocation changed behind the view's back, as a jewel's reach would
+    s.backend
+        .lua
+        .load(
+            "for _, node in pairs(pob.build.spec.nodes) do
+                if node.path and #node.path > 2 and not node.alloc then
+                    node.path[2] = node.path[1]
+                    return
+                end
+            end
+            error('no long path')",
+        )
+        .exec()
+        .unwrap();
+    check(&mut s, "a path edited");
+    s.backend
+        .lua
+        .load(
+            "for _, node in pairs(pob.build.spec.nodes) do
+                if node.path and not node.alloc then node.path[#node.path + 1] = node return end
+            end",
+        )
+        .exec()
+        .unwrap();
+    check(&mut s, "a path grown");
+    // another build
+    s.open_fixture("minion", &fixtures_dir().join("minion.xml"));
+    check(&mut s, "another build");
+}
+
 /// A tree switch between two identical searches matches the new tree's nodes, not the old
 /// tree's results.
 #[test]

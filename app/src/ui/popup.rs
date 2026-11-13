@@ -776,13 +776,17 @@ impl PopupWindow {
             PopupControlKind::Edit => {
                 self.caption(ui, c);
                 // the box's own filter and limit, as PoB's EditControl holds them
-                let opts = EditBoxOptions {
-                    width: width.max(60.0),
-                    byte_limit: c.limit,
-                    filter: c
-                        .ascii_only
-                        .then_some(|ch: char| crate::ui::name_box::Filter::Plain.keeps(ch)),
-                    ..EditBoxOptions::default()
+                let opts = if c.digits {
+                    EditBoxOptions::number(width.max(60.0), c.limit)
+                } else {
+                    EditBoxOptions {
+                        width: width.max(60.0),
+                        byte_limit: c.limit,
+                        filter: c
+                            .ascii_only
+                            .then_some(|ch: char| crate::ui::name_box::Filter::Plain.keeps(ch)),
+                        ..EditBoxOptions::default()
+                    }
                 };
                 let enabled = c.enabled;
                 let boxes = &mut self.boxes;

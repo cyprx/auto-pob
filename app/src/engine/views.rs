@@ -1242,6 +1242,7 @@ mod tests {
                 checked: false,
                 text: String::new(),
                 ascii_only: false,
+                digits: false,
                 limit: None,
                 tooltip_text: None,
                 hover_tooltip: false,
@@ -1818,6 +1819,10 @@ pub struct PopupControl {
     /// punctuation and spaces (EditControl.lua:46)
     #[serde(default)]
     pub ascii_only: bool,
+    /// Edit: a `%D` box, which takes digits only and steps on + and -, Up, Down and the wheel
+    /// (EditControl.lua:64-75, 680-700)
+    #[serde(default)]
+    pub digits: bool,
     /// Edit: the most bytes the box takes
     #[serde(default)]
     pub limit: Option<usize>,

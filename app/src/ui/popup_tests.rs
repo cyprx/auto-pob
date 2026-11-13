@@ -22,6 +22,7 @@ fn control(name: &str, kind: PopupControlKind, pos: [f32; 2], size: [f32; 2]) ->
         checked: false,
         text: String::new(),
         ascii_only: false,
+        digits: false,
         limit: None,
         tooltip_text: None,
         hover_tooltip: false,
@@ -1187,4 +1188,23 @@ fn a_popup_box_limit_counts_bytes() {
     h.frame(vec![Event::Text("\u{65e5}\u{672c}\u{8a9e}ab".into())]);
     h.frame(vec![]);
     assert_eq!(h.popup.box_text("title"), Some("\u{65e5}\u{672c}a"));
+}
+
+/// A popup's `%D` box takes digits only and its + steps it, sent at once
+/// (EditControl.lua:64-75, 680-700), as the Compare tab's stage count
+#[test]
+fn a_popup_digits_box_filters_and_steps() {
+    let mut edit = control("count", PopupControlKind::Edit, [0.0, 0.0], [200.0, 20.0]);
+    edit.digits = true;
+    edit.text = "4".into();
+    let mut h = Harness::new(popup(vec![edit]));
+    h.click("edit_count");
+    h.frame(vec![Event::Text("x".into())]);
+    h.frame(vec![]);
+    assert_eq!(h.popup.box_text("count"), Some("4"));
+    let sent = h.key(Key::ArrowUp);
+    assert_eq!(
+        debug(&sent.commands),
+        [set("count", PopupInput::Text("5".into()))]
+    );
 }

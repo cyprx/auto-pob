@@ -731,6 +731,8 @@ local function control_view(name, control, kind, popup_x, popup_y)
 	elseif kind == "Edit" then
 		view.text = control.buf or ""
 		view.ascii_only = control.filter == "^%w%p "
+		-- a "%D" box: digits only, with + and - and stepping (EditControl.lua:64-75)
+		view.digits = control.filter == "%D"
 		view.limit = control.limit
 	elseif kind == "List" then
 		glue.list_sync(control)

@@ -415,7 +415,7 @@ ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareCont
 note = "part of compare.cmpMainSkill"
 
 [controls."compare.cmpMineCount"]
-ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl); a %D box (PopupControlView.digits): + and -, Up, Down and the wheel step it"
 note = "R6 selector"
 
 [controls."compare.cmpMineCount.buttonDown"]
@@ -475,7 +475,7 @@ ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareCont
 note = "part of compare.cmpSocketGroup"
 
 [controls."compare.cmpStageCount"]
-ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl)"
+ported = "app/src/ui/compare/mod.rs selector row, SP5b renderers (SetCompareControl); a %D box (PopupControlView.digits): + and -, Up, Down and the wheel step it"
 note = "R6 selector"
 
 [controls."compare.cmpStageCount.buttonDown"]

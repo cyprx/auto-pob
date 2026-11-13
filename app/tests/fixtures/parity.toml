@@ -943,7 +943,7 @@ ported = "app/src/ui/config.rs remove custom mod group; audit 2: a red X that re
 ported = "app/src/ui/config.rs custom group enable box with PoB's what-if hover (HoverTooltip CustomModEnabled, NF-10)"
 
 [controls."config.#CustomModBlockControl.textEdit"]
-ported = "app/src/ui/config.rs custom mod group text"
+ported = "app/src/ui/config.rs custom mod group text; unselected, each line in PoB's inactiveText colour, MAGIC for a line parseMod reads whole, else UNSUPPORTED (CustomModGroup.line_colours from glue config.lua; gate custom_mod_groups_match_pob, test custom_mod_lines_take_pobs_colours_while_unselected)"
 
 [controls."config.#CustomModBlockControl.titleEdit"]
 ported = "app/src/ui/config.rs custom mod group title"

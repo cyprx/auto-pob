@@ -237,6 +237,10 @@ pub struct CustomModGroup {
     pub title: String,
     pub enabled: bool,
     pub text: String,
+    /// The colour code PoB's box shows each line of `text` in while it isn't selected: MAGIC
+    /// for a line PoB reads as a modifier, UNSUPPORTED for one it can't (ConfigTab.lua:78-86)
+    #[serde(default)]
+    pub line_colours: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -1439,6 +1443,7 @@ mod tests {
                 title: "Default".into(),
                 enabled: true,
                 text: "+1 to all".into(),
+                line_colours: vec![],
             }],
             sections: vec![ConfigSection {
                 name: "General".into(),

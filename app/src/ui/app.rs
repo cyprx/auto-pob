@@ -3649,11 +3649,13 @@ mod tests {
                     title: "First".into(),
                     enabled: true,
                     text: "+1 to all".into(),
+                    line_colours: vec![],
                 },
                 CustomModGroup {
                     title: "Second".into(),
                     enabled: false,
                     text: String::new(),
+                    line_colours: vec![],
                 },
             ],
             sections: vec![

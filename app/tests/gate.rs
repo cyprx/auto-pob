@@ -1280,16 +1280,21 @@ fn custom_mod_groups_match_pob() {
     .unwrap();
     let ours = s.stats();
     assert_ne!(ours, one);
+    // PoB's box shows a line it reads whole as a modifier in MAGIC, else UNSUPPORTED
+    // (ConfigTab.lua:78-86)
     let groups = vec![
         CustomModGroup {
             title: "Default".into(),
             enabled: false,
             text: "+100 to maximum Life".into(),
+            line_colours: vec!["^x8888FF".into()],
         },
         CustomModGroup {
             title: "Speed".into(),
             enabled: true,
             text: "+10% increased Attack Speed".into(),
+            // PoB's parseMod leaves the "+" over on this one: UNSUPPORTED
+            line_colours: vec!["^xF05050".into()],
         },
     ];
     assert_eq!(s.config().custom_mods, groups);
@@ -1315,6 +1320,37 @@ fn custom_mod_groups_match_pob() {
     .unwrap();
     let theirs = golden_of(&lua, Game::Poe1.pob_version()).unwrap();
     assert_view_matches("attack", "stat", &ours.stats, &theirs.stats);
+
+    // each line's colour is the one upstream's unselected box shows it in: its inactiveText,
+    // without the empty line PoB adds after a last line with no line break
+    let mixed = "+10 to Strength\nnot a modifier\n\n5% increased Attack Speed\n";
+    let mut s2 = Session::start("custom-colours");
+    s2.open_fixture("attack", &xml);
+    s2.run(Command::SetCustomModText {
+        group: 0,
+        text: mixed.into(),
+    })
+    .unwrap();
+    let ours_colours = s2.config().custom_mods[0].line_colours.clone();
+    let mut theirs_colours: Vec<String> = lua
+        .load(format!(
+            r#"local edit = build.configTab.customModsBlockControls[1].controls.textEdit
+            local out = {{}}
+            for line in edit.inactiveText({mixed:?}):gmatch("([^\n]*)\n") do
+                out[#out + 1] = line:match("^(%^x%x%x%x%x%x%x)")
+            end
+            return out"#
+        ))
+        .eval()
+        .unwrap();
+    theirs_colours.truncate(mixed.split('\n').count());
+    assert_eq!(ours_colours, theirs_colours);
+    assert_eq!(
+        ours_colours,
+        ["^x8888FF", "^xF05050", "^xF05050", "^x8888FF", "^xF05050"],
+        "a line each of the text"
+    );
+    drop(s2);
 
     // they survive saving and reopening
     s.run(Command::Save).unwrap();

@@ -957,7 +957,7 @@ ported = "app/src/ui/config.rs dropdowns"
 note = "part of config.#DropDownControl"
 
 [controls."config.#EditControl"]
-ported = "app/src/ui/config.rs edit boxes with PoB's tooltipFunc on hover (HoverTooltip ConfigOption, R22)"
+ported = "app/src/ui/config.rs edit boxes with PoB's tooltipFunc on hover (HoverTooltip ConfigOption, R22); number boxes take PoB's filter and 10-character limit (ConfigTab.lua:273), and the integer ones step on + and -, Up, Down and the wheel from their value or placeholder (config.rs Accept, step_number)"
 note = "PoB adds no what-if comparison to number inputs (ConfigTab.lua:719-721)"
 
 [controls."config.#EditControl.buttonDown"]
@@ -2665,7 +2665,7 @@ ported = "app/src/ui/tree/toolbar.rs Find timeless jewel button (PoB popup sessi
 note = "timeless jewel search (R17)"
 
 [controls."tree.nodePowerMaxDepthCustom"]
-ported = "app/src/ui/tree/toolbar.rs heat map depth Custom entry and its digits box (SetHeatmap max_depth, NF-6)"
+ported = "app/src/ui/tree/toolbar.rs heat map depth Custom entry and its digits box (SetHeatmap max_depth, NF-6); a %D box: + and -, Up, Down and the wheel step the depth and send it"
 
 [controls."tree.nodePowerMaxDepthCustom.buttonDown"]
 ported = "app/src/ui/tree/toolbar.rs heat map depth Custom box"

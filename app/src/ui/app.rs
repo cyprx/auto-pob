@@ -3668,11 +3668,11 @@ mod tests {
             sent_since(&app, before),
             ["SetConfig { var: \"overrideCount\", value: Number(72.0) }"]
         );
-        // an invalid keystroke is kept in the field but never sent
+        // PoB's `%D` filter drops a letter: nothing changes, nothing is sent
         let before = app.sent_full.len();
         type_text(&mut app, &ctx, "x");
         assert_eq!(sent_since(&app, before), Vec::<&str>::new());
-        assert_eq!(app.config_ui.draft("overrideCount"), Some("72x"));
+        assert_eq!(app.config_ui.draft("overrideCount"), Some("72"));
         // emptying the field clears the option
         let backspace = |key| egui::Event::Key {
             key,

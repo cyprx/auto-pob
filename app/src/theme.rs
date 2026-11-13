@@ -68,6 +68,7 @@ pub fn apply(ctx: &egui::Context) {
         FontFamily::Name(HEADING_FONT.into()),
         vec![HEADING_FONT.into()],
     );
+    add_byte_twins(&mut fonts);
     ctx.set_fonts(fonts);
 
     install(ctx);
@@ -78,6 +79,38 @@ pub fn apply(ctx: &egui::Context) {
         );
         style.spacing.button_padding = Vec2::new(8.0, 3.0);
     });
+}
+
+/// Each default text font gets its twin for the bytes PoB keeps that aren't UTF-8
+/// (`byte_font`), right after it in every family: the escapes draw as their Windows-1252
+/// characters instead of a missing glyph
+fn add_byte_twins(fonts: &mut FontDefinitions) {
+    for name in ["Ubuntu-Light", "Hack", HEADING_FONT] {
+        let Some(data) = fonts.font_data.get(name) else {
+            continue;
+        };
+        let Some(twin) = crate::byte_font::byte_twin((*data.font).as_ref()) else {
+            continue;
+        };
+        let twin_name = format!("{name}-bytes");
+        fonts
+            .font_data
+            .insert(twin_name.clone(), Arc::new(FontData::from_owned(twin)));
+        for list in fonts.families.values_mut() {
+            if let Some(at) = list.iter().position(|n| n == name) {
+                list.insert(at + 1, twin_name.clone());
+            }
+        }
+    }
+    // a twin maps only what its font has: the Ubuntu twin ends every family, for the rest
+    let last = "Ubuntu-Light-bytes".to_owned();
+    if fonts.font_data.contains_key(&last) {
+        for list in fonts.families.values_mut() {
+            if !list.contains(&last) {
+                list.push(last.clone());
+            }
+        }
+    }
 }
 
 /// The look and behaviour every context of the app shares: the palette, the edit boxes' hover
@@ -893,5 +926,56 @@ mod tests {
             "{open:?}",
             open = open.painted
         );
+    }
+
+    /// A byte PoB keeps that isn't UTF-8 (shown as an escape, `bytes_text`) draws as its
+    /// Windows-1252 character, in the text and the code fonts and the headings
+    #[test]
+    fn an_escaped_byte_draws_as_its_windows_1252_character() {
+        let ctx = egui::Context::default();
+        apply(&ctx);
+        ctx.run_ui(egui::RawInput::default(), |_| {})
+            .drop_without_applying_deltas();
+        for family in [
+            FontFamily::Proportional,
+            FontFamily::Monospace,
+            FontFamily::Name(HEADING_FONT.into()),
+        ] {
+            let glyph = |text: &str| {
+                let galley = ctx.fonts_mut(|f| {
+                    f.layout_no_wrap(
+                        text.to_owned(),
+                        FontId::new(14.0, family.clone()),
+                        Color32::WHITE,
+                    )
+                });
+                // the twin is another font, so its glyph sits elsewhere in the atlas: the
+                // same shape is the same size, offset and advance
+                let g = galley.rows[0].glyphs[0];
+                (g.uv_rect.size, g.uv_rect.offset, g.advance_width)
+            };
+            assert_eq!(glyph("\u{F7E9}"), glyph("\u{E9}"), "{family:?}: é");
+            assert_eq!(glyph("\u{F792}"), glyph("\u{2019}"), "{family:?}: ’");
+            // and not the missing glyph a character no font has gets
+            assert_ne!(glyph("\u{F7E9}"), glyph("\u{F700}"), "{family:?}: missing");
+            // a reading the family's font lacks comes from the Ubuntu twin: Fontin has no Š
+            let ubuntu = |text: &str| {
+                let galley = ctx.fonts_mut(|f| {
+                    f.layout_no_wrap(
+                        text.to_owned(),
+                        FontId::new(14.0, FontFamily::Proportional),
+                        Color32::WHITE,
+                    )
+                });
+                let g = galley.rows[0].glyphs[0];
+                (g.uv_rect.size, g.uv_rect.offset, g.advance_width)
+            };
+            if family == FontFamily::Name(HEADING_FONT.into()) {
+                assert_eq!(glyph("\u{F78A}"), ubuntu("\u{160}"), "heading: Š");
+            }
+            // an undefined byte is the missing-glyph box, not a "?"
+            assert_eq!(glyph("\u{F781}"), glyph("\u{F700}"), "{family:?}: 0x81");
+            assert_ne!(glyph("\u{F781}"), glyph("?"), "{family:?}: 0x81");
+        }
     }
 }

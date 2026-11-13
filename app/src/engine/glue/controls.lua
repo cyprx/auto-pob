@@ -2,8 +2,10 @@
 
 glue = glue or {}
 
--- Whether PoB's string `ours` is the text `sent` the UI showed for it: the views show bytes that
--- aren't UTF-8 as U+FFFD, so a lookup by text compares in that form too
+-- Whether PoB's string `ours` is the text `sent` the UI showed for it. The views show bytes that
+-- aren't UTF-8 escaped, and the engine turns the escapes back into those bytes on the way in
+-- (bytes_text.rs), so `sent` is PoB's own bytes; the escaped form is compared too in case it
+-- isn't
 function glue.same_text(ours, sent)
 	if ours == sent then
 		return true
@@ -51,6 +53,32 @@ function glue.set_stepping(on)
 	glue.stepping = on
 end
 
+-- The characters of `text` as PoB's OnChar would get them: a lead byte with its continuation
+-- bytes. A byte that can't start one (a build's text from a Windows-1252 editor, sent back by
+-- the engine as it was: bytes_text.rs) is a character of its own, so an edit near it keeps it.
+local function typed_chars(text)
+	local i, n = 1, #text
+	return function()
+		if i > n then
+			return nil
+		end
+		local j = i
+		local b = text:byte(i)
+		if b < 0x80 or (b >= 0xC2 and b <= 0xF4) then
+			while j < n do
+				local c = text:byte(j + 1)
+				if c < 0x80 or c > 0xBF then
+					break
+				end
+				j = j + 1
+			end
+		end
+		local char = text:sub(i, j)
+		i = j + 1
+		return char
+	end
+end
+
 function glue.type_into(control, text, pasted)
 	text = text:gsub("\r", "")
 	if glue.stepping and control.isNumeric then
@@ -90,17 +118,25 @@ function glue.type_into(control, text, pasted)
 				error("the text is too long", 0)
 			end
 		else
-			for char in inserted:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+			-- the kept characters gather in a list: joining them one at a time would copy the
+			-- text once per character, minutes for a pasted build code of some size
+			local parts, length = { }, 0
+			for char in typed_chars(inserted) do
 				if not char:find(control.filterPattern) then
-					local held = replacing and 0 or #kept
+					local held = replacing and 0 or length
 					if limit and #front + held + #char + #back > limit then
 						refused = true
 					else
-						kept = (replacing and "" or kept) .. char
+						if replacing then
+							parts, length = { }, 0
+						end
+						parts[#parts + 1] = char
+						length = length + #char
 						replacing = false
 					end
 				end
 			end
+			kept = table.concat(parts)
 			if refused then
 				error("the text is too long", 0)
 			end

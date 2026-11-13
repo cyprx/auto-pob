@@ -132,6 +132,9 @@ pub struct AutoPobApp {
     calcs: CalcsUi,
     skills: SkillsUi,
     items: ItemsUi,
+    /// `PreloadItemDbs` went to this engine: the Items tab was shown once. The databases are
+    /// PoB's `main`'s, so they stay loaded across builds; a new engine starts a new app.
+    item_dbs_preloaded: bool,
     /// The crafting popup window, whichever tab opened it
     popup: PopupWindow,
     /// The tab that opened the popup: leaving it closes the window
@@ -185,6 +188,9 @@ pub struct AutoPobApp {
     import: Option<String>,
     /// Actions waiting for the next frame (they need the egui context).
     ready_actions: Vec<Pending>,
+    /// A loadout switch went out: the box with the keyboard was for the sets before, so it
+    /// lets go and shows the new sets' text (PoB sets its controls' text from the new sets)
+    release_focus: bool,
     allow_close: bool,
     /// PoB's About window: its help and version history (R25)
     help: HelpUi,
@@ -236,6 +242,7 @@ impl AutoPobApp {
             calcs: CalcsUi::default(),
             skills: SkillsUi::default(),
             items: ItemsUi::default(),
+            item_dbs_preloaded: false,
             popup: PopupWindow::default(),
             popup_tab: None,
             failed_open: None,
@@ -269,6 +276,7 @@ impl AutoPobApp {
             prompt: None,
             import: None,
             ready_actions: Vec::new(),
+            release_focus: false,
             allow_close: false,
             help: HelpUi::default(),
             bar_rects: Vec::new(),
@@ -491,6 +499,18 @@ impl AutoPobApp {
 
     /// Sends a command whose snapshots the UI waits for.
     fn send(&mut self, command: Command) -> u64 {
+        // a loadout switches every set: an edit still being typed is for the group, item or
+        // option of the sets before, and PoB's boxes applied it key by key already
+        if matches!(
+            command,
+            Command::SelectLoadout { .. } | Command::NewLoadout { .. }
+        ) {
+            // whatever has the keyboard lets go and shows the new sets' text, edit or not,
+            // except a dropped list of Build's: it stays the selected control and its search
+            // keeps the keyboard (DropDownControl.lua:422-436)
+            self.release_focus = true;
+            self.flush_edits();
+        }
         if let Command::OpenPopup(kind) = &command {
             // a late edit would end the new session (R4), so every pending one goes first
             self.flush_edits();
@@ -1111,6 +1131,11 @@ impl AutoPobApp {
 
     /// Draws one frame. (`eframe::App::ui` calls this.)
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        self.show_frame(ui);
+        os_clipboard(ui.ctx());
+    }
+
+    fn show_frame(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.process_events();
         crate::widgets::scroll_step::set_options(&ctx, self.scroll_options);
@@ -1592,6 +1617,12 @@ impl AutoPobApp {
             return;
         };
 
+        if std::mem::take(&mut self.release_focus)
+            && let Some(id) = ui.ctx().memory(|m| m.focused())
+            && !crate::widgets::scroll_step::is_build_search(ui.ctx(), id)
+        {
+            ui.ctx().memory_mut(|m| m.surrender_focus(id));
+        }
         // Shortcuts. Nothing fires under a modal. While a text field has focus, Ctrl+Z and
         // Ctrl+Y are left unconsumed for the field's own undo; Ctrl+S still saves.
         let modal = self.modal();
@@ -1746,6 +1777,13 @@ impl AutoPobApp {
                     skills_out = self.skills.show(ui, now, behind);
                 }
                 BuildTab::Items => {
+                    // the first time the tab shows, PoB's item database load starts in the
+                    // background, so the panel's first open finds it done. It is no edit and
+                    // has nothing to answer.
+                    if !self.item_dbs_preloaded {
+                        self.item_dbs_preloaded = true;
+                        self.engine.send(Command::PreloadItemDbs);
+                    }
                     let now = ui.input(|i| i.time);
                     self.items.set_socket_scene(self.tree.socket_scene());
                     items_out = self.items.show(ui, now, behind);
@@ -1784,6 +1822,13 @@ impl AutoPobApp {
             } else {
                 self.send(command);
             }
+        }
+        if self.tab != BuildTab::Calcs
+            && let Some(command) = self.calcs.flush()
+        {
+            // leaving the tab sends a count still being typed: PoB's box applies each key
+            // (CalcsTab.lua:70-85)
+            self.send(command);
         }
         if self.tab != BuildTab::Config {
             // leaving the tab sends a custom modifier edit still being typed
@@ -2344,6 +2389,21 @@ mod compare_tests;
 #[cfg(test)]
 #[path = "app_trade_tests.rs"]
 mod trade_tests;
+
+/// Text copied for the OS clipboard leaves the app: an escape for one of PoB's bytes
+/// (`bytes_text`) goes out as the byte's Windows-1252 character, which other programs can read
+fn os_clipboard(ctx: &egui::Context) {
+    ctx.output_mut(|o| {
+        for command in &mut o.commands {
+            if let egui::OutputCommand::CopyText(text)
+            | egui::OutputCommand::TextSelectionSettled(text) = command
+                && let std::borrow::Cow::Owned(shown) = crate::engine::bytes_text::for_display(text)
+            {
+                *text = shown;
+            }
+        }
+    });
+}
 
 /// Takes Ctrl+W out of the frame, so no text box deletes a word on it
 fn strip_ctrl_w(ui: &egui::Ui) {
@@ -3987,8 +4047,16 @@ mod tests {
         click(&mut app, &ctx, "set_delete");
         assert!(app.config_ui.rects.contains_key("set_delete_yes"));
         app.request(Pending::New);
+        // the request runs on the next frame: until then the old build is still "entered",
+        // so waiting for `entering` to clear must start once it is set
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.entering.is_some(), "the new build wasn't requested");
+        // the new build's first snapshot clears `entering`; its Config view (no sets) may come
+        // in a later frame, and would replace the view set below
         pump_until(&mut app, &ctx, "another build", |a| {
-            a.screen == Screen::Build && a.entering.is_none()
+            a.screen == Screen::Build
+                && a.entering.is_none()
+                && a.config.as_ref().is_some_and(|c| c.sets.is_empty())
         });
         app.config = Some(Arc::new(sample_config()));
         app.tab = BuildTab::Config;
@@ -4705,6 +4773,27 @@ mod tests {
         assert_eq!(all, ["https://example.test/tree"]);
     }
 
+    /// Text the app copies leaves it: an escaped byte goes to the OS clipboard as its
+    /// Windows-1252 character, not as a private-use one
+    #[test]
+    fn copied_text_carries_escaped_bytes_as_windows_1252() {
+        let (mut app, ctx) = open_new_build();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.ctx().copy_text("Caf\u{F7E9} \u{F792}s".into());
+            app.show(ui);
+        });
+        let copied: Vec<String> = output
+            .platform_output
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                egui::OutputCommand::CopyText(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(copied, ["Caf\u{e9} \u{2019}s"]);
+    }
+
     #[test]
     fn second_build_still_draws_the_tree_when_the_layout_is_not_resent() {
         let (mut app, ctx) = tree_app();
@@ -5043,6 +5132,357 @@ mod tests {
         assert_eq!(sent_since(&app, before), Vec::<&str>::new());
     }
 
+    /// PoB's boxes apply each key, so a loadout picked while a group label is being typed
+    /// changes sets after the edit. A pending edit is for the group at its index in the old
+    /// set: it goes out before the switch, never after into the new set's group.
+    #[test]
+    fn a_pending_skills_edit_goes_out_before_a_loadout_switch() {
+        let (mut app, ctx) = skills_app();
+        let mut build = (**app.build.as_ref().unwrap()).clone();
+        build.loadouts = [
+            "^7^7Loadouts:",
+            "Leveling",
+            "Mapping",
+            "^7^7-----",
+            "^7^7New Loadout",
+        ]
+        .map(String::from)
+        .to_vec();
+        build.loadout_selected = Some(1);
+        app.build = Some(Arc::new(build));
+        frame(&mut app, &ctx, vec![]);
+        let pos = app.skills.rect("g0_label").center();
+        click_at(&mut app, &ctx, pos);
+        frame(&mut app, &ctx, vec![egui::Event::Text("x".into())]);
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.skills.has_pending());
+        // the wheel over Build's loadout list steps it while the tab's box has the keyboard
+        let at = top_rect(&ctx, "loadouts").center();
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(at)]);
+        let before = app.sent_full.len();
+        let wheel = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::Vec2::new(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut app, &ctx, vec![wheel]);
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        let sent = sent_since(&app, before);
+        let switch = sent
+            .iter()
+            .position(|c| c.starts_with("SelectLoadout"))
+            .unwrap_or_else(|| panic!("no switch: {sent:?}"));
+        let edit = sent
+            .iter()
+            .position(|c| c.starts_with("SetGroupLabel { group: 0"))
+            .unwrap_or_else(|| panic!("the edit didn't go out first: {sent:?}"));
+        assert!(
+            edit < switch,
+            "the edit went out after the switch: {sent:?}"
+        );
+        // once: the blur after the switch sends nothing more
+        assert_eq!(
+            sent.iter()
+                .filter(|c| c.starts_with("SetGroupLabel"))
+                .count(),
+            1,
+            "{sent:?}"
+        );
+        assert!(!app.skills.has_pending(), "the edit is still waiting");
+        // the box let go: typing on doesn't edit the new set's group with the old text
+        assert!(!ctx.text_edit_focused(), "the box kept the keyboard");
+        let before = app.sent_full.len();
+        frame(&mut app, &ctx, vec![egui::Event::Text("y".into())]);
+        frame(&mut app, &ctx, vec![]);
+        let sent = sent_since(&app, before);
+        assert!(
+            !sent.iter().any(|c| c.starts_with("SetGroupLabel")),
+            "{sent:?}"
+        );
+    }
+
+    /// A loadout picked with the arrows in the dropped, searched list: the list stays the
+    /// selected control and its search keeps the keyboard (DropDownControl.lua:422-436)
+    #[test]
+    fn a_loadout_stepped_in_the_dropped_list_keeps_its_search() {
+        let (mut app, ctx) = notes_app();
+        let mut build = (**app.build.as_ref().unwrap()).clone();
+        build.loadouts = [
+            "^7^7Loadouts:",
+            "Leveling",
+            "Mapping",
+            "Mapping 2",
+            "^7^7-----",
+            "^7^7New Loadout",
+        ]
+        .map(String::from)
+        .to_vec();
+        build.loadout_selected = Some(1);
+        app.build = Some(Arc::new(build));
+        frame(&mut app, &ctx, vec![]);
+        let pos = top_rect(&ctx, "loadouts").center();
+        click_at(&mut app, &ctx, pos);
+        frame(&mut app, &ctx, vec![]);
+        assert!(ctx.text_edit_focused(), "the search has no keyboard");
+        frame(&mut app, &ctx, vec![egui::Event::Text("ma".into())]);
+        let before = app.sent_full.len();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::ArrowDown, egui::Modifiers::NONE),
+        );
+        for _ in 0..2 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        let sent = sent_since(&app, before);
+        assert!(
+            sent.iter().any(|c| c.starts_with("SelectLoadout")),
+            "{sent:?}"
+        );
+        assert!(ctx.text_edit_focused(), "the search lost the keyboard");
+    }
+
+    /// Every kind of box whose edit waits for Enter or a blur, made to hold an edit: the box
+    /// clicked and typed into, with the build saved to a file. Returns the app and the command
+    /// the edit sends.
+    fn pending_in(kind: &str) -> (AutoPobApp, egui::Context, &'static str) {
+        let with_path = |app: &mut AutoPobApp| {
+            app.build = Some(Arc::new(BuildView {
+                path: Some("/b/x.xml".into()),
+                ..(**app.build.as_ref().unwrap()).clone()
+            }));
+        };
+        match kind {
+            "notes" => {
+                let (mut app, ctx) = notes_app();
+                app.notes.type_for_test("my notes", 0.0);
+                (app, ctx, "SetNotes")
+            }
+            "skills" => {
+                let (mut app, ctx) = skills_app();
+                with_path(&mut app);
+                let pos = app.skills.rect("g0_label").center();
+                click_at(&mut app, &ctx, pos);
+                frame(&mut app, &ctx, vec![egui::Event::Text("x".into())]);
+                frame(&mut app, &ctx, vec![]);
+                (app, ctx, "SetGroupLabel")
+            }
+            "sidebar" => {
+                let (app, ctx, _) = stages_app();
+                (app, ctx, "SetMainSkillCount")
+            }
+            "top_bar" => {
+                let (mut app, ctx) = notes_app();
+                frame(&mut app, &ctx, vec![]);
+                type_level(&mut app, &ctx, "75");
+                (app, ctx, "SetCharacterLevel")
+            }
+            "calcs" => {
+                let (mut app, ctx) = notes_app();
+                let mut view = crate::engine::views::CalcsView::default();
+                view.selector.stages = Some("1".into());
+                app.calcs.on_snapshot(&Snapshot::Calcs(Arc::new(view)));
+                app.tab = BuildTab::Calcs;
+                frame(&mut app, &ctx, vec![]);
+                frame(&mut app, &ctx, vec![]);
+                let pos = app.calcs.rects.map["stages"].center();
+                click_at(&mut app, &ctx, pos);
+                frame(&mut app, &ctx, vec![egui::Event::Text("3".into())]);
+                (app, ctx, "SetCalcsCount")
+            }
+            "config" => {
+                let (mut app, ctx) = config_app(sample_config());
+                with_path(&mut app);
+                click(&mut app, &ctx, "mod_text:1");
+                type_text(&mut app, &ctx, "+5 life");
+                (app, ctx, "SetCustomModText")
+            }
+            other => panic!("no box kind {other}"),
+        }
+    }
+
+    const PENDING_KINDS: [&str; 6] = ["notes", "skills", "sidebar", "top_bar", "calcs", "config"];
+
+    /// Save with an edit still being typed in any kind of box: the edit goes out first, once
+    #[test]
+    fn every_pending_box_goes_out_before_a_save() {
+        for kind in PENDING_KINDS {
+            let (mut app, ctx, edit) = pending_in(kind);
+            assert!(app.current_unsaved(), "{kind}: not unsaved");
+            let before = app.sent_full.len();
+            frame(&mut app, &ctx, ctrl(egui::Key::S));
+            for _ in 0..3 {
+                frame(&mut app, &ctx, vec![]);
+            }
+            let sent = sent_since(&app, before);
+            let at = |name: &str| sent.iter().position(|c| c.starts_with(name));
+            let (Some(e), Some(save)) = (at(edit), at("Save")) else {
+                panic!("{kind}: {sent:?}");
+            };
+            assert!(e < save, "{kind}: {sent:?}");
+            assert_eq!(
+                sent.iter().filter(|c| c.starts_with(edit)).count(),
+                1,
+                "{kind}: {sent:?}"
+            );
+        }
+    }
+
+    /// Leaving, closing or opening another build with an edit being typed asks first; Don't
+    /// Save sends nothing of it, even after the box's blur
+    #[test]
+    fn every_pending_box_asks_before_leaving_and_dont_save_drops_it() {
+        for leave in [
+            Pending::BackToList,
+            Pending::Close,
+            Pending::Open("/b/other.xml".into()),
+            Pending::New,
+        ] {
+            for kind in PENDING_KINDS {
+                let (mut app, ctx, edit) = pending_in(kind);
+                let before = app.sent_full.len();
+                app.request(leave.clone());
+                frame(&mut app, &ctx, vec![]);
+                assert_eq!(app.prompt, Some(leave.clone()), "{kind}: no question");
+                app.answer_prompt(leave.clone(), PromptChoice::Discard);
+                for _ in 0..3 {
+                    frame(&mut app, &ctx, vec![]);
+                }
+                let sent = sent_since(&app, before);
+                assert!(
+                    !sent.iter().any(|c| c.starts_with(edit)),
+                    "{kind} {leave:?}: {sent:?}"
+                );
+            }
+        }
+    }
+
+    /// Save then open another build ("reload"): the edit, then the save, then the open
+    #[test]
+    fn every_pending_box_is_saved_before_another_build_opens() {
+        for kind in PENDING_KINDS {
+            let (mut app, ctx, edit) = pending_in(kind);
+            let before = app.sent_full.len();
+            let open = Pending::Open("/b/x.xml".into());
+            app.request(open.clone());
+            frame(&mut app, &ctx, vec![]);
+            assert_eq!(app.prompt, Some(open.clone()), "{kind}: no question");
+            app.answer_prompt(open, PromptChoice::Save);
+            pump_until(&mut app, &ctx, "the open", |a| {
+                a.sent_full[before..]
+                    .iter()
+                    .any(|c| c.starts_with("OpenBuild"))
+            });
+            let sent = sent_since(&app, before);
+            let at = |name: &str| sent.iter().position(|c| c.starts_with(name));
+            let (Some(e), Some(save), Some(o)) = (at(edit), at("Save"), at("OpenBuild")) else {
+                panic!("{kind}: {sent:?}");
+            };
+            assert!(e < save && save < o, "{kind}: {sent:?}");
+        }
+    }
+
+    fn loadouts_app(app: &mut AutoPobApp, ctx: &egui::Context) {
+        let mut build = (**app.build.as_ref().unwrap()).clone();
+        build.loadouts = [
+            "^7^7Loadouts:",
+            "Leveling",
+            "Mapping",
+            "Mapping 2",
+            "^7^7-----",
+            "^7^7New Loadout",
+        ]
+        .map(String::from)
+        .to_vec();
+        build.loadout_selected = Some(1);
+        app.build = Some(Arc::new(build));
+        frame(app, ctx, vec![]);
+    }
+
+    /// A box with the keyboard and no edit at a loadout switch lets go too: it would keep the
+    /// sets before's text, and the next key would write it into the new sets
+    #[test]
+    fn a_box_without_an_edit_lets_go_at_a_loadout_switch() {
+        let (mut app, ctx) = skills_app();
+        loadouts_app(&mut app, &ctx);
+        let pos = app.skills.rect("g0_label").center();
+        click_at(&mut app, &ctx, pos);
+        assert!(ctx.text_edit_focused());
+        let at = top_rect(&ctx, "loadouts").center();
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(at)]);
+        let wheel = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::Vec2::new(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let before = app.sent_full.len();
+        frame(&mut app, &ctx, vec![wheel]);
+        frame(&mut app, &ctx, vec![]);
+        assert!(
+            sent_since(&app, before)
+                .iter()
+                .any(|c| c.starts_with("SelectLoadout")),
+            "no switch"
+        );
+        // the new sets' view
+        let mut view = crate::ui::skills::tests::sample();
+        view.groups[0].label = "NewSetLabel".into();
+        app.on_event(Event::Snapshot {
+            seq: app.last_sent,
+            snapshot: Snapshot::Skills(Arc::new(view)),
+        });
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![egui::Event::Text("y".into())]);
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Enter, egui::Modifiers::NONE),
+        );
+        frame(&mut app, &ctx, vec![]);
+        let sent = sent_since(&app, before);
+        assert!(
+            !sent.iter().any(|c| c.starts_with("SetGroupLabel")),
+            "the old set's text went to the new set: {sent:?}"
+        );
+    }
+
+    /// A Notes edit still waiting out its pause doesn't take the keyboard from the dropped
+    /// loadout list's search: what has the keyboard decides, not what is pending
+    #[test]
+    fn a_loadout_stepped_in_the_searched_list_keeps_it_with_notes_pending() {
+        let (mut app, ctx) = notes_app();
+        loadouts_app(&mut app, &ctx);
+        let now = ctx.input(|i| i.time);
+        app.notes.type_for_test("my notes", now);
+        let pos = top_rect(&ctx, "loadouts").center();
+        click_at(&mut app, &ctx, pos);
+        frame(&mut app, &ctx, vec![]);
+        assert!(ctx.text_edit_focused(), "the search has no keyboard");
+        frame(&mut app, &ctx, vec![egui::Event::Text("ma".into())]);
+        assert!(app.notes.has_pending(), "the notes edit went out already");
+        let before = app.sent_full.len();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::ArrowDown, egui::Modifiers::NONE),
+        );
+        for _ in 0..2 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        let sent = sent_since(&app, before);
+        assert!(
+            sent.iter().any(|c| c.starts_with("SelectLoadout")),
+            "{sent:?}"
+        );
+        assert!(ctx.text_edit_focused(), "the search lost the keyboard");
+    }
+
     #[test]
     fn calcs_and_sidebar_counts_do_not_share_ids() {
         let (app, _ctx) = notes_app();
@@ -5100,6 +5540,62 @@ mod tests {
         ] {
             frame(&mut app, &ctx, events);
         }
+        let sent = sent_since(&app, before);
+        assert!(
+            !sent.iter().any(|c| c.contains("SetCalcsCount")),
+            "{sent:?}"
+        );
+    }
+
+    /// PoB's count box applies each key (CalcsTab.lua:70-85): leaving the tab while typing
+    /// sends the count, once
+    #[test]
+    fn calcs_count_typed_then_tab_switch_is_flushed() {
+        let (mut app, ctx) = notes_app();
+        let mut view = crate::engine::views::CalcsView::default();
+        view.selector.stages = Some("1".into());
+        app.calcs.on_snapshot(&Snapshot::Calcs(Arc::new(view)));
+        app.tab = BuildTab::Calcs;
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        let pos = app.calcs.rects.map["stages"].center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![egui::Event::Text("3".into())],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        let before = app.sent_full.len();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Num2, egui::Modifiers::COMMAND),
+        );
+        assert_eq!(app.tab, BuildTab::Skills);
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(
+            sent_since(&app, before),
+            ["SetCalcsCount { control: Stages, text: \"13\" }"]
+        );
+        assert!(!app.calcs.has_pending());
+        // coming back sends nothing more
+        let before = app.sent_full.len();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Num4, egui::Modifiers::COMMAND),
+        );
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
         let sent = sent_since(&app, before);
         assert!(
             !sent.iter().any(|c| c.contains("SetCalcsCount")),

@@ -343,3 +343,32 @@ fn timeless_progress_reaches_the_window() {
     // the tree's node power is not told
     assert!(app.notices.is_empty(), "{:?}", app.notices);
 }
+
+/// The first time the Items tab shows, PoB's item database load starts in the background,
+/// once per engine; it is no edit, so the app waits for no answer.
+#[test]
+fn the_items_tab_starts_the_item_database_load_once() {
+    let (mut app, ctx, log) = open_build();
+    let preloads = |log: &Arc<Mutex<Log>>| {
+        log.lock()
+            .unwrap()
+            .requests
+            .iter()
+            .filter(|r| *r == "apply PreloadItemDbs")
+            .count()
+    };
+    settle(&mut app, &ctx);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(preloads(&log), 0, "sent before the tab showed");
+    for tab in [BuildTab::Items, BuildTab::Tree, BuildTab::Items] {
+        app.tab = tab;
+        settle(&mut app, &ctx);
+        assert!(!app.behind());
+    }
+    let start = Instant::now();
+    while preloads(&log) == 0 && start.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(preloads(&log), 1);
+}

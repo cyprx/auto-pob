@@ -232,11 +232,39 @@ pub fn register_compression(lua: &Lua) -> mlua::Result<()> {
     g.set("Inflate", lua.create_function(inflate)?)?;
     g.set("Deflate", lua.create_function(deflate)?)?;
     // the text a view shows for a PoB string (`pob.rs` reads strings that aren't UTF-8 with
-    // their bad bytes as U+FFFD), so the glue can find an entry by the text the UI sent
+    // their bad bytes escaped, `bytes_text`), so the glue can find an entry by the text the UI
+    // sent
+    // whether a view (a tree of tables) holds the UTF-8 of an escape character anywhere, keys
+    // included: such a view must be escaped even when it is all valid UTF-8. A Lua walk with
+    // `string.find` is far cheaper than walking the tables from Rust.
+    let scan: mlua::Function = lua
+        .load(
+            r#"
+            local find, next, type = string.find, next, type
+            local function scan(v, depth)
+                local t = type(v)
+                if t == "string" then
+                    return find(v, "\239[\158\159]") ~= nil
+                end
+                if t == "table" and depth < 64 then
+                    for k, x in next, v do
+                        if scan(k, depth + 1) or scan(x, depth + 1) then
+                            return true
+                        end
+                    end
+                end
+                return false
+            end
+            return function(v) return scan(v, 0) end
+            "#,
+        )
+        .set_name("=AutoPobHasEscapes")
+        .eval()?;
+    g.set("AutoPobHasEscapes", scan)?;
     g.set(
         "AutoPobLossy",
         lua.create_function(|lua, text: LuaString| {
-            match String::from_utf8_lossy(&text.as_bytes()) {
+            match super::bytes_text::decode(&text.as_bytes()) {
                 std::borrow::Cow::Borrowed(_) => Ok(text),
                 std::borrow::Cow::Owned(fixed) => lua.create_string(fixed),
             }

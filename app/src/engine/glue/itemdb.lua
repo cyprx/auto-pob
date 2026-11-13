@@ -201,6 +201,21 @@ function glue.item_db_close()
 	waiting = {}
 end
 
+-- PoB's item database load (Main.lua:270-282) ahead of a panel open, once the Items tab was
+-- shown: PoB runs it a slice a frame from its start, but a frame here leaves it alone
+-- (`glue.frame`). The entry is gone once the load ended, or failed.
+function glue.item_db_preload_pending()
+	return pob.main.main.onFrameFuncs.LoadItems ~= nil
+end
+
+-- One slice of that load
+function glue.item_db_preload_step()
+	local load = pob.main.main.onFrameFuncs.LoadItems
+	if load then
+		load()
+	end
+end
+
 -- Whether the open database has work: its load, or a stat sort to run
 function glue.item_db_pending(db)
 	local control = db_control(db)

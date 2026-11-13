@@ -1,4 +1,5 @@
 mod buildpaths;
+pub mod bytes_text;
 pub mod commands;
 pub mod memory;
 pub mod native;

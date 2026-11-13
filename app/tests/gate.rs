@@ -1803,7 +1803,7 @@ fn layout_includes_spec_only_nodes() {
         assert!(ids.contains(id), "allocated node {id} is not in the layout");
     }
     assert!(!state.paths.is_empty(), "the build can grow");
-    for path in &state.paths {
+    for path in state.paths.iter() {
         assert!(ids.contains(&path.node), "reachable node {}", path.node);
         assert!(path.path.iter().all(|id| ids.contains(id)));
     }
@@ -3060,6 +3060,363 @@ fn search_matches_again_after_other_commands() {
     assert_eq!(matches(&mut s).len(), 1);
 }
 
+/// A session with a copy of the tree in which only one node reads as "qzxv", and a fresh
+/// search for it on the first tree (no match)
+fn search_on_two_trees(test: &str) -> Session {
+    let mut s = attack_session(test);
+    s.run(Command::CopySpec {
+        index: 0,
+        title: "Copy".into(),
+    })
+    .unwrap();
+    s.backend
+        .lua
+        .load(
+            "local spec = pob.build.treeTab.specList[2]
+            assert(spec ~= pob.build.spec, 'the copy is active')
+            for _, n in pairs(spec.nodes[spec.curClass.startNodeId].linked) do
+                if n.type == 'Normal' then n.dn = 'Qzxv' return end
+            end
+            error('no neighbour')",
+        )
+        .exec()
+        .unwrap();
+    s.backend.apply(search("qzxv"), &|_| {}).unwrap();
+    assert!(
+        s.backend
+            .tree_state_view()
+            .unwrap()
+            .search_matches
+            .is_empty()
+    );
+    s
+}
+
+/// The same search again, as its only command, and its matches
+fn search_again(s: &mut Session) -> usize {
+    s.backend.apply(search("qzxv"), &|_| {}).unwrap();
+    s.backend.tree_state_view().unwrap().search_matches.len()
+}
+
+/// Switches to the copy behind the engine's back, with no command
+fn switch_behind(s: &mut Session) {
+    s.backend
+        .lua
+        .load("pob.build.treeTab:SetActiveSpec(2)")
+        .exec()
+        .unwrap();
+}
+
+/// Each way the engine learns the nodes may have changed clears the fresh search on its own:
+/// a command with no recalculation after it, a recalculation alone, and a background step
+/// alone.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn search_matches_again_after_each_kind_of_change() {
+    let _guard = lock();
+    // a command alone: the tree switch, with no recalculation
+    let mut s = search_on_two_trees("tree-search-apply");
+    s.backend
+        .apply(Command::SelectSpec { index: 1 }, &|_| {})
+        .unwrap();
+    assert_eq!(search_again(&mut s), 1, "after a command");
+    drop(s);
+    // a recalculation alone
+    let mut s = search_on_two_trees("tree-search-recalc");
+    switch_behind(&mut s);
+    s.backend.recalculate().unwrap();
+    assert_eq!(search_again(&mut s), 1, "after a recalculation");
+    drop(s);
+    // a background step alone
+    let mut s = search_on_two_trees("tree-search-step");
+    switch_behind(&mut s);
+    s.backend
+        .background_step(BackgroundTask::ItemDb, &|_| {})
+        .unwrap();
+    assert_eq!(search_again(&mut s), 1, "after a background step");
+}
+
+/// The spec's reachable paths and dependants, built from scratch as the tree state lists them
+fn paths_from_scratch(
+    s: &Session,
+) -> (
+    Vec<auto_pob::engine::views::NodePath>,
+    Vec<auto_pob::engine::views::NodePath>,
+) {
+    let value: mlua::Value = s
+        .backend
+        .lua
+        .load(
+            "local function list(field, alloc)
+                local out = {}
+                for id, node in pairs(pob.build.spec.nodes) do
+                    if node[field] and (not node.alloc) == (not alloc) then
+                        local path = {}
+                        for i, n in ipairs(node[field]) do path[i] = n.id end
+                        out[#out + 1] = { node = id, path = path }
+                    end
+                end
+                table.sort(out, function(a, b) return a.node < b.node end)
+                return out
+            end
+            return { list('path', false), list('depends', true) }",
+        )
+        .eval()
+        .unwrap();
+    s.backend.lua.from_value(value).unwrap()
+}
+
+/// The tree state keeps its paths and dependants while they stay the same, and they are never
+/// stale: after each change they equal a list built from scratch.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tree_paths_are_kept_but_never_stale() {
+    let _guard = lock();
+    let mut s = attack_session("tree-paths-cache");
+    let check = |s: &mut Session, what: &str| {
+        let state = s.backend.tree_state_view().unwrap();
+        let (paths, depends) = paths_from_scratch(s);
+        assert!(!paths.is_empty(), "{what}");
+        assert!(*state.paths == paths[..], "{what}: stale paths");
+        assert!(*state.depends == depends[..], "{what}: stale dependants");
+        state
+    };
+    let state = check(&mut s, "open");
+    // an edit that leaves the tree alone: the glue doesn't send them again, across its
+    // recalculation
+    let token: i64 = s
+        .backend
+        .lua
+        .load("local _, token = glue.tree_state(false, nil) return token")
+        .eval()
+        .unwrap();
+    s.run(set("conditionFullLife", ConfigValue::Bool(true)))
+        .unwrap();
+    let (again, sent): (i64, bool) = s
+        .backend
+        .lua
+        .load(format!(
+            "local _, again, sent = glue.tree_state(false, {token}) return again, sent"
+        ))
+        .eval()
+        .unwrap();
+    assert_eq!(again, token);
+    assert!(!sent, "unchanged paths were sent again");
+    let edited = check(&mut s, "config edit");
+    // the engine shares the lists it holds rather than copying them
+    let again = s.backend.tree_state_view().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&edited.paths, &again.paths));
+    assert!(std::sync::Arc::ptr_eq(&edited.depends, &again.depends));
+    // every kind of change
+    let reachable = state.paths.iter().find(|p| p.path.len() == 1).unwrap().node;
+    s.run(Command::AllocNode { id: reachable }).unwrap();
+    check(&mut s, "alloc");
+    s.run(Command::DeallocNode { id: reachable }).unwrap();
+    check(&mut s, "dealloc");
+    s.run(Command::Undo(Tab::Tree)).unwrap();
+    check(&mut s, "undo");
+    s.run(Command::Redo(Tab::Tree)).unwrap();
+    check(&mut s, "redo");
+    s.run(Command::CopySpec {
+        index: 0,
+        title: "Copy".into(),
+    })
+    .unwrap();
+    s.run(Command::SelectSpec { index: 1 }).unwrap();
+    s.run(Command::AllocNode { id: reachable }).unwrap();
+    check(&mut s, "alloc on the copy");
+    s.run(Command::SelectSpec { index: 0 }).unwrap();
+    check(&mut s, "back to the first tree");
+    let other = state
+        .classes
+        .iter()
+        .find(|c| c.id != state.class_id)
+        .unwrap()
+        .id;
+    s.run(Command::SelectClass {
+        id: other,
+        connect: false,
+    })
+    .unwrap();
+    check(&mut s, "class change");
+    // a path or an allocation changed behind the view's back, as a jewel's reach would
+    s.backend
+        .lua
+        .load(
+            "for _, node in pairs(pob.build.spec.nodes) do
+                if node.path and #node.path > 2 and not node.alloc then
+                    node.path[2] = node.path[1]
+                    return
+                end
+            end
+            error('no long path')",
+        )
+        .exec()
+        .unwrap();
+    check(&mut s, "a path edited");
+    s.backend
+        .lua
+        .load(
+            "for _, node in pairs(pob.build.spec.nodes) do
+                if node.path and not node.alloc then node.path[#node.path + 1] = node return end
+            end",
+        )
+        .exec()
+        .unwrap();
+    check(&mut s, "a path grown");
+    // another build
+    s.open_fixture("minion", &fixtures_dir().join("minion.xml"));
+    check(&mut s, "another build");
+    // leaving a build lets its lists go: the same build opened again gets them built afresh
+    let token: i64 = s
+        .backend
+        .lua
+        .load("local _, token = glue.tree_state(false, nil) return token")
+        .eval()
+        .unwrap();
+    s.open_fixture("minion", &fixtures_dir().join("minion.xml"));
+    let sent: bool = s
+        .backend
+        .lua
+        .load(format!(
+            "local _, _, sent = glue.tree_state(false, {token}) return sent"
+        ))
+        .eval()
+        .unwrap();
+    assert!(sent, "the left build's lists were kept");
+    check(&mut s, "the same build again");
+}
+
+/// Pastes, saves and socket a jewel into the nearest socket `pick` chooses; returns the number
+/// of nodes the spec has afterwards
+fn socket_jewel(s: &mut Session, pick: &str, text: &str) -> usize {
+    let socket: u32 = s.backend.lua.load(pick).eval().unwrap();
+    s.run(Command::AllocNode { id: socket }).unwrap();
+    // the view takes the tree with the socket allocated, so the jewel is the only change
+    s.backend.tree_state_view().unwrap();
+    s.run(Command::PasteItem { text: text.into() }).unwrap();
+    s.run(Command::SaveDisplayItem).unwrap();
+    let jewel: u32 = s
+        .backend
+        .lua
+        .load(
+            "local m = 0 for id in pairs(pob.build.itemsTab.items) do if id > m then m = id end end return m",
+        )
+        .eval()
+        .unwrap();
+    s.run(Command::EquipItem {
+        slot: format!("Jewel {socket}"),
+        id: Some(jewel),
+    })
+    .unwrap();
+    let count: usize = s
+        .backend
+        .lua
+        .load("local n = 0 for _ in pairs(pob.build.spec.nodes) do n = n + 1 end return n")
+        .eval()
+        .unwrap();
+    count
+}
+
+/// Jewels that change the tree's reach or its nodes: the paths and dependants follow them.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tree_paths_follow_jewels() {
+    let _guard = lock();
+    let mut s = attack_session("tree-paths-jewels");
+    let check = |s: &mut Session, what: &str| {
+        let state = s.backend.tree_state_view().unwrap();
+        let (paths, depends) = paths_from_scratch(s);
+        assert!(*state.paths == paths[..], "{what}: stale paths");
+        assert!(*state.depends == depends[..], "{what}: stale dependants");
+        state
+    };
+    let before = check(&mut s, "open");
+    let nodes_before: usize = s
+        .backend
+        .lua
+        .load("local n = 0 for _ in pairs(pob.build.spec.nodes) do n = n + 1 end return n")
+        .eval()
+        .unwrap();
+    // a radius jewel that lets the nodes around it be taken unconnected: reach changes with
+    // no change of allocation
+    let nearest = |filter: &str| {
+        format!(
+            "local best, d = 0, 1e9
+            for id in pairs(pob.build.itemsTab.sockets) do
+                local n = pob.build.spec.nodes[id]
+                if n and n.name ~= 'Charm Socket' and not n.alloc and n.path and ({filter})
+                    and n.pathDist < d then best, d = id, n.pathDist end
+            end
+            assert(best ~= 0, 'no socket')
+            return best"
+        )
+    };
+    socket_jewel(
+        &mut s,
+        &nearest("not n.expansionJewel"),
+        "Rarity: UNIQUE\nIntuitive Leap\nViridian Jewel\nRadius: Small\nImplicits: 0\n\
+         Passives in Radius can be Allocated without being connected to your tree\nCorrupted",
+    );
+    let leap = check(&mut s, "intuitive leap");
+    assert!(leap.paths != before.paths, "the jewel changed no path");
+    // a large cluster jewel in an outer socket adds nodes to the spec
+    let nodes = socket_jewel(
+        &mut s,
+        &nearest("n.expansionJewel and n.expansionJewel.size == 2"),
+        "Rarity: RARE\nTest Cluster\nLarge Cluster Jewel\nItem Level: 84\nImplicits: 3\n\
+         {crafted}Adds 8 Passive Skills\n{crafted}2 Added Passive Skills are Jewel Sockets\n\
+         {crafted}Added Small Passive Skills grant: 12% increased Fire Damage",
+    );
+    assert!(nodes > nodes_before, "the cluster added no nodes ({nodes})");
+    check(&mut s, "cluster jewel");
+    // a timeless jewel conquers the nodes around it
+    socket_jewel(
+        &mut s,
+        &nearest("not n.expansionJewel"),
+        "Rarity: UNIQUE\nLethal Pride\nTimeless Jewel\nRadius: Large\nImplicits: 0\n\
+         Commanded leadership over 12000 warriors under Kaom\n\
+         Passives in radius are Conquered by the Karui\nCorrupted",
+    );
+    check(&mut s, "timeless jewel");
+}
+
+/// A tree switch between two identical searches matches the new tree's nodes, not the old
+/// tree's results.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn search_matches_again_after_a_tree_switch() {
+    let _guard = lock();
+    let mut s = attack_session("tree-search-switch");
+    let matches = |s: &mut Session| s.backend.tree_state_view().unwrap().search_matches;
+    s.run(Command::CopySpec {
+        index: 0,
+        title: "Copy".into(),
+    })
+    .unwrap();
+    // only the copy has a node that reads as the search
+    s.backend
+        .lua
+        .load(
+            "local spec = pob.build.treeTab.specList[2]
+            assert(spec ~= pob.build.spec, 'the copy is active')
+            for _, n in pairs(spec.nodes[spec.curClass.startNodeId].linked) do
+                if n.type == 'Normal' then n.dn = 'Qzxv' return end
+            end
+            error('no neighbour')",
+        )
+        .exec()
+        .unwrap();
+    s.run(search("qzxv")).unwrap();
+    assert!(matches(&mut s).is_empty());
+    s.run(Command::SelectSpec { index: 1 }).unwrap();
+    s.run(search("qzxv")).unwrap();
+    assert_eq!(matches(&mut s).len(), 1, "the old tree's results");
+    s.run(Command::SelectSpec { index: 0 }).unwrap();
+    s.run(search("qzxv")).unwrap();
+    assert!(matches(&mut s).is_empty(), "the copy's results");
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn jewel_radius_matches_pob() {
@@ -3596,17 +3953,19 @@ fn spike_tree_numbers() {
 }
 
 /// PoB's strings are bytes: a build saved by a Windows-1252 editor keeps bytes that aren't
-/// UTF-8 in its notes, labels and items. PoB shows such a build; every view of ours shows it
-/// too, those bytes as U+FFFD, where serde refused the whole view.
+/// UTF-8 in its notes, labels, items and custom modifiers. PoB shows such a build; every view
+/// of ours shows it too, each such byte as a private-use escape (`bytes_text`), where serde
+/// refused the whole view. An edit to such a field keeps the bytes on save, as PoB's does.
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn a_build_with_bytes_that_are_not_utf8_shows_in_every_view() {
     let _guard = lock();
     let mut s = Session::start("non-utf8");
     let good = fs::read_to_string(fixture_xml("attack")).unwrap();
-    // \u{1} marks where a lone Windows-1252 "é" byte goes
+    // \u{1} marks where a lone Windows-1252 "é" byte goes; \u{2} and \u{3} are the bytes
+    // 0x92 (a continuation byte) and 0xFC (never a lead byte)
     let marked = good
-        .replace("label=\"\"", "label=\"Caf\u{1}\"")
+        .replace("label=\"\"", "label=\"Caf\u{1}\u{2}\u{3}\"")
         .replace(
             "Rarity: NORMAL\nDriftwood Maul",
             "Rarity: RARE\nCaf\u{1} Smasher\nDriftwood Maul",
@@ -3620,7 +3979,8 @@ fn a_build_with_bytes_that_are_not_utf8_shows_in_every_view() {
         )
         .replace(
             "<ConfigSet id=\"1\">",
-            "<ConfigSet id=\"1\" title=\"Tr\u{1}e\">",
+            "<ConfigSet id=\"1\" title=\"Tr\u{1}e\">\n<Input name=\"customMods\" \
+             string=\"+5 to Strength&#10;Caf\u{1} line\"/>",
         )
         .replace(
             "<ItemSet useSecondWeaponSet=\"nil\" id=\"1\">",
@@ -3629,27 +3989,107 @@ fn a_build_with_bytes_that_are_not_utf8_shows_in_every_view() {
     let bytes: Vec<u8> = marked
         .into_bytes()
         .into_iter()
-        .map(|b| if b == 1 { 0xE9 } else { b })
+        .map(|b| match b {
+            1 => 0xE9,
+            2 => 0x92,
+            3 => 0xFC,
+            b => b,
+        })
         .collect();
     let path = s.builds_dir().join("latin.xml");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, bytes).unwrap();
-    s.run(Command::OpenBuild { path }).expect("open");
+    s.run(Command::OpenBuild { path: path.clone() })
+        .expect("open");
+    // the byte 0xE9 as the views show it
+    const E: char = '\u{F7E9}';
+    // and 0x92, 0xFC
+    const Q: char = '\u{F792}';
+    const U: char = '\u{F7FC}';
     let notes = s.backend.notes_view().expect("notes view");
-    assert!(notes.text.contains("caf\u{fffd} notes"), "{:?}", notes.text);
+    assert!(
+        notes.text.contains(&format!("caf{E} notes")),
+        "{:?}",
+        notes.text
+    );
     let skills = s.backend.skills_view().expect("skills view");
-    assert_eq!(skills.groups[0].label, "Caf\u{fffd}");
+    assert_eq!(skills.groups[0].label, format!("Caf{E}{Q}{U}"));
     s.backend.items_view().expect("items view");
     let item = s.backend.item_text(1).expect("item text");
-    assert!(item.text.contains("Caf\u{fffd} Smasher"), "{}", item.text);
+    assert!(
+        item.text.contains(&format!("Caf{E} Smasher")),
+        "{}",
+        item.text
+    );
     let group = s.backend.socket_group_text(0).expect("group text");
-    assert!(group.text.contains("Caf\u{fffd}"), "{}", group.text);
+    assert!(group.text.contains(&format!("Caf{E}")), "{}", group.text);
+    let mods = s.config().custom_mods[0].text.clone();
+    assert!(mods.contains(&format!("Caf{E} line")), "{mods:?}");
+
+    // edits to each field, as the UI sends them: the text it showed, changed
+    s.run(Command::SetNotes {
+        text: format!("{} more", notes.text),
+    })
+    .expect("notes");
+    // each edit deletes the character just before a byte: the box's diff then holds the
+    // bytes after it
+    s.run(Command::SetGroupLabel {
+        group: 0,
+        text: format!("Ca{E}{Q}{U}"),
+    })
+    .expect("label");
+    s.run(Command::SetGroupLabel {
+        group: 0,
+        text: format!("Ca{Q}{U}!"),
+    })
+    .expect("label");
+    s.run(Command::SetCustomModText {
+        group: 0,
+        text: format!("{mods}\n+1 to Dexterity"),
+    })
+    .expect("custom mods");
+    s.run(Command::EditItem { id: 1 }).expect("edit the item");
+    let body = item
+        .text
+        .lines()
+        .filter(|l| !l.starts_with("Rarity:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    s.run(Command::SetDisplayItemText {
+        rarity: 2,
+        text: body.replacen("Smasher", "Smashers", 1),
+    })
+    .expect("item text");
+    s.run(Command::SaveDisplayItem).expect("save the item");
+    s.run(Command::Save).expect("save");
+    let saved = fs::read(&path).unwrap();
+    let has = |needle: &[u8]| saved.windows(needle.len()).any(|w| w == needle);
+    assert!(
+        !has("\u{fffd}".as_bytes()) && ![E, Q, U].iter().any(|c| has(c.to_string().as_bytes())),
+        "an edit wrote the byte as text"
+    );
+    for needle in [
+        &b"caf\xE9 notes"[..],
+        b"label=\"Ca\x92\xFC!\"",
+        b"Caf\xE9 line",
+        b"+1 to Dexterity",
+        // PoB's Save makes the item through sanitiseText (Item.lua:93): one byte, one "?"
+        b"Caf? Smashers",
+        b"Tr\xE9e",
+    ] {
+        assert!(
+            has(needle),
+            "{:?} isn't in the saved file",
+            String::from_utf8_lossy(needle)
+        );
+    }
+    let skills = s.backend.skills_view().expect("skills view");
     // what the UI shows is what it sends back: lookups by that text find the entry
     let build = s.backend.build_view().expect("build view");
     let loadout = build
         .loadouts
         .iter()
-        .find(|l| l.contains('\u{fffd}'))
+        .find(|l| l.contains(E))
         .unwrap_or_else(|| panic!("no loadout: {:?}", build.loadouts))
         .clone();
     s.run(Command::SelectLoadout { label: loadout })
@@ -3663,4 +4103,279 @@ fn a_build_with_bytes_that_are_not_utf8_shows_in_every_view() {
         s.backend.skills_view().unwrap().groups.is_empty(),
         "the group is still there"
     );
+}
+
+/// A build's text can hold a real private-use character in the escapes' range (U+F7E9 here)
+/// in a view serde takes, beside a byte that isn't UTF-8 elsewhere. Every view escapes it, in
+/// whatever order the views come, so an edit saves it as it was, not as the byte 0xE9.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_private_use_character_round_trips_beside_bytes_that_are_not_utf8() {
+    let _guard = lock();
+    let mut s = Session::start("private-use");
+    let good = fs::read_to_string(fixture_xml("attack")).unwrap();
+    let mut bytes = good
+        .replace("label=\"\"", "label=\"X\u{F7E9}Y\"")
+        .replace("<Notes>", "<Notes>caf\u{1} notes")
+        .into_bytes();
+    for b in &mut bytes {
+        if *b == 1 {
+            *b = 0xE9;
+        }
+    }
+    let path = s.builds_dir().join("pua.xml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, bytes).unwrap();
+    s.run(Command::OpenBuild { path: path.clone() })
+        .expect("open");
+    // the engine's order: Skills before Notes
+    let skills = s.backend.skills_view().expect("skills view");
+    let label = skills.groups[0].label.clone();
+    assert_eq!(
+        label, "X\u{F7EF}\u{F79F}\u{F7A9}Y",
+        "the character isn't escaped"
+    );
+    s.backend.notes_view().expect("notes view");
+    // an error that echoes text with such a byte shows it escaped too, not as U+FFFD
+    let error = s
+        .run(Command::SetGroupSlot {
+            group: 0,
+            slot: Some("Caf\u{F7E9}".into()),
+        })
+        .expect_err("no such slot")
+        .to_string();
+    assert_eq!(error, "unknown slot Caf\u{F7E9}");
+    s.run(Command::SetGroupLabel {
+        group: 0,
+        text: format!("{label}!"),
+    })
+    .expect("label");
+    s.run(Command::Save).expect("save");
+    let saved = fs::read(&path).unwrap();
+    let needle = "label=\"X\u{F7E9}Y!\"".as_bytes();
+    assert!(
+        saved.windows(needle.len()).any(|w| w == needle),
+        "the label changed on save"
+    );
+    // file names are no build text: one in the escapes' range lists, opens and saves as
+    // itself after the escapes are in use
+    let named = s.builds_dir().join("x\u{F7E9}.xml");
+    fs::copy(fixture_xml("attack"), &named).unwrap();
+    let list = s.backend.build_list_view().expect("list");
+    assert!(
+        list.entries.iter().any(|e| e.name == "x\u{F7E9}"),
+        "{:?}",
+        list.entries.iter().map(|e| &e.name).collect::<Vec<_>>()
+    );
+    s.run(Command::OpenBuild {
+        path: named.clone(),
+    })
+    .expect("open the build named in the range");
+    s.run(Command::SaveAs {
+        folder: String::new(),
+        name: "y\u{F7E9}".into(),
+        overwrite: false,
+    })
+    .expect("save as a name in the range");
+    assert!(s.builds_dir().join("y\u{F7E9}.xml").exists());
+}
+
+/// A build file named with a real character in the escapes' range (U+F7E9), in a process
+/// that never showed an escape: the build view gives its name and path as they are, and Save
+/// As with the name its box opens on writes that same file, not a new one
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_build_named_in_the_escapes_range_saves_as_itself() {
+    let _guard = lock();
+    let mut s = Session::start("pua-name");
+    let builds = s.builds_dir();
+    fs::create_dir_all(&builds).unwrap();
+    let named = builds.join("x\u{F7E9}.xml");
+    fs::copy(fixture_xml("attack"), &named).unwrap();
+    s.run(Command::OpenBuild {
+        path: named.clone(),
+    })
+    .expect("open");
+    let view = s.backend.build_view().unwrap();
+    assert_eq!(view.name, "x\u{F7E9}");
+    assert_eq!(view.save_as_name, "x\u{F7E9}");
+    assert_eq!(view.path.as_deref(), Some(named.as_path()));
+    s.run(Command::SaveAs {
+        folder: String::new(),
+        name: view.save_as_name.clone(),
+        overwrite: true,
+    })
+    .expect("save as");
+    let files: Vec<String> = fs::read_dir(&builds)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(files, ["x\u{F7E9}.xml"], "Save As wrote another file");
+}
+
+/// A build code PoB can't load raises in Build:Init (here a gem level that isn't a number:
+/// CalcTools.lua:46). PoB reuses one build object, and its next Init ran SyncLoadouts against
+/// the half-loaded tabs (Build.lua:601-604, 859), so every later open, import or new build
+/// failed until a restart. Now the error is PoB's own reason and the next build loads.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_build_that_raises_while_loading_leaves_the_engine_working() {
+    let _guard = lock();
+    let mut s = Session::start("raises-loading");
+    s.open_fixture("attack", &fixture_xml("attack"));
+    let good = fs::read_to_string(fixture_xml("attack")).unwrap();
+    let bad = good.replace("quality=\"0\" level=\"", "quality=\"0\" level=\"x");
+    let code = |s: &Session, xml: &str| -> String {
+        s.backend
+            .lua
+            .load(format!(
+                "return (common.base64.encode(Deflate({xml:?})):gsub('+','-'):gsub('/','_'))"
+            ))
+            .eval::<String>()
+            .unwrap()
+    };
+    let c = code(&s, &bad);
+    let error = s
+        .run(Command::ImportShareCode { code: c })
+        .expect_err("PoB can't load that build")
+        .to_string();
+    assert!(error.contains("CalcTools.lua:46"), "{error}");
+    s.backend.items_view().expect("items view");
+    s.backend.skills_view().expect("skills view");
+    let c = code(&s, &good);
+    s.run(Command::ImportShareCode { code: c })
+        .expect("a good code imports");
+    assert!(!s.backend.skills_view().unwrap().groups.is_empty());
+    // a file that raises the same way, then another build
+    let path = s.builds_dir().join("raises.xml");
+    fs::write(&path, &bad).unwrap();
+    s.run(Command::OpenBuild { path })
+        .expect_err("PoB can't load that build");
+    let path = s.builds_dir().join("attack.xml");
+    s.run(Command::OpenBuild { path }).expect("open");
+    assert!(!s.backend.skills_view().unwrap().groups.is_empty());
+    s.run(Command::NewBuild).expect("new");
+    // a load by another way in than an open or a code (a link's answer lands through PoB's
+    // own SetMode): the Init wrapper itself puts a new build in place, with its tabs
+    s.backend
+        .lua
+        .globals()
+        .set("RAISING_XML", bad.as_str())
+        .unwrap();
+    let state: String = s
+        .backend
+        .lua
+        .load(
+            r#"local ok = pcall(function()
+                pob.main.main:SetMode("BUILD", false, "Landed", RAISING_XML)
+                glue.frame()
+            end)
+            local b = pob.build
+            return tostring(ok) .. " " .. tostring(b.skillsTab ~= nil and b.treeTab ~= nil
+                and b.itemsTab ~= nil and b.configTab ~= nil) .. " " .. tostring(b.buildName)"#,
+        )
+        .eval()
+        .unwrap();
+    assert_eq!(
+        state, "false true Unnamed build",
+        "the raising load left no build"
+    );
+}
+
+/// PoB pastes into its Import Comparison box at once (EditControl:Insert); ours typed the
+/// text one character at a time, joining as it went, which took minutes for a long paste
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_long_comparison_paste_is_quick() {
+    let _guard = lock();
+    let mut s = Session::start("long-compare");
+    s.open_fixture("attack", &fixture_xml("attack"));
+    let start = std::time::Instant::now();
+    let error = s
+        .run(Command::LoadCompare {
+            source: auto_pob::engine::CompareSource::Import {
+                text: "A".repeat(400_000),
+                name: None,
+            },
+        })
+        .expect_err("not a build code")
+        .to_string();
+    assert!(error.contains("Invalid build code"), "{error}");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(10),
+        "took {:?}",
+        start.elapsed()
+    );
+}
+
+/// Undo and redo are each tab's own (PoB keeps an undo list per tab): an edit in one tab, then
+/// edits in others, then that tab's undo takes back its own edit only; redo puts it back;
+/// a save in between keeps the undo lists, and a reload shows what was saved
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn undo_and_redo_stay_in_their_tab() {
+    let _guard = lock();
+    let mut s = Session::start("undo-tabs");
+    let path = s.open_fixture("attack", &fixture_xml("attack"));
+    let label = |s: &mut Session| s.backend.skills_view().unwrap().groups[0].label.clone();
+    let allocated = |s: &mut Session| s.backend.tree_state_view().unwrap().allocated.len();
+    let items = |s: &mut Session| s.backend.items_view().unwrap().items.len();
+    let (label0, tree0, items0) = (label(&mut s), allocated(&mut s), items(&mut s));
+    assert!(tree0 > 1 && items0 > 0);
+
+    s.run(Command::SetGroupLabel {
+        group: 0,
+        text: "Edited".into(),
+    })
+    .unwrap();
+    s.run(Command::ResetTree).unwrap();
+    let id = s.backend.items_view().unwrap().items[0].id;
+    s.run(Command::DeleteItem {
+        id,
+        confirmed: true,
+    })
+    .unwrap();
+    let tree1 = allocated(&mut s);
+    assert!(tree1 < tree0);
+    assert_eq!(items(&mut s), items0 - 1);
+
+    // the Skills undo takes back the label only
+    s.run(Command::Undo(Tab::Skills)).unwrap();
+    assert_eq!(label(&mut s), label0);
+    assert_eq!(allocated(&mut s), tree1, "the Skills undo touched the tree");
+    assert_eq!(
+        items(&mut s),
+        items0 - 1,
+        "the Skills undo touched the items"
+    );
+    // the Items undo, then the Tree undo, each their own
+    s.run(Command::Undo(Tab::Items)).unwrap();
+    assert_eq!(items(&mut s), items0);
+    assert_eq!(allocated(&mut s), tree1, "the Items undo touched the tree");
+    s.run(Command::Undo(Tab::Tree)).unwrap();
+    assert_eq!(allocated(&mut s), tree0);
+    assert_eq!(label(&mut s), label0);
+    // redo in another order
+    s.run(Command::Redo(Tab::Tree)).unwrap();
+    s.run(Command::Redo(Tab::Skills)).unwrap();
+    assert_eq!(label(&mut s), "Edited");
+    assert_eq!(allocated(&mut s), tree1);
+    assert_eq!(
+        items(&mut s),
+        items0,
+        "a redo of another tab redid the item delete"
+    );
+    assert!(s.backend.build_view().unwrap().unsaved);
+
+    // a save keeps each tab's undo, and a reload shows what was saved
+    s.run(Command::Save).unwrap();
+    assert!(!s.backend.build_view().unwrap().unsaved);
+    s.run(Command::Undo(Tab::Skills)).unwrap();
+    assert_eq!(label(&mut s), label0, "the save dropped the Skills undo");
+    s.run(Command::Redo(Tab::Skills)).unwrap();
+    s.run(Command::Save).unwrap();
+    s.run(Command::OpenBuild { path }).unwrap();
+    assert_eq!(label(&mut s), "Edited");
+    assert_eq!(allocated(&mut s), tree1);
+    assert_eq!(items(&mut s), items0);
 }

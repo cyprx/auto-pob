@@ -8,6 +8,7 @@
 //! bytes (EditControl.lua:148). PoB never trims: the Save buttons ask for `%S` and save the box as
 //! it stands.
 
+use crate::engine::bytes_text::{pob_char_len, pob_len};
 use eframe::egui;
 
 /// PoB's limit for set, build and folder names
@@ -312,11 +313,11 @@ pub fn spliced_with(
         let filtered = paste_filter.map(|f| f(inserted));
         let inserted = filtered.as_deref().unwrap_or(inserted);
         // Ctrl+V turns every byte from 128 up into "?" before the filter sees it
-        // (EditControl.lua:533)
+        // (EditControl.lua:533); an escape is one of PoB's bytes
         let swapped: String = inserted
             .chars()
             .flat_map(|c| {
-                let n = if c.is_ascii() { 1 } else { c.len_utf8() };
+                let n = if c.is_ascii() { 1 } else { pob_char_len(c) };
                 std::iter::repeat_n(if c.is_ascii() { c } else { '?' }, n)
             })
             // ReplaceSel and Insert drop "\r" before the filter (EditControl.lua:141, 163)
@@ -329,15 +330,23 @@ pub fn spliced_with(
         }
         out = kept;
     } else {
+        // the limit counts PoB's bytes: an escape is one (`bytes_text`). The text around the
+        // insert is counted once, and what is kept as it grows, so a long insert stays linear.
+        let around = if limit == usize::MAX {
+            0
+        } else {
+            pob_len(front) + pob_len(back)
+        };
+        let mut held = 0;
         for c in inserted.chars() {
             if !keeps(c) {
                 continue;
             }
-            let held = if replacing { 0 } else { out.len() };
-            if front.len() + held + c.len_utf8() + back.len() > limit {
+            if limit != usize::MAX && around + held + pob_char_len(c) > limit {
                 continue;
             }
             out.push(c);
+            held += pob_char_len(c);
             replacing = false;
         }
         if replacing {
@@ -345,7 +354,7 @@ pub fn spliced_with(
         }
     }
     let result = format!("{front}{out}{back}");
-    if pasted && result.len() > limit {
+    if pasted && pob_len(&result) > limit {
         return before.to_owned();
     }
     result
@@ -594,6 +603,41 @@ mod tests {
         // typed, a Path box keeps non-ASCII text up to 100 bytes
         assert_eq!(spliced("", &full, Filter::Path, NAME_LIMIT, false), full);
         assert_eq!(spliced(&full, &more, Filter::Path, NAME_LIMIT, false), full);
+    }
+
+    /// A box holding one of PoB's bytes as an escape (`bytes_text`) counts it as one byte, as
+    /// PoB's limit does, and a paste of one turns it into one "?" (EditControl.lua:533)
+    #[test]
+    fn an_escaped_byte_counts_as_one() {
+        let e = "\u{F7E9}";
+        // 97 ASCII bytes and one escaped byte: 98 of 100
+        let held = format!("{}{e}", "a".repeat(97));
+        let typed = format!("{held}xy");
+        assert_eq!(spliced(&held, &typed, Filter::Plain, 100, false), typed);
+        let past = format!("{typed}z");
+        assert_eq!(spliced(&typed, &past, Filter::Plain, 100, false), typed);
+        // a paste: one "?" for the byte, and the limit counts PoB's bytes too
+        assert_eq!(
+            spliced("", &format!("x{e}"), Filter::Plain, 100, true),
+            "x?"
+        );
+        assert_eq!(spliced(&held, &typed, Filter::Plain, 100, true), typed);
+    }
+
+    /// A long insert that isn't a paste (egui's own undo bringing back a cleared text, an IME
+    /// commit) is counted once, not once per character
+    #[test]
+    fn a_long_typed_insert_is_linear() {
+        let long = "a".repeat(40_000);
+        let start = std::time::Instant::now();
+        assert_eq!(spliced_by("", &long, |_| true, usize::MAX, false), long);
+        let limited = format!("{}{}", "\u{F7E9}".repeat(10), long);
+        assert_eq!(spliced_by("", &limited, |_| true, 50_000, false), limited);
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(500),
+            "{:?}",
+            start.elapsed()
+        );
     }
 
     #[test]

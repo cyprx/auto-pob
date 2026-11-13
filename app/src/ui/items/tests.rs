@@ -648,6 +648,61 @@ fn a_slot_tooltip_stays_while_a_build_list_is_dropped() {
     );
 }
 
+/// A menu that isn't the Items tab's (one of another host's, open over the tab) leaves the
+/// slot tooltips alone: PoB blanks them only for the tab's own selected control
+/// (ItemSlotControl.lua:51)
+#[test]
+fn a_slot_tooltip_stays_while_another_hosts_menu_is_open() {
+    let mut h = Harness::new(sample());
+    let at = h.ui.rect("slot_combo_Body Armour").center();
+    let mut queries = Vec::new();
+    for events in [vec![Event::PointerMoved(at)], vec![], vec![]] {
+        egui::Popup::open_id(&h.ctx, egui::Id::NULL.with("another_hosts_menu"));
+        queries.extend(h.frame(events).queries);
+    }
+    assert!(
+        debug(&queries)
+            .iter()
+            .any(|q| q.contains("slot: Some(\"Body Armour\")")),
+        "another host's menu blanked the slot tooltip"
+    );
+}
+
+/// The slot name's own menu is the tab's: the other slots' tooltips blank under it
+#[test]
+fn a_slot_tooltip_blanks_under_the_tabs_own_menu() {
+    let mut view = sample();
+    let ring = view.slots.iter_mut().find(|s| s.name == "Ring 1").unwrap();
+    ring.selected = 1;
+    let mut h = Harness::new(view);
+    let label = h.ui.rect("slot_label_Body Armour").center();
+    h.frame(vec![Event::PointerMoved(label)]);
+    h.frame(vec![
+        Event::PointerButton {
+            pos: label,
+            button: egui::PointerButton::Secondary,
+            pressed: true,
+            modifiers: Default::default(),
+        },
+        Event::PointerButton {
+            pos: label,
+            button: egui::PointerButton::Secondary,
+            pressed: false,
+            modifiers: Default::default(),
+        },
+    ]);
+    h.frame(vec![]);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the menu didn't open");
+    let at = h.ui.rect("slot_combo_Ring 1").right_center() - egui::vec2(8.0, 0.0);
+    let mut queries = h.frame(vec![Event::PointerMoved(at)]).queries;
+    queries.extend(h.frame(vec![]).queries);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the menu closed");
+    assert!(
+        !debug(&queries).iter().any(|q| q.contains("slot: Some(")),
+        "the tab's own menu left a slot tooltip"
+    );
+}
+
 #[test]
 fn stale_item_tooltip_reply_ignored() {
     let mut h = Harness::new(sample());

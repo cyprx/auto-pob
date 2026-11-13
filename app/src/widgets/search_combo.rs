@@ -34,6 +34,7 @@ pub fn search_combo_ui(
     // PoB's SearchHost (SearchHost.lua:109-115): Esc empties a search and keeps the list
     // dropped; only an empty search lets Esc close it
     let button = ui.make_persistent_id(egui::IdSalt::new(id));
+    super::scroll_step::note_dropdown(ui.ctx(), button.with("popup"));
     let open = egui::Popup::is_id_open(ui.ctx(), button.with("popup"));
     let searching = ui
         .data(|d| d.get_temp::<String>(filter_id))

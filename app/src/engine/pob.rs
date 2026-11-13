@@ -24,6 +24,8 @@ use pob_runtime::net::{NetConfig, Waker};
 use std::path::{Path, PathBuf};
 
 pub struct PobBackend {
+    /// Why the build PoB reopened at start failed, until the UI is told
+    startup_notice: Option<String>,
     pub lua: Lua,
     pub game: Game,
     pob_dir: PathBuf,
@@ -52,6 +54,9 @@ pub struct PobBackend {
     item_db_failed: bool,
     /// The database closed or the build changed; `ItemDb(None)` is still to be sent (R21)
     item_db_ended: bool,
+    /// The Items tab was shown (`PreloadItemDbs`): PoB's item database load runs as
+    /// background work until it ends, with no panel open
+    item_db_preload: bool,
     /// A save PoB made by itself cancelled the Options window; the next settings view says so
     options_lost: bool,
     /// Lua's heap after the last memory release, in bytes
@@ -70,8 +75,24 @@ pub struct PobBackend {
     trace: Vec<u32>,
     /// Nothing but tree searches ran since one whose frame matched every node of the build's
     /// spec, so the tree view's own results are current and the tree state reads them instead
-    /// of matching every node a second time
+    /// of matching every node a second time.
+    ///
+    /// Invariant: whatever may change the spec's nodes or their text must clear it. Today that
+    /// is every path that can: `apply` (any command but `SetTreeSearch`), `recalculate` and
+    /// `background_step`. A view or any other `Backend` method that ever edits the build, or
+    /// swaps the spec even for a moment, must clear it too, or a repeated identical search
+    /// reports the old spec's matches. The glue's `searchStrCached` check only covers a rebuild
+    /// of depends and paths (PassiveSpec.lua:1793), not a direct edit of a node.
     fresh_search: bool,
+    /// The tree state's paths and dependants as last sent, with the glue's token for them
+    tree_paths: Option<TreePaths>,
+}
+
+/// `TreeState.paths` and `TreeState.depends` as the glue last sent them
+struct TreePaths {
+    token: i64,
+    paths: std::sync::Arc<[crate::engine::views::NodePath]>,
+    depends: std::sync::Arc<[crate::engine::views::NodePath]>,
 }
 
 /// R17: a timeless search step yields once this much of `GetTime()` has passed
@@ -122,6 +143,11 @@ pub(crate) fn new_lua(pob_dir: &Path) -> Result<Lua> {
 impl PobBackend {
     /// Starts PoB from `pob_dir`, keeping its user data in `user_dir`; requests go out
     /// through curl with the app's timeouts (R7).
+    /// Why the build PoB reopened at start failed (it starts on the build list then), once
+    pub fn take_startup_notice(&mut self) -> Option<String> {
+        self.startup_notice.take()
+    }
+
     pub fn start(game: Game, pob_dir: &Path, user_dir: &Path) -> Result<PobBackend> {
         PobBackend::start_with(game, pob_dir, user_dir, NetConfig::app())
     }
@@ -188,7 +214,17 @@ impl PobBackend {
         // PoB reopened the build its last exit recorded: the UI shows it, as PoB does
         let loaded: mlua::Function = glue.get("build_loaded").map_err(lua_error)?;
         let on_list = !loaded.call::<bool>(()).map_err(lua_error)?;
+        // the last build's reopen raised: PoB's error, for the UI to show once (bootstrap.lua)
+        let startup_notice = lua
+            .globals()
+            .get::<Option<mlua::LuaString>>("AutoPobStartupError")
+            .map_err(lua_error)?
+            .map(|text| super::bytes_text::decode(&text.as_bytes()).into_owned());
+        if let Some(notice) = &startup_notice {
+            log::warn!("the last build couldn't be reopened: {notice}");
+        }
         Ok(PobBackend {
+            startup_notice,
             lua,
             game,
             pob_dir: pob_dir.to_owned(),
@@ -203,12 +239,14 @@ impl PobBackend {
             item_db: None,
             item_db_failed: false,
             item_db_ended: false,
+            item_db_preload: false,
             options_lost: false,
             released_lua_bytes: 0,
             on_list,
             net,
             timeless_job: false,
             fresh_search: false,
+            tree_paths: None,
             timeless_budget_ms: TIMELESS_BUDGET_MS,
             trace: Vec::new(),
         })
@@ -234,22 +272,73 @@ impl PobBackend {
 
     /// Calls `glue.<name>(args)`, keeping only the error message.
     fn call<A: IntoLuaMulti, R: FromLuaMulti>(&self, name: &str, args: A) -> Result<R> {
-        let glue: mlua::Table = self.lua.globals().get("glue").map_err(|e| anyhow!("{e}"))?;
-        let function: mlua::Function = glue.get(name).map_err(|e| anyhow!("{e}"))?;
-        function.call(args).map_err(|e| match e {
-            // errors raised with `error(message, 0)` arrive as the bare message
-            mlua::Error::RuntimeError(message) => {
-                anyhow!("{}", message.lines().next().unwrap_or_default())
-            }
-            other => anyhow!("{other}"),
-        })
+        self.call_with(name, args, true)
     }
 
-    /// A glue function's string, any bytes that aren't UTF-8 as U+FFFD: PoB's strings are
-    /// bytes, and a build's text can hold some from a Windows-1252 editor
+    /// `call` for a command about files (open, save as, the build list's renames, moves and
+    /// folders): its strings are paths and file names, never a build's text, so they go as
+    /// they are, escape range included
+    fn call_path<A: IntoLuaMulti, R: FromLuaMulti>(&self, name: &str, args: A) -> Result<R> {
+        self.call_with(name, args, false)
+    }
+
+    fn call_with<A: IntoLuaMulti, R: FromLuaMulti>(
+        &self,
+        name: &str,
+        args: A,
+        encode: bool,
+    ) -> Result<R> {
+        let glue: mlua::Table = self.lua.globals().get("glue").map_err(|e| anyhow!("{e}"))?;
+        let function: mlua::Function = glue.get(name).map_err(|e| anyhow!("{e}"))?;
+        // text the views showed with escapes for bytes that aren't UTF-8 goes back as those
+        // bytes (`bytes_text`)
+        let args = if encode && super::bytes_text::seen() {
+            let values = args.into_lua_multi(&self.lua).map_err(|e| anyhow!("{e}"))?;
+            values
+                .into_iter()
+                .map(|v| super::bytes_text::encode_value(&self.lua, v, 0))
+                .collect::<mlua::Result<mlua::MultiValue>>()
+                .map_err(|e| anyhow!("{e}"))?
+        } else {
+            args.into_lua_multi(&self.lua).map_err(|e| anyhow!("{e}"))?
+        };
+        // through Lua's own pcall, so an error message comes back as PoB's bytes: one that
+        // echoes a build's text keeps its bytes that aren't UTF-8, escaped like the views
+        let pcall: mlua::Function = self
+            .lua
+            .globals()
+            .get("pcall")
+            .map_err(|e| anyhow!("{e}"))?;
+        let mut args = args;
+        args.push_front(mlua::Value::Function(function));
+        let mut results: mlua::MultiValue = pcall.call(args).map_err(|e| anyhow!("{e}"))?;
+        match results.pop_front() {
+            Some(mlua::Value::Boolean(true)) => {
+                R::from_lua_multi(results, &self.lua).map_err(|e| anyhow!("{e}"))
+            }
+            _ => Err(match results.pop_front() {
+                // errors raised with `error(message, 0)` arrive as the bare message
+                Some(mlua::Value::String(message)) => {
+                    let message = super::bytes_text::decode(&message.as_bytes()).into_owned();
+                    anyhow!("{}", message.lines().next().unwrap_or_default())
+                }
+                Some(mlua::Value::Error(e)) => match *e {
+                    mlua::Error::RuntimeError(message) => {
+                        anyhow!("{}", message.lines().next().unwrap_or_default())
+                    }
+                    other => anyhow!("{other}"),
+                },
+                Some(other) => anyhow!("{}", other.to_string().unwrap_or_default()),
+                None => anyhow!("the call failed"),
+            }),
+        }
+    }
+
+    /// A glue function's string, any bytes that aren't UTF-8 escaped (`bytes_text`): PoB's
+    /// strings are bytes, and a build's text can hold some from a Windows-1252 editor
     fn call_text<A: IntoLuaMulti>(&self, name: &str, args: A) -> Result<String> {
         let text: mlua::LuaString = self.call(name, args)?;
-        Ok(String::from_utf8_lossy(&text.as_bytes()).into_owned())
+        Ok(super::bytes_text::decode(&text.as_bytes()).into_owned())
     }
 
     /// Whether the layout the UI holds no longer matches what the tree draws.
@@ -341,6 +430,9 @@ impl PobBackend {
     fn left_build(&mut self) -> Result<Affected> {
         let mut affected = Affected::default();
         self.reset_heatmap();
+        // the old tree's paths are no use to the next one: let both copies go
+        self.tree_paths = None;
+        self.call::<_, ()>("tree_paths_forget", ())?;
         // the session's timeless search ends with it (R17)
         self.timeless_job = false;
         // an Options window survives a build change (R19)
@@ -443,18 +535,106 @@ impl PobBackend {
         Ok(affected)
     }
 
+    /// One `ItemDb` step: the open panel's work, else a slice of the load ahead
+    fn item_db_step(&mut self, send: &dyn Fn(Event)) -> Result<Affected> {
+        #[derive(serde::Deserialize)]
+        struct Step {
+            percent: Option<u32>,
+            finished: bool,
+            #[serde(default)]
+            rejected: Option<String>,
+        }
+        // the open panel's own work goes first, as `next_background` offers it. Once
+        // its database has loaded (the uniques load before the rares) only the load
+        // ahead is left, which the panel's step would never run.
+        let panel = match &self.item_db {
+            Some(query) if !self.item_db_failed => self
+                .call::<_, bool>("item_db_pending", db_name(query.db))
+                .unwrap_or(false)
+                .then_some(query),
+            _ => None,
+        };
+        let query = match panel {
+            Some(query) => query,
+            // a slice of the load ahead of a panel open (`PreloadItemDbs`). Nothing
+            // shows it: a failure only stops it, and the panel's own job reports the
+            // load's failure when it opens (`glue.item_db_step`).
+            // Only once the Items tab asked for it: no other caller may load the databases.
+            None if !self.item_db_preload => return Ok(Affected::default()),
+            None => {
+                if let Err(e) = self.call::<_, ()>("item_db_preload_step", ()) {
+                    log::warn!("item database load: {e:#}");
+                    self.item_db_preload = false;
+                }
+                return Ok(Affected::default());
+            }
+        };
+        let step: Step = match self.view("item_db_step", db_name(query.db)) {
+            Ok(step) => step,
+            Err(e) => {
+                self.item_db_failed = true;
+                return Err(e);
+            }
+        };
+        if let Some(percent) = step.percent {
+            send(Event::Progress {
+                task: BackgroundTask::ItemDb,
+                percent,
+            });
+        }
+        // a query that waited out the load turned out bad: the panel closes, so the
+        // UI's query and PoB's controls agree, and the reason is the job's failure
+        if let Some(message) = step.rejected {
+            self.item_db = None;
+            self.item_db_ended = true;
+            let _ = self.call::<_, ()>("item_db_close", ());
+            send(Event::BackgroundFailed {
+                task: BackgroundTask::ItemDb,
+                message,
+            });
+            return Ok(Affected {
+                item_db: true,
+                ..Affected::default()
+            });
+        }
+        // the panel shows the rows once the list builder ends
+        Ok(Affected {
+            item_db: step.finished,
+            ..Affected::default()
+        })
+    }
+
     fn view<T: serde::de::DeserializeOwned>(
         &self,
         name: &str,
         args: impl IntoLuaMulti,
     ) -> Result<T> {
         let value: mlua::Value = self.call(name, args)?;
+        self.view_of(value)
+    }
+
+    /// A view from a glue function's result (see `view`)
+    fn view_of<T: serde::de::DeserializeOwned>(&self, value: mlua::Value) -> Result<T> {
+        // a view that serde would take can still hold a private-use character that is one of
+        // our escapes (U+F780-U+F7FF): it must be escaped too, or an edit sends it back as a
+        // raw byte (`bytes_text`)
+        let scan: mlua::Function = self
+            .lua
+            .globals()
+            .get("AutoPobHasEscapes")
+            .map_err(|e| anyhow!("{e}"))?;
+        if scan.call::<bool>(&value).map_err(|e| anyhow!("{e}"))? {
+            let fixed = lossy_strings(&self.lua, &value, 0)
+                .map_err(|e| anyhow!("{e}"))?
+                .unwrap_or(value);
+            return self.lua.from_value(fixed).map_err(|e| anyhow!("{e}"));
+        }
         match self.lua.from_value(value.clone()) {
             Ok(view) => Ok(view),
             Err(e) => {
                 // PoB's strings are bytes: a build's notes, names or item text can hold bytes
                 // that aren't UTF-8 (a file from a Windows-1252 editor), which serde refuses.
-                // Such a view shows them as U+FFFD instead of failing.
+                // Such a view shows them escaped (`bytes_text`) instead of failing.
                 match lossy_strings(&self.lua, &value, 0).map_err(|e| anyhow!("{e}"))? {
                     Some(fixed) => self.lua.from_value(fixed).map_err(|e| anyhow!("{e}")),
                     None => Err(anyhow!("{e}")),
@@ -464,7 +644,8 @@ impl PobBackend {
     }
 }
 
-/// `value` with every string that isn't UTF-8 replaced by its lossy UTF-8 form, keys
+/// `value` with every string that isn't UTF-8 (or holds an escape character) replaced by its
+/// escaped form (`bytes_text`), keys
 /// included; `None` when every string already was
 fn lossy_strings(
     lua: &mlua::Lua,
@@ -472,8 +653,8 @@ fn lossy_strings(
     depth: usize,
 ) -> mlua::Result<Option<mlua::Value>> {
     match value {
-        mlua::Value::String(text) if text.to_str().is_err() => {
-            let fixed = String::from_utf8_lossy(&text.as_bytes()).into_owned();
+        mlua::Value::String(text) if super::bytes_text::needs_decode(&text.as_bytes()) => {
+            let fixed = super::bytes_text::decode(&text.as_bytes()).into_owned();
             Ok(Some(mlua::Value::String(lua.create_string(fixed)?)))
         }
         // a view is a tree of plain tables; the depth guards against a cycle
@@ -519,7 +700,9 @@ fn popup_rows(control: &mlua::Table) -> mlua::Result<Vec<super::views::PopupRow>
     };
     let text = |list: &mlua::Table, i: usize| -> mlua::Result<String> {
         match list.raw_get::<mlua::Value>(i)? {
-            mlua::Value::String(text) => Ok(String::from_utf8_lossy(&text.as_bytes()).into_owned()),
+            mlua::Value::String(text) => {
+                Ok(super::bytes_text::decode(&text.as_bytes()).into_owned())
+            }
             other => Err(mlua::Error::external(format!(
                 "row {i} is a {}",
                 other.type_name()
@@ -758,6 +941,7 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::ControlTooltip(_)
             | Command::SetItemDb(_)
             | Command::CloseItemDb
+            | Command::PreloadItemDbs
             | Command::ItemTooltip(_)
             | Command::CopyItem { .. }
             | Command::CopySharedItem { .. }
@@ -900,6 +1084,14 @@ impl PobBackend {
             }
             // ended above
             Command::CloseItemDb => Ok(Affected::default()),
+            Command::PreloadItemDbs => {
+                // nothing to run when PoB never registered the load or it already ended: the
+                // loop then never asks about it
+                self.item_db_preload = self
+                    .call::<_, bool>("item_db_preload_pending", ())
+                    .unwrap_or(false);
+                Ok(Affected::default())
+            }
             Command::ViewDbItem { db, name } => {
                 self.call::<_, ()>("item_db_view_item", (db_name(db), name))?;
                 Ok(display_changed())
@@ -1032,13 +1224,13 @@ impl PobBackend {
             Command::RenameBuild { path, name } => {
                 let path = self.build_entry(&path, false)?;
                 buildpaths::name_free(&path, &name, true)?;
-                self.call::<_, ()>("rename_build", (path, name))?;
+                self.call_path::<_, ()>("rename_build", (path, name))?;
                 Ok(list_changed())
             }
             Command::CopyBuild { path, name } => {
                 let path = self.build_entry(&path, true)?;
                 buildpaths::name_free(&path, &name, false)?;
-                self.call::<_, ()>("copy_build", (path, name))?;
+                self.call_path::<_, ()>("copy_build", (path, name))?;
                 Ok(list_changed())
             }
             Command::DeleteBuild { path, kind } => {
@@ -1063,7 +1255,7 @@ impl PobBackend {
                 if !as_asked {
                     anyhow::bail!("the folder changed; look again");
                 }
-                self.call::<_, ()>("delete_build", (path.clone(), kind_name))?;
+                self.call_path::<_, ()>("delete_build", (path.clone(), kind_name))?;
                 // PoB ignores what its delete answers: look at the file system
                 if std::fs::symlink_metadata(&path).is_ok() {
                     anyhow::bail!("couldn't delete that build");
@@ -1075,7 +1267,7 @@ impl PobBackend {
                 let path = self.build_entry(&path, true)?;
                 let folder = buildpaths::folder(&root, &folder, true, true)?;
                 buildpaths::move_target_free(&path, &root, &folder)?;
-                self.call::<_, ()>("move_build", (path, folder))?;
+                self.call_path::<_, ()>("move_build", (path, folder))?;
                 Ok(list_changed())
             }
             Command::CopyBuildTo { path, folder } => {
@@ -1083,17 +1275,17 @@ impl PobBackend {
                 let path = self.build_entry(&path, true)?;
                 let folder = buildpaths::folder(&root, &folder, true, true)?;
                 buildpaths::move_target_free(&path, &root, &folder)?;
-                self.call::<_, ()>("copy_build_to", (path, folder))?;
+                self.call_path::<_, ()>("copy_build_to", (path, folder))?;
                 Ok(list_changed())
             }
             Command::NewFolder { name } => {
                 let folder = buildpaths::folder(&self.build_root()?, &self.folder, true, true)?;
-                self.call::<_, ()>("new_folder", (folder, name))?;
+                self.call_path::<_, ()>("new_folder", (folder, name))?;
                 Ok(list_changed())
             }
             Command::NewFolderIn { folder, name } => {
                 let folder = buildpaths::folder(&self.build_root()?, &folder, true, true)?;
-                self.call::<_, ()>("new_folder", (folder, name))?;
+                self.call_path::<_, ()>("new_folder", (folder, name))?;
                 Ok(list_changed())
             }
             Command::SetBuildSort { sort } => {
@@ -1117,7 +1309,7 @@ impl PobBackend {
             Command::OpenBuild { path } => {
                 self.on_list = false;
                 self.reset_heatmap();
-                self.call::<_, ()>("open_build", path.to_string_lossy().into_owned())?;
+                self.call_path::<_, ()>("open_build", path.to_string_lossy().into_owned())?;
                 self.all_views()
             }
             Command::ImportShareCode { code } => {
@@ -1241,7 +1433,7 @@ impl PobBackend {
                 let root: String = self.call("build_root", ())?;
                 let folder = buildpaths::folder(&root, &folder, false, true)?;
                 buildpaths::save_target(&root, &folder, &name)?;
-                self.call::<_, ()>("save_as", (folder, name, overwrite))?;
+                self.call_path::<_, ()>("save_as", (folder, name, overwrite))?;
                 // PoB's save rewrites the notes' `^_` escapes; the Summary's header names the
                 // build (R4)
                 Ok(Affected {
@@ -1524,8 +1716,10 @@ impl PobBackend {
             }
             Command::LoadCompare { source } => {
                 match source {
-                    CompareSource::File(path) => self
-                        .call::<_, ()>("compare_load_file", path.to_string_lossy().into_owned())?,
+                    CompareSource::File(path) => self.call_path::<_, ()>(
+                        "compare_load_file",
+                        path.to_string_lossy().into_owned(),
+                    )?,
                     CompareSource::Code(code) => self.call::<_, ()>("compare_load_code", code)?,
                     CompareSource::Import { text, name } => {
                         // a link is a request, which lands the comparison when it ends
@@ -2416,11 +2610,32 @@ impl Backend for PobBackend {
     }
 
     fn build_view(&mut self) -> Result<BuildView> {
-        self.view("build_view", ())
+        let mut view: BuildView = self.view("build_view", ())?;
+        // the build's name, path and folder are its file's: names, never escaped, as the build
+        // list's are, so Save As sends back the name the file has (`call_path`)
+        let unescape = |text: &mut String| {
+            if let Some(name) = super::bytes_text::unescape_utf8(text) {
+                *text = name;
+            }
+        };
+        unescape(&mut view.name);
+        unescape(&mut view.save_as_name);
+        if let Some(tooltip) = &mut view.name_tooltip {
+            unescape(tooltip);
+        }
+        if let Some(path) = &view.path
+            && let Some(name) = super::bytes_text::unescape_utf8(&path.to_string_lossy())
+        {
+            view.path = Some(PathBuf::from(name));
+        }
+        Ok(view)
     }
 
     fn build_list_view(&mut self) -> Result<BuildListView> {
-        let mut view: BuildListView = self.view("list_builds", self.folder.clone())?;
+        // the entries are file names (valid UTF-8, buildpaths): they come and go as they are,
+        // never escaped, as the paths of the commands about them do (`call_path`)
+        let value: mlua::Value = self.call_path("list_builds", self.folder.clone())?;
+        let mut view: BuildListView = self.lua.from_value(value).map_err(|e| anyhow!("{e}"))?;
         // a missing Builds folder was already refused by the listing
         let root = self.build_root()?;
         view.tree = buildpaths::folder_tree(&root);
@@ -2448,7 +2663,28 @@ impl Backend for PobBackend {
     }
 
     fn tree_state_view(&mut self) -> Result<TreeState> {
-        self.view("tree_state", self.fresh_search)
+        // the paths come only when they differ from the ones held: building and converting
+        // them was most of the view, which every edit resends; a list held is shared, not copied
+        let held = self.tree_paths.as_ref().map(|p| p.token);
+        let (value, token, sent): (mlua::Value, i64, bool) =
+            self.call("tree_state", (self.fresh_search, held))?;
+        let mut state: TreeState = self.view_of(value)?;
+        if sent {
+            self.tree_paths = Some(TreePaths {
+                token,
+                paths: state.paths.clone(),
+                depends: state.depends.clone(),
+            });
+        } else {
+            let held = self
+                .tree_paths
+                .as_ref()
+                .filter(|p| p.token == token)
+                .ok_or_else(|| anyhow!("the tree's paths went missing"))?;
+            state.paths = held.paths.clone();
+            state.depends = held.depends.clone();
+        }
+        Ok(state)
     }
 
     fn calcs_view(&mut self) -> Result<CalcsView> {
@@ -2515,6 +2751,17 @@ impl Backend for PobBackend {
         {
             return Some(BackgroundTask::ItemDb);
         }
+        // the load ahead of a panel open, at the same rank; it ends once PoB's load has.
+        // It goes before node power, so with the heat map on, the first Items visit holds the
+        // power job back by the load (about a second, once per session): the heat map isn't
+        // shown on the Items tab, and the panel's first open is what the load is for.
+        if self.item_db_preload
+            && self
+                .call::<_, bool>("item_db_preload_pending", ())
+                .unwrap_or(false)
+        {
+            return Some(BackgroundTask::ItemDb);
+        }
         let power = self.heatmap_on
             && !self.power_failed
             && self.call::<_, bool>("power_pending", ()).unwrap_or(false);
@@ -2527,8 +2774,6 @@ impl Backend for PobBackend {
         struct Step {
             percent: Option<u32>,
             finished: bool,
-            #[serde(default)]
-            rejected: Option<String>,
         }
         match task {
             BackgroundTask::Network => {
@@ -2605,42 +2850,16 @@ impl Backend for PobBackend {
                 })
             }
             BackgroundTask::ItemDb => {
-                let Some(query) = &self.item_db else {
-                    return Ok(Affected::default());
-                };
-                let step: Step = match self.view("item_db_step", db_name(query.db)) {
-                    Ok(step) => step,
-                    Err(e) => {
-                        self.item_db_failed = true;
-                        return Err(e);
-                    }
-                };
-                if let Some(percent) = step.percent {
-                    send(Event::Progress {
-                        task: BackgroundTask::ItemDb,
-                        percent,
-                    });
+                let result = self.item_db_step(send);
+                // once PoB's load has ended, by either job, the loop stops asking about it
+                if self.item_db_preload
+                    && !self
+                        .call::<_, bool>("item_db_preload_pending", ())
+                        .unwrap_or(false)
+                {
+                    self.item_db_preload = false;
                 }
-                // a query that waited out the load turned out bad: the panel closes, so the
-                // UI's query and PoB's controls agree, and the reason is the job's failure
-                if let Some(message) = step.rejected {
-                    self.item_db = None;
-                    self.item_db_ended = true;
-                    let _ = self.call::<_, ()>("item_db_close", ());
-                    send(Event::BackgroundFailed {
-                        task: BackgroundTask::ItemDb,
-                        message,
-                    });
-                    return Ok(Affected {
-                        item_db: true,
-                        ..Affected::default()
-                    });
-                }
-                // the panel shows the rows once the list builder ends
-                Ok(Affected {
-                    item_db: step.finished,
-                    ..Affected::default()
-                })
+                result
             }
             BackgroundTask::GemDps => {
                 let step: Step = match self.view("gem_dps_step", ()) {
@@ -2978,7 +3197,15 @@ impl Engine {
                 let pob_dir = crate::pob_files::ensure_pob(game, &data_dir, &mut |progress| {
                     send(Event::Downloading(progress))
                 })?;
-                Ok(Box::new(PobBackend::start(game, &pob_dir, &user_dir)?) as Box<dyn Backend>)
+                let mut backend = PobBackend::start(game, &pob_dir, &user_dir)?;
+                // a last build that raised on reopening: say so on the build list
+                if let Some(text) = backend.take_startup_notice() {
+                    send(Event::Message {
+                        title: "Couldn't reopen the last build".into(),
+                        text,
+                    });
+                }
+                Ok(Box::new(backend) as Box<dyn Backend>)
             },
             wake_ui,
         )
@@ -3067,6 +3294,8 @@ mod tests {
                 search_mode: 0,
             }),
             Command::CloseItemDb,
+            // the Items tab shown: the load runs ahead, the popup's tab is left alone
+            Command::PreloadItemDbs,
             Command::CancelRequest { id: 1 },
         ];
         for command in keeps {

@@ -544,6 +544,7 @@ dependencies = [
  "serde_json",
  "tar",
  "toml_edit",
+ "ttf-parser",
  "webbrowser",
 ]
 

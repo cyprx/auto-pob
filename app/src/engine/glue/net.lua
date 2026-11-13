@@ -122,7 +122,9 @@ function glue.settle_startup()
 		glue.frame()
 		glue.popup_adopt_game_version(conversion, convert)
 	elseif m.mode ~= "BUILD" then
-		build.treeTab = nil
+		-- a start-up open that failed, or raised, left half-loaded tabs; PoB's tab
+		-- constructors run SyncLoadouts against them on the next Init (Build.lua:601-604)
+		build.treeTab, build.skillsTab, build.itemsTab, build.configTab = nil, nil, nil, nil
 	end
 end
 
@@ -142,6 +144,19 @@ do
 		init_failure = nil
 		__net_in_init(true)
 		local ret = { pcall(init, self, ...) }
+		if not ret[1] then
+			-- PoB makes the new tabs one after another, and each constructor's set change
+			-- runs SyncLoadouts against the tabs the build holds then (Build.lua:601-604,
+			-- 753-859). After a load that raised, those are the half-loaded ones (no active
+			-- skill set), and every later Init, of any build, would raise there too. Without
+			-- them SyncLoadouts skips its loadout list until the new tabs are in place. A new
+			-- build stands in, whichever path loaded this one (an open, a code, a link's
+			-- answer); the load's own error is still raised below.
+			self.treeTab, self.skillsTab, self.itemsTab, self.configTab = nil, nil, nil, nil
+			if not pcall(init, self, false, "Unnamed build") then
+				self.treeTab, self.skillsTab, self.itemsTab, self.configTab = nil, nil, nil, nil
+			end
+		end
 		local failed, conversion, convert
 		if ret[1] then
 			failed, conversion, convert = settle_init(self, depth, newMode)

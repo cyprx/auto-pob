@@ -230,16 +230,20 @@ impl SkillsUi {
         if let Some(text) = self.clipboard.take() {
             ui.ctx().copy_text(text);
         }
-        // Ctrl+V outside a text field and any dialog. PoB reads it before its controls
-        // (SkillsTab.lua:628), so it also pastes while a box has the keyboard, silently when the
-        // text has no gems; the engine reports that as an error, so a box's paste stays its own.
+        // Ctrl+V outside any dialog. PoB reads it before its controls (SkillsTab.lua:628): while
+        // one of the tab's boxes has the keyboard the box pastes too, and the tab's try is a
+        // quiet one. Build's boxes take every key first (Build.lua:1230).
         if !self.has_dialog()
             && !self.modal
-            && !ui.ctx().text_edit_focused()
+            && !crate::widgets::scroll_step::build_box_typing(ui.ctx())
             && let Some(text) = crate::ui::shortcuts::ctrl_v_text(ui)
         {
             self.select_new = true;
-            out.commands.push(Command::PasteSocketGroup { text });
+            out.commands.push(if ui.ctx().text_edit_focused() {
+                Command::TryPasteSocketGroup { text }
+            } else {
+                Command::PasteSocketGroup { text }
+            });
         }
 
         self.set_row(ui, &view, &mut out);

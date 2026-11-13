@@ -3345,7 +3345,7 @@ ported = "app/src/ui/items/slots.rs E over a slot holding an item sends EditItem
 ported = "app/src/ui/items/slots.rs Ctrl+F opens the item database on PoB's unique or rare search (items/db.rs focus_search)"
 
 [keys."items.v"]
-ported = "app/src/ui/items/mod.rs Ctrl+V paste outside a text field (PoB also tries a box's paste, silently; the engine reports a non-item as an error, so a box keeps its paste)"
+ported = "app/src/ui/items/mod.rs Ctrl+V: PasteItem, or while one of the tab's boxes has the keyboard (which pastes too) the quiet TryPasteItem, as PoB reads it before its controls (ItemsTab.lua:1454); gate quiet_pastes_match_pob"
 
 [keys."items.y"]
 ported = "app/src/ui/app.rs Ctrl+Y redo"
@@ -3459,7 +3459,7 @@ ported = "app/src/ui/skills/groups.rs right-click menu; Ctrl+right-click sends S
 ported = "app/src/ui/skills/keys.rs F1 over a socket group opens its first gem's poewiki page"
 
 [keys."skills.v"]
-ported = "app/src/ui/skills/mod.rs Ctrl+V paste outside a text field (PoB also tries a box's paste, silently; the engine reports a text with no gems as an error, so a box keeps its paste)"
+ported = "app/src/ui/skills/mod.rs Ctrl+V: PasteSocketGroup, or while one of the tab's boxes has the keyboard (which pastes too) the quiet TryPasteSocketGroup, as PoB reads it before its controls (SkillsTab.lua:628); gate quiet_pastes_match_pob"
 
 [keys."skills.y"]
 ported = "app/src/ui/app.rs Ctrl+Y redo"

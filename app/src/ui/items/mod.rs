@@ -447,21 +447,24 @@ impl ItemsUi {
         out
     }
 
-    /// Ctrl+V (outside a text field), Ctrl+D. The tab reads Ctrl+D before its controls, so it
-    /// acts while a box of its own has the keyboard too (ItemsTab.lua:1481)
+    /// Ctrl+V, Ctrl+D. The tab reads them before its controls, so they act while a box of its
+    /// own has the keyboard too (ItemsTab.lua:1454, 1481)
     fn shortcuts(&mut self, ui: &egui::Ui, view: &ItemsView, out: &mut ItemsOutput) {
         if self.has_dialog() || self.modal {
             return;
         }
-        // PoB also tries a box's paste as an item, silently when it isn't one; the engine
-        // reports that as an error, so a box's paste stays its own
-        if !ui.ctx().text_edit_focused()
-            && let Some(text) = crate::ui::shortcuts::ctrl_v_text(ui)
-        {
-            out.commands.push(Command::PasteItem { text });
-        }
+        // Build's boxes take every key before the tab sees it (Build.lua:1230)
         if crate::widgets::scroll_step::build_box_typing(ui.ctx()) {
             return;
+        }
+        // PoB reads Ctrl+V before its controls (ItemsTab.lua:1454): while one of the tab's
+        // boxes has the keyboard the box pastes too, and the tab's try is a quiet one
+        if let Some(text) = crate::ui::shortcuts::ctrl_v_text(ui) {
+            out.commands.push(if ui.ctx().text_edit_focused() {
+                Command::TryPasteItem { text }
+            } else {
+                Command::PasteItem { text }
+            });
         }
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::D)) {
             out.commands.push(Command::SetShowStatDifferences {

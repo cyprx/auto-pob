@@ -411,6 +411,12 @@ pub enum Command {
     PasteSocketGroup {
         text: String,
     },
+    /// Ctrl+V while one of the tab's boxes has the keyboard: PoB's tab also tries the text as a
+    /// socket group (SkillsTab.lua:628), quietly. Text with no gems changes nothing and is no
+    /// error.
+    TryPasteSocketGroup {
+        text: String,
+    },
     /// Types into the group's label box; PoB's filter and limit apply.
     SetGroupLabel {
         group: usize,
@@ -570,6 +576,12 @@ pub enum Command {
     /// Ctrl+V on the Items tab (R10): the text becomes the display item, like PoB's
     /// `CreateDisplayItemFromRaw`. Text with no item base is `PoB couldn't read that item`.
     PasteItem {
+        text: String,
+    },
+    /// Ctrl+V while one of the tab's boxes has the keyboard: PoB's tab also tries the text as an
+    /// item (ItemsTab.lua:1454), quietly. Text with no item base changes nothing and is no
+    /// error.
+    TryPasteItem {
         text: String,
     },
     /// The item list's double click: the item goes to the display panel for editing.

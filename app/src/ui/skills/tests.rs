@@ -384,11 +384,18 @@ fn paste_event_sends_paste_outside_text_fields() {
         debug(&o.commands),
         ["PasteSocketGroup { text: \"Label: p\" }"]
     );
-    // a box with the keyboard takes the paste (the engine would report a text with no gems
-    // as an error)
+    // PoB's tab reads Ctrl+V before its controls (SkillsTab.lua:628): with a box of the tab
+    // holding the keyboard, the box pastes and the tab tries the text quietly
     h.click("g0_label");
     let o = h.frame(vec![Event::Paste("Label: q".into())]);
-    assert!(o.commands.is_empty(), "the text field takes the paste");
+    assert_eq!(
+        debug(&o.commands),
+        ["TryPasteSocketGroup { text: \"Label: q\" }"]
+    );
+    // a right-click's paste into the box is no Ctrl+V
+    crate::ui::shortcuts::mark_right_click_paste(&h.ctx);
+    let o = h.frame(vec![Event::Paste("Label: r".into())]);
+    assert!(o.commands.is_empty(), "{:?}", o.commands);
 }
 
 #[test]

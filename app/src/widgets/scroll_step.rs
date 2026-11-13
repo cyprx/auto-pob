@@ -326,24 +326,100 @@ const SLIDER_KEYS: [(Key, i32); 4] = [
     (Key::ArrowRight, 1),
 ];
 
+fn focused_slider_id() -> egui::Id {
+    egui::Id::NULL.with("pob_focused_slider")
+}
+
+fn slider_keys_id() -> egui::Id {
+    egui::Id::NULL.with("pob_slider_keys")
+}
+
+/// The arrows a focused slider takes this frame: (its id, the pass, steps up, Shift, Ctrl)
+type SliderKeys = (egui::Id, u64, i32, bool, bool);
+
+/// Call before drawing a slider. The slider with the keyboard (egui's focus, PoB's selected
+/// control) steps on all four arrows by PoB's steps (SliderControl.lua:164-180), so its arrows
+/// are taken out of the frame before egui's own slider sees them: egui would step it by its
+/// own amount, on Left and Right only. [`slider_step`] spends them.
+pub fn slider_keys(ui: &egui::Ui) {
+    let ctx = ui.ctx();
+    let Some(id) = ctx.data(|d| d.get_temp::<egui::Id>(focused_slider_id())) else {
+        return;
+    };
+    if ctx.memory(|m| m.focused()) != Some(id) {
+        return;
+    }
+    let (total, wheel, shift, ctrl) = ui.input(|i| steps(i, &SLIDER_KEYS));
+    let keys = total - wheel;
+    if keys == 0 {
+        return;
+    }
+    ui.input_mut(|i| {
+        i.events.retain(
+            |e| !matches!(e, Event::Key { key, .. } if SLIDER_KEYS.iter().any(|(k, _)| k == key)),
+        );
+    });
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp::<SliderKeys>(slider_keys_id(), (id, pass, keys, shift, ctrl)));
+}
+
+fn slider_size(shift: bool, ctrl: bool) -> f64 {
+    if shift {
+        0.25
+    } else if ctrl {
+        0.01
+    } else {
+        0.05
+    }
+}
+
 /// A slider at `value` (0 to 1) drawn as `response`: the value the wheel or arrows move it to
-/// while it is pointed at: 0.05 a step, 0.25 with Shift, 0.01 with Ctrl, the wheel reversed
-/// by PoB's option.
+/// while it is pointed at, or the arrows while it has the keyboard ([`slider_keys`] took them
+/// before it was drawn): 0.05 a step, 0.25 with Shift, 0.01 with Ctrl, the wheel reversed by
+/// PoB's option.
 pub fn slider_step(ui: &egui::Ui, response: &egui::Response, value: f64) -> Option<f64> {
-    if !response.enabled()
-        || !response.hovered()
-        || held(ui.ctx())
-        || behind_window(ui.ctx(), response)
-    {
+    let ctx = ui.ctx();
+    if response.has_focus() {
+        // the arrows stay on it: egui would move the focus on with Up and Down
+        ctx.memory_mut(|m| {
+            m.set_focus_lock_filter(
+                response.id,
+                egui::EventFilter {
+                    horizontal_arrows: true,
+                    vertical_arrows: true,
+                    ..Default::default()
+                },
+            );
+        });
+        ctx.data_mut(|d| d.insert_temp(focused_slider_id(), response.id));
+        let pass = ctx.cumulative_pass_nr();
+        let taken = ctx.data_mut(|d| {
+            let taken = d.get_temp::<SliderKeys>(slider_keys_id());
+            d.remove::<SliderKeys>(slider_keys_id());
+            taken
+        });
+        if let Some((id, at, keys, shift, ctrl)) = taken
+            && id == response.id
+            && at == pass
+            && response.enabled()
+        {
+            let to = (value + f64::from(keys) * slider_size(shift, ctrl)).clamp(0.0, 1.0);
+            return (to != value).then_some(to);
+        }
+    }
+    if !response.enabled() || !response.hovered() || held(ctx) || behind_window(ctx, response) {
         return None;
     }
-    // a focused slider takes the arrows itself (egui's own step)
-    let focused = response.has_focus();
-    let arrows: &[(Key, i32)] = if focused { &[] } else { &SLIDER_KEYS };
+    // a focused slider's arrows were taken before it was drawn: the wheel is left
+    let arrows: &[(Key, i32)] = if response.has_focus() {
+        &[]
+    } else {
+        &SLIDER_KEYS
+    };
     let (total, wheel, shift, ctrl) = ui.input(|i| steps(i, arrows));
     let keys = total - wheel;
     // the wheel down lowers the value (SliderControl.lua:164)
-    let wheel = if options(ui.ctx()).invert_slider {
+    let wheel = if options(ctx).invert_slider {
         wheel
     } else {
         -wheel
@@ -353,14 +429,7 @@ pub fn slider_step(ui: &egui::Ui, response: &egui::Response, value: f64) -> Opti
         return None;
     }
     take(ui, arrows);
-    let size = if shift {
-        0.25
-    } else if ctrl {
-        0.01
-    } else {
-        0.05
-    };
-    let to = (value + f64::from(step) * size).clamp(0.0, 1.0);
+    let to = (value + f64::from(step) * slider_size(shift, ctrl)).clamp(0.0, 1.0);
     (to != value).then_some(to)
 }
 
@@ -589,22 +658,31 @@ mod tests {
         assert_eq!(run(true), Some(1), "the window's own dropdown didn't step");
     }
 
+    /// The slider with the keyboard steps by PoB's steps on all four arrows, pointed at or not,
+    /// and egui's own step doesn't move it (SliderControl.lua:164-180)
     #[test]
-    fn a_focused_slider_keeps_its_own_arrows() {
+    fn a_focused_slider_steps_by_pobs_steps_on_every_arrow() {
         let ctx = egui::Context::default();
-        let up = Event::Key {
-            key: Key::ArrowUp,
+        let key = |key: Key, modifiers: Modifiers| Event::Key {
+            key,
             physical_key: None,
             pressed: true,
             repeat: false,
-            modifiers: Modifiers::NONE,
+            modifiers,
         };
+        // (value after egui drew it, PoB's step) for each frame
         let mut seen = Vec::new();
-        for (focus, events) in [
+        let frames = [
             (true, vec![]),
-            (false, vec![Event::PointerMoved(Pos2::new(60.0, 20.0))]),
-            (false, vec![up.clone()]),
-        ] {
+            (false, vec![]),
+            (false, vec![key(Key::ArrowUp, Modifiers::NONE)]),
+            (false, vec![key(Key::ArrowDown, Modifiers::NONE)]),
+            (false, vec![key(Key::ArrowLeft, Modifiers::NONE)]),
+            (false, vec![key(Key::ArrowRight, Modifiers::NONE)]),
+            (false, vec![key(Key::ArrowUp, Modifiers::SHIFT)]),
+            (false, vec![key(Key::ArrowDown, Modifiers::COMMAND)]),
+        ];
+        for (focus, events) in frames {
             ctx.run_ui(
                 RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 200.0))),
@@ -612,21 +690,54 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
+                    // a button first, so Up would have somewhere to move the focus to
+                    let _ = ui.button("above");
                     let mut v = 0.5;
+                    slider_keys(ui);
                     let r = ui.add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false));
                     if focus {
                         r.request_focus();
                     }
-                    seen.push(slider_step(ui, &r, 0.5));
+                    seen.push((v, slider_step(ui, &r, 0.5)));
                 },
             )
             .drop_without_applying_deltas();
         }
-        // egui's own step moves a focused slider; PoB's isn't added on top (no stray command)
-        assert_eq!(seen.last().copied().flatten(), None);
-        // unfocused and pointed at, the arrows are PoB's
+        let steps: Vec<Option<f64>> = seen[2..]
+            .iter()
+            .map(|(_, s)| s.map(|v| (v * 100.0).round() / 100.0))
+            .collect();
+        assert_eq!(
+            steps,
+            [
+                Some(0.55),
+                Some(0.45),
+                Some(0.45),
+                Some(0.55),
+                Some(0.75),
+                Some(0.49)
+            ]
+        );
+        // egui's own step never moved it
+        assert!(seen.iter().all(|(v, _)| *v == 0.5), "{seen:?}");
+        // unfocused and not pointed at, the arrows do nothing
         let unfocused = egui::Context::default();
-        assert!(slide(&unfocused, 0.5, vec![up]).is_some());
+        let mut out = Some(0.0);
+        unfocused
+            .run_ui(
+                RawInput {
+                    events: vec![key(Key::ArrowUp, Modifiers::NONE)],
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut v = 0.5;
+                    slider_keys(ui);
+                    let r = ui.add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false));
+                    out = slider_step(ui, &r, 0.5);
+                },
+            )
+            .drop_without_applying_deltas();
+        assert_eq!(out, None);
     }
 
     /// A hovered top bar box steps on Down while a tab's box has the keyboard, as PoB's

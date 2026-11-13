@@ -593,6 +593,7 @@ fn panel(
                     Some((l, v)) if l == line => v,
                     _ => range,
                 };
+                crate::widgets::scroll_step::slider_keys(ui);
                 let slider = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).show_value(false));
                 state.rects.note(&slider, || "range_slider".into());
                 // the wheel and the arrows move it (SliderControl.lua:164-180)
@@ -663,6 +664,7 @@ fn stacked_range_lines(
                     Some((l, v)) if l == line => v,
                     _ => range,
                 };
+                crate::widgets::scroll_step::slider_keys(ui);
                 let slider = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).show_value(false));
                 state
                     .rects

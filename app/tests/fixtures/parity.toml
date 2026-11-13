@@ -3471,24 +3471,20 @@ ported = "app/src/ui/app.rs Ctrl+Z undo"
 ported = "app/src/ui/skills/sets.rs F2 renames the selected set"
 
 [keys."SliderControl.DOWN"]
-ported = "app/src/ui"
-note = "egui's own widget behaviour"
+ported = "app/src/widgets/scroll_step.rs slider_keys + slider_step at every slider: steps it down 0.05, 0.25 with Shift, 0.01 with Ctrl, while it has the keyboard or, with no control selected, is pointed at (SliderControl.lua:164-180); test a_focused_slider_steps_by_pobs_steps_on_every_arrow"
 
 [keys."SliderControl.LEFT"]
-ported = "app/src/ui"
-note = "egui's own widget behaviour"
+ported = "app/src/widgets/scroll_step.rs slider_keys + slider_step at every slider: steps it down 0.05, 0.25 with Shift, 0.01 with Ctrl, while it has the keyboard or, with no control selected, is pointed at (SliderControl.lua:164-180); test a_focused_slider_steps_by_pobs_steps_on_every_arrow"
 
 [keys."SliderControl.LEFTBUTTON"]
 ported = "app/src/ui"
 note = "egui's own widget behaviour"
 
 [keys."SliderControl.RIGHT"]
-ported = "app/src/ui"
-note = "egui's own widget behaviour"
+ported = "app/src/widgets/scroll_step.rs slider_keys + slider_step at every slider: steps it up 0.05, 0.25 with Shift, 0.01 with Ctrl, while it has the keyboard or, with no control selected, is pointed at (SliderControl.lua:164-180); test a_focused_slider_steps_by_pobs_steps_on_every_arrow"
 
 [keys."SliderControl.UP"]
-ported = "app/src/ui"
-note = "egui's own widget behaviour"
+ported = "app/src/widgets/scroll_step.rs slider_keys + slider_step at every slider: steps it up 0.05, 0.25 with Shift, 0.01 with Ctrl, while it has the keyboard or, with no control selected, is pointed at (SliderControl.lua:164-180); test a_focused_slider_steps_by_pobs_steps_on_every_arrow"
 
 [keys."SliderControl.WHEELDOWN"]
 ported = "app/src/widgets/scroll_step.rs slider_step at every slider: 0.05 a notch, 0.25 with Shift, 0.01 with Ctrl, reversed by PoB's Invert slider scroll direction (SliderControl.lua:164-171)"

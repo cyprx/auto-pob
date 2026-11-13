@@ -248,6 +248,7 @@ fn affix_row(
             let label = ui.label(pob_text(roll, 14.0, default));
             state.rects.note(&label, || format!("affix_roll_{slot}"));
             let mut value = state.affix_sliders.get(&slot).copied().unwrap_or(range);
+            crate::widgets::scroll_step::slider_keys(ui);
             let slider = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).show_value(false));
             state.rects.note(&slider, || format!("affix_range_{slot}"));
             // its own tooltip, for the value under the pointer, or the value while dragged
@@ -309,6 +310,7 @@ fn cluster_rows(
     ui.horizontal(|ui| {
         ui.label("Added Passives:");
         let mut value = state.cluster_slider.unwrap_or(current);
+        crate::widgets::scroll_step::slider_keys(ui);
         let slider = ui.add_enabled(
             span > 0,
             egui::Slider::new(&mut value, 0.0..=1.0)

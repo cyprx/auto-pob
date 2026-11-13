@@ -300,9 +300,38 @@ function glue.new_build()
 	enter_build(false, "Unnamed build")
 end
 
+-- Whether `path` is a folder: Linux opens one, and only the read fails (EISDIR)
+local function is_folder(path)
+	local file = io.open(path, "r")
+	if not file then
+		return false
+	end
+	local ok, _, code = file:read(0)
+	file:close()
+	-- an empty file reads nil with no error
+	return ok == nil and code == 21
+end
+
 function glue.open_build(fullPath)
 	local name = fullPath:match("([^/\\]+)%.xml$") or fullPath
-	enter_build(fullPath, name)
+	if not is_folder(fullPath) then
+		enter_build(fullPath, name)
+		return
+	end
+	-- On Windows, where PoB runs, `io.open` refuses a folder, and LoadDBFile takes it as a
+	-- missing file (Build.lua:2023-2027). Linux would open it and fail inside the XML reader.
+	local open = io.open
+	io.open = function(path, ...)
+		if path == fullPath then
+			return nil, path .. ": Permission denied", 13
+		end
+		return open(path, ...)
+	end
+	local ok, err = pcall(enter_build, fullPath, name)
+	io.open = open
+	if not ok then
+		error(err, 0)
+	end
 end
 
 function glue.import_code(code)

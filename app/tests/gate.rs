@@ -911,6 +911,21 @@ fn a_garbage_build_file_is_an_error_and_does_not_wedge_the_engine() {
     );
 }
 
+/// A folder named like a build is a build PoB can't open, as on Windows where `io.open`
+/// refuses a folder: the plain message, not a Lua error from inside its XML reader
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_folder_named_like_a_build_is_a_clean_error() {
+    let _guard = lock();
+    let mut s = Session::start("folder-build");
+    let folder = s.builds_dir().join("folder.xml");
+    fs::create_dir_all(&folder).unwrap();
+    let err = s.run(Command::OpenBuild { path: folder }).unwrap_err();
+    assert_eq!(format!("{err:#}"), "couldn't open that build");
+    s.open_fixture("attack", &fixture_xml("attack"));
+    assert_view_matches("attack", "stat", &s.stats().stats, &golden("attack").stats);
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn recalculate_reports_frame_errors_once() {

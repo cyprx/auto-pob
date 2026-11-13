@@ -2193,6 +2193,17 @@ fn range_dropdown_matches_pob() {
 fn item_text_tooltip_matches_pob() {
     let _guard = lock();
     let (mut s, lua) = gear_sessions("items-text-tooltip");
+    // counts the item tooltips our side builds: the check builds none
+    s.backend
+        .lua
+        .load(
+            "tooltips_built = 0; local tab = pob.build.itemsTab; local add = tab.AddItemTooltip; \
+             tab.AddItemTooltip = function(...) tooltips_built = tooltips_built + 1; \
+             return add(...) end",
+        )
+        .exec()
+        .unwrap();
+    let built = |s: &Session| -> u32 { lua_value(&s.backend.lua, "return tooltips_built") };
     let texts = [
         (
             2,
@@ -2214,6 +2225,7 @@ fn item_text_tooltip_matches_pob() {
             .unwrap();
         }
         for (rarity, text) in &texts {
+            let full_before = built(&s);
             let view = s
                 .backend
                 .control_tooltip_view(&ControlTooltipQuery::ItemText {
@@ -2239,10 +2251,54 @@ fn item_text_tooltip_matches_pob() {
                 &theirs,
                 &format!("Save tooltip for {text:?}, item shown {shown}"),
             );
-            invalid += usize::from(matches!(
+            let is_invalid = matches!(
                 view.tooltip.lines.first(),
                 Some(ItemTooltipLine::Line { text, .. }) if text == "The item is invalid."
-            ));
+            );
+            invalid += usize::from(is_invalid);
+            assert_eq!(
+                built(&s) > full_before,
+                !is_invalid,
+                "the count is the tooltip's"
+            );
+            // the check alone, a parse: empty while Save is enabled, else the same hint
+            let before = built(&s);
+            let check = s
+                .backend
+                .control_tooltip_view(&ControlTooltipQuery::ItemTextCheck {
+                    rarity: *rarity,
+                    text: text.clone(),
+                })
+                .unwrap()
+                .expect("the Save check");
+            assert_eq!(built(&s), before, "the check built an item tooltip");
+            let enabled: bool = lua_value(
+                &lua,
+                &format!(
+                    "local t = build.itemsTab; t:EditDisplayItemText(); \
+                     local p = main.popups[1]; p.controls.rarity:SetSel({}); \
+                     p.controls.edit:SetText({text:?}); \
+                     local on = p.controls.save:IsEnabled(); main:ClosePopup(); return on",
+                    rarity + 1
+                ),
+            );
+            assert_eq!(
+                enabled, !is_invalid,
+                "Save for {text:?}, item shown {shown}"
+            );
+            if is_invalid {
+                assert_same(
+                    &json_of(&check.tooltip),
+                    &theirs,
+                    &format!("Save check for {text:?}, item shown {shown}"),
+                );
+            } else {
+                assert!(
+                    check.tooltip.lines.is_empty(),
+                    "Save check for {text:?}: {:?}",
+                    check.tooltip
+                );
+            }
         }
         assert_eq!(open_popups(&s), 0, "a popup was left open");
     }

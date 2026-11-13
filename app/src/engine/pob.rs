@@ -2695,6 +2695,9 @@ impl Backend for PobBackend {
             ControlTooltipQuery::ItemText { rarity, text } => {
                 Some(self.view("item_text_tooltip", (*rarity, text.clone()))?)
             }
+            ControlTooltipQuery::ItemTextCheck { rarity, text } => {
+                Some(self.view("item_text_check", (*rarity, text.clone()))?)
+            }
             ControlTooltipQuery::AffixSlider { slot, at } => self.view(
                 "affix_tooltip",
                 (*slot, None::<i64>, f64::from(*at.min(&1000)) / 1000.0),

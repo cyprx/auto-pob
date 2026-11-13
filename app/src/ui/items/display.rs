@@ -37,11 +37,14 @@ pub struct DisplayState {
     pub(super) submitted: Option<u64>,
     pub(super) rects: Rects,
     pub(super) crafting: CraftingState,
-    /// The raw-text window's question about its text, the text as it was when it last
-    /// changed, and when; the answer for the question (Save's verdict and tooltip)
+    /// The raw-text window's check of its text (Save's enabled test, a parse), the text as it
+    /// was when it last changed, and when; the answer for the check
     pub(super) text_asked: Option<ControlTooltipQuery>,
     text_seen: Option<(ControlTooltipQuery, f64)>,
     text_verdict: Option<Arc<ControlTooltipView>>,
+    /// Save's full tooltip question, asked while Save is hovered, and its answer
+    pub(super) text_tip_asked: Option<ControlTooltipQuery>,
+    text_tip: Option<Arc<ControlTooltipView>>,
     /// Questions for the engine from the last frame
     pub(super) queries: Vec<Command>,
     /// A text box had the keyboard or a dropdown list was open as the frame began: PoB's
@@ -93,10 +96,13 @@ impl DisplayState {
         if self.text_asked.as_ref() == Some(&view.query) {
             self.text_verdict = Some(view.clone());
         }
+        if self.text_tip_asked.as_ref() == Some(&view.query) {
+            self.text_tip = Some(view.clone());
+        }
     }
 
-    /// Asks the engine about the window's text once it stops changing for a moment; the first
-    /// text of a window at once
+    /// Asks the engine to check the window's text once it stops changing for a moment; the
+    /// first text of a window at once
     fn ask_about_text(&mut self, ctx: &egui::Context, query: ControlTooltipQuery) {
         if self.text_asked.as_ref() == Some(&query) {
             return;
@@ -123,19 +129,37 @@ impl DisplayState {
             self.text_asked = None;
             self.text_seen = None;
             self.text_verdict = None;
+            self.text_tip_asked = None;
+            self.text_tip = None;
             return Vec::new();
         };
-        let query = ControlTooltipQuery::ItemText {
-            rarity: window.rarity,
+        let (rarity, hovered) = (window.rarity, window.save_hovered);
+        let check = ControlTooltipQuery::ItemTextCheck {
+            rarity,
             text: window.text.clone(),
         };
-        self.ask_about_text(ctx, query.clone());
-        let verdict = self.text_verdict.clone().filter(|v| v.query == query);
+        let full = ControlTooltipQuery::ItemText {
+            rarity,
+            text: window.text.clone(),
+        };
+        self.ask_about_text(ctx, check.clone());
+        let verdict = self.text_verdict.clone().filter(|v| v.query == check);
+        // PoB builds Save's tooltip, the item's with a calculation a comparable slot, only while
+        // Save is hovered (ItemsTab.lua:2637-2640); an invalid text's hint came with the check
+        let invalid = verdict
+            .as_ref()
+            .is_some_and(|v| text_window::invalid(&v.tooltip));
+        if hovered && !invalid && self.text_tip_asked.as_ref() != Some(&full) {
+            self.text_tip_asked = Some(full.clone());
+            self.queries.push(Command::ControlTooltip(full.clone()));
+        }
+        let tip = self.text_tip.clone().filter(|v| v.query == full);
         let Some(window) = &mut self.text_window else {
             return Vec::new();
         };
         let save = text_window::SaveVerdict {
-            tooltip: verdict.as_ref().map(|v| &v.tooltip),
+            check: verdict.as_ref().map(|v| &v.tooltip),
+            tooltip: tip.as_ref().map(|v| &v.tooltip),
         };
         match text_window::show(ctx, window, &mut self.rects, &save) {
             Outcome::Open => Vec::new(),
@@ -304,6 +328,7 @@ fn panel(
                     rarity: view.edit_rarity,
                     text: view.edit_text.clone(),
                     creating: false,
+                    save_hovered: false,
                 });
                 state.submitted = None;
             } else {
@@ -567,7 +592,8 @@ fn panel(
                 let slider = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).show_value(false));
                 state.rects.note(&slider, || "range_slider".into());
                 // the wheel and the arrows move it (SliderControl.lua:164-180)
-                if let Some(to) = crate::widgets::scroll_step::page_slider_step(ui, &slider, value) {
+                if let Some(to) = crate::widgets::scroll_step::page_slider_step(ui, &slider, value)
+                {
                     state.slider = Some((line, to));
                     out.push(Command::SetRangeLine { line, value: to });
                 }
@@ -639,7 +665,8 @@ fn stacked_range_lines(
                     .rects
                     .note(&slider, || format!("stacked_slider_{line}"));
                 // the wheel and the arrows move it, as every slider (SliderControl.lua:164-180)
-                if let Some(to) = crate::widgets::scroll_step::page_slider_step(ui, &slider, value) {
+                if let Some(to) = crate::widgets::scroll_step::page_slider_step(ui, &slider, value)
+                {
                     state.slider = Some((line, to));
                     out.push(Command::SetRangeLine { line, value: to });
                 }

@@ -372,7 +372,8 @@ fn empty_panel_and_slot_column_order() {
 
 /// The raw-text window is PoB's: its titles, "Create" for a new item, and a Save enabled only
 /// while PoB reads the text as an item, with the item's tooltip or PoB's hint
-/// (ItemsTab.lua:2606-2658)
+/// (ItemsTab.lua:2606-2658). The text is only checked (a parse, PoB's `save.enabled`) after a
+/// pause; the item's tooltip, which calculates, is asked for only while Save is hovered.
 #[test]
 fn the_text_window_asks_pob_whether_save_is_enabled() {
     let mut h = Harness::new(sample());
@@ -382,27 +383,57 @@ fn the_text_window_asks_pob_whether_save_is_enabled() {
     h.frame(vec![]);
     assert!(shown(&h, "Create Custom Item from Text"), "{:?}", h.drawn);
     assert!(shown(&h, "Create"));
-    let query = ControlTooltipQuery::ItemText {
+    let check = ControlTooltipQuery::ItemTextCheck {
         rarity: 2,
         text: String::new(),
     };
-    // the first text of a window is asked about at once
-    assert_eq!(h.ui.display.text_asked.as_ref(), Some(&query), "{asked:?}");
+    let full = ControlTooltipQuery::ItemText {
+        rarity: 2,
+        text: String::new(),
+    };
+    // the first text of a window is checked at once
+    assert_eq!(h.ui.display.text_asked.as_ref(), Some(&check), "{asked:?}");
+    assert_eq!(
+        h.ui.display.text_tip_asked, None,
+        "no tooltip before Save is hovered"
+    );
     let reply = |query: ControlTooltipQuery, first: &str| {
         Snapshot::ControlTooltip(Arc::new(crate::engine::views::ControlTooltipView {
             query,
             tooltip: ItemTooltip {
-                lines: vec![tip_line(first, None)],
+                lines: if first.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![tip_line(first, None)]
+                },
                 ..ItemTooltip::default()
             },
         }))
     };
-    h.ui.on_snapshot(&reply(query.clone(), "The item is invalid."));
+    h.ui.on_snapshot(&reply(check.clone(), "The item is invalid."));
     h.frame(vec![]);
-    let sent = h.click("text_save").commands;
-    assert!(sent.is_empty(), "Save is disabled: {sent:?}");
-    h.ui.on_snapshot(&reply(query, "Doom Loop"));
+    let sent = h.click("text_save");
+    assert!(sent.commands.is_empty(), "Save is disabled: {sent:?}");
+    assert!(
+        !debug(&sent.queries)
+            .iter()
+            .any(|q| q.contains("ItemText {")),
+        "the hint came with the check: {:?}",
+        sent.queries
+    );
+    // a readable text: hovering Save asks for the item's tooltip, once
+    h.frame(vec![Event::PointerMoved(Pos2::new(5.0, 5.0))]);
+    h.ui.on_snapshot(&reply(check, ""));
+    assert!(h.frame(vec![]).queries.is_empty(), "Save isn't hovered");
+    let pos = h.ui.rect("text_save").center();
+    let mut queries = h.frame(vec![Event::PointerMoved(pos)]).queries;
+    queries.extend(h.frame(vec![]).queries);
+    queries.extend(h.frame(vec![]).queries);
+    assert_eq!(debug(&queries), [format!("ControlTooltip({full:?})")]);
+    h.ui.on_snapshot(&reply(full, "Doom Loop"));
     h.frame(vec![]);
+    h.frame(vec![]);
+    assert!(shown(&h, "Doom Loop"), "{:?}", h.drawn);
     assert_eq!(
         debug(&h.click("text_save").commands),
         ["SetDisplayItemText { rarity: 2, text: \"\" }"]

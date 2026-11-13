@@ -995,14 +995,18 @@ fn a_press_that_leaves_the_quality_box_toggles_no_mod_line() {
     assert!(h.ctx.text_edit_focused());
     let o = h.click("tip_line_0");
     assert!(
-        !debug(&o.commands).iter().any(|c| c.starts_with("ToggleModLine")),
+        !debug(&o.commands)
+            .iter()
+            .any(|c| c.starts_with("ToggleModLine")),
         "{:?}",
         o.commands
     );
     // the next press is the line's
     let o = h.click("tip_line_0");
     assert!(
-        debug(&o.commands).iter().any(|c| c.starts_with("ToggleModLine")),
+        debug(&o.commands)
+            .iter()
+            .any(|c| c.starts_with("ToggleModLine")),
         "{:?}",
         o.commands
     );

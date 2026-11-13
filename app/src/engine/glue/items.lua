@@ -795,6 +795,29 @@ function glue.item_text_tooltip(rarity, text)
 	return glue.read_tooltip(tooltip)
 end
 
+-- That Save's enabled test alone: PoB's `save.enabled` only parses the text, with no
+-- calculation (ItemsTab.lua:2633-2636). An empty tooltip while it is enabled; while it is not,
+-- the tooltip's invalid-item lines, which also only parse.
+function glue.item_text_check(rarity, text)
+	local tab = items_tab()
+	if rarity > 4 then
+		error("no such rarity", 0)
+	end
+	local tooltip = new("Tooltip")
+	glue.in_popups(function()
+		tab:EditDisplayItemText()
+		local popup = pob.main.main.popups[1]
+		popup.controls.rarity:SetSel(rarity + 1)
+		popup.controls.edit:SetText("")
+		glue.paste_into(popup.controls.edit, text)
+		local save = popup.controls.save
+		if not save:IsEnabled() then
+			save.tooltipFunc(tooltip)
+		end
+	end)
+	return glue.read_tooltip(tooltip)
+end
+
 -- The panel's Save / Add to build button
 function glue.display_save()
 	local tab = items_tab()

@@ -1281,6 +1281,13 @@ pub enum ControlTooltipQuery {
         rarity: usize,
         text: String,
     },
+    /// The same Save's enabled test alone, which only parses the text (`save.enabled`,
+    /// ItemsTab.lua:2633-2636): an empty tooltip while PoB reads it as an item, else PoB's
+    /// "The item is invalid." lines (which cost no calculation)
+    ItemTextCheck {
+        rarity: usize,
+        text: String,
+    },
     DbItem {
         db: ItemDb,
         name: String,

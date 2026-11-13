@@ -26,6 +26,8 @@ pub struct TextWindow {
     pub text: String,
     /// "Create custom...": there is no item yet
     pub creating: bool,
+    /// The pointer was on Save last frame: its tooltip, the item's, is asked for only then
+    pub save_hovered: bool,
 }
 
 impl TextWindow {
@@ -35,25 +37,40 @@ impl TextWindow {
             rarity: 2,
             text: String::new(),
             creating: true,
+            save_hovered: false,
         }
     }
 }
 
-/// PoB's verdict on the window's text: Save's tooltip, whose "The item is invalid." first
-/// line means Save is disabled (ItemsTab.lua:2630-2652). None until the engine answered for
-/// this very text: Save stays enabled, and the engine refuses an invalid item.
+/// PoB's verdict on the window's text. `check` is Save's enabled test (it only parses the
+/// text): empty while PoB reads it as an item, else the tooltip's "The item is invalid." lines
+/// (ItemsTab.lua:2633-2652). `tooltip` is Save's full tooltip, the item's, asked for only while
+/// Save is hovered, as PoB builds it only then. Each is None until the engine answered for this
+/// very text: Save stays enabled, and the engine refuses an invalid item.
 pub struct SaveVerdict<'a> {
+    pub check: Option<&'a ItemTooltip>,
     pub tooltip: Option<&'a ItemTooltip>,
 }
 
 /// PoB's first line for a text it can't read as an item
 const INVALID: &str = "The item is invalid.";
 
+/// The tooltip is PoB's hint for a text it can't read as an item
+pub(super) fn invalid(tooltip: &ItemTooltip) -> bool {
+    matches!(tooltip.lines.first(), Some(ItemTooltipLine::Line { text, .. }) if text == INVALID)
+}
+
 impl SaveVerdict<'_> {
     fn enabled(&self) -> bool {
-        !self.tooltip.is_some_and(|t| {
-            matches!(t.lines.first(), Some(ItemTooltipLine::Line { text, .. }) if text == INVALID)
-        })
+        !self.check.or(self.tooltip).is_some_and(invalid)
+    }
+
+    /// What Save's tooltip shows: PoB's hint for an invalid text, else the item's
+    fn hover(&self) -> Option<&ItemTooltip> {
+        match self.check {
+            Some(check) if invalid(check) => Some(check),
+            _ => self.tooltip,
+        }
     }
 }
 
@@ -133,7 +150,8 @@ pub fn show(
             // its tooltip the item's or PoB's hint (ItemsTab.lua:2626-2652)
             let label = if window.creating { "Create" } else { "Save" };
             let mut save = ui.add_enabled(verdict.enabled(), egui::Button::new(label));
-            if let Some(tooltip) = verdict.tooltip {
+            window.save_hovered = save.contains_pointer();
+            if let Some(tooltip) = verdict.hover() {
                 save = save
                     .on_hover_ui(|ui| {
                         item_tooltip_ui(ui, tooltip);

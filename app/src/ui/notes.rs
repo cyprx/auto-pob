@@ -78,6 +78,30 @@ fn hex_code_at(s: &str, i: usize) -> Option<usize> {
     .then_some(8)
 }
 
+/// PoB's `SetShowColorCodes(false)` (NotesTab.lua:52-55): "^_xRRGGBB" back to "^xRRGGBB"
+/// and "^_N" back to "^N"
+fn hide_colour_codes(text: &str) -> String {
+    let b = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'^' && b.get(i + 1) == Some(&b'_') {
+            let hex = b.get(i + 2) == Some(&b'x')
+                && b.get(i + 3..i + 9)
+                    .is_some_and(|h| h.iter().all(u8::is_ascii_hexdigit));
+            if hex || b.get(i + 2).is_some_and(u8::is_ascii_digit) {
+                out.push('^');
+                i += 2;
+                continue;
+            }
+        }
+        let ch = text[i..].chars().next().unwrap_or('\0');
+        out.push(ch);
+        i += ch.len_utf8().max(1);
+    }
+    out
+}
+
 fn byte_of_char(text: &str, char_index: usize) -> usize {
     text.char_indices()
         .nth(char_index)
@@ -159,12 +183,15 @@ impl NotesUi {
         // stall if a SetNotes fails and is never echoed.
         if self.dirty_since.is_none() && seq >= self.sent_seq && self.text != view.text {
             // the echo of our own edit, less what the box's filter drops ("\r", control
-            // characters), keeps the undo
-            let echo = self
+            // characters), keeps the undo; so does a Save's, which turns shown colour codes
+            // back into codes without PoB's `SetText` (NotesTab.lua:48-56, 80)
+            let filtered: String = self
                 .text
                 .chars()
                 .filter(|&c| !c.is_ascii_control() || c == '\t' || c == '\n')
-                .eq(view.text.chars());
+                .collect();
+            let echo = filtered == view.text
+                || hide_colour_codes(&filtered) == hide_colour_codes(&view.text);
             self.text.clone_from(&view.text);
             self.reset_undo |= !echo;
         }
@@ -523,6 +550,58 @@ mod tests {
             run_events(&mut ui, &ctx, 15.0, undo());
             assert_eq!(ui.text, "build B", "build change {build_change}");
         }
+    }
+
+    /// PoB's Save turns shown colour codes ("^_1", "^_xRRGGBB") back into codes by setting
+    /// the box's text directly, with no `SetText`, so its undo stays (NotesTab.lua:48-56, 80):
+    /// the view after a Save keeps ours too
+    #[test]
+    fn undo_survives_a_save_that_rewrites_shown_colour_codes() {
+        let ctx = egui::Context::default();
+        let mut ui = NotesUi::default();
+        ui.on_view(
+            &NotesView {
+                text: "a".into(),
+                colours: Vec::new(),
+            },
+            1,
+        );
+        run_events(&mut ui, &ctx, 0.0, vec![]);
+        ctx.memory_mut(|m| m.request_focus(ui.edit_id));
+        run_events(&mut ui, &ctx, 0.1, vec![]);
+        run_events(
+            &mut ui,
+            &ctx,
+            1.0,
+            vec![egui::Event::Text(" ^_1x ^_xFF0000y".into())],
+        );
+        run_events(&mut ui, &ctx, 3.0, vec![]);
+        ui.sent(2);
+        // the view after the Save
+        ui.on_view(
+            &NotesView {
+                text: "a ^1x ^xFF0000y".into(),
+                colours: Vec::new(),
+            },
+            3,
+        );
+        assert_eq!(ui.text, "a ^1x ^xFF0000y");
+        run_events(&mut ui, &ctx, 4.0, vec![]);
+        for t in 0..3 {
+            run_events(
+                &mut ui,
+                &ctx,
+                6.0 + f64::from(t),
+                vec![egui::Event::Key {
+                    key: egui::Key::Z,
+                    physical_key: Some(egui::Key::Z),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND,
+                }],
+            );
+        }
+        assert_eq!(ui.text, "a");
     }
 
     #[test]

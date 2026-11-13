@@ -1578,3 +1578,41 @@ fn build_list_data_loss_guards() {
     assert!(sub.join("made/saved.xml").is_file());
     assert_eq!(s.open_popups(), 0);
 }
+
+/// A build file's class and ascendancy are read from its XML: a byte there that isn't UTF-8
+/// (a file from a Windows-1252 editor) is escaped as in every view, and the list still loads;
+/// the names beside it come as they are
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_class_that_isnt_utf8_leaves_the_build_list_working() {
+    let _guard = lock();
+    let mut s = super::Session::start("list-bad-class");
+    let builds = s.builds_dir();
+    fs::create_dir_all(&builds).unwrap();
+    let good = fs::read_to_string(super::fixture_xml("attack")).unwrap();
+    fs::write(builds.join("good.xml"), &good).unwrap();
+    let mut bad = good
+        .replace("className=\"Marauder\"", "className=\"\u{1}Marauder\"")
+        .replace("ascendClassName=\"None\"", "ascendClassName=\"Ju\u{1}\"")
+        .into_bytes();
+    for b in &mut bad {
+        if *b == 1 {
+            *b = 0xE9;
+        }
+    }
+    fs::write(builds.join("bad.xml"), bad).unwrap();
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .unwrap();
+    let view = s.backend.build_list_view().expect("the list loads");
+    let entry = |name: &str| {
+        view.entries
+            .iter()
+            .find(|e| e.name == name)
+            .unwrap_or_else(|| panic!("no {name}"))
+    };
+    assert_eq!(entry("bad").class.as_deref(), Some("\u{F7E9}Marauder"));
+    assert_eq!(entry("bad").ascendancy.as_deref(), Some("Ju\u{F7E9}"));
+    assert_eq!(entry("good").class.as_deref(), Some("Marauder"));
+}

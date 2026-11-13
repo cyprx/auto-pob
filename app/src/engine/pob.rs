@@ -1120,6 +1120,19 @@ impl PobBackend {
                 name,
                 overwrite,
             } => {
+                // as strict as the build list's commands (R16): no link on the way to the
+                // folder, which may be new (the save makes it), and none at the file itself, which
+                // an overwrite would write through
+                // the glue's own checks first, in its order, so its messages stay
+                if name.is_empty() || name.contains(['/', '\\']) {
+                    anyhow::bail!("that isn't a valid build name");
+                }
+                if folder.contains("..") || folder.starts_with('/') {
+                    anyhow::bail!("that isn't a valid folder");
+                }
+                let root: String = self.call("build_root", ())?;
+                let folder = buildpaths::folder(&root, &folder, false, true)?;
+                buildpaths::save_target(&root, &folder, &name)?;
                 self.call::<_, ()>("save_as", (folder, name, overwrite))?;
                 // PoB's save rewrites the notes' `^_` escapes; the Summary's header names the
                 // build (R4)

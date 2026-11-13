@@ -151,6 +151,18 @@ pub(crate) fn folder(root: &str, folder: &str, must_exist: bool, strict: bool) -
     })
 }
 
+/// Refuses Save As onto `name.xml` in `folder` (checked by [`folder`]) when that is a link,
+/// a dangling one included: the save would write through it.
+pub(crate) fn save_target(root: &str, folder: &str, name: &str) -> Result<()> {
+    let target = Path::new(&root_dir(root))
+        .join(folder)
+        .join(format!("{name}.xml"));
+    if fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(outside());
+    }
+    Ok(())
+}
+
 /// Refuses a new name that is taken in the entry's folder, exactly or as a case variant, a
 /// link (also a dangling one) included: a rename or copy would replace or write through it.
 /// `entry` is the approved source; `rename` lets the entry's own name through when only its

@@ -693,7 +693,7 @@ impl Toolbar {
                 let minus = ui.small_button("-");
                 step += i32::from(plus.clicked()) - i32::from(minus.clicked());
                 for _ in 0..step.unsigned_abs() {
-                    *text = crate::widgets::edit_box::stepped(text, step > 0);
+                    *text = crate::widgets::edit_box::stepped(text, step > 0, false);
                 }
                 if step != 0 || field.lost_focus() {
                     // an empty box is no limit, as PoB's `tonumber("")`

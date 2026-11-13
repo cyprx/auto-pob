@@ -296,6 +296,15 @@ fn our_url(
     run(s, Command::OpenPopup(PopupKind::BuySimilar { source })).expect("opening Buy similar");
     let view = popup(s);
     assert_eq!(view.title, "Buy Similar");
+    // its number boxes are TradeHelpers.newPlainNumericEdit's: `isNumeric` off, so no + or -
+    // and no stepping (TradeHelpers.lua:548-559)
+    for c in view
+        .controls
+        .iter()
+        .filter(|c| c.kind == PopupControlKind::Edit)
+    {
+        assert!(!c.numeric, "{} steps, as PoB's doesn't", c.name);
+    }
     let edits = if non_default {
         edits_of(&view)
     } else {

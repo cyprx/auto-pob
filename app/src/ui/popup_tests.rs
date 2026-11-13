@@ -23,6 +23,8 @@ fn control(name: &str, kind: PopupControlKind, pos: [f32; 2], size: [f32; 2]) ->
         text: String::new(),
         ascii_only: false,
         digits: false,
+        signed: false,
+        numeric: false,
         limit: None,
         tooltip_text: None,
         hover_tooltip: false,
@@ -1196,6 +1198,7 @@ fn a_popup_box_limit_counts_bytes() {
 fn a_popup_digits_box_filters_and_steps() {
     let mut edit = control("count", PopupControlKind::Edit, [0.0, 0.0], [200.0, 20.0]);
     edit.digits = true;
+    edit.numeric = true;
     edit.text = "4".into();
     let mut h = Harness::new(popup(vec![edit]));
     h.click("edit_count");
@@ -1207,4 +1210,21 @@ fn a_popup_digits_box_filters_and_steps() {
         debug(&sent.commands),
         [set("count", PopupInput::Text("5".into()))]
     );
+}
+
+/// Buy Similar's number boxes are `%D` boxes with `isNumeric` turned off: digits only, but no
+/// + or - and no stepping (TradeHelpers.lua:548-559)
+#[test]
+fn a_popup_digits_box_without_is_numeric_does_not_step() {
+    let mut edit = control("mod1Min", PopupControlKind::Edit, [0.0, 0.0], [200.0, 20.0]);
+    edit.digits = true;
+    edit.text = "4".into();
+    let mut h = Harness::new(popup(vec![edit]));
+    h.click("edit_mod1Min");
+    h.frame(vec![Event::Text("x".into())]);
+    h.frame(vec![]);
+    assert_eq!(h.popup.box_text("mod1Min"), Some("4"));
+    let sent = h.key(Key::ArrowUp);
+    assert!(sent.commands.is_empty(), "{:?}", debug(&sent.commands));
+    assert_eq!(h.popup.box_text("mod1Min"), Some("4"));
 }

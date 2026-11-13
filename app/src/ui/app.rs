@@ -5219,6 +5219,8 @@ mod tests {
             text: String::new(),
             ascii_only: false,
             digits: false,
+            signed: false,
+            numeric: false,
             limit: None,
             tooltip_text: None,
             hover_tooltip: false,

@@ -777,7 +777,18 @@ impl PopupWindow {
                 self.caption(ui, c);
                 // the box's own filter and limit, as PoB's EditControl holds them
                 let opts = if c.digits {
-                    EditBoxOptions::number(width.max(60.0), c.limit)
+                    // the number filter goes with `%D` or `^%-%d`, the + and - and stepping
+                    // with `isNumeric` (TradeHelpers.lua:548-559 turns it off)
+                    EditBoxOptions {
+                        filter: Some(if c.signed {
+                            |ch: char| ch.is_ascii_digit() || ch == '-'
+                        } else {
+                            |ch: char| ch.is_ascii_digit()
+                        }),
+                        numeric: c.numeric,
+                        signed: c.signed,
+                        ..EditBoxOptions::number(width.max(60.0), c.limit)
+                    }
                 } else {
                     EditBoxOptions {
                         width: width.max(60.0),

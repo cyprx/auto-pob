@@ -1243,6 +1243,8 @@ mod tests {
                 text: String::new(),
                 ascii_only: false,
                 digits: false,
+                signed: false,
+                numeric: false,
                 limit: None,
                 tooltip_text: None,
                 hover_tooltip: false,
@@ -1819,10 +1821,16 @@ pub struct PopupControl {
     /// punctuation and spaces (EditControl.lua:46)
     #[serde(default)]
     pub ascii_only: bool,
-    /// Edit: a `%D` box, which takes digits only and steps on + and -, Up, Down and the wheel
-    /// (EditControl.lua:64-75, 680-700)
+    /// Edit: a number box's filter, `%D` (digits) or `^%-%d` (digits and "-")
     #[serde(default)]
     pub digits: bool,
+    /// Edit: the filter is `^%-%d`
+    #[serde(default)]
+    pub signed: bool,
+    /// Edit: PoB's `isNumeric`, which gives the box + and - and steps it on Up, Down and the
+    /// wheel (EditControl.lua:64-75, 680-700); Buy Similar's boxes turn it off
+    #[serde(default)]
+    pub numeric: bool,
     /// Edit: the most bytes the box takes
     #[serde(default)]
     pub limit: Option<usize>,

@@ -556,13 +556,13 @@ fn compare_summary_matches_pob() {
         assert!(control.shown && control.enabled, "{boxed} isn't offered");
         // a `%D` box, so drawn with PoB's + and - (EditControl.lua:64-75)
         assert_eq!(
-            control.digits,
+            control.numeric,
             up.eval::<bool>(&format!(
                 "return build.compareTab.controls.{boxed}.isNumeric == true"
             )),
             "{boxed}"
         );
-        assert!(control.digits, "{boxed} is not a %D box");
+        assert!(control.digits && control.numeric, "{boxed} is not a %D box");
         // PoB's filter drops what isn't a digit
         run(
             &mut s,

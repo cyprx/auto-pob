@@ -25,6 +25,8 @@ pub struct EditBoxOptions {
     /// PoB's integer box (filter `%D`, EditControl.lua:64-75): + and - buttons, and Up, Down
     /// and the wheel step its number by one, sent at once (EditControl.lua:680-700)
     pub numeric: bool,
+    /// A `^%-%d` box: its step goes below 0
+    pub signed: bool,
 }
 
 impl Default for EditBoxOptions {
@@ -35,6 +37,7 @@ impl Default for EditBoxOptions {
             filter: None,
             hint: None,
             numeric: false,
+            signed: false,
         }
     }
 }
@@ -48,6 +51,7 @@ impl EditBoxOptions {
             filter: Some(|c| c.is_ascii_digit()),
             hint: None,
             numeric: true,
+            signed: false,
         }
     }
 }
@@ -66,13 +70,13 @@ pub fn clear_button(ui: &mut egui::Ui, text: &mut String) -> Option<egui::Respon
 }
 
 /// PoB's step of a `%D` box (EditControl.lua:680-700): up adds one to its number, or makes it
-/// 1; down takes one from a number above 0, or makes it 0
-pub fn stepped(text: &str, up: bool) -> String {
-    let current = text.parse::<u64>().ok();
+/// 1; down takes one from a number above 0 (any number in a `signed` `^%-%d` box), or makes it 0
+pub fn stepped(text: &str, up: bool, signed: bool) -> String {
+    let current = text.trim().parse::<i64>().ok();
     match (current, up) {
         (Some(n), true) => n.saturating_add(1).to_string(),
         (None, true) => "1".to_owned(),
-        (Some(n), false) if n > 0 => (n - 1).to_string(),
+        (Some(n), false) if n > 0 || signed => n.saturating_sub(1).to_string(),
         (_, false) => "0".to_owned(),
     }
 }
@@ -120,7 +124,7 @@ impl EditBox {
             if step != 0 {
                 // SetText(..., true): the change function runs at once (EditControl.lua:96-103)
                 for _ in 0..step.unsigned_abs() {
-                    self.text = stepped(&self.text, step > 0);
+                    self.text = stepped(&self.text, step > 0, opts.signed);
                 }
                 self.sent.clone_from(&self.text);
                 self.pending = false;
@@ -522,13 +526,15 @@ mod tests {
 
     #[test]
     fn a_number_steps_as_pobs() {
-        assert_eq!(stepped("41", true), "42");
-        assert_eq!(stepped("", true), "1");
-        assert_eq!(stepped("x", true), "1");
-        assert_eq!(stepped("3", false), "2");
+        assert_eq!(stepped("41", true, false), "42");
+        assert_eq!(stepped("", true, false), "1");
+        assert_eq!(stepped("x", true, false), "1");
+        assert_eq!(stepped("3", false, false), "2");
         // a `%D` box never goes below 0
-        assert_eq!(stepped("0", false), "0");
-        assert_eq!(stepped("", false), "0");
+        assert_eq!(stepped("0", false, false), "0");
+        assert_eq!(stepped("", false, false), "0");
+        // a `^%-%d` box goes below 0
+        assert_eq!(stepped("0", false, true), "-1");
     }
 
     /// PoB's `%D` box: its + button, Up and Down while it has the keyboard, and the wheel over

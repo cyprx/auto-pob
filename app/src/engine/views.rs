@@ -2140,6 +2140,9 @@ pub struct OAuthView {
     /// PoB's "Character import status", with colour codes stripped
     #[serde(default)]
     pub status: String,
+    /// The same with PoB's colour codes, as its label draws it
+    #[serde(default)]
+    pub status_coded: String,
     /// PoB's error line (`oauthErrCode`)
     #[serde(default)]
     pub error: Option<String>,
@@ -2175,6 +2178,7 @@ impl Default for OAuthView {
             leagues: Vec::new(),
             characters: Vec::new(),
             status: String::new(),
+            status_coded: String::new(),
             error: None,
             retry_at: None,
             busy: false,
@@ -2205,6 +2209,9 @@ pub struct PublicView {
     /// PoB's "Character import status" line, with colour codes stripped
     #[serde(default)]
     pub status: String,
+    /// The same with PoB's colour codes, as its label draws it
+    #[serde(default)]
+    pub status_coded: String,
     /// PoB's label under a name without a discriminator (`siteAccountNameMissingDiscriminator`)
     #[serde(default)]
     pub missing_discriminator: String,
@@ -2248,6 +2255,7 @@ impl Default for PublicView {
             leagues: Vec::new(),
             characters: Vec::new(),
             status: String::new(),
+            status_coded: String::new(),
             missing_discriminator: String::new(),
             bandit_note: String::new(),
             history_selected: None,

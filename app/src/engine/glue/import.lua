@@ -408,8 +408,9 @@ end
 local function oauth_view(tab)
 	local controls = tab.controls
 	local label = controls.charImportStatusLabel.label
-	local status = StripEscapes(type(label) == "function" and label() or label or "")
-	status = status:gsub("^Character import status: ", "")
+	local coded = tostring(type(label) == "function" and label() or label or "")
+	coded = coded:gsub("^%^7Character import status: ", "")
+	local status = StripEscapes(coded)
 	local realm = controls.accountRealm:GetSelValue()
 	local code = realm.realmCode
 	local list = tab.characterList[code]
@@ -421,6 +422,7 @@ local function oauth_view(tab)
 		leagues = {},
 		characters = {},
 		status = status,
+		status_coded = coded,
 		error = tab.oauthErrCode and StripEscapes(tostring(tab.oauthErrCode)) or nil,
 		retry_at = tab.rateLimitEndTime,
 		busy = tab.oauthLoading and true or false,
@@ -466,6 +468,7 @@ function glue.account_view()
 			leagues = {},
 			characters = {},
 			status = StripEscapes(tab.charImportStatus or ""),
+			status_coded = tostring(tab.charImportStatus or ""),
 		},
 	}
 	local public = view.public

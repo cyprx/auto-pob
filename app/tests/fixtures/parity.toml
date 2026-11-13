@@ -1056,7 +1056,7 @@ ported = "app/src/ui/import.rs 'Delete skills' box with PoB's tip, on by default
 ported = "app/src/ui/import.rs 'Ignore weapon swap' box with PoB's tip, off by default"
 
 [controls."import.charImportStatusLabel"]
-ported = "app/src/ui/import.rs sign-in import: PoB's 'Character import status: ' line"
+ported = "app/src/ui/import.rs sign-in import: PoB's 'Character import status: ' line, in PoB's colours (OAuthView.status_coded)"
 
 [controls."import.charImportTree"]
 ported = "app/src/ui/import.rs 'Passive Tree and Jewels' part of Import (one Import for both parts, D-054), PoB's overwrite question"
@@ -1196,7 +1196,7 @@ ported = "app/src/ui/import.rs import by account name Start: enabled on %S[#-]dd
 ported = "app/src/ui/import.rs import by account name: PoB's 'To start importing a character, enter the character's account name:' above the box"
 
 [controls."import.siteAccountNameMissingDiscriminator"]
-ported = "app/src/ui/import.rs PoB's label under the name box and Start disabled as PoB's (PublicView.missing_discriminator, account_name_state)"
+ported = "app/src/ui/import.rs PoB's label under the name box in its ^1 red, and Start disabled as PoB's (PublicView.missing_discriminator, account_name_state)"
 
 [controls."import.siteAccountNameUnicode"]
 ported = "app/src/ui/import.rs"
@@ -1231,7 +1231,7 @@ ported = "app/src/ui/import.rs 'Delete skills' box with PoB's tip, on by default
 ported = "app/src/ui/import.rs 'Ignore weapon swap' box with PoB's tip, off by default"
 
 [controls."import.siteCharImportStatusLabel"]
-ported = "app/src/ui/import.rs import by account name: PoB's 'Character import status: ' line"
+ported = "app/src/ui/import.rs import by account name: PoB's 'Character import status: ' line, in PoB's colours (PublicView.status_coded)"
 
 [controls."import.siteCharImportTree"]
 ported = "app/src/ui/import.rs 'Passive Tree and Jewels' part of Import (one Import for both parts, D-054), PoB's overwrite question"

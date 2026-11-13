@@ -591,7 +591,12 @@ impl ImportUi {
                     out.commands.push(Command::SignIn);
                 }
             }
-            Self::status_lines(ui, &oauth.status, oauth.error.as_deref());
+            Self::status_lines(
+                ui,
+                &oauth.status,
+                &oauth.status_coded,
+                oauth.error.as_deref(),
+            );
             return;
         }
         let picks = (
@@ -636,7 +641,12 @@ impl ImportUi {
             ui.colored_label(ui.visuals().warn_fg_color, format!("Retry in {waiting} s"));
             ui.ctx().request_repaint_after(Duration::from_secs(1));
         }
-        Self::status_lines(ui, &oauth.status, oauth.error.as_deref());
+        Self::status_lines(
+            ui,
+            &oauth.status,
+            &oauth.status_coded,
+            oauth.error.as_deref(),
+        );
         if fetched {
             let realm = self.realm;
             let importing = oauth.busy;
@@ -769,9 +779,14 @@ impl ImportUi {
                     }
                 });
                 if account_name_state(&self.account_box.text).0 {
-                    ui.colored_label(ui.visuals().error_fg_color, &public.missing_discriminator);
+                    // PoB's "^1" (red) label
+                    ui.label(crate::widgets::pob_text(
+                        &format!("^1{}", public.missing_discriminator),
+                        14.0,
+                        ui.visuals().text_color(),
+                    ));
                 }
-                Self::status_lines(ui, &public.status, None);
+                Self::status_lines(ui, &public.status, &public.status_coded, None);
             }
             PublicStage::Fetching | PublicStage::Importing => {
                 ui.horizontal(|ui| {
@@ -780,7 +795,7 @@ impl ImportUi {
                 });
             }
             PublicStage::SelectCharacter => {
-                Self::status_lines(ui, &public.status, None);
+                Self::status_lines(ui, &public.status, &public.status_coded, None);
                 let picks = (
                     public.realm,
                     public.league_selected.clone(),
@@ -809,9 +824,15 @@ impl ImportUi {
 
     /// PoB's "Character import status: ..." label and its "Error: ..." label in its
     /// `NEGATIVE` colour (ImportTab.lua:78-81, 172-176)
-    fn status_lines(ui: &mut egui::Ui, status: &str, error: Option<&str>) {
+    fn status_lines(ui: &mut egui::Ui, status: &str, coded: &str, error: Option<&str>) {
         if !status.is_empty() {
-            ui.label(format!("Character import status: {status}"));
+            // PoB's colours: a warning or a failure is coloured (`WARNING`, `NEGATIVE`)
+            let text = if coded.is_empty() { status } else { coded };
+            ui.label(crate::widgets::pob_text(
+                &format!("^7Character import status: {text}"),
+                14.0,
+                ui.visuals().text_color(),
+            ));
         }
         if let Some(error) = error {
             ui.colored_label(theme::NEGATIVE, format!("Error: {error}"));
@@ -1231,9 +1252,17 @@ pub(crate) mod tests {
 
     /// Texts drawn in a frame.
     fn texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
-        fn walk(shape: &egui::epaint::Shape, out: &mut Vec<String>) {
+        galleys(shapes)
+            .iter()
+            .map(|g| g.text().to_owned())
+            .collect()
+    }
+
+    /// The text galleys drawn in a frame.
+    fn galleys(shapes: &[egui::epaint::ClippedShape]) -> Vec<Arc<egui::Galley>> {
+        fn walk(shape: &egui::epaint::Shape, out: &mut Vec<Arc<egui::Galley>>) {
             match shape {
-                egui::epaint::Shape::Text(t) => out.push(t.galley.text().to_owned()),
+                egui::epaint::Shape::Text(t) => out.push(t.galley.clone()),
                 egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
                 _ => {}
             }
@@ -1255,6 +1284,7 @@ pub(crate) mod tests {
         pub opened: Vec<String>,
         pub copied: Vec<String>,
         pub drawn: Vec<String>,
+        pub galleys: Vec<Arc<egui::Galley>>,
     }
 
     impl Harness {
@@ -1270,6 +1300,7 @@ pub(crate) mod tests {
                 opened: Vec::new(),
                 copied: Vec::new(),
                 drawn: Vec::new(),
+                galleys: Vec::new(),
             };
             h.account(signed_in());
             h.share(share());
@@ -1301,6 +1332,7 @@ pub(crate) mod tests {
                 out = self.ui.show(ui, self.now);
             });
             self.drawn = texts(&full.shapes);
+            self.galleys = galleys(&full.shapes);
             full.drop_without_applying_deltas();
             for command in self.ui.take_ready().into_iter().chain(out.commands) {
                 self.seq += 1;
@@ -1331,6 +1363,20 @@ pub(crate) mod tests {
         pub fn idle_for(&mut self, seconds: f64) {
             self.time += seconds;
             self.frame(vec![]);
+        }
+
+        /// The colour of the drawn section that reads `section`
+        pub fn colour_of(&self, section: &str) -> Option<egui::Color32> {
+            self.galleys.iter().find_map(|g| {
+                g.job
+                    .sections
+                    .iter()
+                    .find(|s| {
+                        let range = usize::from(s.byte_range.start)..usize::from(s.byte_range.end);
+                        &g.job.text[range] == section
+                    })
+                    .map(|s| s.format.color)
+            })
         }
 
         pub fn has_text(&self, needle: &str) -> bool {
@@ -2555,6 +2601,22 @@ pub(crate) mod tests {
     #[test]
     fn the_status_and_error_read_as_pobs() {
         let mut h = Harness::new();
+        let mut view = signed_in();
+        view.oauth.status = "Authenticated".into();
+        view.oauth.error = Some("Could not import character".into());
+        h.account(view);
+        h.frame(vec![]);
+        assert!(h.has_text("Character import status: Authenticated"));
+        // a status PoB colours keeps its colour
+        let mut view = signed_out();
+        view.oauth.status = "Not authenticated".into();
+        view.oauth.status_coded = "^xFF9922Not authenticated".into();
+        h.account(view);
+        h.frame(vec![]);
+        assert_eq!(
+            h.colour_of("Not authenticated"),
+            Some(egui::Color32::from_rgb(0xFF, 0x99, 0x22))
+        );
         let mut view = signed_in();
         view.oauth.status = "Authenticated".into();
         view.oauth.error = Some("Could not import character".into());

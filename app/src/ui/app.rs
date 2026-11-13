@@ -3899,6 +3899,50 @@ mod tests {
         );
     }
 
+    /// Closing with a custom modifier edit still being typed asks first: "Don't Save" drops
+    /// the edit (no blur sends it later), "Save" sends it before the save
+    #[test]
+    fn closing_with_a_custom_mod_edit_being_typed_asks_first() {
+        let saved = |app: &mut AutoPobApp| {
+            app.build = Some(Arc::new(BuildView {
+                path: Some("/b/x.xml".into()),
+                ..(**app.build.as_ref().unwrap()).clone()
+            }));
+        };
+        // Don't Save
+        let (mut app, ctx) = config_app(sample_config());
+        saved(&mut app);
+        click(&mut app, &ctx, "mod_text:1");
+        type_text(&mut app, &ctx, "+5 life");
+        let before = app.sent_full.len();
+        app.request(Pending::Close);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.prompt, Some(Pending::Close), "no unsaved prompt");
+        app.answer_prompt(Pending::Close, PromptChoice::Discard);
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "mod_title:0");
+        frame(&mut app, &ctx, vec![]);
+        let sent = sent_since(&app, before);
+        assert!(
+            !sent.iter().any(|c| c.starts_with("SetCustomModText")),
+            "{sent:?}"
+        );
+        // Save
+        let (mut app, ctx) = config_app(sample_config());
+        saved(&mut app);
+        click(&mut app, &ctx, "mod_text:1");
+        type_text(&mut app, &ctx, "+5 life");
+        let before = app.sent_full.len();
+        app.request(Pending::Close);
+        frame(&mut app, &ctx, vec![]);
+        app.answer_prompt(Pending::Close, PromptChoice::Save);
+        let sent = sent_since(&app, before);
+        assert_eq!(
+            sent,
+            ["SetCustomModText { group: 1, text: \"+5 life\" }", "Save"]
+        );
+    }
+
     /// A custom modifier group's title box has `EditControl`'s own filter (ConfigTab.lua:35)
     #[test]
     fn a_custom_mod_title_drops_what_pobs_box_drops() {

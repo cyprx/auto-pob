@@ -491,6 +491,14 @@ impl AutoPobApp {
 
     /// Sends a command whose snapshots the UI waits for.
     fn send(&mut self, command: Command) -> u64 {
+        // a loadout switches every set: an edit still being typed is for the group, item or
+        // option of the sets before, and PoB's boxes applied it key by key already
+        if matches!(
+            command,
+            Command::SelectLoadout { .. } | Command::NewLoadout { .. }
+        ) {
+            self.flush_edits();
+        }
         if let Command::OpenPopup(kind) = &command {
             // a late edit would end the new session (R4), so every pending one goes first
             self.flush_edits();
@@ -5057,6 +5065,61 @@ mod tests {
             key_with(egui::Key::S, egui::Modifiers::COMMAND),
         );
         assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+    }
+
+    /// PoB's boxes apply each key, so a loadout picked while a group label is being typed
+    /// changes sets after the edit. A pending edit is for the group at its index in the old
+    /// set: it goes out before the switch, never after into the new set's group.
+    #[test]
+    fn a_pending_skills_edit_goes_out_before_a_loadout_switch() {
+        let (mut app, ctx) = skills_app();
+        let mut build = (**app.build.as_ref().unwrap()).clone();
+        build.loadouts = [
+            "^7^7Loadouts:",
+            "Leveling",
+            "Mapping",
+            "^7^7-----",
+            "^7^7New Loadout",
+        ]
+        .map(String::from)
+        .to_vec();
+        build.loadout_selected = Some(1);
+        app.build = Some(Arc::new(build));
+        frame(&mut app, &ctx, vec![]);
+        let pos = app.skills.rect("g0_label").center();
+        click_at(&mut app, &ctx, pos);
+        frame(&mut app, &ctx, vec![egui::Event::Text("x".into())]);
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.skills.has_pending());
+        // the wheel over Build's loadout list steps it while the tab's box has the keyboard
+        let at = top_rect(&ctx, "loadouts").center();
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(at)]);
+        let before = app.sent_full.len();
+        let wheel = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::Vec2::new(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut app, &ctx, vec![wheel]);
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        let sent = sent_since(&app, before);
+        let switch = sent
+            .iter()
+            .position(|c| c.starts_with("SelectLoadout"))
+            .unwrap_or_else(|| panic!("no switch: {sent:?}"));
+        let edit = sent
+            .iter()
+            .position(|c| c.starts_with("SetGroupLabel { group: 0"))
+            .unwrap_or_else(|| panic!("the edit didn't go out first: {sent:?}"));
+        assert!(
+            edit < switch,
+            "the edit went out after the switch: {sent:?}"
+        );
+        assert!(!app.skills.has_pending(), "the edit is still waiting");
     }
 
     #[test]

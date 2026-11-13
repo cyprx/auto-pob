@@ -345,12 +345,67 @@ fn handle_input(ui: &egui::Ui, tab: &mut TreeTab, response: &egui::Response) {
             .zoom_at(response.rect, pointer, 1.2f32.powi(level));
     }
     if let Some(pointer) = response.hover_pos() {
-        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-        let factor = (scroll * 0.002).exp() * ui.input(|i| i.zoom_delta());
+        // PoB zooms one of its 1.2 steps a wheel notch, three with Shift
+        // (PassiveTreeView.lua:229-233); egui would turn Shift's wheel sideways
+        let (notches, shift) = wheel_notches(ui);
+        tab.wheel_rest += notches;
+        let steps = tab.wheel_rest.trunc();
+        tab.wheel_rest -= steps;
+        let mut factor = 1.0;
+        if steps != 0.0 {
+            factor = 1.2f32.powi(steps as i32 * if shift { 3 } else { 1 });
+        } else if notches == 0.0 {
+            // a trackpad's pinch, or a touch screen's
+            factor = ui.input(|i| {
+                let pinch: f32 = i
+                    .events
+                    .iter()
+                    .filter_map(|e| match e {
+                        egui::Event::Zoom(f) => Some(*f),
+                        _ => None,
+                    })
+                    .product();
+                pinch * i.multi_touch().map_or(1.0, |t| t.zoom_delta)
+            });
+        }
         if factor != 1.0 {
             tab.camera.zoom_at(response.rect, pointer, factor);
         }
     }
+}
+
+/// This frame's wheel notches, up positive, and whether Shift was held. A line is a notch; a
+/// trackpad's points count 50 to a notch.
+fn wheel_notches(ui: &egui::Ui) -> (f32, bool) {
+    ui.input(|i| {
+        let mut notches = 0.0;
+        let mut shift = false;
+        for event in &i.events {
+            if let egui::Event::MouseWheel {
+                unit,
+                delta,
+                modifiers,
+                ..
+            } = event
+            {
+                // the vertical wheel only (PoB has WHEELUP and WHEELDOWN); with Shift some
+                // platforms already send it sideways, so then the sideways part counts. A
+                // sideways swipe or tilt without Shift zooms nothing.
+                let d = if delta.y != 0.0 || !modifiers.shift {
+                    delta.y
+                } else {
+                    delta.x
+                };
+                notches += match unit {
+                    egui::MouseWheelUnit::Line => d,
+                    egui::MouseWheelUnit::Point => d / 50.0,
+                    egui::MouseWheelUnit::Page => d * 3.0,
+                };
+                shift |= modifiers.shift;
+            }
+        }
+        (notches, shift)
+    })
 }
 
 /// Uploads sprite sheets that aren't on the GPU yet. Returns them indexed like

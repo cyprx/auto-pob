@@ -13,12 +13,7 @@ const QUALITY_DIGITS: usize = 2;
 
 /// PoB's quality boxes take digits only (filter `%D`).
 fn quality_options() -> EditBoxOptions {
-    EditBoxOptions {
-        width: 40.0,
-        char_limit: Some(QUALITY_DIGITS),
-        filter: Some(|c| c.is_ascii_digit()),
-        hint: None,
-    }
+    EditBoxOptions::number(40.0, Some(QUALITY_DIGITS))
 }
 
 #[derive(Default)]
@@ -344,7 +339,11 @@ fn panel(
                         .show(ui, id, quality, busy, &quality_options());
                 state.rects.note(&response, || "quality".into());
                 if let Some(text) = sent {
-                    out.push(Command::SetItemQuality { text });
+                    let stepped = state.quality.stepped;
+                    out.push(crate::widgets::edit_box::as_step(
+                        Command::SetItemQuality { text },
+                        stepped,
+                    ));
                 }
             } else {
                 // the item has no such box: an edit for another item must not follow
@@ -367,7 +366,11 @@ fn panel(
                         .show(ui, id, quality, busy, &quality_options());
                 state.rects.note(&response, || "catalyst_quality".into());
                 if let Some(text) = sent {
-                    out.push(Command::SetItemCatalystQuality { text });
+                    let stepped = state.catalyst_quality.stepped;
+                    out.push(crate::widgets::edit_box::as_step(
+                        Command::SetItemCatalystQuality { text },
+                        stepped,
+                    ));
                 }
             } else {
                 state.catalyst_quality.discard();

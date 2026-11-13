@@ -684,7 +684,18 @@ impl Toolbar {
                 rects.note(&field, || "depth_custom".into());
                 // PoB's box takes digits only ("%D")
                 text.retain(|c| c.is_ascii_digit());
-                if field.lost_focus() {
+                // and, as every %D box, steps on + and -, Up, Down and the wheel, sending at
+                // once (EditControl.lua:64-75, 680-700)
+                let mut step = crate::widgets::scroll_step::number_step(ui, &field);
+                ui.spacing_mut().item_spacing.x = 1.0;
+                let plus = ui.small_button("+");
+                rects.note(&plus, || "depth_custom_plus".into());
+                let minus = ui.small_button("-");
+                step += i32::from(plus.clicked()) - i32::from(minus.clicked());
+                for _ in 0..step.unsigned_abs() {
+                    *text = crate::widgets::edit_box::stepped(text, step > 0, false);
+                }
+                if step != 0 || field.lost_focus() {
                     // an empty box is no limit, as PoB's `tonumber("")`
                     let depth = text.parse::<u32>().ok();
                     if depth != state.max_depth {

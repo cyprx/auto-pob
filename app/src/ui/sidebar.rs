@@ -248,10 +248,8 @@ fn count(
     out: &mut Vec<Command>,
 ) {
     ui.label(label);
-    let opts = EditBoxOptions {
-        width: 50.0,
-        ..EditBoxOptions::default()
-    };
+    // PoB's count boxes are `%D` boxes with no limit (Build.lua:504, 516)
+    let opts = EditBoxOptions::number(50.0, None);
     let (response, sent) = state.counts.show(ui, key, text, behind, &opts);
     note(ui, key, response.rect);
     out.extend(sent.map(|text| count_command(key, text)));

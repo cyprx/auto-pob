@@ -290,6 +290,8 @@ fn paste_event_sends_paste_outside_text_fields() {
         debug(&o.commands),
         ["PasteSocketGroup { text: \"Label: p\" }"]
     );
+    // a box with the keyboard takes the paste (the engine would report a text with no gems
+    // as an error)
     h.click("g0_label");
     let o = h.frame(vec![Event::Paste("Label: q".into())]);
     assert!(o.commands.is_empty(), "the text field takes the paste");
@@ -628,8 +630,9 @@ fn a_pending_default_quality_is_not_unsaved_but_still_flushes() {
         debug(&h.ui.flush().into_iter().collect::<Vec<_>>()),
         ["SetSkillOption(DefaultQuality(\"20\"))"]
     );
-    // a gem field still counts
+    // a gem field still counts (its two characters are full: type over them)
     h.click("g0_s0_level");
+    h.frame_key(Key::A, Modifiers::COMMAND);
     h.type_text("1");
     h.frame(vec![]);
     assert!(h.ui.has_pending());
@@ -935,5 +938,25 @@ fn a_group_label_takes_fifty_characters() {
             "SetGroupLabel {{ group: 0, text: \"{}\" }}",
             "x".repeat(50)
         )]
+    );
+}
+
+/// The label box takes 50 bytes, not 50 characters (SkillsTab.lua:161, EditControl.lua:148)
+#[test]
+fn the_group_label_limit_counts_bytes() {
+    let mut h = Harness::new(sample());
+    h.click("g0_label");
+    h.frame(vec![Event::Key {
+        key: Key::A,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::COMMAND,
+    }]);
+    h.frame(vec![Event::Text("\u{65e5}".repeat(20))]);
+    h.frame(vec![]);
+    assert_eq!(
+        h.ui.boxes.text(&"g0_label".to_owned()).unwrap(),
+        "\u{65e5}".repeat(16)
     );
 }

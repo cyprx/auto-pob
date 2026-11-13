@@ -22,6 +22,9 @@ fn control(name: &str, kind: PopupControlKind, pos: [f32; 2], size: [f32; 2]) ->
         checked: false,
         text: String::new(),
         ascii_only: false,
+        digits: false,
+        signed: false,
+        numeric: false,
         limit: None,
         tooltip_text: None,
         hover_tooltip: false,
@@ -1175,4 +1178,57 @@ fn a_popup_box_with_pobs_default_filter_keeps_ascii_and_its_limit() {
     h.frame(vec![Event::Text("\u{65e5}\u{672c} ab\u{e9}cdefg".into())]);
     h.frame(vec![]);
     assert_eq!(h.popup.box_text("title"), Some(" abcd"));
+}
+
+/// A popup box's limit counts bytes (EditControl.lua:148): a 3-byte character takes three
+#[test]
+fn a_popup_box_limit_counts_bytes() {
+    let mut edit = control("title", PopupControlKind::Edit, [0.0, 0.0], [200.0, 20.0]);
+    edit.limit = Some(7);
+    let mut h = Harness::new(popup(vec![edit]));
+    h.click("edit_title");
+    h.frame(vec![Event::Text("\u{65e5}\u{672c}\u{8a9e}ab".into())]);
+    h.frame(vec![]);
+    assert_eq!(h.popup.box_text("title"), Some("\u{65e5}\u{672c}a"));
+}
+
+/// A popup's `%D` box takes digits only and its + steps it, sent at once
+/// (EditControl.lua:64-75, 680-700), as the Compare tab's stage count
+#[test]
+fn a_popup_digits_box_filters_and_steps() {
+    let mut edit = control("count", PopupControlKind::Edit, [0.0, 0.0], [200.0, 20.0]);
+    edit.digits = true;
+    edit.numeric = true;
+    edit.text = "4".into();
+    let mut h = Harness::new(popup(vec![edit]));
+    h.click("edit_count");
+    h.frame(vec![Event::Text("x".into())]);
+    h.frame(vec![]);
+    assert_eq!(h.popup.box_text("count"), Some("4"));
+    // sent as a step, which PoB makes with SetText past the box's limit (EditControl.lua:686-699)
+    let sent = h.key(Key::ArrowUp);
+    assert_eq!(
+        debug(&sent.commands),
+        [format!(
+            "Step({})",
+            set("count", PopupInput::Text("5".into()))
+        )]
+    );
+}
+
+/// Buy Similar's number boxes are `%D` boxes with `isNumeric` turned off: digits only, but no
+/// + or - and no stepping (TradeHelpers.lua:548-559)
+#[test]
+fn a_popup_digits_box_without_is_numeric_does_not_step() {
+    let mut edit = control("mod1Min", PopupControlKind::Edit, [0.0, 0.0], [200.0, 20.0]);
+    edit.digits = true;
+    edit.text = "4".into();
+    let mut h = Harness::new(popup(vec![edit]));
+    h.click("edit_mod1Min");
+    h.frame(vec![Event::Text("x".into())]);
+    h.frame(vec![]);
+    assert_eq!(h.popup.box_text("mod1Min"), Some("4"));
+    let sent = h.key(Key::ArrowUp);
+    assert!(sent.commands.is_empty(), "{:?}", debug(&sent.commands));
+    assert_eq!(h.popup.box_text("mod1Min"), Some("4"));
 }

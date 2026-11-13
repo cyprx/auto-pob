@@ -71,7 +71,28 @@ fn hidden(ui: &mut egui::Ui) -> egui::Response {
     )
 }
 
+/// PoB's dropdown takes either button: a right-click on a row picks it as a left-click does
+/// (DropDownControl.lua:475-487). The response reads as clicked then.
+pub fn either_button(mut response: egui::Response) -> egui::Response {
+    if response.secondary_clicked() {
+        response
+            .flags
+            .insert(egui::response::Flags::FAKE_PRIMARY_CLICKED);
+    }
+    response
+}
+
+/// A right-click on the dropdown's button drops or closes its list, as a left-click does
+/// (DropDownControl.lua:446-455)
+pub fn toggle_on_right_click(ui: &egui::Ui, button: &egui::Response, popup: egui::Id) {
+    if button.secondary_clicked() {
+        egui::Popup::toggle_id(ui.ctx(), popup);
+        ui.ctx().request_repaint();
+    }
+}
+
 fn picked(ui: &mut egui::Ui, response: egui::Response) -> egui::Response {
+    let response = either_button(response);
     if response.clicked() {
         ui.close();
     }
@@ -99,7 +120,11 @@ pub fn value<V: PartialEq>(
     if !matches(ui, text.text(), true) {
         return hidden(ui);
     }
-    let response = ui.selectable_value(current, selected_value, text);
+    let mut response = either_button(ui.selectable_label(*current == selected_value, text));
+    if response.clicked() && *current != selected_value {
+        *current = selected_value;
+        response.mark_changed();
+    }
     picked(ui, response)
 }
 
@@ -214,6 +239,7 @@ impl<'a> Dropdown<'a> {
             });
             inner
         });
+        toggle_on_right_click(ui, &shown.response, button.with("popup"));
         if shown.inner.is_none() {
             // closed: the next drop starts with an empty search, focused
             ui.data_mut(|d| {
@@ -311,9 +337,13 @@ mod tests {
         }
 
         fn click(&mut self, pos: Pos2) {
+            self.click_with(pos, PointerButton::Primary);
+        }
+
+        fn click_with(&mut self, pos: Pos2, button: PointerButton) {
             let b = |pressed| Event::PointerButton {
                 pos,
-                button: PointerButton::Primary,
+                button,
                 pressed,
                 modifiers: Modifiers::NONE,
             };
@@ -441,5 +471,18 @@ mod tests {
         h.key(Key::ArrowUp);
         // Alpha hidden: Down goes to the first match (DropDownControl.lua:57-107)
         assert_eq!(h.steps, [1, 3, 1]);
+    }
+
+    /// PoB's dropdown takes the right button as the left: it drops the list and picks a row
+    /// (DropDownControl.lua:446-455, 475-487)
+    #[test]
+    fn a_right_click_drops_the_list_and_picks_a_row() {
+        let mut h = Harness::new();
+        h.click_with(h.button.center(), PointerButton::Secondary);
+        assert_eq!(h.entries.len(), 4, "a right-click didn't drop the list");
+        let gamma = h.entries[&2].center();
+        h.click_with(gamma, PointerButton::Secondary);
+        assert_eq!(h.picks, [2]);
+        assert!(h.entries.is_empty(), "a right pick left the list dropped");
     }
 }

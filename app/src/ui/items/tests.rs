@@ -370,14 +370,18 @@ fn ctrl_v_outside_text_sends_paste_item() {
 }
 
 #[test]
-fn ctrl_v_in_a_text_field_does_not() {
+fn ctrl_v_in_a_text_field_does_not_but_ctrl_d_does() {
     let mut h = Harness::new(sample());
     h.field = Some(String::new());
     h.frame(vec![]);
     h.frame(vec![]);
     assert!(h.ctx.text_edit_focused(), "the field has focus");
+    // the field takes the paste (the engine would report a non-item text as an error)
     let o = h.frame(vec![Event::Paste("Rarity: Rare".into())]);
     assert!(o.commands.is_empty(), "the field takes the paste");
+    // the tab reads Ctrl+D before its controls (ItemsTab.lua:1481)
+    let o = h.key(Key::D, Modifiers::COMMAND);
+    assert_eq!(debug(&o.commands), ["SetShowStatDifferences { on: true }"]);
 }
 
 #[test]

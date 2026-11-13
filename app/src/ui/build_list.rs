@@ -13,7 +13,8 @@ use eframe::egui::{self, Key, PointerButton};
 
 /// How long the search box waits after the last key before the filter is sent.
 const FILTER_DELAY: f64 = 0.2;
-/// PoB's name boxes take 100 characters and strip these (`\/:*?"<>|` and control characters).
+/// PoB's search box takes 100 bytes and drops control characters and parentheses (filter
+/// `%c%(%)`, BuildList.lua:96; the limit counts bytes, EditControl.lua:148)
 const SEARCH_LIMIT: usize = 100;
 /// The pointer has to travel this far before a press on a row is a drag.
 const DRAG_DISTANCE: f32 = 6.0;
@@ -219,15 +220,10 @@ fn build_name_is_free(path: &std::path::Path, original: &str, text: &str) -> boo
 }
 
 /// What PoB's search box keeps.
-fn clean_search(text: &mut String) {
-    text.retain(|c| !c.is_control() && c != '(' && c != ')');
-    truncate_chars(text, SEARCH_LIMIT);
-}
-
-fn truncate_chars(text: &mut String, limit: usize) {
-    if let Some((i, _)) = text.char_indices().nth(limit) {
-        text.truncate(i);
-    }
+/// What the search box holds after the edit that turned `before` into `text`, as PoB's
+fn clean_search(before: &str, text: &mut String, pasted: bool) {
+    let keeps = |c: char| !c.is_control() && c != '(' && c != ')';
+    *text = name_box::spliced_by(before, text, keeps, SEARCH_LIMIT, pasted);
 }
 
 /// The folders an entry can be moved to or copied to: every folder of the Builds tree except
@@ -480,6 +476,8 @@ impl BuildListUi {
         }
         let mut clear = false;
         ui.horizontal(|ui| {
+            let before = self.filter_text.clone();
+            let pasted = name_box::pasted(ui);
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.filter_text)
                     .id(self.search_id)
@@ -488,7 +486,7 @@ impl BuildListUi {
             );
             mark(ui, "search", &edit);
             if edit.changed() {
-                clean_search(&mut self.filter_text);
+                clean_search(&before, &mut self.filter_text, pasted);
                 self.filter_edit = Some(now);
             }
             if !self.filter_text.is_empty() {
@@ -555,8 +553,9 @@ impl BuildListUi {
         let list_focused = ui.memory(|m| m.has_focus(self.id));
         let (new, back, forward) = ui.input_mut(|i| {
             (
-                // a text box keeps its Ctrl+N
-                !typing && i.consume_key(egui::Modifiers::COMMAND, Key::N),
+                // the screen reads Ctrl+N before any control, a text box's too
+                // (BuildList.lua:171)
+                i.consume_key(egui::Modifiers::COMMAND, Key::N),
                 i.pointer.button_pressed(PointerButton::Extra1),
                 i.pointer.button_pressed(PointerButton::Extra2),
             )
@@ -573,42 +572,22 @@ impl BuildListUi {
             self.navigating = Some(next.clone());
             action = Some(ListScreenAction::OpenFolder(next));
         }
-        if !list_focused || typing {
-            return action;
-        }
-        // Up, Down, Home and End move the selection (ListControl.lua:375-382)
-        crate::ui::shortcuts::keep_arrows(ui.ctx(), self.id);
-        if let Some(to) =
-            ui.input_mut(|i| crate::ui::shortcuts::list_key(i, rows.len(), self.selected))
-        {
-            self.selected = Some(to);
-        }
-        // egui-winit turns Ctrl+X and Ctrl+C into events, and Ctrl+V into one only when the
-        // clipboard holds text; with nothing on it the press is dropped and only the release
-        // arrives as a key. So a paste is the event, the key press, or a release whose press
-        // was not seen.
+        // Ctrl+V is the screen's own key, read before any control: it acts wherever the
+        // keyboard is (BuildList.lua:136-170). egui-winit turns Ctrl+V into an event only when
+        // the clipboard holds text; with nothing on it the press is dropped and only the
+        // release arrives as a key. So a paste is the event, the key press, or a release whose
+        // press was not seen. A right-click's paste into the search box is no Ctrl+V.
         let command = egui::Modifiers::COMMAND;
-        let (cut, copy, paste_down, paste_up, f2, delete) = ui.input_mut(|i| {
-            let cut = i.events.iter().any(|e| matches!(e, egui::Event::Cut))
-                || i.consume_key(command, Key::X);
-            let copy = i.events.iter().any(|e| matches!(e, egui::Event::Copy))
-                || i.consume_key(command, Key::C);
-            let paste_down = i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
+        let right_click = crate::ui::shortcuts::right_click_pasted(ui.ctx());
+        let (paste_down, paste_up) = ui.input_mut(|i| {
+            let paste_down = (!right_click
+                && i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))))
                 || i.consume_key(command, Key::V);
             let paste_up = i.events.iter().any(|e| {
                 matches!(e, egui::Event::Key { key: Key::V, pressed: false, modifiers, .. }
                     if modifiers.command)
             });
-            (
-                cut,
-                copy,
-                paste_down,
-                paste_up,
-                i.consume_key(egui::Modifiers::NONE, Key::F2),
-                // PoB's list deletes on Delete and Backspace (ListControl.lua:392)
-                i.consume_key(egui::Modifiers::NONE, Key::Delete)
-                    || i.consume_key(egui::Modifiers::NONE, Key::Backspace),
-            )
+            (paste_down, paste_up)
         });
         let paste = if paste_down {
             self.paste_seen = true;
@@ -618,15 +597,6 @@ impl BuildListUi {
         } else {
             false
         };
-        let entry = self.selected_entry(rows);
-        if (cut || copy)
-            && let Some(e) = entry
-        {
-            self.cut = Some(Mark {
-                entry: e.clone(),
-                copy: copy && !cut,
-            });
-        }
         if paste && let Some(mark) = self.cut.clone() {
             let from = &mark.entry.folder;
             if mark.copy && *from == view.folder {
@@ -651,6 +621,39 @@ impl BuildListUi {
                 // PoB clears it in the folder it was cut in, too (BuildList.lua:167)
                 self.cut = None;
             }
+        }
+        if !list_focused || typing {
+            return action;
+        }
+        // Up, Down, Home and End move the selection (ListControl.lua:375-382)
+        crate::ui::shortcuts::keep_arrows(ui.ctx(), self.id);
+        if let Some(to) =
+            ui.input_mut(|i| crate::ui::shortcuts::list_key(i, rows.len(), self.selected))
+        {
+            self.selected = Some(to);
+        }
+        let (cut, copy, f2, delete) = ui.input_mut(|i| {
+            let cut = i.events.iter().any(|e| matches!(e, egui::Event::Cut))
+                || i.consume_key(command, Key::X);
+            let copy = i.events.iter().any(|e| matches!(e, egui::Event::Copy))
+                || i.consume_key(command, Key::C);
+            (
+                cut,
+                copy,
+                i.consume_key(egui::Modifiers::NONE, Key::F2),
+                // PoB's list deletes on Delete and Backspace (ListControl.lua:392)
+                i.consume_key(egui::Modifiers::NONE, Key::Delete)
+                    || i.consume_key(egui::Modifiers::NONE, Key::Backspace),
+            )
+        });
+        let entry = self.selected_entry(rows);
+        if (cut || copy)
+            && let Some(e) = entry
+        {
+            self.cut = Some(Mark {
+                entry: e.clone(),
+                copy: copy && !cut,
+            });
         }
         if f2 && let Some(e) = entry {
             self.dialog = Some(dialog_for(e, false));
@@ -1101,6 +1104,8 @@ mod tests {
         time: f64,
         focus: bool,
         blocked: bool,
+        /// The next frame's paste is a right-click's
+        right_paste: bool,
     }
 
     impl H {
@@ -1112,6 +1117,7 @@ mod tests {
                 time: 1.0,
                 focus: false,
                 blocked: false,
+                right_paste: false,
             };
             h.frame(vec![]);
             h
@@ -1127,10 +1133,14 @@ mod tests {
             };
             let mut out = None;
             let (focus, blocked) = (self.focus, self.blocked);
+            let right_paste = std::mem::take(&mut self.right_paste);
             let (ui_state, view) = (&mut self.ui, &self.view);
             self.ctx
                 .clone()
                 .run_ui(input, |ui| {
+                    if right_paste {
+                        crate::ui::shortcuts::mark_right_click_paste(ui.ctx());
+                    }
                     if focus {
                         let id = ui_state.id;
                         ui.memory_mut(|m| m.request_focus(id));
@@ -1630,15 +1640,32 @@ mod tests {
     }
 
     #[test]
-    fn cut_and_paste_leave_the_search_box_alone() {
+    fn ctrl_v_in_the_search_box_pastes_the_mark_too() {
+        // the screen reads Ctrl+V before its controls (BuildList.lua:136-170): the search box
+        // takes the text and the marked build moves
         let mut h = H::new(view(""));
         h.select(1);
         h.frame(vec![Event::Cut]);
         h.view = view("sub/");
         h.focus = false;
         h.click("search");
+        assert_eq!(
+            h.frame(vec![Event::Paste("abc".into())]),
+            Some(ListScreenAction::Move {
+                path: "/b/one.xml".into(),
+                folder: "sub/".into(),
+            })
+        );
+        // a right-click's paste into the box is no Ctrl+V
+        let mut h = H::new(view(""));
+        h.select(1);
+        h.frame(vec![Event::Cut]);
+        h.view = view("sub/");
+        h.focus = false;
+        h.click("search");
+        h.right_paste = true;
         assert_eq!(h.frame(vec![Event::Paste("abc".into())]), None);
-        assert!(h.ui.cut.is_some(), "the search box's paste used the mark");
+        assert!(h.ui.cut.is_some(), "a right-click paste used the mark");
     }
 
     #[test]
@@ -1841,12 +1868,26 @@ mod tests {
         }
     }
 
+    /// PoB's search box drops parentheses and control characters and takes 100 bytes
+    /// (BuildList.lua:96, EditControl.lua:148)
     #[test]
-    fn ctrl_n_does_nothing_while_a_text_box_has_focus() {
+    fn the_search_box_limit_counts_bytes() {
         let mut h = H::new(view(""));
         h.click("search");
-        assert_eq!(h.key(Key::N, Modifiers::COMMAND), None);
-        // with the focus off the box, it starts a build
+        h.frame(vec![Event::Text(format!("({}", "\u{65e5}".repeat(40)))]);
+        h.frame(vec![]);
+        assert_eq!(h.ui.filter_text, "\u{65e5}".repeat(33));
+    }
+
+    #[test]
+    fn ctrl_n_starts_a_build_even_while_a_text_box_has_focus() {
+        // the screen reads Ctrl+N before its controls (BuildList.lua:171)
+        let mut h = H::new(view(""));
+        h.click("search");
+        assert_eq!(
+            h.key(Key::N, Modifiers::COMMAND),
+            Some(ListScreenAction::New)
+        );
         h.click_at(Pos2::new(900.0, 650.0), PointerButton::Primary);
         assert_eq!(
             h.key(Key::N, Modifiers::COMMAND),

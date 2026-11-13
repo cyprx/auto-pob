@@ -107,6 +107,8 @@ impl Derived {
 #[derive(Default)]
 pub struct TreeTab {
     pub(super) camera: Camera,
+    /// Wheel travel short of a whole notch, for a trackpad's small scrolls
+    pub(super) wheel_rest: f32,
     /// Fit the whole tree into the view on the next frame
     pub(super) needs_fit: bool,
     /// Where the canvas was drawn last
@@ -1006,6 +1008,70 @@ mod tests {
         assert_eq!(h.tab.hover, None);
     }
 
+    /// PoB zooms one 1.2 step a wheel notch and three with Shift held
+    /// (PassiveTreeView.lua:229-233), around the pointer
+    #[test]
+    fn the_wheel_zooms_pobs_steps_and_shift_three() {
+        let (l, s) = sample();
+        let mut h = Harness::new(l, s);
+        h.frame(vec![Event::PointerMoved(Pos2::new(400.0, 300.0))]);
+        let wheel = |shift: bool| Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            source: egui::MouseWheelSource::Wheel,
+            delta: Vec2::new(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: if shift {
+                egui::Modifiers::SHIFT
+            } else {
+                egui::Modifiers::NONE
+            },
+        };
+        let start = h.tab.camera.zoom;
+        h.frame(vec![wheel(false)]);
+        let one = h.tab.camera.zoom;
+        assert!((one / start - 1.2).abs() < 1e-3, "{}", one / start);
+        h.frame(vec![wheel(true)]);
+        let three = h.tab.camera.zoom;
+        assert!(
+            (three / one - 1.2f32.powi(3)).abs() < 1e-3,
+            "{}",
+            three / one
+        );
+    }
+
+    /// A sideways swipe or tilt wheel without Shift doesn't zoom; with Shift (as macOS sends
+    /// it) it does; a trackpad pinch (`Event::Zoom`) zooms by its factor
+    #[test]
+    fn sideways_scroll_zooms_only_with_shift_and_a_pinch_zooms() {
+        let (l, s) = sample();
+        let mut h = Harness::new(l, s);
+        h.frame(vec![Event::PointerMoved(Pos2::new(400.0, 300.0))]);
+        let sideways = |modifiers| Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            source: egui::MouseWheelSource::Wheel,
+            delta: Vec2::new(1.0, 0.0),
+            phase: egui::TouchPhase::Move,
+            modifiers,
+        };
+        let start = h.tab.camera.zoom;
+        h.frame(vec![sideways(egui::Modifiers::NONE)]);
+        assert_eq!(h.tab.camera.zoom, start, "a sideways swipe zoomed");
+        h.frame(vec![sideways(egui::Modifiers::SHIFT)]);
+        let shifted = h.tab.camera.zoom;
+        assert!(
+            (shifted / start - 1.2f32.powi(3)).abs() < 1e-3,
+            "{}",
+            shifted / start
+        );
+        h.frame(vec![Event::Zoom(0.5)]);
+        assert!(
+            (h.tab.camera.zoom / shifted - 0.5).abs() < 1e-3,
+            "{} {}",
+            h.tab.camera.zoom,
+            shifted
+        );
+    }
+
     #[test]
     fn unknown_ids_are_skipped() {
         let (layout, _) = sample();
@@ -1535,6 +1601,27 @@ mod tests {
         assert_eq!(
             debug(&out.commands),
             ["SetHeatmap { stat: Some(\"Life\"), max_depth: Some(10) }"]
+        );
+    }
+
+    /// The Custom depth box is a %D box: its + steps the depth and sends it at once
+    /// (EditControl.lua:64-75, 680-700)
+    #[test]
+    fn the_custom_depth_box_steps_on_its_plus_button() {
+        let mut h = heat_harness();
+        let mut state = (*h.tab.state.clone().unwrap()).clone();
+        state.max_depth = Some(15);
+        h.tab.on_snapshot(&Snapshot::Tree(Arc::new(state)));
+        h.frame(vec![]);
+        let depth = h.tab.rects.map["heat_depth"].center();
+        h.frame(vec![Event::PointerMoved(depth)]);
+        h.frame(vec![wheel(-1.0)]);
+        h.frame(vec![]);
+        assert_eq!(h.tab.toolbar.custom_depth_for_test(), Some("15"));
+        let out = press(&mut h, "depth_custom_plus");
+        assert_eq!(
+            debug(&out.commands),
+            ["SetHeatmap { stat: Some(\"Life\"), max_depth: Some(16) }"]
         );
     }
 

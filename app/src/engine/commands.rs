@@ -82,6 +82,10 @@ pub enum DeleteKind {
 
 #[derive(Debug, Clone)]
 pub enum Command {
+    /// `command` comes from a number box's step (+, -, Up, Down, the wheel): PoB sets such a
+    /// box with `SetText(text, true)`, past its limit too (EditControl.lua:680-700), not as typed
+    /// text, so the engine does the same for the boxes `command` types into
+    Step(Box<Command>),
     /// Sub-path relative to the Builds folder; "" is the root.
     ListBuilds {
         folder: String,

@@ -83,14 +83,18 @@ pub fn wiki_url(name: &str) -> String {
     format!("https://www.poewiki.net/wiki/{}", name.replace(' ', "_"))
 }
 
+/// A press of `key`, with Ctrl when `command`. PoB reads a plain key whatever modifiers are
+/// held (TreeTab.lua:367, PassiveTreeView.lua:203, ItemsTab.lua:1459, ListControl.lua:375):
+/// Ctrl+P is P to it.
 fn pressed(input: &egui::InputState, key: Key, command: bool) -> bool {
     input.events.iter().any(|e| {
         matches!(e, Event::Key { key: k, pressed: true, modifiers, .. }
-            if *k == key && modifiers.command == command && !modifiers.alt)
+            if *k == key && (!command || (modifiers.command && !modifiers.alt)))
     })
 }
 
-/// A press of `key` without Ctrl: whether Shift was held, PoB's three zoom steps
+/// A press of `key`, whatever else is held: whether Shift was, PoB's three zoom steps
+/// (PassiveTreeView.lua:214-217)
 fn pressed_shift(input: &egui::InputState, key: Key) -> Option<bool> {
     input.events.iter().find_map(|e| match e {
         Event::Key {
@@ -98,7 +102,7 @@ fn pressed_shift(input: &egui::InputState, key: Key) -> Option<bool> {
             pressed: true,
             modifiers,
             ..
-        } if *k == key && !modifiers.command && !modifiers.alt => Some(modifiers.shift),
+        } if *k == key => Some(modifiers.shift),
         _ => None,
     })
 }
@@ -113,6 +117,33 @@ fn released(input: &egui::InputState, key: Key) -> bool {
 /// egui-winit turns Ctrl+C into `Event::Copy`; tests and other platforms send the key
 fn copy(input: &egui::InputState) -> bool {
     input.events.iter().any(|e| matches!(e, Event::Copy)) || pressed(input, Key::C, true)
+}
+
+fn right_paste_id() -> egui::Id {
+    egui::Id::NULL.with("pob_right_click_paste")
+}
+
+/// The app marks the frame whose paste is a right-click's into a box, which is no Ctrl+V
+pub fn mark_right_click_paste(ctx: &egui::Context) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(right_paste_id(), pass));
+}
+
+/// This frame's paste is a right-click's into a box
+pub fn right_click_pasted(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<u64>(right_paste_id())) == Some(ctx.cumulative_pass_nr())
+}
+
+/// The text Ctrl+V pastes this frame, for the Items and Skills tabs, which read it only while
+/// no text box has the keyboard (a box keeps its own paste, so neither a right-click's paste
+/// nor a top bar box can reach here)
+pub fn ctrl_v_text(ui: &egui::Ui) -> Option<String> {
+    ui.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            Event::Paste(text) => Some(text.clone()),
+            _ => None,
+        })
+    })
 }
 
 /// PoB's list keys (ListControl.lua:375-382): Up and Down step the selection round the list,
@@ -397,6 +428,14 @@ mod tests {
             action(&tree, key(Key::ArrowUp, Modifiers::NONE)),
             Some(A::PrevSpec)
         );
+        // PoB checks no modifier on its plain keys: Ctrl or Shift held, they still act
+        assert_eq!(action(&tree, key(Key::P, cmd)), Some(A::Heatmap));
+        assert_eq!(action(&tree, key(Key::ArrowDown, cmd)), Some(A::NextSpec));
+        assert_eq!(
+            action(&tree, key(Key::PageUp, cmd | Modifiers::SHIFT)),
+            Some(A::Zoom(3))
+        );
+        assert_eq!(action(&items, key(Key::E, cmd)), Some(A::EditSlot));
     }
 
     #[test]

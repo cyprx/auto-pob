@@ -776,13 +776,28 @@ impl PopupWindow {
             PopupControlKind::Edit => {
                 self.caption(ui, c);
                 // the box's own filter and limit, as PoB's EditControl holds them
-                let opts = EditBoxOptions {
-                    width: width.max(60.0),
-                    char_limit: c.limit,
-                    filter: c
-                        .ascii_only
-                        .then_some(|ch: char| crate::ui::name_box::Filter::Plain.keeps(ch)),
-                    ..EditBoxOptions::default()
+                let opts = if c.digits {
+                    // the number filter goes with `%D` or `^%-%d`, the + and - and stepping
+                    // with `isNumeric` (TradeHelpers.lua:548-559 turns it off)
+                    EditBoxOptions {
+                        filter: Some(if c.signed {
+                            |ch: char| ch.is_ascii_digit() || ch == '-'
+                        } else {
+                            |ch: char| ch.is_ascii_digit()
+                        }),
+                        numeric: c.numeric,
+                        signed: c.signed,
+                        ..EditBoxOptions::number(width.max(60.0), c.limit)
+                    }
+                } else {
+                    EditBoxOptions {
+                        width: width.max(60.0),
+                        byte_limit: c.limit,
+                        filter: c
+                            .ascii_only
+                            .then_some(|ch: char| crate::ui::name_box::Filter::Plain.keeps(ch)),
+                        ..EditBoxOptions::default()
+                    }
                 };
                 let enabled = c.enabled;
                 let boxes = &mut self.boxes;
@@ -792,10 +807,14 @@ impl PopupWindow {
                 let (response, sent) = inner.inner;
                 self.rects.note(&response, || format!("edit_{name}"));
                 if let Some(text) = sent {
-                    out.commands.push(Command::SetPopupControl {
-                        name: name.to_owned(),
-                        value: PopupInput::Text(text),
-                    });
+                    let stepped = self.boxes.stepped(&name.to_owned());
+                    out.commands.push(crate::widgets::edit_box::as_step(
+                        Command::SetPopupControl {
+                            name: name.to_owned(),
+                            value: PopupInput::Text(text),
+                        },
+                        stepped,
+                    ));
                 }
             }
             PopupControlKind::List => self.list(ui, view, c, out),

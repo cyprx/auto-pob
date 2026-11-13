@@ -155,6 +155,7 @@ impl Fake {
 impl Fake {
     fn apply_command(&mut self, command: Command) -> anyhow::Result<Affected> {
         match command {
+            Command::Step(inner) => self.apply_command(*inner),
             Command::SetConfig { .. } => {
                 self.log.lock().unwrap().set_configs += 1;
                 if let Some(message) = &self.fail_set_config {

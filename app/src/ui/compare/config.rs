@@ -55,6 +55,10 @@ pub(super) fn show(
                 .desired_width(240.0),
         );
         tab.rects.note(&search, || "config_search".into());
+        // its "x" empties it (CompareTab's configSearchEdit is clearable)
+        if let Some(x) = crate::widgets::edit_box::clear_button(ui, &mut tab.config_filter) {
+            tab.rects.note(&x, || "config_search_clear".into());
+        }
         if std::mem::take(&mut tab.focus_search) {
             search.request_focus();
         }

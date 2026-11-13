@@ -33,8 +33,18 @@ end
 -- would pass the limit is refused. `pasted` text is one insertion: Insert drops the rejected
 -- characters, ReplaceSel refuses the whole text if it has one, and a text that would pass the
 -- limit is refused whole (an error here). False when the text changed nothing.
+-- While a number box's step is applied (Command::Step): PoB steps an isNumeric box with
+-- SetText(text, true), which checks neither filter nor limit (EditControl.lua:680-700)
+function glue.set_stepping(on)
+	glue.stepping = on
+end
+
 function glue.type_into(control, text, pasted)
 	text = text:gsub("\r", "")
+	if glue.stepping and control.isNumeric then
+		control:SetText(text, true)
+		return true
+	end
 	local old = control.buf or ""
 	-- the edit replaced old[head + 1 .. #old - tail] with text[head + 1 .. #text - tail]; both
 	-- cuts fall between characters

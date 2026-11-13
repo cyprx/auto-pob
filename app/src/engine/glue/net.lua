@@ -147,8 +147,13 @@ do
 			-- runs SyncLoadouts against the tabs the build holds then (Build.lua:601-604,
 			-- 753-859). After a load that raised, those are the half-loaded ones (no active
 			-- skill set), and every later Init, of any build, would raise there too. Without
-			-- them SyncLoadouts skips its loadout list until the new tabs are in place.
+			-- them SyncLoadouts skips its loadout list until the new tabs are in place. A new
+			-- build stands in, whichever path loaded this one (an open, a code, a link's
+			-- answer); the load's own error is still raised below.
 			self.treeTab, self.skillsTab, self.itemsTab, self.configTab = nil, nil, nil, nil
+			if not pcall(init, self, false, "Unnamed build") then
+				self.treeTab, self.skillsTab, self.itemsTab, self.configTab = nil, nil, nil, nil
+			end
 		end
 		local failed, conversion, convert
 		if ret[1] then

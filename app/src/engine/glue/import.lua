@@ -446,8 +446,6 @@ local function oauth_view(tab)
 		end
 		view.character_selected = selected_name(controls.charSelect)
 	end
-	-- PoB fetches the remembered realm's list when its tab is opened (ImportTab.lua:734-739)
-	view.remembered_realm = main().lastRealm ~= nil
 	return view
 end
 

@@ -2168,10 +2168,6 @@ pub struct OAuthView {
     /// (ImportTab.lua:1085-1093)
     #[serde(default)]
     pub character_selected: Option<String>,
-    /// PoB remembers a realm (`main.lastRealm`): opening the tab fetches its list once
-    /// (`TryFetchCharacterList`, ImportTab.lua:734-739, Build.lua:437)
-    #[serde(default)]
-    pub remembered_realm: bool,
 }
 
 impl Default for OAuthView {
@@ -2192,7 +2188,6 @@ impl Default for OAuthView {
             busy: false,
             league_selected: None,
             character_selected: None,
-            remembered_realm: false,
         }
     }
 }

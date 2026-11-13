@@ -1032,7 +1032,8 @@ ported = "app/src/ui/import.rs sign-in import"
 note = "part of import.accountRealm"
 
 [controls."import.accountRealmFetchButton"]
-ported = "app/src/ui/import.rs sign-in import Fetch; opening the tab with its button fetches the remembered realm's list once, as TryFetchCharacterList (OAuthView.remembered_realm)"
+ported = "app/src/ui/import.rs sign-in import Fetch (\"Fetched\" once the realm's list is in)"
+note = "deliberate deviation: PoB's TryFetchCharacterList (ImportTab.lua:734-739, Build.lua:437) fetches when the tab is opened; SP6's rule (no network request without a request-making click) leaves it out, so the user presses Fetch (test opening_the_tab_makes_no_request)"
 
 [controls."import.authenticateButton"]
 ported = "app/src/ui/import.rs sign-in import"

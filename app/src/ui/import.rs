@@ -132,14 +132,6 @@ pub struct ImportUi {
     /// The character list whose picks were taken from PoB's drop-downs: a new list starts on
     /// PoB's league and character, as PoB's own drop-downs do
     list_seen: Option<(bool, Realm, Vec<String>)>,
-    /// PoB's once-per-tab fetch of the remembered realm's characters was tried
-    /// (`TryFetchCharacterList`)
-    auto_fetched: bool,
-    /// The tab is showing (`leave` says when it stops)
-    shown: bool,
-    /// The tab was entered with its button, not Ctrl+I: PoB's try may go once the account is
-    /// known (Build.lua:435-437; Ctrl+I, Build.lua:1159, doesn't try)
-    fetch_on_entry: bool,
 }
 
 impl Default for ImportUi {
@@ -183,9 +175,6 @@ impl Default for ImportUi {
             history_pick: None,
             realm_seen: false,
             list_seen: None,
-            auto_fetched: false,
-            shown: false,
-            fetch_on_entry: false,
         }
     }
 }
@@ -423,8 +412,6 @@ impl ImportUi {
 
     /// The tab is not showing: an answer that was to be copied is no longer wanted.
     pub fn leave(&mut self) -> Option<Command> {
-        self.shown = false;
-        self.fetch_on_entry = false;
         self.await_code = false;
         self.copy_ready = None;
         self.flush()
@@ -454,11 +441,6 @@ impl ImportUi {
                 out.commands.push(Command::ExportShareCode);
             }
         }
-        if !self.shown {
-            self.shown = true;
-            self.fetch_on_entry = !self.focus_code;
-        }
-        self.try_fetch(&mut out);
         egui::ScrollArea::vertical().show(ui, |ui| {
             self.account_panel(ui, now_epoch, &mut out);
             ui.add_space(8.0);
@@ -467,35 +449,6 @@ impl ImportUi {
             self.share_panel(ui, &mut out);
         });
         out
-    }
-
-    /// PoB's `TryFetchCharacterList` (ImportTab.lua:734-739): opening the tab with its button
-    /// (not Ctrl+I, Build.lua:437, 1159) presses Fetch once for the remembered realm. Signed
-    /// out, the press does nothing but the try is spent, as PoB's.
-    fn try_fetch(&mut self, out: &mut ImportOutput) {
-        if self.auto_fetched || !self.fetch_on_entry || self.modal {
-            return;
-        }
-        let Some(account) = self.account.clone() else {
-            return;
-        };
-        self.fetch_on_entry = false;
-        let oauth = &account.oauth;
-        if !oauth.remembered_realm {
-            return;
-        }
-        self.auto_fetched = true;
-        let running = oauth.busy
-            || oauth.signing_in
-            || self
-                .pending
-                .iter()
-                .any(|p| p.label == "Signing in" || p.label == "Fetching characters");
-        if oauth.signed_in && !oauth.fetched && !running {
-            self.realm = oauth.realm;
-            out.commands
-                .push(Command::ListCharacters { realm: oauth.realm });
-        }
     }
 
     // ---- the account ---------------------------------------------------------------------
@@ -2683,50 +2636,23 @@ pub(crate) mod tests {
         assert!(h.has_text("Retrieving paste.."));
     }
 
-    /// Opening the tab fetches the remembered realm's characters once, signed in, as PoB's
-    /// `TryFetchCharacterList` (ImportTab.lua:734-739); not on Ctrl+I, and only once
+    /// Opening the tab, signed in with a realm PoB remembers and no list yet, makes no
+    /// request: PoB's `TryFetchCharacterList` (ImportTab.lua:734-739) is left out by the SP6
+    /// rule that only a click asks the network; the Fetch button does it
     #[test]
-    fn opening_the_tab_fetches_the_remembered_realm_once() {
-        let fetchable = |realm| {
-            let mut view = signed_in();
-            view.oauth.fetched = false;
-            view.oauth.realm = realm;
-            view.oauth.remembered_realm = true;
-            view
-        };
+    fn opening_the_tab_makes_no_request() {
         let mut h = Harness::new();
-        h.account(fetchable(Realm::Sony));
-        h.frame(vec![]);
-        assert_eq!(h.log, ["ListCharacters { realm: Sony }"]);
-        h.frame(vec![]);
-        assert_eq!(h.log.len(), 1, "once");
-        // Ctrl+I opens the tab without it
-        let mut h = Harness::new();
-        h.account(fetchable(Realm::Pc));
-        h.ui.focus_code();
+        let mut view = signed_in();
+        view.oauth.fetched = false;
+        h.account(view);
         for _ in 0..3 {
             h.frame(vec![]);
         }
         assert!(h.log.is_empty(), "{:?}", h.log);
-        // a later visit with the tab's button tries
-        assert!(h.ui.leave().is_none());
-        h.frame(vec![]);
-        assert_eq!(h.log, ["ListCharacters { realm: Pc }"]);
-        // no remembered realm: nothing
-        let mut h = Harness::new();
-        let mut view = fetchable(Realm::Pc);
-        view.oauth.remembered_realm = false;
-        h.account(view);
-        h.frame(vec![]);
-        assert!(h.log.is_empty());
-        // signed out: the try is spent, nothing goes
-        let mut h = Harness::new();
-        let mut view = fetchable(Realm::Pc);
-        view.oauth.signed_in = false;
-        h.account(view);
-        h.frame(vec![]);
-        h.account(fetchable(Realm::Pc));
+        h.ui.leave();
         h.frame(vec![]);
         assert!(h.log.is_empty(), "{:?}", h.log);
+        h.click("fetch");
+        assert_eq!(h.log, ["ListCharacters { realm: Pc }"]);
     }
 }

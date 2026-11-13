@@ -227,3 +227,11 @@ pob = {
 	main = mainObject,
 	build = mainObject.main.modes["BUILD"],
 }
+
+-- Launch.lua sets the collector's pause to 400: a cycle starts only once the heap is 4x what
+-- the last one kept. A node power run then peaks near 950 MB on a small build, nearly all of
+-- it garbage (about 260 MB is live), and a gem DPS sort on top of it passes 1 GB. Lua's own
+-- default, 200, halves that headroom: the heat map peaks near 570 MB for about 15% more CPU.
+-- Set only now, so the start itself keeps PoB's pace (at 200 it took about 0.08 s longer).
+-- The collector's pace changes no calculated value.
+collectgarbage("setpause", 200)

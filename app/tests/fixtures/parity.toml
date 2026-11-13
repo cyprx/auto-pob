@@ -900,7 +900,7 @@ ported = "app/src/ui/compare/mod.rs sub_tabs Config (app/src/ui/compare/config.r
 note = "Compare sub-tabs"
 
 [controls."compare.subTabItems"]
-ported = "app/src/ui/compare/mod.rs sub_tabs Items (app/src/ui/compare/items.rs), after Skills as PoB's order (CompareTab.lua:197); columns headed by both build names in PoB's colours"
+ported = "app/src/ui/compare/mod.rs sub_tabs Items (app/src/ui/compare/items.rs), after Skills as PoB's order (CompareTab.lua:197); columns headed by both build names in PoB's colours; hovering Equip shows PoB's stat comparison (HoverTarget::CompareEquip), gate compare_views_and_copies_match_pob"
 note = "Compare sub-tabs"
 
 [controls."compare.subTabSkills"]

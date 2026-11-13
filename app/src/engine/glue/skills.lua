@@ -184,7 +184,7 @@ end
 function glue.skills_delete_group(index, expected)
 	local group = group_at(index)
 	-- the UI's view was stale: that place holds another group now
-	if expected ~= nil and (group.displayLabel or "") ~= expected then
+	if expected ~= nil and not glue.same_text(group.displayLabel or "", expected) then
 		error("the socket group list changed; nothing was deleted", 0)
 	end
 	if group.source then

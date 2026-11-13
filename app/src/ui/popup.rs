@@ -913,10 +913,15 @@ impl PopupWindow {
                         let row = &c.rows[i];
                         let selected = c.row_selected.as_deref() == Some(row.key.as_str())
                             || range.is_some_and(|(a, b)| a <= i && i <= b);
-                        let mut response = ui.add(
-                            egui::Button::selectable(selected, pob_text(&row.label, 14.0, default))
+                        let mut response = crate::theme::list_row(ui, |ui| {
+                            ui.add(
+                                egui::Button::selectable(
+                                    selected,
+                                    pob_text(&row.label, 14.0, default),
+                                )
                                 .truncate(),
-                        );
+                            )
+                        });
                         if c.reorder {
                             response = response.interact(egui::Sense::click_and_drag());
                             rects.push(response.rect);

@@ -698,3 +698,51 @@ fn the_text_window_filters_as_you_type() {
             .clone();
     assert_eq!(text, "Iron Ring\n+10-20 to Life ?-?");
 }
+
+/// A paste the Edit / Create box shortens leaves the caret right after what went in, as PoB's
+/// (EditControl.lua:150, 168): egui's caret would sit one character further per dropped "\r"
+#[test]
+fn a_shortened_paste_leaves_the_caret_after_it() {
+    let mut h = Harness::new(sample());
+    h.settle();
+    h.click("create");
+    h.frame(vec![]);
+    h.click("text_edit");
+    h.frame(vec![Event::Text("AB".into())]);
+    h.key(Key::ArrowLeft, Modifiers::NONE);
+    h.frame(vec![Event::Paste("x\r\ny\r\n".into())]);
+    h.frame(vec![Event::Text("Z".into())]);
+    h.frame(vec![]);
+    let text =
+        h.ui.display
+            .text_window
+            .as_ref()
+            .expect("the window closed")
+            .text
+            .clone();
+    assert_eq!(text, "Ax\ny\nZB");
+}
+
+/// A paste the Edit / Create box refuses whole (a tag alone, which sanitiseText drops) leaves
+/// the caret where it was, as PoB's
+#[test]
+fn a_refused_paste_leaves_the_caret_where_it_was() {
+    let mut h = Harness::new(sample());
+    h.settle();
+    h.click("create");
+    h.frame(vec![]);
+    h.click("text_edit");
+    h.frame(vec![Event::Text("AB".into())]);
+    h.key(Key::ArrowLeft, Modifiers::NONE);
+    h.frame(vec![Event::Paste("<tag>".into())]);
+    h.frame(vec![Event::Text("Z".into())]);
+    h.frame(vec![]);
+    let text =
+        h.ui.display
+            .text_window
+            .as_ref()
+            .expect("the window closed")
+            .text
+            .clone();
+    assert_eq!(text, "AZB");
+}

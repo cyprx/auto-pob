@@ -68,6 +68,10 @@ pub struct PobBackend {
     pub timeless_budget_ms: u32,
     /// The path traced with Shift that the next node tooltip is built with (empty: none)
     trace: Vec<u32>,
+    /// Nothing but tree searches ran since one whose frame matched every node of the build's
+    /// spec, so the tree view's own results are current and the tree state reads them instead
+    /// of matching every node a second time
+    fresh_search: bool,
 }
 
 /// R17: a timeless search step yields once this much of `GetTime()` has passed
@@ -204,6 +208,7 @@ impl PobBackend {
             on_list,
             net,
             timeless_job: false,
+            fresh_search: false,
             timeless_budget_ms: TIMELESS_BUDGET_MS,
             trace: Vec::new(),
         })
@@ -238,6 +243,13 @@ impl PobBackend {
             }
             other => anyhow!("{other}"),
         })
+    }
+
+    /// A glue function's string, any bytes that aren't UTF-8 as U+FFFD: PoB's strings are
+    /// bytes, and a build's text can hold some from a Windows-1252 editor
+    fn call_text<A: IntoLuaMulti>(&self, name: &str, args: A) -> Result<String> {
+        let text: mlua::LuaString = self.call(name, args)?;
+        Ok(String::from_utf8_lossy(&text.as_bytes()).into_owned())
     }
 
     /// Whether the layout the UI holds no longer matches what the tree draws.
@@ -437,7 +449,63 @@ impl PobBackend {
         args: impl IntoLuaMulti,
     ) -> Result<T> {
         let value: mlua::Value = self.call(name, args)?;
-        self.lua.from_value(value).map_err(|e| anyhow!("{e}"))
+        match self.lua.from_value(value.clone()) {
+            Ok(view) => Ok(view),
+            Err(e) => {
+                // PoB's strings are bytes: a build's notes, names or item text can hold bytes
+                // that aren't UTF-8 (a file from a Windows-1252 editor), which serde refuses.
+                // Such a view shows them as U+FFFD instead of failing.
+                match lossy_strings(&self.lua, &value, 0).map_err(|e| anyhow!("{e}"))? {
+                    Some(fixed) => self.lua.from_value(fixed).map_err(|e| anyhow!("{e}")),
+                    None => Err(anyhow!("{e}")),
+                }
+            }
+        }
+    }
+}
+
+/// `value` with every string that isn't UTF-8 replaced by its lossy UTF-8 form, keys
+/// included; `None` when every string already was
+fn lossy_strings(
+    lua: &mlua::Lua,
+    value: &mlua::Value,
+    depth: usize,
+) -> mlua::Result<Option<mlua::Value>> {
+    match value {
+        mlua::Value::String(text) if text.to_str().is_err() => {
+            let fixed = String::from_utf8_lossy(&text.as_bytes()).into_owned();
+            Ok(Some(mlua::Value::String(lua.create_string(fixed)?)))
+        }
+        // a view is a tree of plain tables; the depth guards against a cycle
+        mlua::Value::Table(table) if depth < 64 => {
+            let mut changed = false;
+            let copy = lua.create_table()?;
+            for pair in table.pairs::<mlua::Value, mlua::Value>() {
+                let (key, item) = pair?;
+                let key = match lossy_strings(lua, &key, depth + 1)? {
+                    Some(fixed) => {
+                        changed = true;
+                        fixed
+                    }
+                    None => key,
+                };
+                let item = match lossy_strings(lua, &item, depth + 1)? {
+                    Some(fixed) => {
+                        changed = true;
+                        fixed
+                    }
+                    None => item,
+                };
+                copy.raw_set(key, item)?;
+            }
+            if !changed {
+                return Ok(None);
+            }
+            // the metatable marks an empty table as an array for serde
+            copy.set_metatable(table.metatable())?;
+            Ok(Some(mlua::Value::Table(copy)))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -451,7 +519,7 @@ fn popup_rows(control: &mlua::Table) -> mlua::Result<Vec<super::views::PopupRow>
     };
     let text = |list: &mlua::Table, i: usize| -> mlua::Result<String> {
         match list.raw_get::<mlua::Value>(i)? {
-            mlua::Value::String(text) => Ok(text.to_str()?.to_owned()),
+            mlua::Value::String(text) => Ok(String::from_utf8_lossy(&text.as_bytes()).into_owned()),
             other => Err(mlua::Error::external(format!(
                 "row {i} is a {}",
                 other.type_name()
@@ -1334,7 +1402,8 @@ impl PobBackend {
                 self.network_affected()
             }
             Command::SetTreeSearch { text } => {
-                self.call::<_, ()>("set_tree_search", text)?;
+                let fresh = std::mem::take(&mut self.fresh_search);
+                self.fresh_search = self.call("set_tree_search", (text, fresh))?;
                 Ok(Affected {
                     build: true,
                     tree: true,
@@ -2241,6 +2310,10 @@ impl Backend for PobBackend {
             self.call::<_, ()>("set_stepping", false)?;
             return result;
         }
+        // any other command may change the nodes the search looks at
+        if !matches!(command, Command::SetTreeSearch { .. }) {
+            self.fresh_search = false;
+        }
         // a structural command ends the search only when it went through (R13); one that
         // failed changed nothing, and a changed group table ends the search on its own
         let ends = ends_gem_search(&command);
@@ -2324,6 +2397,7 @@ impl Backend for PobBackend {
     }
 
     fn recalculate(&mut self) -> Result<()> {
+        self.fresh_search = false;
         // a new output revision makes PoB's sort cache start the DPS sort again
         self.call::<_, ()>("recalculate", ())
     }
@@ -2374,7 +2448,7 @@ impl Backend for PobBackend {
     }
 
     fn tree_state_view(&mut self) -> Result<TreeState> {
-        self.view("tree_state", ())
+        self.view("tree_state", self.fresh_search)
     }
 
     fn calcs_view(&mut self) -> Result<CalcsView> {
@@ -2394,7 +2468,7 @@ impl Backend for PobBackend {
     }
 
     fn socket_group_text(&mut self, group: usize) -> Result<SocketGroupText> {
-        let text: String = self.call("skills_copy", group + 1)?;
+        let text = self.call_text("skills_copy", group + 1)?;
         Ok(SocketGroupText { group, text })
     }
 
@@ -2448,6 +2522,7 @@ impl Backend for PobBackend {
     }
 
     fn background_step(&mut self, task: BackgroundTask, send: &dyn Fn(Event)) -> Result<Affected> {
+        self.fresh_search = false;
         #[derive(serde::Deserialize)]
         struct Step {
             percent: Option<u32>,
@@ -2735,7 +2810,7 @@ impl Backend for PobBackend {
     }
 
     fn item_text(&mut self, id: u32) -> Result<ItemText> {
-        let text: String = self.call("item_copy", id)?;
+        let text = self.call_text("item_copy", id)?;
         Ok(ItemText {
             id,
             text,
@@ -2745,7 +2820,7 @@ impl Backend for PobBackend {
     }
 
     fn shared_item_text(&mut self, index: usize) -> Result<ItemText> {
-        let text: String = self.call("shared_copy", index + 1)?;
+        let text = self.call_text("shared_copy", index + 1)?;
         Ok(ItemText {
             id: index as u32,
             text,
@@ -2755,7 +2830,7 @@ impl Backend for PobBackend {
     }
 
     fn db_item_text(&mut self, db: ItemDb, name: &str) -> Result<ItemText> {
-        let text: String = self.call("item_db_copy", (db_name(db), name))?;
+        let text = self.call_text("item_db_copy", (db_name(db), name))?;
         Ok(ItemText {
             id: 0,
             text,

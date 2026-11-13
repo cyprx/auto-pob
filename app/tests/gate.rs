@@ -911,6 +911,21 @@ fn a_garbage_build_file_is_an_error_and_does_not_wedge_the_engine() {
     );
 }
 
+/// A folder named like a build is a build PoB can't open, as on Windows where `io.open`
+/// refuses a folder: the plain message, not a Lua error from inside its XML reader
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_folder_named_like_a_build_is_a_clean_error() {
+    let _guard = lock();
+    let mut s = Session::start("folder-build");
+    let folder = s.builds_dir().join("folder.xml");
+    fs::create_dir_all(&folder).unwrap();
+    let err = s.run(Command::OpenBuild { path: folder }).unwrap_err();
+    assert_eq!(format!("{err:#}"), "couldn't open that build");
+    s.open_fixture("attack", &fixture_xml("attack"));
+    assert_view_matches("attack", "stat", &s.stats().stats, &golden("attack").stats);
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn recalculate_reports_frame_errors_once() {
@@ -3011,6 +3026,40 @@ fn search_matches_pob() {
     assert!(!unsaved(&mut s), "the saved search is not a change");
 }
 
+/// The tree state reads the tree view's own search results only while nothing but searches ran
+/// since its frame matched them: after any other command the nodes are matched again.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn search_matches_again_after_other_commands() {
+    let _guard = lock();
+    let mut s = attack_session("tree-search-again");
+    let matches = |s: &mut Session| s.backend.tree_state_view().unwrap().search_matches;
+    s.run(search("qzxv")).unwrap();
+    assert!(matches(&mut s).is_empty());
+    // a node now reads as the search, behind the view's back
+    s.backend
+        .lua
+        .load(
+            "local spec = pob.build.spec
+            for _, n in pairs(spec.nodes[spec.curClass.startNodeId].linked) do
+                if n.type == 'Normal' then n.dn = 'Qzxv' return end
+            end
+            error('no neighbour')",
+        )
+        .exec()
+        .unwrap();
+    // the same text again: the view's results are the ones its frame took, as PoB shows them
+    s.run(search("qzxv")).unwrap();
+    assert!(matches(&mut s).is_empty());
+    // any other command: matched again, so the renamed node is found
+    s.run(set("conditionFullLife", ConfigValue::Bool(true)))
+        .unwrap();
+    assert_eq!(matches(&mut s).len(), 1);
+    // and the same text after it doesn't go back to the view's old results
+    s.run(search("qzxv")).unwrap();
+    assert_eq!(matches(&mut s).len(), 1);
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn jewel_radius_matches_pob() {
@@ -3543,5 +3592,75 @@ fn spike_tree_numbers() {
     assert!(
         alive,
         "the power coroutine should still be alive after its first real step"
+    );
+}
+
+/// PoB's strings are bytes: a build saved by a Windows-1252 editor keeps bytes that aren't
+/// UTF-8 in its notes, labels and items. PoB shows such a build; every view of ours shows it
+/// too, those bytes as U+FFFD, where serde refused the whole view.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_build_with_bytes_that_are_not_utf8_shows_in_every_view() {
+    let _guard = lock();
+    let mut s = Session::start("non-utf8");
+    let good = fs::read_to_string(fixture_xml("attack")).unwrap();
+    // \u{1} marks where a lone Windows-1252 "é" byte goes
+    let marked = good
+        .replace("label=\"\"", "label=\"Caf\u{1}\"")
+        .replace(
+            "Rarity: NORMAL\nDriftwood Maul",
+            "Rarity: RARE\nCaf\u{1} Smasher\nDriftwood Maul",
+        )
+        .replace("<Notes>", "<Notes>caf\u{1} notes")
+        // a loadout: the four sets share a title (Build.lua:301-415)
+        .replace("<Spec ", "<Spec title=\"Tr\u{1}e\" ")
+        .replace(
+            "<SkillSet id=\"1\">",
+            "<SkillSet id=\"1\" title=\"Tr\u{1}e\">",
+        )
+        .replace(
+            "<ConfigSet id=\"1\">",
+            "<ConfigSet id=\"1\" title=\"Tr\u{1}e\">",
+        )
+        .replace(
+            "<ItemSet useSecondWeaponSet=\"nil\" id=\"1\">",
+            "<ItemSet useSecondWeaponSet=\"nil\" id=\"1\" title=\"Tr\u{1}e\">",
+        );
+    let bytes: Vec<u8> = marked
+        .into_bytes()
+        .into_iter()
+        .map(|b| if b == 1 { 0xE9 } else { b })
+        .collect();
+    let path = s.builds_dir().join("latin.xml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, bytes).unwrap();
+    s.run(Command::OpenBuild { path }).expect("open");
+    let notes = s.backend.notes_view().expect("notes view");
+    assert!(notes.text.contains("caf\u{fffd} notes"), "{:?}", notes.text);
+    let skills = s.backend.skills_view().expect("skills view");
+    assert_eq!(skills.groups[0].label, "Caf\u{fffd}");
+    s.backend.items_view().expect("items view");
+    let item = s.backend.item_text(1).expect("item text");
+    assert!(item.text.contains("Caf\u{fffd} Smasher"), "{}", item.text);
+    let group = s.backend.socket_group_text(0).expect("group text");
+    assert!(group.text.contains("Caf\u{fffd}"), "{}", group.text);
+    // what the UI shows is what it sends back: lookups by that text find the entry
+    let build = s.backend.build_view().expect("build view");
+    let loadout = build
+        .loadouts
+        .iter()
+        .find(|l| l.contains('\u{fffd}'))
+        .unwrap_or_else(|| panic!("no loadout: {:?}", build.loadouts))
+        .clone();
+    s.run(Command::SelectLoadout { label: loadout })
+        .expect("select the loadout");
+    s.run(Command::DeleteSocketGroup {
+        group: 0,
+        name: Some(skills.groups[0].label.clone()),
+    })
+    .expect("delete the group");
+    assert!(
+        s.backend.skills_view().unwrap().groups.is_empty(),
+        "the group is still there"
     );
 }

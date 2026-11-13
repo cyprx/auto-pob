@@ -80,8 +80,9 @@ pub fn search_combo_ui(
                     if !super::dropdown::search_matches(&filter, &text.text) {
                         continue;
                     }
-                    let item =
-                        super::dropdown::either_button(ui.selectable_label(i == selected, text));
+                    let item = super::dropdown::either_button(crate::theme::list_row(ui, |ui| {
+                        ui.selectable_label(i == selected, text)
+                    }));
                     entry(i, &item);
                     if item.clicked() {
                         if i == selected {

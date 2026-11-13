@@ -38,10 +38,19 @@ local function frame()
 	-- above. Its draw only lays out and reads the tree. The build's own `viewMode` is put back
 	-- afterwards, so Save still writes the tab it was saved on. Opening a build sets `viewMode`
 	-- in the same frame (Init, then OnFrame), so the swap happens inside OnFrame.
+	--
+	-- PoB loads its item databases a slice at a time in its first frames
+	-- (`onFrameFuncs.LoadItems`, Main.lua:270-280). Only the Items tab's database panel reads
+	-- them (ItemsTab.lua:281-294), and its job (`glue.item_db_step`) runs that load itself, so a
+	-- frame leaves it alone too: otherwise each of the first edits after a start would pay for
+	-- a slice (25-80 ms), and the databases would be held even when the panel never opens.
 	local build = pob.build
 	local viewer = build.treeTab and build.treeTab.viewer
 	local heatmap = viewer and viewer.showHeatMap
 	if viewer then viewer.showHeatMap = false end
+	local frameFuncs = pob.main.main.onFrameFuncs
+	local loadItems = frameFuncs.LoadItems
+	frameFuncs.LoadItems = nil
 	local onFrame = rawget(build, "OnFrame")
 	build.OnFrame = function(self, ...)
 		local saved = self.viewMode
@@ -53,6 +62,7 @@ local function frame()
 	local ok, err = pcall(runCallback, "OnFrame")
 	build.OnFrame = onFrame
 	if viewer then viewer.showHeatMap = heatmap end
+	frameFuncs.LoadItems = loadItems
 	if not ok then error(err, 0) end
 	-- Launch.lua catches errors from a frame and shows them as a prompt
 	local message = pob.main.promptMsg
@@ -250,7 +260,7 @@ local function loadout_index(label)
 	local drop = pob.build.controls.buildLoadouts
 	require_usable(drop)
 	for index, entry in ipairs(drop.list) do
-		if entry == label then
+		if glue.same_text(entry, label) then
 			return drop, index
 		end
 	end
@@ -300,9 +310,38 @@ function glue.new_build()
 	enter_build(false, "Unnamed build")
 end
 
+-- Whether `path` is a folder: Linux opens one, and only the read fails (EISDIR)
+local function is_folder(path)
+	local file = io.open(path, "r")
+	if not file then
+		return false
+	end
+	local ok, _, code = file:read(0)
+	file:close()
+	-- an empty file reads nil with no error
+	return ok == nil and code == 21
+end
+
 function glue.open_build(fullPath)
 	local name = fullPath:match("([^/\\]+)%.xml$") or fullPath
-	enter_build(fullPath, name)
+	if not is_folder(fullPath) then
+		enter_build(fullPath, name)
+		return
+	end
+	-- On Windows, where PoB runs, `io.open` refuses a folder, and LoadDBFile takes it as a
+	-- missing file (Build.lua:2023-2027). Linux would open it and fail inside the XML reader.
+	local open = io.open
+	io.open = function(path, ...)
+		if path == fullPath then
+			return nil, path .. ": Permission denied", 13
+		end
+		return open(path, ...)
+	end
+	local ok, err = pcall(enter_build, fullPath, name)
+	io.open = open
+	if not ok then
+		error(err, 0)
+	end
 end
 
 function glue.import_code(code)

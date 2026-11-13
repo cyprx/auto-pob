@@ -143,18 +143,30 @@ pub(super) fn show(
         }
         let before = tab.config_filter.clone();
         let pasted = crate::ui::name_box::pasted(ui);
+        let next = crate::ui::name_box::next_selection(ui);
         let search = ui.add(
             egui::TextEdit::singleline(&mut tab.config_filter)
                 .hint_text("Search")
                 .desired_width(240.0),
         );
+        let sel = crate::ui::name_box::own(next, search.id);
         if search.changed() {
-            tab.config_filter = crate::ui::name_box::spliced_by(
+            let raw = std::mem::take(&mut tab.config_filter);
+            tab.config_filter = crate::ui::name_box::spliced_at(
                 &before,
-                &tab.config_filter,
+                &raw,
+                sel,
                 |c| !c.is_ascii_control(),
                 SEARCH_LIMIT,
                 pasted,
+            );
+            crate::ui::name_box::place_caret(
+                ui.ctx(),
+                search.id,
+                &before,
+                &raw,
+                &tab.config_filter,
+                sel,
             );
         }
         crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &search, &tab.config_filter);

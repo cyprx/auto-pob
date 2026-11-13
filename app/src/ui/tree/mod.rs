@@ -574,7 +574,7 @@ impl TreeTab {
             .show(ctx, |ui| {
                 for option in &options.options {
                     let button = egui::Button::selectable(chosen == Some(option.id), &option.text);
-                    let response = ui.add(button);
+                    let response = crate::theme::list_row(ui, |ui| ui.add(button));
                     #[cfg(test)]
                     self.rects
                         .map

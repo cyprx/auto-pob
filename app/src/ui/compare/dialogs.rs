@@ -132,9 +132,12 @@ impl CompareUi {
                 ui.set_min_width(360.0);
                 for row in shown {
                     if let Some(name) = folders.get(row) {
-                        let r = ui.add(
-                            egui::Button::selectable(false, format!("\u{1f4c1} {name}")).truncate(),
-                        );
+                        let r = crate::theme::list_row(ui, |ui| {
+                            ui.add(
+                                egui::Button::selectable(false, format!("\u{1f4c1} {name}"))
+                                    .truncate(),
+                            )
+                        });
                         self.rects.note(&r, || format!("folder:{name}"));
                         if r.clicked() {
                             go = Some(format!("{folder}{name}/"));
@@ -145,9 +148,11 @@ impl CompareUi {
                     match &browse {
                         Some(view) if i < view.entries.len() => {
                             let entry = &view.entries[i];
-                            let r = ui.add(
-                                egui::Button::selectable(false, entry.name.as_str()).truncate(),
-                            );
+                            let r = crate::theme::list_row(ui, |ui| {
+                                ui.add(
+                                    egui::Button::selectable(false, entry.name.as_str()).truncate(),
+                                )
+                            });
                             self.rects.note(&r, || format!("saved:{i}"));
                             if r.clicked() {
                                 load = Some(Command::LoadCompare {

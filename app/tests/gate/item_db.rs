@@ -741,3 +741,47 @@ fn db_add_recipe_matches_pob() {
     crafting_round_trip("db_add", &recipe, &mut s);
     eprintln!("db_add: {:?}", started.elapsed());
 }
+
+/// PoB loads its item databases in its first frames; only the database panel reads them, and
+/// its job loads them. The engine's frames leave that load alone, so edits never pay for it
+/// and a build that never opens the panel never holds the databases.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn item_databases_load_only_for_the_panel() {
+    let _guard = lock();
+    let mut s = Session::start("item-db-lazy");
+    s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+    let loading = |s: &mut Session| -> bool {
+        s.backend
+            .lua
+            .load(
+                "local m = pob.main.main
+                assert(m.onFrameFuncs.LoadItems, 'the load is gone')
+                return (m.uniqueDB.loading and m.rareDB.loading) and true or false",
+            )
+            .eval()
+            .unwrap()
+    };
+    assert!(loading(&mut s), "the databases were loaded already");
+    // PoB's load takes about 20 frames; these edits run more than that
+    for i in 0..30 {
+        s.run(Command::SetConfig {
+            var: "conditionFullLife".into(),
+            value: ConfigValue::Bool(i % 2 == 0),
+        })
+        .unwrap();
+    }
+    assert!(loading(&mut s), "the edits' frames loaded the databases");
+    // the panel's job loads them
+    let view = lists(&mut s, ItemDb::Uniques);
+    assert!(!view.loading && !view.rows.is_empty());
+    let view = lists(&mut s, ItemDb::Rares);
+    assert!(!view.loading && !view.rows.is_empty());
+    let left: bool = s
+        .backend
+        .lua
+        .load("return pob.main.main.onFrameFuncs.LoadItems ~= nil")
+        .eval()
+        .unwrap();
+    assert!(!left, "the load is still listed");
+}

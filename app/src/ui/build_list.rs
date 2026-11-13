@@ -225,9 +225,9 @@ fn build_name_is_free(path: &std::path::Path, original: &str, text: &str) -> boo
 
 /// What PoB's search box keeps.
 /// What the search box holds after the edit that turned `before` into `text`, as PoB's
-fn clean_search(before: &str, text: &mut String, pasted: bool) {
+fn clean_search(before: &str, text: &mut String, pasted: bool, sel: name_box::Selection) {
     let keeps = |c: char| !c.is_control() && c != '(' && c != ')';
-    *text = name_box::spliced_by(before, text, keeps, SEARCH_LIMIT, pasted);
+    *text = name_box::spliced_at(before, text, sel, keeps, SEARCH_LIMIT, pasted);
 }
 
 /// The folders an entry can be moved to or copied to: every folder of the Builds tree except
@@ -486,6 +486,7 @@ impl BuildListUi {
         ui.horizontal(|ui| {
             let before = self.filter_text.clone();
             let pasted = name_box::pasted(ui);
+            let sel = name_box::selection(ui.ctx(), self.search_id);
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.filter_text)
                     .id(self.search_id)
@@ -499,7 +500,9 @@ impl BuildListUi {
                 &self.filter_text,
             );
             if edit.changed() {
-                clean_search(&before, &mut self.filter_text, pasted);
+                let raw = self.filter_text.clone();
+                clean_search(&before, &mut self.filter_text, pasted, sel);
+                name_box::place_caret(ui.ctx(), edit.id, &before, &raw, &self.filter_text, sel);
                 self.filter_edit = Some(now);
             }
             if !self.filter_text.is_empty() {
@@ -1023,6 +1026,7 @@ fn name_edit(
 ) -> bool {
     let before = text.clone();
     let pasted = name_box::pasted(ui);
+    let sel = name_box::selection(ui.ctx(), id);
     let edit = ui.add(
         egui::TextEdit::singleline(text)
             .desired_width(f32::INFINITY)
@@ -1035,7 +1039,10 @@ fn name_edit(
         *focus = false;
     }
     if edit.changed() {
-        *text = name_box::spliced(&before, text, Filter::Path, name_box::NAME_LIMIT, pasted);
+        let raw = std::mem::take(text);
+        let keeps = |c| Filter::Path.keeps(c);
+        *text = name_box::spliced_at(&before, &raw, sel, keeps, name_box::NAME_LIMIT, pasted);
+        name_box::place_caret(ui.ctx(), id, &before, &raw, text, sel);
     }
     // PoB's change function runs only when a key changed the text
     *edited |= *text != before;
@@ -1368,6 +1375,28 @@ mod tests {
                 kind: DeleteKind::Folder,
             })
         );
+    }
+
+    /// A key the rename box refuses leaves the caret where it was, as PoB's (EditControl.lua:
+    /// 140-172): the next key goes in at the same place
+    #[test]
+    fn a_refused_key_in_the_rename_box_leaves_the_caret() {
+        let mut h = H::new(view(""));
+        h.select(1);
+        h.key(Key::F2, Modifiers::NONE);
+        h.focus = false;
+        h.frame(vec![]);
+        h.click("name_edit");
+        h.key(Key::A, Modifiers::COMMAND);
+        h.key(Key::Backspace, Modifiers::NONE);
+        h.text("ab");
+        h.key(Key::ArrowLeft, Modifiers::NONE);
+        h.text("/");
+        h.text("x");
+        let Some(Dialog::Name { text, .. }) = &h.ui.dialog else {
+            panic!("no name box");
+        };
+        assert_eq!(text, "axb");
     }
 
     #[test]

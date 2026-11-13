@@ -358,8 +358,9 @@ impl SkillsUi {
             &mut out.commands,
         );
         // a gem that fits its socket borders its Quality box in the gem's colour, enabled or
-        // not (SkillsTab.lua:852-859)
-        if gem.matches_socket && !gem.colour.is_empty() {
+        // not (SkillsTab.lua:852-859); the box draws white under the pointer instead, where
+        // EditControl skips its borderFunc (EditControl.lua:246-252)
+        if gem.matches_socket && !gem.colour.is_empty() && !quality.hovered() {
             ui.painter().rect_stroke(
                 quality.rect,
                 ui.visuals().widgets.inactive.corner_radius,

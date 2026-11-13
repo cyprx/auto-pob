@@ -568,7 +568,7 @@ function glue.import_public_character(league, name, kind, a, b, c)
 	controls.siteCharSelectLeague:SetSel(index)
 	local at
 	for i, entry in ipairs(controls.siteCharSelect.list) do
-		if entry.label == name and at == nil then
+		if glue.same_text(entry.label, name) and at == nil then
 			at = i
 		end
 	end
@@ -732,7 +732,7 @@ function glue.import_character(realm_id, league, name, kind, a, b, c)
 	local wanted = league or "Any"
 	local index
 	for i, entry in ipairs(controls.charSelectLeague.list or {}) do
-		if entry == wanted and index == nil then
+		if glue.same_text(entry, wanted) and index == nil then
 			index = i
 		end
 	end
@@ -742,7 +742,7 @@ function glue.import_character(realm_id, league, name, kind, a, b, c)
 	controls.charSelectLeague:SetSel(index)
 	local at
 	for i, entry in ipairs(controls.charSelect.list or {}) do
-		if entry.label == name and at == nil then
+		if glue.same_text(entry.label, name) and at == nil then
 			at = i
 		end
 	end

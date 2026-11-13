@@ -105,7 +105,7 @@ pub fn item(ui: &mut egui::Ui, selected: bool, text: impl Into<WidgetText>) -> e
     if !matches(ui, text.text(), true) {
         return hidden(ui);
     }
-    let response = ui.selectable_label(selected, text);
+    let response = crate::theme::list_row(ui, |ui| ui.selectable_label(selected, text));
     picked(ui, response)
 }
 
@@ -120,7 +120,10 @@ pub fn value<V: PartialEq>(
     if !matches(ui, text.text(), true) {
         return hidden(ui);
     }
-    let mut response = either_button(ui.selectable_label(*current == selected_value, text));
+    let on = *current == selected_value;
+    let mut response = either_button(crate::theme::list_row(ui, |ui| {
+        ui.selectable_label(on, text)
+    }));
     if response.clicked() && *current != selected_value {
         *current = selected_value;
         response.mark_changed();

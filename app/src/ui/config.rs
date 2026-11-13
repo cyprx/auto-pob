@@ -270,19 +270,32 @@ enum FieldStyle<'a> {
 }
 
 /// PoB's unselected custom modifier box: each line of `text` in its colour code, a line past
-/// the codes in `default` (ConfigTab.lua:78-86)
+/// the codes in `default` (ConfigTab.lua:78-86). DrawString still reads the codes inside a
+/// line; with Alt held the line shows stripped of them and trimmed.
 fn coloured_lines(
     text: &str,
     colours: &[String],
     font: egui::FontId,
     default: egui::Color32,
+    alt: bool,
 ) -> egui::text::LayoutJob {
+    use crate::widgets::pob_text::{append_pob_text, pob_colour, strip_escapes};
     let mut job = egui::text::LayoutJob::default();
     for (i, line) in text.split_inclusive('\n').enumerate() {
-        let colour = colours.get(i).map_or(default, |code| {
-            crate::widgets::pob_text::pob_colour(code, default)
-        });
-        job.append(line, 0.0, egui::TextFormat::simple(font.clone(), colour));
+        let colour = colours
+            .get(i)
+            .map_or(default, |code| pob_colour(code, default));
+        let (body, end) = match line.strip_suffix('\n') {
+            Some(body) => (body, "\n"),
+            None => (line, ""),
+        };
+        let shown = if alt {
+            let lua_space = |c: char| c == ' ' || ('\t'..='\r').contains(&c);
+            strip_escapes(body).trim_matches(lua_space).to_owned()
+        } else {
+            body.to_owned()
+        };
+        append_pob_text(&mut job, &format!("{shown}{end}"), &font, colour);
     }
     job.keep_trailing_whitespace = true;
     job
@@ -323,11 +336,65 @@ pub struct ConfigUi {
     order_focused: bool,
     /// Hover questions made this frame; `show` hands them out with the commands
     hover_queries: Vec<Command>,
+    /// A box that sends on blur and holds an edit not sent yet, by key: the command that
+    /// sends it. PoB's custom modifier boxes change the build at each key (ConfigTab.lua:
+    /// 35-40, 70-75), so a save, a tab switch or a close sends it first.
+    pending: HashMap<String, Command>,
 }
 
 impl ConfigUi {
     /// Forgets the build's state, as for another build: PoB makes a new ConfigTab for each.
     /// The custom-modifier boxes keep the heights their grips left them.
+    /// An edit typed into a box is waiting to be sent, so the build has unsaved changes the
+    /// engine doesn't know about yet.
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// Sends the edits still being typed; the box's blur later sends nothing more.
+    pub fn flush(&mut self) -> Vec<Command> {
+        let mut commands = Vec::new();
+        for (key, command) in std::mem::take(&mut self.pending) {
+            if let Some(text) = self.drafts.get(&key) {
+                self.sent.insert(key, text.clone());
+            }
+            commands.push(command);
+        }
+        commands
+    }
+
+    /// Drops the edits still being typed (the user chose not to save).
+    pub fn discard(&mut self) {
+        for key in std::mem::take(&mut self.pending).into_keys() {
+            if let Some(text) = self.drafts.get(&key) {
+                self.sent.insert(key, text.clone());
+            }
+        }
+    }
+
+    /// Notes whether the blur-sent box `key`, showing `current` from the view, holds an edit
+    /// not sent yet; `make` is the command that sends it.
+    fn note_pending(
+        &mut self,
+        key: &str,
+        response: &egui::Response,
+        current: &str,
+        make: impl FnOnce(String) -> Command,
+    ) {
+        let waiting = self.drafts.get(key).filter(|text| {
+            response.has_focus() && text.as_str() != current && self.sent.get(key) != Some(*text)
+        });
+        match waiting {
+            Some(text) => {
+                let command = make(text.clone());
+                self.pending.insert(key.to_owned(), command);
+            }
+            None => {
+                self.pending.remove(key);
+            }
+        }
+    }
+
     pub fn reset(&mut self) {
         let heights = std::mem::take(&mut self.heights);
         *self = Self {
@@ -447,17 +514,21 @@ impl ConfigUi {
             ui.separator();
             let before = self.search.clone();
             let pasted = name_box::pasted(ui);
+            let next = name_box::next_selection(ui);
             let search = ui.add(
                 egui::TextEdit::singleline(&mut self.search)
                     .hint_text("Search options")
                     .desired_width(160.0),
             );
+            let sel = name_box::own(next, search.id);
             self.note("search".into(), &search);
             crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &search, &self.search);
             // PoB's box drops control characters and takes 100 bytes (ConfigTab.lua:165)
             if search.changed() {
-                self.search =
-                    name_box::spliced_by(&before, &self.search, |c| !c.is_control(), 100, pasted);
+                let raw = std::mem::take(&mut self.search);
+                let keeps = |c: char| !c.is_control();
+                self.search = name_box::spliced_at(&before, &raw, sel, keeps, 100, pasted);
+                name_box::place_caret(ui.ctx(), search.id, &before, &raw, &self.search, sel);
             }
             if std::mem::take(&mut self.focus_search) {
                 search.request_focus();
@@ -956,6 +1027,7 @@ impl ConfigUi {
             .unwrap_or_else(|| current.to_owned());
         let before = text.clone();
         let pasted = name_box::pasted(ui);
+        let next = name_box::next_selection(ui);
         let edit = match style {
             FieldStyle::Single { width } => {
                 egui::TextEdit::singleline(&mut text).desired_width(width)
@@ -977,11 +1049,19 @@ impl ConfigUi {
             }
             _ => None,
         };
+        // the box lays its own text out unseen, so a click still finds its place in the text,
+        // and the coloured lines, codes read, are drawn over it
+        let wrap = std::cell::Cell::new(f32::INFINITY);
         let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
             let font = egui::FontSelection::default().resolve(ui.style());
-            let default = ui.visuals().text_color();
-            let mut job = coloured_lines(buf.as_str(), colours.unwrap_or(&[]), font, default);
-            job.wrap.max_width = wrap_width;
+            wrap.set(wrap_width);
+            let mut job = egui::text::LayoutJob::simple(
+                buf.as_str().to_owned(),
+                font,
+                egui::Color32::TRANSPARENT,
+                wrap_width,
+            );
+            job.keep_trailing_whitespace = true;
             ui.fonts_mut(|f| f.layout_job(job))
         };
         let edit = if colours.is_some() {
@@ -989,7 +1069,21 @@ impl ConfigUi {
         } else {
             edit
         };
-        let response = ui.add(edit.hint_text(hint));
+        let output = edit.hint_text(hint).show(ui);
+        let response = output.response.response;
+        if let Some(colours) = colours
+            && !text.is_empty()
+        {
+            let font = egui::FontSelection::default().resolve(ui.style());
+            let default = ui.visuals().text_color();
+            let alt = ui.input(|i| i.modifiers.alt);
+            let mut job = coloured_lines(&text, colours, font, default, alt);
+            job.wrap.max_width = wrap.get();
+            let galley = ui.fonts_mut(|f| f.layout_job(job));
+            ui.painter()
+                .with_clip_rect(output.text_clip_rect.intersect(ui.clip_rect()))
+                .galley(output.galley_pos, galley, default);
+        }
         if response.has_focus() {
             self.field_focus = Some(key.clone());
         } else if self.field_focus.as_deref() == Some(key.as_str()) {
@@ -1006,7 +1100,9 @@ impl ConfigUi {
         if changed && let Some(accept) = accept {
             // the box's own filter and limit, for what an edit inserts
             let raw = std::mem::take(&mut text);
-            text = name_box::spliced_by(&before, &raw, accept.keeps, accept.limit, pasted);
+            let sel = name_box::own(next, response.id);
+            text = name_box::spliced_at(&before, &raw, sel, accept.keeps, accept.limit, pasted);
+            name_box::place_caret(ui.ctx(), response.id, &before, &raw, &text, sel);
             // typing over the text with itself is an edit; one the box drops is none
             changed = text != before || raw == before;
         }
@@ -1080,6 +1176,13 @@ impl ConfigUi {
             .id_salt("config_custom_mods")
             .default_open(true)
             .show(ui, |ui| {
+                // a group that went holds no edit
+                self.pending.retain(|key, _| {
+                    key.rsplit(':')
+                        .next()
+                        .and_then(|i| i.parse::<usize>().ok())
+                        .is_some_and(|i| i < groups.len())
+                });
                 for (i, group) in groups.iter().enumerate() {
                     self.custom_mod_group(ui, i, group, behind, commands);
                     ui.add_space(6.0);
@@ -1132,6 +1235,12 @@ impl ConfigUi {
                 }),
             );
             self.note(format!("mod_title:{i}"), &response);
+            self.note_pending(
+                &format!("mod_title:{i}"),
+                &response,
+                &group.title,
+                |title| Command::SetCustomModTitle { group: i, title },
+            );
             if let Some(title) = title {
                 commands.push(Command::SetCustomModTitle { group: i, title });
             }
@@ -1162,6 +1271,9 @@ impl ConfigUi {
             None,
         );
         self.note(format!("mod_text:{i}"), &response);
+        self.note_pending(&format!("mod_text:{i}"), &response, &group.text, |text| {
+            Command::SetCustomModText { group: i, text }
+        });
         if let Some(text) = text {
             commands.push(Command::SetCustomModText { group: i, text });
         }
@@ -1204,6 +1316,37 @@ mod tests {
     /// While it isn't selected, the custom modifier box shows each line in PoB's colour for it:
     /// MAGIC for a line PoB reads as a modifier, UNSUPPORTED for one it can't
     /// (ConfigTab.lua:78-86); selected, it is plain text
+    /// DrawString still reads the colour codes inside a custom modifier line, after the
+    /// line's own MAGIC or UNSUPPORTED; with Alt held the line shows stripped and trimmed
+    /// (ConfigTab.lua:78-86)
+    #[test]
+    fn custom_mod_lines_read_their_own_colour_codes() {
+        let mut h = Harness::new();
+        h.view.custom_mods[0].text = " ^1+5 to ^xAABBCCStrength\nplain".into();
+        h.view.custom_mods[0].line_colours = vec!["^x8888FF".into(), "^xF05050".into()];
+        h.frame(vec![]);
+        let magic = egui::Color32::from_rgb(0x88, 0x88, 0xFF);
+        let red = egui::Color32::from_rgb(255, 0, 0);
+        let custom = egui::Color32::from_rgb(0xAA, 0xBB, 0xCC);
+        let unsupported = egui::Color32::from_rgb(0xF0, 0x50, 0x50);
+        assert_eq!(
+            h.text_colours(" +5 to Strength\nplain"),
+            [
+                (" ".to_owned(), magic),
+                ("+5 to ".to_owned(), red),
+                ("Strength\n".to_owned(), custom),
+                ("plain".to_owned(), unsupported)
+            ]
+        );
+        assert_eq!(
+            h.text_colours_with("+5 to Strength\nplain", Modifiers::ALT),
+            [
+                ("+5 to Strength\n".to_owned(), magic),
+                ("plain".to_owned(), unsupported)
+            ]
+        );
+    }
+
     #[test]
     fn custom_mod_lines_take_pobs_colours_while_unselected() {
         let mut h = Harness::new();
@@ -1398,6 +1541,15 @@ mod tests {
 
         /// One frame; the colours of the drawn text whose whole text is `text`, a run each
         fn text_colours(&mut self, text: &str) -> Vec<(String, egui::Color32)> {
+            self.text_colours_with(text, Modifiers::NONE)
+        }
+
+        /// `text_colours` with `modifiers` held
+        fn text_colours_with(
+            &mut self,
+            text: &str,
+            modifiers: Modifiers,
+        ) -> Vec<(String, egui::Color32)> {
             self.time += 0.06;
             let input = RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -1405,6 +1557,7 @@ mod tests {
                     egui::vec2(1200.0, 800.0),
                 )),
                 time: Some(self.time),
+                events: vec![Event::ModifiersChanged(modifiers)],
                 ..RawInput::default()
             };
             let view = self.view.clone();
@@ -1416,7 +1569,11 @@ mod tests {
                 if let egui::Shape::Text(t) = &clipped.shape
                     && t.galley.job.text == text
                 {
+                    // the box's own text is laid out unseen under the coloured lines
                     for section in &t.galley.job.sections {
+                        if section.format.color == egui::Color32::TRANSPARENT {
+                            continue;
+                        }
                         let range = section.byte_range.start.0..section.byte_range.end.0;
                         let part = t.galley.job.text[range].to_owned();
                         runs.push((part, section.format.color));

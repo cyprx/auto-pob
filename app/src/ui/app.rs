@@ -586,6 +586,7 @@ impl AutoPobApp {
                 || self.sidebar.has_pending()
                 || self.top_bar.has_pending()
                 || self.calcs.has_pending()
+                || self.config_ui.has_pending()
                 || self.build.as_ref().is_some_and(|b| b.unsaved))
     }
 
@@ -957,6 +958,9 @@ impl AutoPobApp {
             self.send(command);
         }
         if let Some(command) = self.calcs.flush() {
+            self.send(command);
+        }
+        for command in self.config_ui.flush() {
             self.send(command);
         }
         if let Some(command) = self.skills.flush() {
@@ -1782,6 +1786,12 @@ impl AutoPobApp {
                 self.send(command);
             }
         }
+        if self.tab != BuildTab::Config {
+            // leaving the tab sends a custom modifier edit still being typed
+            for command in self.config_ui.flush() {
+                self.send(command);
+            }
+        }
         if let Some(command) = notes_command {
             self.send(command);
         } else if self.tab != BuildTab::Notes {
@@ -2128,6 +2138,7 @@ impl AutoPobApp {
                 self.sidebar.discard();
                 self.top_bar.discard();
                 self.calcs.discard();
+                self.config_ui.discard();
                 self.ready_actions.push(pending);
             }
             Resolution::Stay => {}
@@ -3852,6 +3863,83 @@ mod tests {
         assert_eq!(
             sent_since(&app, before),
             ["RemoveCustomModGroup { group: 0 }"]
+        );
+    }
+
+    /// PoB's custom modifier boxes change the build at each key (ConfigTab.lua:35-40, 70-75):
+    /// an edit still being typed marks the build unsaved, and a save or a tab switch sends it
+    #[test]
+    fn a_custom_mod_edit_being_typed_is_not_lost() {
+        let (mut app, ctx) = config_app(sample_config());
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "mod_text:1");
+        type_text(&mut app, &ctx, "+5 life");
+        assert!(
+            app.current_unsaved(),
+            "the typed text isn't an unsaved change"
+        );
+        frame(&mut app, &ctx, ctrl(egui::Key::Num2));
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.tab, BuildTab::Skills);
+        assert_eq!(
+            sent_since(&app, before),
+            ["SetCustomModText { group: 1, text: \"+5 life\" }"]
+        );
+        // a save sends the title being typed, and the blur after it sends nothing more
+        let (mut app, ctx) = config_app(sample_config());
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "mod_title:1");
+        type_text(&mut app, &ctx, "abc");
+        frame(&mut app, &ctx, ctrl(egui::Key::S));
+        frame(&mut app, &ctx, vec![]);
+        let sent = sent_since(&app, before);
+        assert_eq!(
+            sent,
+            ["SetCustomModTitle { group: 1, title: \"Secondabc\" }"]
+        );
+    }
+
+    /// Closing with a custom modifier edit still being typed asks first: "Don't Save" drops
+    /// the edit (no blur sends it later), "Save" sends it before the save
+    #[test]
+    fn closing_with_a_custom_mod_edit_being_typed_asks_first() {
+        let saved = |app: &mut AutoPobApp| {
+            app.build = Some(Arc::new(BuildView {
+                path: Some("/b/x.xml".into()),
+                ..(**app.build.as_ref().unwrap()).clone()
+            }));
+        };
+        // Don't Save
+        let (mut app, ctx) = config_app(sample_config());
+        saved(&mut app);
+        click(&mut app, &ctx, "mod_text:1");
+        type_text(&mut app, &ctx, "+5 life");
+        let before = app.sent_full.len();
+        app.request(Pending::Close);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.prompt, Some(Pending::Close), "no unsaved prompt");
+        app.answer_prompt(Pending::Close, PromptChoice::Discard);
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "mod_title:0");
+        frame(&mut app, &ctx, vec![]);
+        let sent = sent_since(&app, before);
+        assert!(
+            !sent.iter().any(|c| c.starts_with("SetCustomModText")),
+            "{sent:?}"
+        );
+        // Save
+        let (mut app, ctx) = config_app(sample_config());
+        saved(&mut app);
+        click(&mut app, &ctx, "mod_text:1");
+        type_text(&mut app, &ctx, "+5 life");
+        let before = app.sent_full.len();
+        app.request(Pending::Close);
+        frame(&mut app, &ctx, vec![]);
+        app.answer_prompt(Pending::Close, PromptChoice::Save);
+        let sent = sent_since(&app, before);
+        assert_eq!(
+            sent,
+            ["SetCustomModText { group: 1, text: \"+5 life\" }", "Save"]
         );
     }
 

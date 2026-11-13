@@ -363,7 +363,7 @@ function glue.compare_convert_tree(theirs, index, label, keepCopy)
 		if entry == nil then
 			error("no such choice", 0)
 		end
-		if entry.label ~= label then
+		if not glue.same_text(entry.label, label) then
 			error("the list changed; pick again", 0)
 		end
 		glue.in_popups(function()

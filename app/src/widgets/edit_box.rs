@@ -173,6 +173,7 @@ impl EditBox {
         let guarded = opts.filter.is_some() || opts.byte_limit.is_some();
         let before = guarded.then(|| self.text.clone());
         let pasted = guarded && focused && crate::ui::name_box::pasted(ui);
+        let sel = crate::ui::name_box::selection(ui.ctx(), id);
         let mut edit = egui::TextEdit::singleline(&mut self.text)
             .id(id)
             .desired_width(opts.width);
@@ -189,7 +190,8 @@ impl EditBox {
             let keeps = opts.filter.unwrap_or(|_| true);
             let limit = opts.byte_limit.unwrap_or(usize::MAX);
             let raw = std::mem::take(&mut self.text);
-            self.text = crate::ui::name_box::spliced_by(&before, &raw, keeps, limit, pasted);
+            self.text = crate::ui::name_box::spliced_at(&before, &raw, sel, keeps, limit, pasted);
+            crate::ui::name_box::place_caret(ui.ctx(), id, &before, &raw, &self.text, sel);
             // typing over the text with itself is an edit; one the box drops is none
             self.refused = raw != before && self.text == before;
         }

@@ -332,13 +332,24 @@ end
 
 -- Ids of the nodes the viewer would highlight for its search text: Draw caches
 -- `DoesNodeMatchSearchParams` for every node when the text changes (PassiveTreeView.lua:780-802).
-local function search_matches(build)
+-- `fresh`: only tree searches ran since a frame's Draw did that for this text and spec
+-- (`glue.set_tree_search`), so its results are read rather than matched again.
+local function search_matches(build, fresh)
 	local viewer = build.treeTab.viewer
-	viewer.searchParams = search_words(viewer.searchStr)
+	local results = fresh and viewer.searchStrCached == viewer.searchStr and viewer.searchStrResults
+	if not results then
+		viewer.searchParams = search_words(viewer.searchStr)
+	end
 	local matches = {}
 	if #viewer.searchParams > 0 then
 		for id, node in pairs(build.spec.nodes) do
-			if viewer:DoesNodeMatchSearchParams(node) then
+			local match
+			if results then
+				match = results[id]
+			else
+				match = viewer:DoesNodeMatchSearchParams(node)
+			end
+			if match then
 				matches[#matches + 1] = id
 			end
 		end
@@ -398,8 +409,8 @@ local function version_choices(tab)
 	return choices
 end
 
--- The build's state on the active tree.
-function glue.tree_state()
+-- The build's state on the active tree. `fresh`: see `search_matches`.
+function glue.tree_state(fresh)
 	local build = pob.build
 	local spec = build.spec
 	local masteries, masteryOptions = mastery_state(spec)
@@ -427,7 +438,7 @@ function glue.tree_state()
 		-- allocated nodes: what deallocating each one drops
 		depends = node_paths(spec, "depends", function(node) return node.alloc end),
 		search = build.treeTab.viewer.searchStr,
-		search_matches = search_matches(build),
+		search_matches = search_matches(build, fresh),
 		compare = compare,
 		compare_spec = compareSpec,
 		jewels = jewel_sockets(build),
@@ -911,13 +922,18 @@ end
 -- ---- Search and tooltips ----
 
 -- The treeSearch box's callback (TreeTab.lua:180); TreeTab:Draw copies the text back into the box.
-function glue.set_tree_search(text)
+-- Returns whether the tree view's search results are current for the build's spec: this
+-- frame's Draw matched every node for the new text (PassiveTreeView.lua:780-802), or the text
+-- is unchanged and `fresh` says they were current before (only tree searches ran since).
+function glue.set_tree_search(text, fresh)
 	local viewer = pob.build.treeTab.viewer
+	local before = viewer.searchStrCached
 	viewer.searchStr = text
 	pob.build.treeTab.searchFlag = text ~= viewer.searchStrSaved
 	-- PoB works out `unsaved` in OnFrame (Build.lua:1303, which reads searchFlag). The frame
 	-- doesn't set buildFlag, so nothing is recalculated and the heat map keeps running.
 	glue.frame()
+	return viewer.searchStrCached == text and (before ~= text or fresh == true)
 end
 
 -- What the tree draws when the mouse is over a node (PassiveTreeView.lua:1458), or nil when the

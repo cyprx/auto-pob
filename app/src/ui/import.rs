@@ -889,8 +889,8 @@ impl ImportUi {
                     }
                     let default = ui.visuals().text_color();
                     let text = format!("^7{}   {detail}", c.name);
-                    let r = ui
-                        .selectable_label(selected, crate::widgets::pob_text(&text, 14.0, default));
+                    let label = crate::widgets::pob_text(&text, 14.0, default);
+                    let r = crate::theme::list_row(ui, |ui| ui.selectable_label(selected, label));
                     mark(ui, &format!("char:{}", c.name), &r);
                     if r.clicked() {
                         self.selected = Some(c.name.clone());

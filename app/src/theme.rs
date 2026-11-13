@@ -153,9 +153,9 @@ fn hand_cursor(ctx: &egui::Context) {
     let skipped: egui::IdSet = ctx.data(|d| d.get_temp(no_hand_id()).unwrap_or_default());
     let clickable = hovered.iter().any(|id| {
         !skipped.contains(id)
+            // egui never reports a disabled widget hovered, so `hovered` covers `enabled`
             && ctx.read_response(*id).is_some_and(|r| {
-                r.enabled()
-                    && r.hovered()
+                r.hovered()
                     && r.sense.senses_click()
                     && !r.sense.senses_drag()
                     && r.rect.height() <= HAND_MAX_HEIGHT
@@ -766,6 +766,106 @@ mod tests {
         assert!(hand.rect.contains(AT), "{:?}", hand.rect);
         assert_eq!(hand.cursor, CursorIcon::PointingHand);
         assert_eq!(run(frames(true), label(true)).cursor, CursorIcon::Default);
+    }
+
+    /// Frames with the pointer moved to `at`
+    fn hover_at(at: Pos2) -> Vec<Vec<Event>> {
+        vec![vec![], vec![Event::PointerMoved(at)], vec![], vec![]]
+    }
+
+    /// A sortable table's hovered row takes the rows' warm fill
+    #[test]
+    fn a_hovered_table_row_has_the_warm_fill() {
+        let table = |ui: &mut egui::Ui| {
+            let columns = [crate::widgets::list::ListColumn {
+                title: "Name",
+                width: 150.0,
+            }];
+            crate::widgets::list::list(
+                ui,
+                egui::Id::unique("table"),
+                &columns,
+                3,
+                |i, row| {
+                    row.col(|ui| {
+                        ui.label(format!("row {i}"));
+                    });
+                },
+                &mut None,
+            );
+            Rect::NOTHING
+        };
+        let warm = |f: &Frame| f.painted.iter().any(|p| p.fill == ROW_HOVERED);
+        assert!(!warm(&run(hover_at(Pos2::new(290.0, 290.0)), table)));
+        // below the 20 pt header, on the second row
+        let hovered = run(hover_at(Pos2::new(40.0, 50.0)), table);
+        assert!(warm(&hovered), "{:?}", hovered.painted);
+    }
+
+    /// A button drawn after a list row still lights up: `list_row` puts the look back
+    #[test]
+    fn a_button_after_a_list_row_keeps_the_gold_border() {
+        let draw = |ui: &mut egui::Ui| {
+            list_row(ui, |ui| ui.selectable_label(false, "a row"));
+            ui.button("a button").rect
+        };
+        let rect = run(frames(false), draw).rect;
+        let hovered = run(hover_at(rect.center()), draw);
+        assert!(
+            hovered.has_fill(WIDGET_HOVERED) && hovered.has_border(BORDER_HOVERED),
+            "{:?}",
+            hovered.painted
+        );
+    }
+
+    /// A selected framed row under the pointer keeps the selection's fill
+    #[test]
+    fn a_hovered_selected_framed_row_keeps_the_selection() {
+        let hovered = run(frames(true), |ui| {
+            row_frame(ui, true, |ui| {
+                ui.set_min_width(200.0);
+                ui.label("a row");
+            })
+            .response
+            .rect
+        });
+        assert!(hovered.rect.contains(AT), "{:?}", hovered.rect);
+        assert!(hovered.has_fill(SELECTION) && !hovered.has_fill(ROW_HOVERED));
+    }
+
+    /// A read-only edit box doesn't light up
+    #[test]
+    fn a_hovered_read_only_edit_box_keeps_its_look() {
+        let hovered = run(frames(true), |ui| {
+            let mut text = "abc";
+            ui.add(egui::TextEdit::singleline(&mut text)).rect
+        });
+        assert!(hovered.rect.contains(AT), "{:?}", hovered.rect);
+        assert!(!hovered.has_fill(EDIT_HOVERED), "{:?}", hovered.painted);
+    }
+
+    /// Drag-sensing widgets keep their own cursor: a small click-and-drag widget the arrow,
+    /// a draggable row under a click overlay (the app's reorderable lists) the grab hand
+    #[test]
+    fn drag_sensing_widgets_keep_their_cursor() {
+        let drag = run(frames(true), |ui| {
+            ui.allocate_exact_size(Vec2::new(100.0, 20.0), egui::Sense::click_and_drag())
+                .1
+                .rect
+        });
+        assert!(drag.rect.contains(AT), "{:?}", drag.rect);
+        assert_eq!(drag.cursor, CursorIcon::Default);
+        let row = run(frames(true), |ui| {
+            let id = egui::Id::unique("row");
+            let inner = ui.dnd_drag_source(id, 0usize, |ui| {
+                ui.set_min_width(200.0);
+                ui.label("a row");
+            });
+            ui.interact(inner.response.rect, id.with("click"), egui::Sense::click())
+                .rect
+        });
+        assert!(row.rect.contains(AT), "{:?}", row.rect);
+        assert_eq!(row.cursor, CursorIcon::Grab);
     }
 
     /// A dropped dropdown keeps the gold border (PoB's is white)

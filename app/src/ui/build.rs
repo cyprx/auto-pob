@@ -977,6 +977,12 @@ mod tests {
                     };
                     out.push((r.rect, r.fill, border))
                 }
+                // a line as a flat rectangle, its colour as the border
+                egui::Shape::LineSegment { points, stroke } => out.push((
+                    Rect::from_two_pos(points[0], points[1]),
+                    egui::Color32::TRANSPARENT,
+                    stroke.color,
+                )),
                 egui::Shape::Vec(v) => v.iter().for_each(|s| gold(s, out)),
                 _ => {}
             }
@@ -1126,5 +1132,47 @@ mod tests {
         let mut tab = BuildTab::Items;
         let (_, painted) = strip(&mut tab, vec![vec![], vec![]]);
         assert!(painted.iter().all(|p| p.2 != border));
+    }
+
+    /// A hovered main tab lights up: the lighter fill and the light gold border
+    #[test]
+    fn a_hovered_main_tab_lights_up() {
+        let mut tab = BuildTab::Items;
+        let (tabs, _) = strip(&mut tab, vec![vec![]]);
+        let (_, painted) = strip(
+            &mut tab,
+            vec![vec![], vec![Event::PointerMoved(tabs[4].center())], vec![]],
+        );
+        let fill = egui::Color32::from_rgb(76, 60, 40);
+        let border = egui::Color32::from_rgb(236, 204, 134);
+        assert!(
+            painted.iter().any(|p| p.0 == tabs[4] && p.1 == fill),
+            "{painted:?}"
+        );
+        assert!(painted.iter().any(|p| p.0 == tabs[4] && p.2 == border));
+        // the others don't
+        assert!(painted.iter().all(|p| p.0 != tabs[3] || p.1 != fill));
+    }
+
+    /// The line under the band is broken under the selected tab, joining it to the content
+    #[test]
+    fn the_line_under_the_band_breaks_under_the_selected_tab() {
+        let bronze = egui::Color32::from_rgb(120, 92, 58);
+        let mut tab = BuildTab::Calcs;
+        let (tabs, painted) = strip(&mut tab, vec![vec![], vec![]]);
+        let selected = tabs[3];
+        let mut lines: Vec<Rect> = painted
+            .iter()
+            .filter(|p| p.2 == bronze && p.0.height() == 0.0)
+            .map(|p| p.0)
+            .collect();
+        lines.sort_by(|a, b| a.left().total_cmp(&b.left()));
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[0].center().y, selected.bottom() - 0.5);
+        assert_eq!((lines[0].left(), lines[0].right()), (0.0, selected.left()));
+        assert_eq!(
+            (lines[1].left(), lines[1].right()),
+            (selected.right(), 1200.0)
+        );
     }
 }

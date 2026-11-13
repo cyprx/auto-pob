@@ -149,14 +149,16 @@ pub fn show(
         rects.note(&edit, || "text_edit".into());
         // PoB's box takes "^%C\t\n" and pastes through sanitiseText (ItemsTab.lua:2617-2624)
         if edit.changed() {
+            let raw = std::mem::take(&mut window.text);
             window.text = crate::ui::name_box::spliced_with(
                 &before,
-                &window.text,
+                &raw,
                 |c| !c.is_control() || c == '\t' || c == '\n',
                 usize::MAX,
                 pasted,
                 Some(crate::ui::name_box::sanitise_text),
             );
+            crate::ui::name_box::place_caret(ctx, edit.id, &raw, &window.text);
         }
         ui.horizontal(|ui| {
             // "Create" when there is no item yet; enabled while PoB reads the text as an item,

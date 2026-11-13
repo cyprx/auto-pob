@@ -125,6 +125,54 @@ pub fn sanitise_text(text: &str) -> String {
         .collect()
 }
 
+/// The bytes an edit kept at each end: it replaced `before[head..before.len() - tail]` with
+/// `raw[head..raw.len() - tail]`
+fn edit_span(before: &str, raw: &str) -> (usize, usize) {
+    let head: usize = before
+        .chars()
+        .zip(raw.chars())
+        .take_while(|(a, b)| a == b)
+        .map(|(c, _)| c.len_utf8())
+        .sum();
+    let tail: usize = before[head..]
+        .chars()
+        .rev()
+        .zip(raw[head..].chars().rev())
+        .take_while(|(a, b)| a == b)
+        .map(|(c, _)| c.len_utf8())
+        .sum();
+    (head, tail)
+}
+
+/// Where PoB's caret sits, in characters, when egui left it at `caret` in `raw` and `spliced`
+/// made the box hold `result`. The edit ends at egui's caret, so the characters the filter
+/// dropped or added all lie before it: PoB's caret is right after what went in, or where it
+/// was when the box refused the edit (EditControl.lua:140-172).
+pub fn shifted_caret(caret: usize, raw: &str, result: &str) -> usize {
+    let (raw, result) = (raw.chars().count(), result.chars().count());
+    (caret + result).saturating_sub(raw).min(result)
+}
+
+/// Puts the caret of the text box `id` where PoB's would be after `spliced` turned egui's
+/// edit, `raw`, into `result`. egui leaves it after the raw edit, which a filter that drops or
+/// widens characters, or a refused edit, moved.
+pub fn place_caret(ctx: &egui::Context, id: egui::Id, raw: &str, result: &str) {
+    if raw == result {
+        return;
+    }
+    if let Some(mut state) = egui::TextEdit::load_state(ctx, id)
+        && let Some(range) = state.cursor.char_range()
+    {
+        let at = shifted_caret(range.primary.index.0, raw, result);
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::one(
+                egui::text::CCursor::new(at),
+            )));
+        state.store(ctx, id);
+    }
+}
+
 /// What PoB's box holds after the edit that turned `before` into `raw`. PoB filters and limits
 /// only the text an edit inserts, so the text already in the box, such as a name being renamed,
 /// stays as it is (EditControl.lua:140-172).
@@ -159,20 +207,7 @@ pub fn spliced_with(
     pasted: bool,
     paste_filter: Option<fn(&str) -> String>,
 ) -> String {
-    // the edit replaced `before[head..before.len() - tail]` with `raw[head..raw.len() - tail]`
-    let head: usize = before
-        .chars()
-        .zip(raw.chars())
-        .take_while(|(a, b)| a == b)
-        .map(|(c, _)| c.len_utf8())
-        .sum();
-    let tail: usize = before[head..]
-        .chars()
-        .rev()
-        .zip(raw[head..].chars().rev())
-        .take_while(|(a, b)| a == b)
-        .map(|(c, _)| c.len_utf8())
-        .sum();
+    let (head, tail) = edit_span(before, raw);
     let (front, rest) = raw.split_at(head);
     let (inserted, back) = rest.split_at(rest.len() - tail);
     if inserted.is_empty() {
@@ -240,7 +275,9 @@ pub fn edit(
     let mut changed = response.changed();
     if changed {
         let same = *text == before;
-        *text = spliced(&before, text, filter, limit, pasted);
+        let raw = std::mem::take(text);
+        *text = spliced(&before, &raw, filter, limit, pasted);
+        place_caret(ui.ctx(), response.id, &raw, text);
         // typing over the text with itself is an edit; a character the box drops is none
         changed = same || *text != before;
     }
@@ -250,6 +287,32 @@ pub fn edit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// PoB's caret goes right after what an edit put in, or stays where it was when the box
+    /// refused the edit (EditControl.lua:140-172)
+    #[test]
+    fn shifted_caret_follows_the_filtered_insertion() {
+        // a "\r" dropped from a paste in the middle: egui's caret is after "x\r\ny"
+        let raw = "Ax\r\nyB";
+        let result = spliced_by("AB", raw, |_| true, usize::MAX, true);
+        assert_eq!(result, "Ax\nyB");
+        assert_eq!(shifted_caret(5, raw, &result), 4);
+        // a paste that starts like the text after it: "b\r" pasted after "a" of "ab"
+        let raw = "ab\rb";
+        let result = spliced_by("ab", raw, |_| true, usize::MAX, true);
+        assert_eq!(result, "abb");
+        assert_eq!(shifted_caret(3, raw, &result), 2);
+        // a non-ASCII character pasted as one "?" per byte moves it the other way
+        let raw = "a\u{e9}b";
+        let result = spliced_by("ab", raw, |_| true, usize::MAX, true);
+        assert_eq!(result, "a??b");
+        assert_eq!(shifted_caret(2, raw, &result), 3);
+        // a refused key leaves the caret where it was
+        let raw = "a/b";
+        let result = spliced("ab", raw, Filter::Path, NAME_LIMIT, false);
+        assert_eq!(result, "ab");
+        assert_eq!(shifted_caret(2, raw, &result), 1);
+    }
 
     #[test]
     fn sanitise_text_is_pobs() {

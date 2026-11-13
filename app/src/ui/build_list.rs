@@ -499,7 +499,9 @@ impl BuildListUi {
                 &self.filter_text,
             );
             if edit.changed() {
+                let raw = self.filter_text.clone();
                 clean_search(&before, &mut self.filter_text, pasted);
+                name_box::place_caret(ui.ctx(), edit.id, &raw, &self.filter_text);
                 self.filter_edit = Some(now);
             }
             if !self.filter_text.is_empty() {

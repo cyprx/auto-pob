@@ -623,8 +623,9 @@ impl Toolbar {
             .on_hover_text(SEARCH_TIP);
         // PoB's box drops control characters and takes 100 bytes (TreeTab.lua:211)
         if field.changed() {
-            self.search =
-                name_box::spliced_by(&before, &self.search, |c| !c.is_control(), 100, pasted);
+            let raw = std::mem::take(&mut self.search);
+            self.search = name_box::spliced_by(&before, &raw, |c| !c.is_control(), 100, pasted);
+            name_box::place_caret(ui.ctx(), field.id, &raw, &self.search);
         }
         crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &field, &self.search);
         rects.note(&field, || "search".into());

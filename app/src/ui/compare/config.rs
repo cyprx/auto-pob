@@ -149,13 +149,15 @@ pub(super) fn show(
                 .desired_width(240.0),
         );
         if search.changed() {
+            let raw = std::mem::take(&mut tab.config_filter);
             tab.config_filter = crate::ui::name_box::spliced_by(
                 &before,
-                &tab.config_filter,
+                &raw,
                 |c| !c.is_ascii_control(),
                 SEARCH_LIMIT,
                 pasted,
             );
+            crate::ui::name_box::place_caret(ui.ctx(), search.id, &raw, &tab.config_filter);
         }
         crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &search, &tab.config_filter);
         tab.rects.note(&search, || "config_search".into());

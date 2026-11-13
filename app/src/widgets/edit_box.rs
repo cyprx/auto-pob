@@ -190,6 +190,7 @@ impl EditBox {
             let limit = opts.byte_limit.unwrap_or(usize::MAX);
             let raw = std::mem::take(&mut self.text);
             self.text = crate::ui::name_box::spliced_by(&before, &raw, keeps, limit, pasted);
+            crate::ui::name_box::place_caret(ui.ctx(), id, &raw, &self.text);
             // typing over the text with itself is an edit; one the box drops is none
             self.refused = raw != before && self.text == before;
         }

@@ -270,19 +270,32 @@ enum FieldStyle<'a> {
 }
 
 /// PoB's unselected custom modifier box: each line of `text` in its colour code, a line past
-/// the codes in `default` (ConfigTab.lua:78-86)
+/// the codes in `default` (ConfigTab.lua:78-86). DrawString still reads the codes inside a
+/// line; with Alt held the line shows stripped of them and trimmed.
 fn coloured_lines(
     text: &str,
     colours: &[String],
     font: egui::FontId,
     default: egui::Color32,
+    alt: bool,
 ) -> egui::text::LayoutJob {
+    use crate::widgets::pob_text::{append_pob_text, pob_colour, strip_escapes};
     let mut job = egui::text::LayoutJob::default();
     for (i, line) in text.split_inclusive('\n').enumerate() {
-        let colour = colours.get(i).map_or(default, |code| {
-            crate::widgets::pob_text::pob_colour(code, default)
-        });
-        job.append(line, 0.0, egui::TextFormat::simple(font.clone(), colour));
+        let colour = colours
+            .get(i)
+            .map_or(default, |code| pob_colour(code, default));
+        let (body, end) = match line.strip_suffix('\n') {
+            Some(body) => (body, "\n"),
+            None => (line, ""),
+        };
+        let shown = if alt {
+            let lua_space = |c: char| c == ' ' || ('\t'..='\r').contains(&c);
+            strip_escapes(body).trim_matches(lua_space).to_owned()
+        } else {
+            body.to_owned()
+        };
+        append_pob_text(&mut job, &format!("{shown}{end}"), &font, colour);
     }
     job.keep_trailing_whitespace = true;
     job
@@ -978,11 +991,19 @@ impl ConfigUi {
             }
             _ => None,
         };
+        // the box lays its own text out unseen, so a click still finds its place in the text,
+        // and the coloured lines, codes read, are drawn over it
+        let wrap = std::cell::Cell::new(f32::INFINITY);
         let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
             let font = egui::FontSelection::default().resolve(ui.style());
-            let default = ui.visuals().text_color();
-            let mut job = coloured_lines(buf.as_str(), colours.unwrap_or(&[]), font, default);
-            job.wrap.max_width = wrap_width;
+            wrap.set(wrap_width);
+            let mut job = egui::text::LayoutJob::simple(
+                buf.as_str().to_owned(),
+                font,
+                egui::Color32::TRANSPARENT,
+                wrap_width,
+            );
+            job.keep_trailing_whitespace = true;
             ui.fonts_mut(|f| f.layout_job(job))
         };
         let edit = if colours.is_some() {
@@ -990,7 +1011,21 @@ impl ConfigUi {
         } else {
             edit
         };
-        let response = ui.add(edit.hint_text(hint));
+        let output = edit.hint_text(hint).show(ui);
+        let response = output.response.response;
+        if let Some(colours) = colours
+            && !text.is_empty()
+        {
+            let font = egui::FontSelection::default().resolve(ui.style());
+            let default = ui.visuals().text_color();
+            let alt = ui.input(|i| i.modifiers.alt);
+            let mut job = coloured_lines(&text, colours, font, default, alt);
+            job.wrap.max_width = wrap.get();
+            let galley = ui.fonts_mut(|f| f.layout_job(job));
+            ui.painter()
+                .with_clip_rect(output.text_clip_rect.intersect(ui.clip_rect()))
+                .galley(output.galley_pos, galley, default);
+        }
         if response.has_focus() {
             self.field_focus = Some(key.clone());
         } else if self.field_focus.as_deref() == Some(key.as_str()) {
@@ -1206,6 +1241,37 @@ mod tests {
     /// While it isn't selected, the custom modifier box shows each line in PoB's colour for it:
     /// MAGIC for a line PoB reads as a modifier, UNSUPPORTED for one it can't
     /// (ConfigTab.lua:78-86); selected, it is plain text
+    /// DrawString still reads the colour codes inside a custom modifier line, after the
+    /// line's own MAGIC or UNSUPPORTED; with Alt held the line shows stripped and trimmed
+    /// (ConfigTab.lua:78-86)
+    #[test]
+    fn custom_mod_lines_read_their_own_colour_codes() {
+        let mut h = Harness::new();
+        h.view.custom_mods[0].text = " ^1+5 to ^xAABBCCStrength\nplain".into();
+        h.view.custom_mods[0].line_colours = vec!["^x8888FF".into(), "^xF05050".into()];
+        h.frame(vec![]);
+        let magic = egui::Color32::from_rgb(0x88, 0x88, 0xFF);
+        let red = egui::Color32::from_rgb(255, 0, 0);
+        let custom = egui::Color32::from_rgb(0xAA, 0xBB, 0xCC);
+        let unsupported = egui::Color32::from_rgb(0xF0, 0x50, 0x50);
+        assert_eq!(
+            h.text_colours(" +5 to Strength\nplain"),
+            [
+                (" ".to_owned(), magic),
+                ("+5 to ".to_owned(), red),
+                ("Strength\n".to_owned(), custom),
+                ("plain".to_owned(), unsupported)
+            ]
+        );
+        assert_eq!(
+            h.text_colours_with("+5 to Strength\nplain", Modifiers::ALT),
+            [
+                ("+5 to Strength\n".to_owned(), magic),
+                ("plain".to_owned(), unsupported)
+            ]
+        );
+    }
+
     #[test]
     fn custom_mod_lines_take_pobs_colours_while_unselected() {
         let mut h = Harness::new();
@@ -1400,6 +1466,15 @@ mod tests {
 
         /// One frame; the colours of the drawn text whose whole text is `text`, a run each
         fn text_colours(&mut self, text: &str) -> Vec<(String, egui::Color32)> {
+            self.text_colours_with(text, Modifiers::NONE)
+        }
+
+        /// `text_colours` with `modifiers` held
+        fn text_colours_with(
+            &mut self,
+            text: &str,
+            modifiers: Modifiers,
+        ) -> Vec<(String, egui::Color32)> {
             self.time += 0.06;
             let input = RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -1407,6 +1482,7 @@ mod tests {
                     egui::vec2(1200.0, 800.0),
                 )),
                 time: Some(self.time),
+                events: vec![Event::ModifiersChanged(modifiers)],
                 ..RawInput::default()
             };
             let view = self.view.clone();
@@ -1418,7 +1494,11 @@ mod tests {
                 if let egui::Shape::Text(t) = &clipped.shape
                     && t.galley.job.text == text
                 {
+                    // the box's own text is laid out unseen under the coloured lines
                     for section in &t.galley.job.sections {
+                        if section.format.color == egui::Color32::TRANSPARENT {
+                            continue;
+                        }
                         let range = section.byte_range.start.0..section.byte_range.end.0;
                         let part = t.galley.job.text[range].to_owned();
                         runs.push((part, section.format.color));

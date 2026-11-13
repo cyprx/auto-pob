@@ -42,6 +42,18 @@ fn parse_code(s: &[u8]) -> Option<(Color32, usize)> {
 /// first code.
 pub fn pob_text(text: &str, size: f32, default: Color32) -> LayoutJob {
     let mut job = LayoutJob::default();
+    append_pob_text(&mut job, text, &FontId::proportional(size), default);
+    job
+}
+
+/// Appends `text` to `job` in `font`, switching colour at each PoB colour code; `default`
+/// applies until the first code. Returns the colour in force at the end.
+pub fn append_pob_text(
+    job: &mut LayoutJob,
+    text: &str,
+    font: &FontId,
+    default: Color32,
+) -> Color32 {
     let bytes = text.as_bytes();
     let mut color = default;
     let mut start = 0;
@@ -51,7 +63,7 @@ pub fn pob_text(text: &str, size: f32, default: Color32) -> LayoutJob {
             job.append(
                 &text[start..end],
                 0.0,
-                TextFormat::simple(FontId::proportional(size), color),
+                TextFormat::simple(font.clone(), color),
             );
         }
     };
@@ -59,7 +71,7 @@ pub fn pob_text(text: &str, size: f32, default: Color32) -> LayoutJob {
         if bytes[i] == b'^'
             && let Some((new_color, len)) = parse_code(&bytes[i..])
         {
-            flush(&mut job, start, i, color);
+            flush(job, start, i, color);
             color = new_color;
             i += len;
             start = i;
@@ -67,8 +79,32 @@ pub fn pob_text(text: &str, size: f32, default: Color32) -> LayoutJob {
             i += 1;
         }
     }
-    flush(&mut job, start, bytes.len(), color);
-    job
+    flush(job, start, bytes.len(), color);
+    color
+}
+
+/// PoB's `StripEscapes` (HeadlessWrapper.lua:75-77): drops every `^<digit>`, then every
+/// `^x` and six hex digits (lowercase "x" only, unlike the drawing parser)
+pub fn strip_escapes(text: &str) -> String {
+    let pass = |text: &str, len: usize, is_code: &dyn Fn(&[u8]) -> bool| {
+        let bytes = text.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'^' && bytes.len() - i >= len && is_code(&bytes[i + 1..i + len]) {
+                i += len;
+            } else {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+        // only ASCII bytes go, so the rest stays UTF-8
+        String::from_utf8(out).unwrap_or_default()
+    };
+    let digits = pass(text, 2, &|c| c[0].is_ascii_digit());
+    pass(&digits, 8, &|c| {
+        c[0] == b'x' && c[1..].iter().all(u8::is_ascii_hexdigit)
+    })
 }
 
 /// The colour a PoB code such as `^xAABBCC` selects; `default` for anything else.
@@ -144,6 +180,16 @@ mod tests {
                 (job.text[range].to_string(), s.format.color)
             })
             .collect()
+    }
+
+    #[test]
+    fn strip_escapes_is_pobs() {
+        assert_eq!(
+            strip_escapes("^1+5 to ^xAABBCCStr^XAABBCC"),
+            "+5 to Str^XAABBCC"
+        );
+        assert_eq!(strip_escapes("^^12"), "^2");
+        assert_eq!(strip_escapes("caf\u{e9}^7!^"), "caf\u{e9}!^");
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! (R30), Ctrl+click on the item list, Shift's child tooltips (R34), the stacked range sliders
 //! (`showAllItemAffixes`) and the Config tab's Mod Browser (R28).
 
-use super::items::{FIND_NO_SLIDER, NoSlider, display, gear_sessions, items_round_trip, on_both};
+use super::items::{FIND_NO_SLIDER, NoSlider, display, gear_sessions, on_both, round_trip_checks};
 use super::items_harness::{
     ItemsAction, ItemsCheckpoint, assert_same, checkpoints, json, json_of, open_popups,
     run_items_recipe, strip_nulls, upstream_json, upstream_with_items_lib,
@@ -143,12 +143,8 @@ fn ring3_graft_match_pob() {
         "no such item",
     );
     assert_eq!(snapshot_dir(&s.user), files, "a file was written");
-}
-
-#[test]
-#[ignore = "needs the pinned PoB install"]
-fn items_round_trip_ring3_graft() {
-    items_round_trip("ring3_graft");
+    // the round trip on the same replay (items_round_trip_ring3_graft was a replay of its own)
+    round_trip_checks("ring3_graft", &recipe, &mut s);
 }
 
 // ---- Shift's child tooltips (R34) ----

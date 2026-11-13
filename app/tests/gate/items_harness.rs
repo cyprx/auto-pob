@@ -100,10 +100,52 @@ pub(crate) fn strip_nulls(value: serde_json::Value) -> serde_json::Value {
 
 /// The build `items/<name>.lua` prepares, saved as XML. The script runs in upstream PoB on its
 /// base fixture and sets `setup_xml`.
+///
+/// Many tests start from the same setup, and each runs in a process of its own, so the XML is
+/// kept on disk (under the target folder) by everything that makes it: the script, its base
+/// fixture, the fixture libraries upstream loads, the pinned PoB folder and this gate binary.
+/// A change to any of them makes it again. Upstream PoB then loads the same XML as before.
 pub(crate) fn setup_xml(name: &str) -> String {
     let source = fs::read_to_string(fixtures_dir().join(format!("items/{name}.lua"))).unwrap();
     let base = recipe_setting(&source, "base").unwrap_or_else(|| panic!("{name}: no base"));
-    let lua = upstream_with_items_lib(&fixtures_dir().join(format!("{base}.xml")), &base);
+    let base_xml = fs::read(fixtures_dir().join(format!("{base}.xml"))).unwrap();
+    let cached = setup_cache_path(name, &source, &base_xml);
+    if let Ok(xml) = fs::read_to_string(&cached) {
+        return xml;
+    }
+    let xml = make_setup_xml(name, &source, &base);
+    // a whole file or none: parallel test processes may write the same setup at once
+    let partial = cached.with_extension(format!("{}.part", std::process::id()));
+    if fs::write(&partial, &xml).is_ok() && fs::rename(&partial, &cached).is_err() {
+        let _ = fs::remove_file(&partial);
+    }
+    xml
+}
+
+/// Where `setup_xml` keeps `name`'s setup, named by a hash of everything that makes it
+fn setup_cache_path(name: &str, source: &str, base_xml: &[u8]) -> std::path::PathBuf {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    source.hash(&mut hash);
+    base_xml.hash(&mut hash);
+    for lib in ["items_lib.lua", "popup_lib.lua", "tree_lib.lua"] {
+        fs::read(fixtures_dir().join(lib)).unwrap().hash(&mut hash);
+    }
+    pob_dir().hash(&mut hash);
+    Game::Poe1.pob_version().hash(&mut hash);
+    // the gate binary carries our upstream start-up (natives, bootstrap): a rebuild is a change
+    let exe = std::env::current_exe().unwrap();
+    exe.hash(&mut hash);
+    let meta = fs::metadata(&exe).unwrap();
+    meta.len().hash(&mut hash);
+    meta.modified().unwrap().hash(&mut hash);
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("gate-setups");
+    fs::create_dir_all(&dir).unwrap();
+    dir.join(format!("{name}-{:016x}.xml", hash.finish()))
+}
+
+fn make_setup_xml(name: &str, source: &str, base: &str) -> String {
+    let lua = upstream_with_items_lib(&fixtures_dir().join(format!("{base}.xml")), base);
     lua.load(source)
         .set_name(format!("={name}"))
         .exec()

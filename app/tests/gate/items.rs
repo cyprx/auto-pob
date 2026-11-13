@@ -2,8 +2,8 @@
 //! Included from `gate.rs`, whose helpers it reaches through `super::`.
 
 use super::items_harness::{
-    ItemsCheckpoint, assert_same, check_items_recipe, checkpoints, json, json_of, open_popups,
-    raws_and_jewels, run_items_recipe, setup_xml, strip_nulls, upstream_json,
+    ItemsCheckpoint, ItemsRecipe, assert_same, check_items_recipe, checkpoints, json, json_of,
+    open_popups, raws_and_jewels, run_items_recipe, setup_xml, strip_nulls, upstream_json,
     upstream_with_items_lib,
 };
 use super::{Session, fixtures, lock, lua_value, snapshot_dir};
@@ -1799,6 +1799,12 @@ fn a_conditional_cancel_only_cancels_the_item_it_names() {
 pub(crate) fn items_round_trip(name: &str) {
     let _guard = lock();
     let (recipe, mut s) = run_items_recipe(name);
+    round_trip_checks(name, &recipe, &mut s);
+}
+
+/// `items_round_trip`'s checks on a session where `recipe` ended, for a test that also checks
+/// that session in other ways (one replay of the recipe for both)
+pub(crate) fn round_trip_checks(name: &str, recipe: &ItemsRecipe, s: &mut Session) {
     s.run(Command::Save).unwrap();
     let saved = s.backend.build_view().unwrap().path.expect("a saved build");
     // what upstream PoB makes of the file we wrote

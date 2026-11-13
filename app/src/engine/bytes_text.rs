@@ -24,6 +24,27 @@ fn escape(b: u8) -> char {
     char::from_u32(FIRST + u32::from(b) - 0x80).expect("a private-use character")
 }
 
+/// The Windows-1252 character of one of PoB's bytes (0x80..=0xFF), the stated source of such
+/// bytes; U+FFFD for the five it leaves undefined
+pub fn windows_1252(b: u8) -> char {
+    const LOW: [char; 32] = [
+        '\u{20AC}', '\u{FFFD}', '\u{201A}', '\u{0192}', '\u{201E}', '\u{2026}', '\u{2020}',
+        '\u{2021}', '\u{02C6}', '\u{2030}', '\u{0160}', '\u{2039}', '\u{0152}', '\u{FFFD}',
+        '\u{017D}', '\u{FFFD}', '\u{FFFD}', '\u{2018}', '\u{2019}', '\u{201C}', '\u{201D}',
+        '\u{2022}', '\u{2013}', '\u{2014}', '\u{02DC}', '\u{2122}', '\u{0161}', '\u{203A}',
+        '\u{0153}', '\u{FFFD}', '\u{017E}', '\u{0178}',
+    ];
+    match b {
+        0x80..=0x9F => LOW[usize::from(b - 0x80)],
+        _ => char::from(b),
+    }
+}
+
+/// Every escape character with the byte it stands for
+pub fn escapes() -> impl Iterator<Item = (char, u8)> {
+    (0x80..=0xFFu8).map(|b| (escape(b), b))
+}
+
 /// Whether `c` stands for one of PoB's bytes
 pub fn is_escape(c: char) -> bool {
     (FIRST..=LAST).contains(&(c as u32))

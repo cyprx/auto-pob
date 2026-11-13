@@ -5144,6 +5144,14 @@ mod tests {
             edit < switch,
             "the edit went out after the switch: {sent:?}"
         );
+        // once: the blur after the switch sends nothing more
+        assert_eq!(
+            sent.iter()
+                .filter(|c| c.starts_with("SetGroupLabel"))
+                .count(),
+            1,
+            "{sent:?}"
+        );
         assert!(!app.skills.has_pending(), "the edit is still waiting");
         // the box let go: typing on doesn't edit the new set's group with the old text
         assert!(!ctx.text_edit_focused(), "the box kept the keyboard");

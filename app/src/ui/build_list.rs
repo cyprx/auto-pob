@@ -225,9 +225,9 @@ fn build_name_is_free(path: &std::path::Path, original: &str, text: &str) -> boo
 
 /// What PoB's search box keeps.
 /// What the search box holds after the edit that turned `before` into `text`, as PoB's
-fn clean_search(before: &str, text: &mut String, pasted: bool) {
+fn clean_search(before: &str, text: &mut String, pasted: bool, sel: name_box::Selection) {
     let keeps = |c: char| !c.is_control() && c != '(' && c != ')';
-    *text = name_box::spliced_by(before, text, keeps, SEARCH_LIMIT, pasted);
+    *text = name_box::spliced_at(before, text, sel, keeps, SEARCH_LIMIT, pasted);
 }
 
 /// The folders an entry can be moved to or copied to: every folder of the Builds tree except
@@ -486,6 +486,7 @@ impl BuildListUi {
         ui.horizontal(|ui| {
             let before = self.filter_text.clone();
             let pasted = name_box::pasted(ui);
+            let sel = name_box::selection(ui.ctx(), self.search_id);
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.filter_text)
                     .id(self.search_id)
@@ -500,8 +501,8 @@ impl BuildListUi {
             );
             if edit.changed() {
                 let raw = self.filter_text.clone();
-                clean_search(&before, &mut self.filter_text, pasted);
-                name_box::place_caret(ui.ctx(), edit.id, &before, &raw, &self.filter_text);
+                clean_search(&before, &mut self.filter_text, pasted, sel);
+                name_box::place_caret(ui.ctx(), edit.id, &before, &raw, &self.filter_text, sel);
                 self.filter_edit = Some(now);
             }
             if !self.filter_text.is_empty() {

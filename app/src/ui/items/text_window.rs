@@ -139,6 +139,8 @@ pub fn show(
         });
         let before = window.text.clone();
         let pasted = crate::ui::name_box::pasted(ui);
+        let id = ui.make_persistent_id("items_text_edit");
+        let sel = crate::ui::name_box::selection(ctx, id);
         let edit = ui.add(
             egui::TextEdit::multiline(&mut window.text)
                 .id_salt("items_text_edit")
@@ -157,8 +159,10 @@ pub fn show(
                 usize::MAX,
                 pasted,
                 Some(crate::ui::name_box::sanitise_text),
+                crate::ui::name_box::own((id, sel), edit.id),
             );
-            crate::ui::name_box::place_caret(ctx, edit.id, &before, &raw, &window.text);
+            let sel = crate::ui::name_box::own((id, sel), edit.id);
+            crate::ui::name_box::place_caret(ctx, edit.id, &before, &raw, &window.text, sel);
         }
         ui.horizontal(|ui| {
             // "Create" when there is no item yet; enabled while PoB reads the text as an item,

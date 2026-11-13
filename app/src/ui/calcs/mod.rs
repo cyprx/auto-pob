@@ -377,6 +377,7 @@ impl CalcsUi {
         }
         let before = buf.clone();
         let pasted = crate::ui::name_box::pasted(ui);
+        let sel = crate::ui::name_box::selection(ui.ctx(), id);
         let response = ui.add(
             egui::TextEdit::singleline(buf)
                 .id(id)
@@ -386,8 +387,15 @@ impl CalcsUi {
         // PoB's box drops control characters and takes 100 bytes (CalcsTab.lua:35)
         if response.changed() {
             let raw = std::mem::take(buf);
-            *buf = crate::ui::name_box::spliced_by(&before, &raw, |c| !c.is_control(), 100, pasted);
-            crate::ui::name_box::place_caret(ui.ctx(), id, &before, &raw, buf);
+            *buf = crate::ui::name_box::spliced_at(
+                &before,
+                &raw,
+                sel,
+                |c| !c.is_control(),
+                100,
+                pasted,
+            );
+            crate::ui::name_box::place_caret(ui.ctx(), id, &before, &raw, buf, sel);
         }
         crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &response, buf);
         self.rects.note(&response, || "search".into());

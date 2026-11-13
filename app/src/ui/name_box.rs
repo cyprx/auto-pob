@@ -144,6 +144,52 @@ fn edit_span(before: &str, raw: &str) -> (usize, usize) {
     (head, tail)
 }
 
+/// A box's selection as its last frame left it: read before the box runs, it is what an edit
+/// this frame replaces (PoB's `sel` and `caret`, EditControl.lua:140-172)
+pub type Selection = Option<egui::text::CCursorRange>;
+
+/// The selection of the text box `id`, read before the box runs this frame
+pub fn selection(ctx: &egui::Context, id: egui::Id) -> Selection {
+    egui::TextEdit::load_state(ctx, id).and_then(|state| state.cursor.char_range())
+}
+
+/// The selection of the box `ui` adds next under an auto id, read before it runs; `own` keeps
+/// it only if the box did take that id
+pub fn next_selection(ui: &egui::Ui) -> (egui::Id, Selection) {
+    let id = ui.next_auto_id();
+    (id, selection(ui.ctx(), id))
+}
+
+/// The selection `next_selection` read, if the box drawn is the one it read it for
+pub fn own(next: (egui::Id, Selection), id: egui::Id) -> Selection {
+    if next.0 == id { next.1 } else { None }
+}
+
+/// `edit_span` from the box's own selection: the edit replaced the selected text (or went in
+/// at the caret) when `raw` keeps what lies outside it; anything else, such as a Delete or an
+/// undo, falls back to the text diff
+fn edit_span_at(before: &str, raw: &str, sel: Selection) -> (usize, usize) {
+    let byte = |chars: usize| before.char_indices().nth(chars).map(|(i, _)| i);
+    if let Some(range) = sel {
+        let [lo, hi] = range.sorted_cursors();
+        let count = before.chars().count();
+        let (lo, hi) = (lo.index.0, hi.index.0);
+        if hi <= count {
+            let start = byte(lo).unwrap_or(before.len());
+            let end = byte(hi).unwrap_or(before.len());
+            let tail = before.len() - end;
+            if raw.len() > start + tail
+                && raw.starts_with(&before[..start])
+                && raw.ends_with(&before[end..])
+                && raw.is_char_boundary(raw.len() - tail)
+            {
+                return (start, tail);
+            }
+        }
+    }
+    edit_span(before, raw)
+}
+
 /// Where PoB's caret sits, in characters, when egui left it at `caret` in `raw` and `spliced`
 /// made the box hold `result`. The edit ends at egui's caret, so the characters the filter
 /// dropped or added all lie before it: PoB's caret is right after what went in, or where it
@@ -171,21 +217,31 @@ pub fn kept_selection(before: &str, raw: &str, result: &str) -> Option<(usize, u
 
 /// Puts the caret of the text box `id` where PoB's would be after `spliced` turned egui's
 /// edit of `before`, `raw`, into `result`. egui leaves it after the raw edit, which a filter
-/// that drops or widens characters, or a refused edit, moved; a refused edit over a selection
-/// keeps the selection.
-pub fn place_caret(ctx: &egui::Context, id: egui::Id, before: &str, raw: &str, result: &str) {
+/// that drops or widens characters, or a refused edit, moved. A refused edit leaves the box as
+/// it was: `sel`, the selection read before the box ran, comes back as it was, direction and
+/// all (EditControl.lua:140-152).
+pub fn place_caret(
+    ctx: &egui::Context,
+    id: egui::Id,
+    before: &str,
+    raw: &str,
+    result: &str,
+    sel: Selection,
+) {
     if raw == result {
         return;
     }
     if let Some(mut state) = egui::TextEdit::load_state(ctx, id)
         && let Some(range) = state.cursor.char_range()
     {
-        let range = match kept_selection(before, raw, result) {
-            Some((start, end)) => egui::text::CCursorRange::two(
+        let refused = result == before;
+        let range = match (refused, sel, kept_selection(before, raw, result)) {
+            (true, Some(sel), _) => sel,
+            (_, _, Some((start, end))) => egui::text::CCursorRange::two(
                 egui::text::CCursor::new(start),
                 egui::text::CCursor::new(end),
             ),
-            None => egui::text::CCursorRange::one(egui::text::CCursor::new(shifted_caret(
+            _ => egui::text::CCursorRange::one(egui::text::CCursor::new(shifted_caret(
                 range.primary.index.0,
                 raw,
                 result,
@@ -217,11 +273,24 @@ pub fn spliced_by(
     limit: usize,
     pasted: bool,
 ) -> String {
-    spliced_with(before, raw, keeps, limit, pasted, None)
+    spliced_with(before, raw, keeps, limit, pasted, None, None)
+}
+
+/// `spliced_by` knowing the box's selection before the edit (`selection`), so a paste over it
+/// is PoB's `ReplaceSel` and one at the caret its `Insert`, whatever the texts look like
+pub fn spliced_at(
+    before: &str,
+    raw: &str,
+    sel: Selection,
+    keeps: impl Fn(char) -> bool,
+    limit: usize,
+    pasted: bool,
+) -> String {
+    spliced_with(before, raw, keeps, limit, pasted, None, sel)
 }
 
 /// `spliced_by` for a box with a `pasteFilter`, which a paste goes through before anything
-/// else (EditControl.lua:530)
+/// else (EditControl.lua:530), and the box's selection before the edit, if known
 pub fn spliced_with(
     before: &str,
     raw: &str,
@@ -229,8 +298,9 @@ pub fn spliced_with(
     limit: usize,
     pasted: bool,
     paste_filter: Option<fn(&str) -> String>,
+    sel: Selection,
 ) -> String {
-    let (head, tail) = edit_span(before, raw);
+    let (head, tail) = edit_span_at(before, raw, sel);
     let (front, rest) = raw.split_at(head);
     let (inserted, back) = rest.split_at(rest.len() - tail);
     if inserted.is_empty() {
@@ -292,15 +362,18 @@ pub fn edit(
 ) -> (egui::Response, bool) {
     let before = text.clone();
     let pasted = pasted(ui);
+    // the box takes the next auto id unless `build` gives it one
+    let next = next_selection(ui);
     let response = ui.add(build(egui::TextEdit::singleline(text)));
+    let sel = own(next, response.id);
     crate::widgets::url_click::open_on_ctrl_click(ui, &response, text);
     crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &response, text);
     let mut changed = response.changed();
     if changed {
         let same = *text == before;
         let raw = std::mem::take(text);
-        *text = spliced(&before, &raw, filter, limit, pasted);
-        place_caret(ui.ctx(), response.id, &before, &raw, text);
+        *text = spliced_at(&before, &raw, sel, |c| filter.keeps(c), limit, pasted);
+        place_caret(ui.ctx(), response.id, &before, &raw, text, sel);
         // typing over the text with itself is an edit; a character the box drops is none
         changed = same || *text != before;
     }
@@ -351,12 +424,14 @@ mod tests {
         assert_eq!(kept_selection("abcd", "axd", "axd"), None);
     }
 
-    /// Typed into a build name box: "/" over a selection is refused and the selection stays,
-    /// so the next key replaces it (EditControl.lua:140-152)
-    #[test]
-    fn a_refused_key_keeps_the_selection_in_the_box() {
+    /// A build name box holding "abcd" with `sel` selected gets `events`, then "x": what it
+    /// holds after each, and the selection the refused edit left
+    fn name_box_run(
+        sel: (usize, usize),
+        events: Vec<egui::Event>,
+    ) -> (String, String, Option<egui::text::CCursorRange>) {
         let ctx = egui::Context::default();
-        let id = egui::Id::NULL.with("name_box_test");
+        let id = std::cell::Cell::new(egui::Id::NULL);
         let mut text = String::from("abcd");
         let run = |events: Vec<egui::Event>, text: &mut String| {
             let input = egui::RawInput {
@@ -368,24 +443,50 @@ mod tests {
                 ..Default::default()
             };
             let out = ctx.run_ui(input, |ui| {
-                edit(ui, text, Filter::Path, NAME_LIMIT, |e| e.id(id));
+                id.set(edit(ui, text, Filter::Path, NAME_LIMIT, |e| e).0.id);
             });
             out.drop_without_applying_deltas();
         };
-        ctx.memory_mut(|m| m.request_focus(id));
         run(vec![], &mut text);
-        let mut state = egui::TextEdit::load_state(&ctx, id).unwrap_or_default();
+        ctx.memory_mut(|m| m.request_focus(id.get()));
+        run(vec![], &mut text);
+        let mut state = egui::TextEdit::load_state(&ctx, id.get()).unwrap_or_default();
         state
             .cursor
             .set_char_range(Some(egui::text::CCursorRange::two(
-                egui::text::CCursor::new(1),
-                egui::text::CCursor::new(3),
+                egui::text::CCursor::new(sel.0),
+                egui::text::CCursor::new(sel.1),
             )));
-        state.store(&ctx, id);
-        run(vec![egui::Event::Text("/".into())], &mut text);
-        assert_eq!(text, "abcd");
+        state.store(&ctx, id.get());
+        run(events, &mut text);
+        let after = text.clone();
+        let kept = selection(&ctx, id.get());
         run(vec![egui::Event::Text("x".into())], &mut text);
-        assert_eq!(text, "axd");
+        (after, text, kept)
+    }
+
+    /// PoB's ReplaceSel refuses a key or a paste its filter drops a character of, and keeps
+    /// the selection, so the next key replaces it (EditControl.lua:140-152). The selection is
+    /// the box's own, not guessed from the texts: a paste that starts or ends like the
+    /// selected text is still ReplaceSel
+    #[test]
+    fn a_refused_edit_keeps_the_selection_in_the_box() {
+        let text = |t: &str| vec![egui::Event::Text(t.into())];
+        let paste = |t: &str| vec![egui::Event::Paste(t.into())];
+        for (what, events) in [
+            ("key", text("/")),
+            ("paste b/", paste("b/")),
+            ("paste bc/", paste("bc/")),
+            ("paste bc/x", paste("bc/x")),
+        ] {
+            let (after, next, _) = name_box_run((1, 3), events);
+            assert_eq!(after, "abcd", "{what}");
+            assert_eq!(next, "axd", "{what}");
+        }
+        // a selection made right to left comes back the same way round
+        let (_, _, kept) = name_box_run((3, 1), paste("bc/"));
+        let kept = kept.expect("no selection");
+        assert_eq!((kept.primary.index.0, kept.secondary.index.0), (1, 3));
     }
 
     #[test]

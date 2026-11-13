@@ -514,18 +514,21 @@ impl ConfigUi {
             ui.separator();
             let before = self.search.clone();
             let pasted = name_box::pasted(ui);
+            let next = name_box::next_selection(ui);
             let search = ui.add(
                 egui::TextEdit::singleline(&mut self.search)
                     .hint_text("Search options")
                     .desired_width(160.0),
             );
+            let sel = name_box::own(next, search.id);
             self.note("search".into(), &search);
             crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &search, &self.search);
             // PoB's box drops control characters and takes 100 bytes (ConfigTab.lua:165)
             if search.changed() {
                 let raw = std::mem::take(&mut self.search);
-                self.search = name_box::spliced_by(&before, &raw, |c| !c.is_control(), 100, pasted);
-                name_box::place_caret(ui.ctx(), search.id, &before, &raw, &self.search);
+                let keeps = |c: char| !c.is_control();
+                self.search = name_box::spliced_at(&before, &raw, sel, keeps, 100, pasted);
+                name_box::place_caret(ui.ctx(), search.id, &before, &raw, &self.search, sel);
             }
             if std::mem::take(&mut self.focus_search) {
                 search.request_focus();
@@ -1024,6 +1027,7 @@ impl ConfigUi {
             .unwrap_or_else(|| current.to_owned());
         let before = text.clone();
         let pasted = name_box::pasted(ui);
+        let next = name_box::next_selection(ui);
         let edit = match style {
             FieldStyle::Single { width } => {
                 egui::TextEdit::singleline(&mut text).desired_width(width)
@@ -1096,8 +1100,9 @@ impl ConfigUi {
         if changed && let Some(accept) = accept {
             // the box's own filter and limit, for what an edit inserts
             let raw = std::mem::take(&mut text);
-            text = name_box::spliced_by(&before, &raw, accept.keeps, accept.limit, pasted);
-            name_box::place_caret(ui.ctx(), response.id, &before, &raw, &text);
+            let sel = name_box::own(next, response.id);
+            text = name_box::spliced_at(&before, &raw, sel, accept.keeps, accept.limit, pasted);
+            name_box::place_caret(ui.ctx(), response.id, &before, &raw, &text, sel);
             // typing over the text with itself is an edit; one the box drops is none
             changed = text != before || raw == before;
         }

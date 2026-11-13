@@ -6,7 +6,8 @@ use crate::theme;
 use eframe::egui::{self, Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, Vec2};
 
 pub const ALLOCATED: Color32 = Color32::from_rgb(230, 185, 80);
-pub const SEARCH_RING: Color32 = Color32::from_rgb(255, 60, 200);
+/// PoB tints its search ring red: its `rgbColor` is never set (PassiveTreeView.lua:1013-1014)
+pub const SEARCH_RING: Color32 = Color32::from_rgb(255, 0, 0);
 pub const JEWEL_RING: Color32 = Color32::from_rgb(120, 190, 230);
 
 /// PoB's heat strength: `(max(value, 0) / max * 1.5) ^ 0.5` (PassiveTreeView.lua:911),

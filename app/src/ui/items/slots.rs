@@ -342,11 +342,14 @@ impl ItemsUi {
                 }
                 // PoB blanks a closed slot's tooltip while another control of the tab is
                 // selected, a list excepted (ItemSlotControl.lua:47-52): a box with the
-                // keyboard or another dropped list
+                // keyboard or another dropped list. A dropped list of Build's is Build's
+                // selected control, not the tab's (ItemSlotControl.lua:51 reads only
+                // itemsTab.selControl)
                 let own_dropped =
                     egui::Popup::is_id_open(ui.ctx(), combo.inner.response.id.with("popup"));
-                let blank =
-                    !own_dropped && (self.tab_box_selected || egui::Popup::is_any_open(ui.ctx()));
+                let tab_dropped = egui::Popup::is_any_open(ui.ctx())
+                    && !crate::widgets::scroll_step::build_box_typing(ui.ctx());
+                let blank = !own_dropped && (self.tab_box_selected || tab_dropped);
                 if slot.selected != 0 && !blank {
                     self.note_hover(
                         &combo.inner.response,

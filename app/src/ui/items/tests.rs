@@ -598,6 +598,56 @@ fn a_slot_tooltip_blanks_while_a_box_has_the_keyboard() {
     assert!(asked(&mut h), "a selected list blanked the tooltip");
 }
 
+/// A dropped list of Build's (the sidebar's main skill) is Build's selected control, not the
+/// tab's, so it leaves the slot tooltips alone (ItemSlotControl.lua:51); one of the tab's own
+/// blanks them
+#[test]
+fn a_slot_tooltip_stays_while_a_build_list_is_dropped() {
+    use crate::widgets::scroll_step::{FocusScope, set_scope};
+    let pos = |h: &Harness| h.ui.rect("slot_combo_Body Armour").center();
+    let asked = |h: &mut Harness, events: Vec<Event>| {
+        let build = FocusScope {
+            typing: true,
+            build_box: true,
+            ..FocusScope::default()
+        };
+        let mut queries = Vec::new();
+        for events in [events, vec![], vec![]] {
+            // the app reads Build's dropped list into the scope as each frame begins, and
+            // the sidebar keeps its popup open
+            set_scope(&h.ctx, build);
+            egui::Popup::open_id(
+                &h.ctx,
+                egui::Id::NULL.with("sidebar_main_skill").with("popup"),
+            );
+            queries.extend(h.frame(events).queries);
+        }
+        debug(&queries)
+            .iter()
+            .any(|q| q.contains("slot: Some(\"Body Armour\")"))
+    };
+    let mut h = Harness::new(sample());
+    let at = pos(&h);
+    assert!(
+        asked(&mut h, vec![Event::PointerMoved(at)]),
+        "a dropped Build list blanked the slot tooltip"
+    );
+    // the tab's own dropped list blanks it
+    let mut h = Harness::new(sample());
+    h.click("filter");
+    assert!(egui::Popup::is_any_open(&h.ctx));
+    let at = pos(&h);
+    h.frame(vec![Event::PointerMoved(at)]);
+    let mut queries = h.frame(vec![]).queries;
+    queries.extend(h.frame(vec![]).queries);
+    assert!(
+        !debug(&queries)
+            .iter()
+            .any(|q| q.contains("slot: Some(\"Body Armour\")")),
+        "the tab's dropped list left the slot tooltip"
+    );
+}
+
 #[test]
 fn stale_item_tooltip_reply_ignored() {
     let mut h = Harness::new(sample());

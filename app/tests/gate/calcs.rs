@@ -597,6 +597,35 @@ fn breakdowns_match_pob() {
     assert!(n > 0, "minion Life has no sections");
 }
 
+/// A breakdown row's source tooltip for a ring, an amulet or a jewel: PoB's item tooltip has
+/// a header (`tooltipHeader`, ItemsTab.lua:4374), under which its `AddSeparator` drops a second
+/// separator in a row (Tooltip.lua:116-123). Ours showed two.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn breakdown_item_tooltips_match_pob() {
+    let _guard = lock();
+    let (mut s, lua) = both("attack");
+    let ring = "Rarity: RARE\nGate Loop\nTwo-Stone Ring\nImplicits: 1\n\
+                +16% to Fire and Cold Resistances\n+60 to maximum Life\n+40% to Fire Resistance";
+    s.run(Command::PasteItem { text: ring.into() }).unwrap();
+    s.run(Command::SaveDisplayItem).unwrap();
+    lua.globals().set("RING", ring).unwrap();
+    lua.load(
+        "build.itemsTab:AddItem(new('Item', RING)) build.itemsTab:PopulateSlots() \
+         build.buildFlag = true runCallback('OnFrame')",
+    )
+    .exec()
+    .unwrap();
+    let cell = find_cell(&lua, "FireResist");
+    assert!(assert_breakdown_matches(&mut s, &lua, &cell, "FireResist") > 0);
+    let shown = s.backend.breakdown_view(&cell).unwrap();
+    let from_ring = shown.sections.iter().any(|section| {
+        matches!(section, BreakdownSection::Table { rows, .. }
+            if rows.iter().any(|r| r.cells.values().any(|v| v.contains("Gate Loop"))))
+    });
+    assert!(from_ring, "no row from the ring");
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn breakdown_of_vanished_cell_is_empty() {

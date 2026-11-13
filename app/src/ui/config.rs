@@ -740,18 +740,10 @@ impl ConfigUi {
                         } else {
                             set.title.clone()
                         };
-                        let fill = if selected == Some(set.id) {
-                            ui.visuals().selection.bg_fill
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        };
-                        egui::Frame::NONE
-                            .fill(fill)
-                            .inner_margin(2.0)
-                            .show(ui, |ui| {
-                                ui.set_min_width(220.0);
-                                ui.add(egui::Label::new(label).selectable(false));
-                            });
+                        crate::theme::row_frame(ui, selected == Some(set.id), |ui| {
+                            ui.set_min_width(220.0);
+                            ui.add(egui::Label::new(label).selectable(false));
+                        });
                     },
                 );
                 // a click on a row selects the list; a click anywhere else, but in the questions

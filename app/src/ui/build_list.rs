@@ -214,9 +214,11 @@ fn sort_label(sort: BuildSort) -> &'static str {
 /// Whether PoB's Save is on for a build named `text` in the folder of `path`, whose name is
 /// `original`: a different name needs no build of that name on disk, the same name in another
 /// case needs only the case to differ (BuildListControl.lua:99-109)
+/// The name is the list's spelling: escapes stand for the bytes of a name that isn't UTF-8.
 fn build_name_is_free(path: &std::path::Path, original: &str, text: &str) -> bool {
     if !text.eq_ignore_ascii_case(original) {
-        let file = path.with_file_name(format!("{text}.xml"));
+        let name = crate::engine::bytes_text::path_from_escaped(&format!("{text}.xml"));
+        let file = path.with_file_name(name);
         !file.exists()
     } else {
         text != original
@@ -1404,6 +1406,20 @@ mod tests {
             panic!("no name box");
         };
         assert_eq!(text, "axb");
+    }
+
+    /// The Save of a Rename or Copy box looks for a build of the typed name as the list
+    /// spells it: escapes are the bytes of a name that isn't UTF-8, so such a build is seen
+    #[test]
+    fn a_taken_name_that_isnt_utf8_is_seen() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = crate::test_dir::TestDir::new("bl-latin-free");
+        let file = |b: &[u8]| dir.join(std::ffi::OsStr::from_bytes(b));
+        std::fs::write(file(b"caf\xE9.xml"), "a").unwrap();
+        std::fs::write(file(b"caf\xE9 2.xml"), "b").unwrap();
+        let path = file(b"caf\xE9.xml");
+        assert!(!build_name_is_free(&path, "caf\u{F7E9}", "caf\u{F7E9} 2"));
+        assert!(build_name_is_free(&path, "caf\u{F7E9}", "caf\u{F7E9} 3"));
     }
 
     /// Each Rename box is a new `EditControl` in PoB, with no undo of its own: Ctrl+Z in the

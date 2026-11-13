@@ -1084,7 +1084,12 @@ impl ConfigUi {
         } else if self.field_focus.as_deref() == Some(key.as_str()) {
             self.field_focus = None;
         }
-        if !response.has_focus() && self.undo.entry(key.clone()).or_default().follow(current) {
+        // judged once the engine caught up: while it is behind the field shows its draft, and
+        // the views that come are of edits still in flight
+        if !response.has_focus()
+            && !behind
+            && self.undo.entry(key.clone()).or_default().follow(current)
+        {
             crate::widgets::edit_box::forget_undo(ui.ctx(), response.id);
         }
         crate::widgets::url_click::open_on_ctrl_click(ui, &response, &text);
@@ -1315,6 +1320,74 @@ mod tests {
         }
     }
 
+    /// Typing faster than the engine, then leaving the box: the views of the first keys come
+    /// while it is still behind, then the last key's. Each is an echo of the box's own edit,
+    /// so Ctrl+Z still takes the edit back, as in PoB
+    #[test]
+    fn undo_survives_echoes_that_come_while_typing_faster_than_the_engine() {
+        let mut h = Harness::new();
+        let mut note = option("Note");
+        note.var = "note".into();
+        note.kind = ConfigKind::Text;
+        note.value = Some(serde_json::json!("hi"));
+        h.view.sections[0].options.push(note);
+        h.frame(vec![]);
+        h.frame(vec![]);
+        let set = |h: &mut Harness, text: &str| {
+            h.view.sections[0].options[1].value = Some(serde_json::json!(text));
+        };
+        h.behind = true;
+        h.click("field:note");
+        h.frame(vec![Event::Text("a".into())]);
+        h.time += 2.0;
+        h.frame(vec![Event::Text("b".into())]);
+        h.time += 2.0;
+        h.frame(vec![]);
+        // a click on nothing: the box lets go
+        let away = Pos2::new(1150.0, 780.0);
+        for events in [
+            vec![Event::PointerMoved(away)],
+            vec![Event::PointerButton {
+                pos: away,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            }],
+            vec![Event::PointerButton {
+                pos: away,
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            }],
+            vec![],
+        ] {
+            h.frame(events);
+        }
+        // the engine answers in order: "hia" while still behind, then "hiab"
+        set(&mut h, "hia");
+        h.frame(vec![]);
+        set(&mut h, "hiab");
+        h.behind = false;
+        h.frame(vec![]);
+        h.click("field:note");
+        let mut sent = vec![];
+        for _ in 0..3 {
+            h.time += 2.0;
+            sent.extend(h.frame(vec![Event::Key {
+                key: egui::Key::Z,
+                physical_key: Some(egui::Key::Z),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            }]));
+        }
+        assert!(
+            sent.iter()
+                .any(|c| matches!(c, Command::SetConfig { var, .. } if var == "note")),
+            "Ctrl+Z took nothing back: {sent:?}"
+        );
+    }
+
     /// While it isn't selected, the custom modifier box shows each line in PoB's colour for it:
     /// MAGIC for a line PoB reads as a modifier, UNSUPPORTED for one it can't
     /// (ConfigTab.lua:78-86); selected, it is plain text
@@ -1477,6 +1550,8 @@ mod tests {
         view: ConfigView,
         ctx: egui::Context,
         time: f64,
+        /// The engine hasn't answered every command yet
+        behind: bool,
     }
 
     impl Harness {
@@ -1514,6 +1589,7 @@ mod tests {
                 view,
                 ctx: egui::Context::default(),
                 time: 1.0,
+                behind: false,
             };
             h.frame(vec![]);
             h.frame(vec![]);
@@ -1533,9 +1609,10 @@ mod tests {
             };
             let mut out = vec![];
             let view = self.view.clone();
+            let behind = self.behind;
             let output = self.ctx.run_ui(input, |ui| {
                 // egui may run a frame twice; each pass's output counts
-                out.extend(self.ui.show(ui, &view, false));
+                out.extend(self.ui.show(ui, &view, behind));
             });
             output.drop_without_applying_deltas();
             out

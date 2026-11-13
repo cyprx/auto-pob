@@ -689,28 +689,16 @@ mod tests {
 
     /// An Abyss timeless jewel is 74 MB inflated, read the first time a search or the tree needs
     /// it. Unoptimised, flate2's backend took about 2.1 s for it (a stall of the search's first
-    /// step); the dev profile optimises it as the release build does, about 0.25 s.
+    /// step); the dev profile optimises it as the release build does, about 0.25 s. Checked in
+    /// the workspace's Cargo.toml, not by timing, which a loaded machine makes flaky.
     #[test]
     fn inflate_is_optimised_in_every_build() {
-        use std::io::Write;
-        // 24 MB of mod-like bytes that compress about as well as the jewel data (2.5:1)
-        let mut raw = Vec::with_capacity(24 << 20);
-        let mut seed = 0x2545_f491_u32;
-        while raw.len() < 24 << 20 {
-            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            raw.push(b"abcdefghijklmnop"[(seed >> 28) as usize]);
+        let manifest = concat!(env!("CARGO_MANIFEST_DIR"), "/../Cargo.toml");
+        let doc: toml_edit::DocumentMut = fs::read_to_string(manifest).unwrap().parse().unwrap();
+        // the backend flate2 builds with here (`rust_backend`), its checksums and flate2 itself
+        for package in ["flate2", "miniz_oxide", "adler2", "simd-adler32"] {
+            let level = doc["profile"]["dev"]["package"][package]["opt-level"].as_integer();
+            assert_eq!(level, Some(3), "{package} isn't optimised in dev builds");
         }
-        let mut packed = flate2::write::ZlibEncoder::new(Vec::new(), Compression::fast());
-        packed.write_all(&raw).unwrap();
-        let packed = packed.finish().unwrap();
-        let lua = lua();
-        let packed = lua.create_string(&packed).unwrap();
-        let start = std::time::Instant::now();
-        let out = inflate(&lua, packed).unwrap();
-        let took = start.elapsed();
-        assert_eq!(out.as_string().unwrap().as_bytes().len(), raw.len());
-        eprintln!("inflate took {took:?}");
-        // optimised: about 0.1 s; unoptimised: about 0.7 s
-        assert!(took < std::time::Duration::from_millis(350), "{took:?}");
     }
 }

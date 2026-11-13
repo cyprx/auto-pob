@@ -320,6 +320,8 @@ impl GemPicker {
                     .desired_width(300.0),
             );
             self.rects.note(&edit, || "picker_text".into());
+            // the gem box is an EditControl too (GemSelectControl.lua:18, 806)
+            crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &edit, &text);
             if std::mem::take(&mut self.focus_pending) {
                 edit.request_focus();
             }

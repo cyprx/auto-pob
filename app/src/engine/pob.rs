@@ -240,6 +240,13 @@ impl PobBackend {
         })
     }
 
+    /// A glue function's string, any bytes that aren't UTF-8 as U+FFFD: PoB's strings are
+    /// bytes, and a build's text can hold some from a Windows-1252 editor
+    fn call_text<A: IntoLuaMulti>(&self, name: &str, args: A) -> Result<String> {
+        let text: mlua::LuaString = self.call(name, args)?;
+        Ok(String::from_utf8_lossy(&text.as_bytes()).into_owned())
+    }
+
     /// Whether the layout the UI holds no longer matches what the tree draws.
     fn layout_changed(&self) -> Result<bool> {
         let key = super::tree::layout_key(&self.lua).map_err(|e| anyhow!("{e}"))?;
@@ -437,7 +444,63 @@ impl PobBackend {
         args: impl IntoLuaMulti,
     ) -> Result<T> {
         let value: mlua::Value = self.call(name, args)?;
-        self.lua.from_value(value).map_err(|e| anyhow!("{e}"))
+        match self.lua.from_value(value.clone()) {
+            Ok(view) => Ok(view),
+            Err(e) => {
+                // PoB's strings are bytes: a build's notes, names or item text can hold bytes
+                // that aren't UTF-8 (a file from a Windows-1252 editor), which serde refuses.
+                // Such a view shows them as U+FFFD instead of failing.
+                match lossy_strings(&self.lua, &value, 0).map_err(|e| anyhow!("{e}"))? {
+                    Some(fixed) => self.lua.from_value(fixed).map_err(|e| anyhow!("{e}")),
+                    None => Err(anyhow!("{e}")),
+                }
+            }
+        }
+    }
+}
+
+/// `value` with every string that isn't UTF-8 replaced by its lossy UTF-8 form, keys
+/// included; `None` when every string already was
+fn lossy_strings(
+    lua: &mlua::Lua,
+    value: &mlua::Value,
+    depth: usize,
+) -> mlua::Result<Option<mlua::Value>> {
+    match value {
+        mlua::Value::String(text) if text.to_str().is_err() => {
+            let fixed = String::from_utf8_lossy(&text.as_bytes()).into_owned();
+            Ok(Some(mlua::Value::String(lua.create_string(fixed)?)))
+        }
+        // a view is a tree of plain tables; the depth guards against a cycle
+        mlua::Value::Table(table) if depth < 64 => {
+            let mut changed = false;
+            let copy = lua.create_table()?;
+            for pair in table.pairs::<mlua::Value, mlua::Value>() {
+                let (key, item) = pair?;
+                let key = match lossy_strings(lua, &key, depth + 1)? {
+                    Some(fixed) => {
+                        changed = true;
+                        fixed
+                    }
+                    None => key,
+                };
+                let item = match lossy_strings(lua, &item, depth + 1)? {
+                    Some(fixed) => {
+                        changed = true;
+                        fixed
+                    }
+                    None => item,
+                };
+                copy.raw_set(key, item)?;
+            }
+            if !changed {
+                return Ok(None);
+            }
+            // the metatable marks an empty table as an array for serde
+            copy.set_metatable(table.metatable())?;
+            Ok(Some(mlua::Value::Table(copy)))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -451,7 +514,7 @@ fn popup_rows(control: &mlua::Table) -> mlua::Result<Vec<super::views::PopupRow>
     };
     let text = |list: &mlua::Table, i: usize| -> mlua::Result<String> {
         match list.raw_get::<mlua::Value>(i)? {
-            mlua::Value::String(text) => Ok(text.to_str()?.to_owned()),
+            mlua::Value::String(text) => Ok(String::from_utf8_lossy(&text.as_bytes()).into_owned()),
             other => Err(mlua::Error::external(format!(
                 "row {i} is a {}",
                 other.type_name()
@@ -2394,7 +2457,7 @@ impl Backend for PobBackend {
     }
 
     fn socket_group_text(&mut self, group: usize) -> Result<SocketGroupText> {
-        let text: String = self.call("skills_copy", group + 1)?;
+        let text = self.call_text("skills_copy", group + 1)?;
         Ok(SocketGroupText { group, text })
     }
 
@@ -2735,7 +2798,7 @@ impl Backend for PobBackend {
     }
 
     fn item_text(&mut self, id: u32) -> Result<ItemText> {
-        let text: String = self.call("item_copy", id)?;
+        let text = self.call_text("item_copy", id)?;
         Ok(ItemText {
             id,
             text,
@@ -2745,7 +2808,7 @@ impl Backend for PobBackend {
     }
 
     fn shared_item_text(&mut self, index: usize) -> Result<ItemText> {
-        let text: String = self.call("shared_copy", index + 1)?;
+        let text = self.call_text("shared_copy", index + 1)?;
         Ok(ItemText {
             id: index as u32,
             text,
@@ -2755,7 +2818,7 @@ impl Backend for PobBackend {
     }
 
     fn db_item_text(&mut self, db: ItemDb, name: &str) -> Result<ItemText> {
-        let text: String = self.call("item_db_copy", (db_name(db), name))?;
+        let text = self.call_text("item_db_copy", (db_name(db), name))?;
         Ok(ItemText {
             id: 0,
             text,

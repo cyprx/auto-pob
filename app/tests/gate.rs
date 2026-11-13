@@ -3545,3 +3545,40 @@ fn spike_tree_numbers() {
         "the power coroutine should still be alive after its first real step"
     );
 }
+
+/// PoB's strings are bytes: a build saved by a Windows-1252 editor keeps bytes that aren't
+/// UTF-8 in its notes, labels and items. PoB shows such a build; every view of ours shows it
+/// too, those bytes as U+FFFD, where serde refused the whole view.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_build_with_bytes_that_are_not_utf8_shows_in_every_view() {
+    let _guard = lock();
+    let mut s = Session::start("non-utf8");
+    let good = fs::read_to_string(fixture_xml("attack")).unwrap();
+    // \u{1} marks where a lone Windows-1252 "é" byte goes
+    let marked = good
+        .replace("label=\"\"", "label=\"Caf\u{1}\"")
+        .replace(
+            "Rarity: NORMAL\nDriftwood Maul",
+            "Rarity: RARE\nCaf\u{1} Smasher\nDriftwood Maul",
+        )
+        .replace("<Notes>", "<Notes>caf\u{1} notes");
+    let bytes: Vec<u8> = marked
+        .into_bytes()
+        .into_iter()
+        .map(|b| if b == 1 { 0xE9 } else { b })
+        .collect();
+    let path = s.builds_dir().join("latin.xml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, bytes).unwrap();
+    s.run(Command::OpenBuild { path }).expect("open");
+    let notes = s.backend.notes_view().expect("notes view");
+    assert!(notes.text.contains("caf\u{fffd} notes"), "{:?}", notes.text);
+    let skills = s.backend.skills_view().expect("skills view");
+    assert_eq!(skills.groups[0].label, "Caf\u{fffd}");
+    s.backend.items_view().expect("items view");
+    let item = s.backend.item_text(1).expect("item text");
+    assert!(item.text.contains("Caf\u{fffd} Smasher"), "{}", item.text);
+    let group = s.backend.socket_group_text(0).expect("group text");
+    assert!(group.text.contains("Caf\u{fffd}"), "{}", group.text);
+}

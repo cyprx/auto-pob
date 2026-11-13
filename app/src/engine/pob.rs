@@ -3111,6 +3111,8 @@ mod tests {
                 search_mode: 0,
             }),
             Command::CloseItemDb,
+            // the Items tab shown: the load runs ahead, the popup's tab is left alone
+            Command::PreloadItemDbs,
             Command::CancelRequest { id: 1 },
         ];
         for command in keeps {

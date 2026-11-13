@@ -128,7 +128,9 @@ impl Accept {
     fn for_option(kind: ConfigKind, allow_zero: bool) -> Option<Self> {
         let (keeps, number): (fn(char) -> bool, _) = match kind {
             ConfigKind::Integer => (|c| c.is_ascii_digit() || c == '-', Some(true)),
-            ConfigKind::Count if allow_zero => (|c| c.is_ascii_digit() || c == '-', Some(true)),
+            // PoB's countAllowZero box takes "-" and steps below 0, but a negative count is no
+            // value here (parse_number_input), so its step stops at 0
+            ConfigKind::Count if allow_zero => (|c| c.is_ascii_digit() || c == '-', Some(false)),
             ConfigKind::Count => (|c| c.is_ascii_digit(), Some(false)),
             ConfigKind::Float => (|c| c.is_ascii_digit() || c == '.', None),
             // "^%C\t\n" (ConfigTab.lua:289)

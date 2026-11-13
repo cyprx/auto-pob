@@ -427,6 +427,38 @@ fn a_matching_socket_borders_the_quality_box() {
     );
 }
 
+/// PoB's EditControl draws a hovered box's border white and calls borderFunc only otherwise
+/// (EditControl.lua:246-252), so the socket colour leaves the Quality box under the pointer
+#[test]
+fn a_hovered_quality_box_drops_the_socket_border() {
+    let mut fits = gem("Boneshatter");
+    fits.matches_socket = true;
+    let mut h = Harness::new(view(vec![group("Boneshatter", vec![fits])]));
+    let green = egui::Color32::from_rgb(0x33, 0xFF, 0x77);
+    let near = |a: Rect, b: Rect| (a.center() - b.center()).length() < 2.0;
+    h.frame(vec![]);
+    h.frame(vec![Event::PointerMoved(
+        h.ui.rect("g0_s0_quality").center(),
+    )]);
+    h.frame(vec![]);
+    let quality = h.ui.rect("g0_s0_quality");
+    assert!(
+        !h.strokes
+            .iter()
+            .any(|(r, c)| *c == green && near(*r, quality)),
+        "the hovered Quality box keeps the socket border"
+    );
+    h.frame(vec![Event::PointerGone]);
+    h.frame(vec![]);
+    let quality = h.ui.rect("g0_s0_quality");
+    assert!(
+        h.strokes
+            .iter()
+            .any(|(r, c)| *c == green && near(*r, quality)),
+        "the border comes back once the pointer leaves"
+    );
+}
+
 #[test]
 fn paste_event_sends_paste_outside_text_fields() {
     let mut h = Harness::new(sample());

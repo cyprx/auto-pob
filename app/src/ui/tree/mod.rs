@@ -75,6 +75,17 @@ pub(super) struct Derived {
     pub compare: HashMap<u32, [f32; 3]>,
     /// The id (not the label) nodes of the build's ascendancy carry
     pub current_ascendancy: Option<String>,
+    /// The id the chosen bloodline's nodes carry
+    pub bloodline: Option<String>,
+}
+
+impl Derived {
+    /// Whether nodes of `ascendancy` are of the build's ascendancy or its bloodline, which PoB
+    /// draws as chosen (PassiveTreeView.lua:572)
+    pub fn is_chosen(&self, ascendancy: &str) -> bool {
+        self.current_ascendancy.as_deref() == Some(ascendancy)
+            || self.bloodline.as_deref() == Some(ascendancy)
+    }
 }
 
 impl Derived {
@@ -101,6 +112,7 @@ impl Derived {
             matches: state.search_matches.iter().copied().collect(),
             compare: state.compare.iter().map(|c| (c.node, c.rgb)).collect(),
             current_ascendancy,
+            bloodline: state.bloodline.clone(),
         }
     }
 }
@@ -987,6 +999,25 @@ mod tests {
         assert!(out.commands.is_empty(), "{:?}", out.commands);
     }
 
+    /// A click on a node of another bloodline switches to it (PassiveTreeView.lua:398-411);
+    /// the chosen bloodline's nodes are the build's own, so one without a path does nothing
+    #[test]
+    fn bloodline_nodes_follow_the_chosen_bloodline() {
+        for (bloodline, sends) in [("Farrul", true), ("Trialmaster", false)] {
+            let (l, s) = sample();
+            let mut layout = (*l).clone();
+            // node 4 has no path
+            layout.nodes[3].ascendancy = Some(bloodline.into());
+            let mut state = (*s).clone();
+            state.bloodline = Some("Trialmaster".into());
+            let mut h = Harness::new(Arc::new(layout), Arc::new(state));
+            assert_eq!(h.tab.derived.is_chosen(bloodline), !sends);
+            let out = h.click_at(h.screen_of(4));
+            let want: &[&str] = if sends { &["AllocNode { id: 4 }"] } else { &[] };
+            assert_eq!(debug(&out.commands), want, "{bloodline}");
+        }
+    }
+
     #[test]
     fn a_resent_layout_rebuilds_the_grid_and_keeps_the_camera() {
         let (l, s) = sample();
@@ -1030,6 +1061,42 @@ mod tests {
                 lines: vec![],
             })));
         h.frame(vec![]);
+    }
+
+    /// A node of the compared spec only is hovered where none of ours is, and asks for its
+    /// tooltip; a click on it does nothing (PassiveTreeView.lua:308-320, 1143)
+    #[test]
+    fn a_compare_only_node_is_hovered_and_asks_for_its_tooltip() {
+        let (l, s) = sample();
+        let mut state = (*s).clone();
+        state.compare_only = vec![crate::engine::CompareOnlyNode {
+            id: 70_000,
+            x: 300.0,
+            y: 300.0,
+            kind: "Notable".into(),
+            name: "Prismatic Heart".into(),
+            art: None,
+        }];
+        let mut h = Harness::new(l, Arc::new(state));
+        let rect = h.tab.rect_for_test();
+        let pos = h.tab.camera.to_screen(rect, [300.0, 300.0]);
+        h.time = 2.0;
+        h.frame(vec![Event::PointerMoved(pos)]);
+        assert_eq!(h.tab.hover, Some(70_000));
+        h.time = 2.2;
+        assert_eq!(
+            debug(&h.frame(vec![]).queries),
+            ["PreviewNode { id: 70000 }"]
+        );
+        h.tab
+            .on_snapshot(&Snapshot::NodeTooltip(Arc::new(NodeTooltip {
+                id: 70_000,
+                trace: vec![],
+                lines: vec![],
+            })));
+        h.frame(vec![]);
+        let out = h.click_at(pos);
+        assert!(out.commands.is_empty(), "{:?}", out.commands);
     }
 
     #[test]

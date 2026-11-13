@@ -55,6 +55,28 @@ function act.alloc_ascendancy(node)
 	act.alloc(spec.nodes[node.id])
 end
 
+-- A left click on an unallocated bloodline node: a bloodline other than the chosen one is
+-- chosen first (PassiveTreeView.lua:398-411), then the node is allocated as usual
+-- (PassiveTreeView.lua:499-505).
+function act.alloc_bloodline(node)
+	local spec = build.spec
+	assert(node.isBloodline and spec.tree.alternate_ascendancies, "not a bloodline node")
+	if not spec.curSecondaryAscendClass or node.ascendancyName ~= spec.curSecondaryAscendClass.id then
+		for bloodlineId, bloodline in pairs(spec.tree.alternate_ascendancies) do
+			if bloodline.id == node.ascendancyName then
+				spec:SelectSecondaryAscendClass(bloodlineId)
+				spec:AddUndoState()
+				spec:SetWindowTitleWithBuildClass()
+				build.buildFlag = true
+				break
+			end
+		end
+	end
+	local target = spec.nodes[node.id]
+	assert(target.path and not target.alloc, "the bloodline node has no path")
+	act.alloc(target)
+end
+
 -- A left click on an allocated node (PassiveTreeView.lua:384-388)
 function act.dealloc(node)
 	build.spec:DeallocNode(node)
@@ -403,6 +425,30 @@ function pick.ascendancy_node()
 	end
 	assert(best, "no node in " .. name)
 	return best
+end
+
+-- The lowest-id node next to the start of the bloodline whose id is `name` ("Trialmaster")
+function pick.bloodline_node(name)
+	local best
+	for _, node in pairs(build.spec.nodes) do
+		if node.isBloodline and node.ascendancyName == name and node.type ~= "AscendClassStart"
+			and node.type ~= "Mastery" and (not best or node.id < best.id) then
+			for _, other in ipairs(node.linked) do
+				if other.type == "AscendClassStart" then
+					best = node
+				end
+			end
+		end
+	end
+	assert(best, "no node next to the start of " .. name)
+	return best
+end
+
+-- The nearest unallocated node of the bloodline `name` that has a path
+function pick.bloodline_next(name)
+	return nearest(function(node)
+		return node.isBloodline and node.ascendancyName == name and node.type ~= "Mastery"
+	end)
 end
 
 -- The name of the class with the lowest id, other than the current one, that the tree is not

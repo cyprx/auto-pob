@@ -1147,3 +1147,50 @@ fn the_group_label_limit_counts_bytes() {
         "\u{65e5}".repeat(16)
     );
 }
+
+/// A field still being typed in when the set changes: its edit goes out first, for the set it
+/// was typed in, as PoB's box applied each key before the dropdown was touched
+/// (SkillsTab.lua:94-97); the wheel over the set dropdown leaves it alone while the box has
+/// the keyboard (ControlHost.lua:56-71)
+#[test]
+fn a_field_typed_in_when_the_set_changes_goes_out_first() {
+    let mut h = Harness::new(sample());
+    h.click("g0_label");
+    h.type_text("!");
+    let wheel = Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: Vec2::new(0.0, -1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+        source: egui::MouseWheelSource::Wheel,
+    };
+    let at = h.ui.rect("set").center();
+    // the app says the box has the keyboard, as it does each frame
+    use crate::widgets::scroll_step::{FocusScope, set_scope};
+    let typing = FocusScope {
+        typing: true,
+        ..FocusScope::default()
+    };
+    set_scope(&h.ctx, typing);
+    h.frame(vec![Event::PointerMoved(at)]);
+    set_scope(&h.ctx, typing);
+    let o = h.frame(vec![Event::PointerMoved(at), wheel]);
+    set_scope(&h.ctx, FocusScope::default());
+    assert!(
+        !debug(&o.commands)
+            .iter()
+            .any(|c| c.starts_with("SelectSkillSet")),
+        "{:?}",
+        o.commands
+    );
+    let mut sent = debug(&h.click("set").commands);
+    sent.extend(debug(&h.click("set_item_1").commands));
+    assert_eq!(
+        sent,
+        [
+            "SetGroupLabel { group: 0, text: \"Boneshatter!\" }",
+            "SelectSkillSet { id: 2 }"
+        ]
+    );
+    assert!(!h.ui.has_pending());
+}

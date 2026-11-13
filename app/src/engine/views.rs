@@ -519,6 +519,9 @@ pub struct TreeState {
     pub convertible_to: Option<String>,
     pub class_id: u32,
     pub ascendancy_id: u32,
+    /// The id (not the name) the chosen bloodline's nodes carry (`curSecondaryAscendClass.id`)
+    #[serde(default)]
+    pub bloodline: Option<String>,
     /// Sorted by name, like the class dropdown
     #[serde(default)]
     pub classes: Vec<ClassChoice>,
@@ -554,6 +557,10 @@ pub struct TreeState {
     /// 0-based
     #[serde(default)]
     pub compare_spec: Option<usize>,
+    /// The nodes allocated in the compared spec that this spec doesn't have (a cluster jewel's
+    /// subgraph): PoB draws them green and gives them a tooltip (PassiveTreeView.lua:1102-1153)
+    #[serde(default)]
+    pub compare_only: Vec<CompareOnlyNode>,
     #[serde(default)]
     pub power_stats: Vec<String>,
     #[serde(default)]
@@ -627,6 +634,47 @@ pub struct NodePath {
     pub node: u32,
     #[serde(default)]
     pub path: Vec<u32>,
+}
+
+/// A node of the compared spec only, where PoB draws it
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct CompareOnlyNode {
+    pub id: u32,
+    pub x: f32,
+    pub y: f32,
+    pub kind: String,
+    pub name: String,
+    /// Its allocated icon and frame, from the layout's sheets
+    #[serde(default)]
+    pub art: Option<CompareOnlyArt>,
+}
+
+/// A compare-only node's allocated art
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct CompareOnlyArt {
+    #[serde(default)]
+    pub icon: Option<LuaSprite>,
+    #[serde(default)]
+    pub frame: Option<LuaSprite>,
+}
+
+/// A sprite as the glue lists it: a 1-based sheet and a pixel rectangle
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct LuaSprite {
+    pub sheet: usize,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl LuaSprite {
+    pub fn sprite(&self) -> Option<Sprite> {
+        Some(Sprite {
+            sheet: self.sheet.checked_sub(1)?,
+            rect: [self.x, self.y, self.w, self.h],
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]

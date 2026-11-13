@@ -2877,6 +2877,46 @@ fn tree_recipes_match_pob() {
     }
 }
 
+/// A click on a bloodline node chooses that bloodline, from none or from another one, and
+/// allocates the node (PassiveTreeView.lua:398-411, 499-505)
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_bloodline_node_click_chooses_the_bloodline() {
+    let _guard = lock();
+    // the top bar's bloodline at each checkpoint, by the id its nodes carry
+    let mut chosen = Vec::new();
+    let recipe = check_recipe_with("bloodline", &mut |s, check| {
+        if check.is_some() {
+            let id = s.backend.build_view().unwrap().secondary_selected;
+            let name: Option<String> = s
+                .backend
+                .lua
+                .load(format!(
+                    "local a = pob.build.spec.tree.alternate_ascendancies[{id}] return a and a.id"
+                ))
+                .eval()
+                .unwrap();
+            chosen.push(name);
+        }
+    });
+    // PoB's undo state reads `secondaryAscendClassId`, which no spec has, so an undo drops
+    // the bloodline (PassiveSpec.lua:2289); the checkpoint's nodes show upstream did too
+    let at = |name: &str| Some(name.to_owned());
+    assert_eq!(chosen, [at("Trialmaster"), at("Farrul"), None]);
+    let checks: Vec<&Checkpoint> = recipe
+        .actions
+        .iter()
+        .filter_map(|a| match a {
+            TreeAction::Check { check } => Some(check),
+            _ => None,
+        })
+        .collect();
+    // the clicks changed the tree, and the undo took the last one back
+    assert_eq!(checks.len(), 3);
+    assert_ne!(checks[0].allocated, checks[1].allocated);
+    assert_ne!(checks[1].allocated, checks[2].allocated);
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn spec_recipes_match_pob() {
@@ -3684,6 +3724,86 @@ fn jewel_radius_matches_pob() {
     assert_eq!(radius, theirs.radius_nodes);
     assert!(radius.len() > 10, "{}", radius.len());
     assert_eq!(ours.ring, Some(theirs.ring));
+}
+
+/// Nodes allocated only in the compared tree (a cluster jewel's subgraph): PoB draws them and
+/// gives them their own tooltip (PassiveTreeView.lua:1102-1153, 1748-1804)
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn compare_only_nodes_match_pob() {
+    let _guard = lock();
+    // upstream at the recipe's end, kept for its tooltips
+    let source = fs::read_to_string(fixtures_dir().join("tree/compare_only.lua")).unwrap();
+    let lua = upstream_with_tree_lib("attack");
+    lua.load(include_str!("../src/engine/glue/tooltip.lua"))
+        .set_name("=recorder")
+        .exec()
+        .unwrap();
+    lua.load(source).exec().unwrap();
+    lua.load("recipe()").exec().unwrap();
+    let theirs: Vec<auto_pob::engine::NodeTooltip> = lua_value(
+        &lua,
+        r#"
+        local viewer, compareSpec = build.treeTab.viewer, build.treeTab.specList[1]
+        local ids = {}
+        for id, node in pairs(compareSpec.nodes) do
+            if not build.spec.nodes[id] and node.alloc and node.x and node.type ~= "ClassStart"
+                and node.type ~= "AscendClassStart" then
+                ids[#ids + 1] = id
+            end
+        end
+        table.sort(ids)
+        local list = {}
+        viewer.compareSpec = compareSpec
+        for _, id in ipairs(ids) do
+            local tooltip = glue.tooltip()
+            viewer:AddCompareNodeTooltip(tooltip, compareSpec.nodes[id], build)
+            list[#list + 1] = { id = id, lines = tooltip:lines() }
+        end
+        return list
+        "#,
+    );
+    assert!(theirs.len() > 3, "{} compare-only nodes", theirs.len());
+    let mut ours = Vec::new();
+    check_recipe_with("compare_only", &mut |s, check| {
+        if check.is_none() {
+            return;
+        }
+        // the layout first, as the engine sends it before the state
+        let sheets = s.backend.tree_layout_view().unwrap().sheets.len();
+        let state = s.backend.tree_state_view().unwrap();
+        // PoB draws each with its allocated art (PassiveTreeView.lua:1124-1131): an icon on a
+        // sheet the layout sent
+        for node in state.compare_only.iter().filter(|n| n.kind != "Socket") {
+            let icon = node
+                .art
+                .as_ref()
+                .and_then(|a| a.icon)
+                .and_then(|i| i.sprite())
+                .unwrap_or_else(|| panic!("node {} has no art", node.id));
+            assert!(icon.sheet < sheets, "node {}", node.id);
+        }
+        for node in &state.compare_only {
+            let tip = s.backend.node_tooltip_view(node.id).unwrap();
+            ours.push((node.id, tip));
+        }
+        // the Tree tab's compare off: none
+        s.run(Command::SetCompareSpec { index: None }).unwrap();
+        assert!(s.backend.tree_state_view().unwrap().compare_only.is_empty());
+        s.run(Command::SetCompareSpec { index: Some(0) }).unwrap();
+    });
+    let ids: Vec<u32> = ours.iter().map(|(id, _)| *id).collect();
+    let want: Vec<u32> = theirs.iter().map(|t| t.id).collect();
+    assert_eq!(ids, want);
+    for ((_, tip), want) in ours.iter().zip(&theirs) {
+        assert_eq!(tip.as_ref(), Some(want), "node {}", want.id);
+    }
+    assert!(
+        theirs[0].lines.iter().any(|l| matches!(l,
+            auto_pob::engine::TooltipLine::Line { text, .. } if text.contains("only in the compared build"))),
+        "{:?}",
+        theirs[0].lines
+    );
 }
 
 #[test]

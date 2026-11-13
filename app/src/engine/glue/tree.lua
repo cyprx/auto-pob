@@ -8,6 +8,9 @@ local sheets, sheetIndex
 
 -- Looks up a sprite the way PoB's PassiveTree does, returning its sheet and pixel
 -- rectangle. PoB's own UVs can't be used: headless images report a 1x1 size.
+-- While set, a sprite on a sheet the last layout didn't send is left out
+local sheetsFrozen = false
+
 local function sprite(spriteType, name)
 	local tree = pob.build.spec.tree
 	local data = tree.skillSprites[spriteType]
@@ -28,6 +31,9 @@ local function sprite(spriteType, name)
 	end
 	local file = data.filename:gsub("%?%x+$", ""):gsub(".*/", "")
 	if not sheetIndex[file] then
+		if sheetsFrozen then
+			return nil
+		end
 		table.insert(sheets, "TreeData/" .. tree.treeVersion .. "/" .. file)
 		sheetIndex[file] = #sheets
 	end
@@ -378,6 +384,57 @@ local function compare_state(build)
 	return compare_colours(build, compareSpec), compareSpec and tab.activeCompareSpec - 1 or nil
 end
 
+-- The spec the drawn tree is compared with: the comparison's in the Compare tab's overlay
+-- (CompareTab.lua:3392), none side by side, else the Tree tab's (TreeTab.lua:445)
+local function viewed_compare_spec(build)
+	local compare = build.compareTab
+	local entry = compare and compare.compareViewMode == "TREE" and compare:GetActiveCompare()
+	if entry then
+		return compare.treeOverlayMode and entry.spec or nil
+	end
+	local tab = build.treeTab
+	return tab.isComparing and tab.specList[tab.activeCompareSpec] or nil
+end
+
+-- A node PoB draws although this build's spec doesn't have it: allocated in the compared spec
+-- only, such as a cluster jewel's subgraph (PassiveTreeView.lua:1102-1107, 308-320)
+local function compare_only(build, compareSpec, id)
+	local node = compareSpec and compareSpec.nodes[id]
+	return node ~= nil and not build.spec.nodes[id] and node.alloc and node.x ~= nil
+		and node.y ~= nil and node.type ~= "ClassStart" and node.type ~= "AscendClassStart"
+end
+
+-- A compare-only node's allocated icon and frame, on sheets the layout already has
+local function compare_only_art(node)
+	sheetsFrozen = true
+	local ok, art = pcall(nodeArt, node)
+	sheetsFrozen = false
+	if not ok then
+		return nil
+	end
+	return { icon = art.icon[2], frame = art.frame and art.frame[2] or nil }
+end
+
+-- Those nodes, sorted by id
+local function compare_only_nodes(build)
+	local compareSpec = viewed_compare_spec(build)
+	local list = {}
+	if compareSpec then
+		for id, node in pairs(compareSpec.nodes) do
+			if compare_only(build, compareSpec, id) then
+				list[#list + 1] = {
+					id = id, x = node.x, y = node.y, kind = node.type, name = node.dn or "",
+					-- PoB draws its allocated art, tinted green (PassiveTreeView.lua:1108-1140),
+					-- from the sheets the layout sent
+					art = sheetIndex and compare_only_art(node) or nil,
+				}
+			end
+		end
+		table.sort(list, function(a, b) return a.id < b.id end)
+	end
+	return list
+end
+
 -- The words PassiveTreeView:Draw splits the search text into (bootstrap.lua)
 local search_words = AutoPobSearchWords
 
@@ -483,6 +540,7 @@ function glue.tree_state(fresh, held)
 		convertible_to = convertible,
 		class_id = spec.curClassId,
 		ascendancy_id = spec.curAscendClassId,
+		bloodline = spec.curSecondaryAscendClass and spec.curSecondaryAscendClass.id or nil,
 		classes = class_choices(spec),
 		points = points(spec),
 		allocated = glue.alloc_ids(),
@@ -496,6 +554,7 @@ function glue.tree_state(fresh, held)
 		search_matches = search_matches(build, fresh),
 		compare = compare,
 		compare_spec = compareSpec,
+		compare_only = compare_only_nodes(build),
 		jewels = jewel_sockets(build),
 		specs = spec_entries(),
 		active_spec = build.treeTab.activeSpec - 1,
@@ -537,12 +596,22 @@ local function finish_edit(withTitle)
 end
 
 -- The ascendancy part of a left click on an unallocated node (PassiveTreeView.lua:397-495):
--- clicking a node of another ascendancy switches to it first. Bloodlines aren't supported, and
--- the cross-class confirmation is replaced by an error: the UI asks through `SelectClass`.
+-- clicking a node of another ascendancy or bloodline switches to it first. The cross-class
+-- confirmation is replaced by an error: the UI asks through `SelectClass`.
 local function switch_to_clicked_ascendancy(node)
 	local spec = pob.build.spec
-	if node.isBloodline then
-		error("secondary ascendancies aren't supported yet", 0)
+	-- a bloodline other than the chosen one is chosen (PassiveTreeView.lua:398-411)
+	if node.isBloodline and spec.tree.alternate_ascendancies then
+		if not spec.curSecondaryAscendClass or node.ascendancyName ~= spec.curSecondaryAscendClass.id then
+			for bloodlineId, bloodline in pairs(spec.tree.alternate_ascendancies) do
+				if bloodline.id == node.ascendancyName then
+					spec:SelectSecondaryAscendClass(bloodlineId)
+					finish_edit(true)
+					break
+				end
+			end
+		end
+		return
 	end
 	if not (spec.curAscendClassId == 0 or node.ascendancyName ~= spec.curAscendClassBaseName) then
 		return
@@ -1007,8 +1076,24 @@ end
 function glue.node_tooltip(id, trace)
 	local build = pob.build
 	local node = build.spec.nodes[id]
+	local viewed = viewed_compare_spec(build)
 	if not node then
-		return nil
+		-- a node of the compared spec only has PoB's own tooltip for it (PassiveTreeView.lua:
+		-- 1143-1147), except a mastery without effects
+		local other = compare_only(build, viewed, id) and viewed.nodes[id]
+		if not other or (other.type == "Mastery" and not other.masteryEffects) then
+			return nil
+		end
+		local viewer = build.treeTab.viewer
+		local tooltip = glue.tooltip()
+		local compareSpec = viewer.compareSpec
+		viewer.compareSpec = viewed
+		local ok, err = pcall(viewer.AddCompareNodeTooltip, viewer, tooltip, other, build)
+		viewer.compareSpec = compareSpec
+		if not ok then
+			error(tostring(err):match("[^\n]+") or "couldn't build the tooltip", 0)
+		end
+		return { id = id, lines = tooltip:lines(), trace = {} }
 	end
 	local tab = build.treeTab
 	local viewer = tab.viewer
@@ -1027,8 +1112,9 @@ function glue.node_tooltip(id, trace)
 		viewer.tracePath = nodes
 		viewer.traceMode = true
 	end
-	-- as TreeTab:Draw sets it (TreeTab.lua:445)
-	viewer.compareSpec = tab.isComparing and tab.specList[tab.activeCompareSpec] or nil
+	-- as TreeTab:Draw sets it (TreeTab.lua:445), or the Compare tab's overlay
+	-- (CompareTab.lua:3392)
+	viewer.compareSpec = viewed
 	local ok, err = pcall(viewer.AddNodeTooltip, viewer, tooltip, node, build)
 	viewer.tracePath, viewer.compareSpec, viewer.traceMode = tracePath, compareSpec, traceMode
 	if not ok then

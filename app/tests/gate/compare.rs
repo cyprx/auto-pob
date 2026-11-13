@@ -1843,3 +1843,157 @@ fn a_hidden_compare_tab_gets_its_view_when_shown() {
     assert_eq!(sent, [None]);
     assert_eq!(compare_snapshots(&mut s, vec![shown(true)]), [None]);
 }
+
+/// In the Compare tab's overlay PoB draws our tree against the comparison's spec, tooltips
+/// included (CompareTab.lua:3392): a socket we haven't taken shows the jewel the comparison
+/// has in it (PassiveTreeView.lua:1505-1511)
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn overlay_node_tooltips_follow_the_comparison() {
+    let _guard = lock();
+    let web = canned_web();
+    let mut s = net_session("compare-overlay-tooltips", canned(&web), None);
+    s.open_fixture("attack");
+    let up = Upstream::new("attack");
+    up.lua
+        .load(include_str!("../../src/engine/glue/tooltip.lua"))
+        .set_name("=recorder")
+        .exec()
+        .unwrap();
+    // the jewel recipe's build: dot with a jewel in a socket
+    let xml = super::upstream_tree_recipe("jewel")
+        .xml
+        .expect("the jewel recipe saves its build");
+    let scratch = Scratch::new("compare-overlay-tooltips");
+    let path = scratch.0.join("jewel.xml");
+    fs::write(&path, &xml).unwrap();
+    run(&mut s, Command::SetCompareOverlay { on: true }).unwrap();
+    load_file(&mut s, &path);
+    up.call::<()>("loadCompare", (xml, "jewel".to_string()));
+    // the sockets either tree has taken, and every node the overlay colours
+    let ids: Vec<u32> = up.json(
+        r#"local entry, ids = build.compareTab:GetActiveCompare(), {}
+        for id, node in pairs(build.spec.nodes) do
+            local other = entry.spec.nodes[id]
+            if node.type == "Socket" and (node.alloc or (other and other.alloc)) then
+                ids[#ids + 1] = id
+            end
+        end
+        table.sort(ids)
+        return ids"#,
+    );
+    let socketed: Vec<u32> = up.json(
+        r#"local entry, ids = build.compareTab:GetActiveCompare(), {}
+        for id, item in pairs(entry.spec.jewels) do
+            local node = build.spec.nodes[id]
+            if item ~= 0 and node and not node.alloc and entry.spec.allocNodes[id] then
+                ids[#ids + 1] = id
+            end
+        end
+        return ids"#,
+    );
+    assert!(
+        !socketed.is_empty(),
+        "the comparison's jewel is in a socket we have"
+    );
+    let coloured = up.tree_colours().into_iter().map(|c| c.node);
+    for id in ids.into_iter().chain(coloured) {
+        let want: auto_pob::engine::NodeTooltip = up.json(&format!(
+            r#"local viewer = build.treeTab.viewer
+            viewer.compareSpec = build.compareTab:GetActiveCompare().spec
+            local tooltip = glue.tooltip()
+            viewer:AddNodeTooltip(tooltip, build.spec.nodes[{id}], build)
+            viewer.compareSpec = nil
+            return {{ id = {id}, lines = tooltip:lines() }}"#
+        ));
+        let ours = s.backend.node_tooltip_view(id).unwrap();
+        assert_eq!(ours.as_ref(), Some(&want), "node {id}");
+    }
+    let jewel: auto_pob::engine::NodeTooltip = up.json(&format!(
+        r#"local viewer = build.treeTab.viewer
+        local tooltip = glue.tooltip()
+        viewer.compareSpec = build.compareTab:GetActiveCompare().spec
+        viewer:AddNodeTooltip(tooltip, build.spec.nodes[{}], build)
+        viewer.compareSpec = nil
+        return {{ id = 0, lines = tooltip:lines() }}"#,
+        socketed[0]
+    ));
+    assert!(
+        jewel.lines.iter().any(|l| matches!(l,
+            auto_pob::engine::TooltipLine::Line { text, .. } if text.contains("Eldritch Knowledge"))),
+        "{:?}",
+        jewel.lines
+    );
+}
+
+/// The overlay shows the comparison's nodes our tree doesn't have (a cluster jewel's
+/// subgraph), with PoB's tooltip for them (PassiveTreeView.lua:1102-1153, 1748-1804)
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn the_overlay_shows_the_comparisons_own_nodes() {
+    let _guard = lock();
+    let web = canned_web();
+    let mut s = net_session("compare-overlay-only", canned(&web), None);
+    s.open_fixture("attack");
+    let up = Upstream::new("attack");
+    up.lua
+        .load(include_str!("../../src/engine/glue/tooltip.lua"))
+        .set_name("=recorder")
+        .exec()
+        .unwrap();
+    // attack with a large cluster jewel allocated
+    let xml = super::upstream_tree_recipe("compare_only")
+        .setup_xml
+        .expect("the recipe saves its setup");
+    let scratch = Scratch::new("compare-overlay-only");
+    let path = scratch.0.join("cluster.xml");
+    fs::write(&path, &xml).unwrap();
+    run(&mut s, Command::SetCompareOverlay { on: true }).unwrap();
+    load_file(&mut s, &path);
+    up.call::<()>("loadCompare", (xml, "cluster".to_string()));
+    let theirs: Vec<auto_pob::engine::NodeTooltip> = up.json(
+        r#"local viewer, spec = build.treeTab.viewer, build.compareTab:GetActiveCompare().spec
+        local ids, list = {}, {}
+        for id, node in pairs(spec.nodes) do
+            if not build.spec.nodes[id] and node.alloc and node.x and node.type ~= "ClassStart"
+                and node.type ~= "AscendClassStart" then
+                ids[#ids + 1] = id
+            end
+        end
+        table.sort(ids)
+        viewer.compareSpec = spec
+        for _, id in ipairs(ids) do
+            local tooltip = glue.tooltip()
+            viewer:AddCompareNodeTooltip(tooltip, spec.nodes[id], build)
+            list[#list + 1] = { id = id, lines = tooltip:lines() }
+        end
+        viewer.compareSpec = nil
+        return list"#,
+    );
+    assert!(theirs.len() > 3, "{} compare-only nodes", theirs.len());
+    let ours: Vec<u32> = s
+        .backend
+        .tree_state_view()
+        .unwrap()
+        .compare_only
+        .iter()
+        .map(|n| n.id)
+        .collect();
+    let want: Vec<u32> = theirs.iter().map(|t| t.id).collect();
+    assert_eq!(ours, want);
+    for want in &theirs {
+        let tip = s.backend.node_tooltip_view(want.id).unwrap();
+        assert_eq!(tip.as_ref(), Some(want), "node {}", want.id);
+    }
+    // side by side PoB draws no comparison on our tree
+    run(
+        &mut s,
+        Command::SetCompareControl {
+            name: "treeOverlayCheck".into(),
+            value: PopupInput::Check(false),
+        },
+    )
+    .unwrap();
+    assert!(s.backend.tree_state_view().unwrap().compare_only.is_empty());
+    assert_eq!(s.backend.node_tooltip_view(want[0]).unwrap(), None);
+}

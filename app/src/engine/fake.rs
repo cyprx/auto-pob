@@ -859,6 +859,7 @@ pub fn empty_tree_state() -> TreeState {
         convertible_to: None,
         class_id: 0,
         ascendancy_id: 0,
+        bloodline: None,
         classes: vec![],
         points: Points {
             used: 0,
@@ -878,6 +879,7 @@ pub fn empty_tree_state() -> TreeState {
         specs: vec![],
         active_spec: 0,
         compare_spec: None,
+        compare_only: vec![],
         power_stats: vec![],
         heatmap: None,
         max_depth: None,

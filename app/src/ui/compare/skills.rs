@@ -30,8 +30,10 @@ pub(super) fn show(ui: &mut egui::Ui, view: &CompareView) {
                 .striped(true)
                 .spacing([24.0, 6.0])
                 .show(ui, |ui| {
-                    ui.strong("This build");
-                    ui.strong(super::plain(&view.headers[1]));
+                    // PoB's column headers: our short build name in its POSITIVE colour, the
+                    // comparison's label in WARNING (CompareTab.lua:1810-1813, 4370-4371, 4922-4925)
+                    ui.label(super::header(&view.headers[0], default));
+                    ui.label(super::header(&view.headers[1], default));
                     ui.end_row();
                     for row in &view.skills {
                         for (header, lines) in

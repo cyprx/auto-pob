@@ -1040,6 +1040,8 @@ pub enum HoverTarget {
         index: usize,
         entry: bool,
     },
+    /// A Compare Items row's Equip button: "Equipping this item in <slot> will give you:"
+    CompareEquip { slot: String },
 }
 
 /// Whose controls a [`HoverTarget::Dropdown`] is among

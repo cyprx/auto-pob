@@ -918,6 +918,8 @@ struct UpImport {
     share_label: String,
     #[serde(default)]
     last_site: Option<String>,
+    #[serde(default)]
+    selected_site: Option<String>,
     unsaved: bool,
     #[serde(default)]
     import_link: Option<String>,
@@ -1019,6 +1021,10 @@ fn build_sites_match_pob() {
     assert_eq!(sites.len(), 8);
     let sharing: Vec<&SiteInfo> = sites.iter().filter(|site| site.can_share()).collect();
     assert_eq!(sharing.len(), 5);
+    // Share's site drop-down starts where PoB's does (ImportTab.lua:540)
+    let picked = up_dump(&up).selected_site;
+    assert!(picked.is_some());
+    assert_eq!(our_view(&mut s).last_site, picked);
 
     // ---- Routes: every site serves the attack code; the five that take uploads answer them ----
     for site in &sites {
@@ -1873,6 +1879,8 @@ struct UpAccount {
     characters: Vec<CharacterEntry>,
     prompt: bool,
     popups: usize,
+    league_selected: Option<String>,
+    character_selected: Option<String>,
 }
 
 fn up_account(up: &UpstreamNet) -> UpAccount {
@@ -1910,6 +1918,14 @@ fn assert_public_equal(ours: &PublicView, theirs: &UpAccount, what: &str) {
     ) {
         assert_eq!(ours.leagues, theirs.leagues, "{what}: leagues");
         assert_eq!(ours.characters, theirs.characters, "{what}: characters");
+        assert_eq!(
+            ours.league_selected, theirs.league_selected,
+            "{what}: league picked"
+        );
+        assert_eq!(
+            ours.character_selected, theirs.character_selected,
+            "{what}: character picked"
+        );
     }
 }
 
@@ -2623,6 +2639,8 @@ fn accounts(s: &NetSession) -> String {
 struct UpOAuth {
     leagues: Vec<String>,
     characters: Vec<CharacterEntry>,
+    league_selected: Option<String>,
+    character_selected: Option<String>,
 }
 
 fn import_oauth(realm: Realm, league: Option<&str>, name: &str, part: CharacterPart) -> Command {
@@ -2824,6 +2842,16 @@ fn oauth_flow_matches_pob() {
     };
     assert_eq!(signed.characters, theirs.characters);
     assert_eq!(signed.leagues, theirs.leagues);
+    // PoB's own picks after the list came: the first league and its first character
+    assert_eq!(
+        (&signed.league_selected, &signed.character_selected),
+        (&theirs.league_selected, &theirs.character_selected)
+    );
+    assert!(signed.character_selected.is_some(), "PoB picks a character");
+    assert!(
+        signed.characters.iter().all(|c| c.colour.starts_with('^')),
+        "PoB's class colours"
+    );
     let names: Vec<&str> = signed.characters.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, ["alphaGate", "GateOne", "gateThree", "GateTwo"]);
     assert_eq!(

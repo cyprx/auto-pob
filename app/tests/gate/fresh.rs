@@ -437,3 +437,52 @@ fn a_non_ascii_loadout_name_makes_nothing_as_in_pob() {
     let _ = std::fs::remove_dir_all(&pob);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// An older auto-pob's `GetUserPath` ended in a slash, so the open build it recorded at exit is
+/// `<user>//Path of Building/Builds/...`. Started on that, PoB derives the build's folder from
+/// the length of today's single-slash `buildPath` (Build.lua:65); ours folds the path first.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_build_recorded_by_an_older_auto_pob_reopens_in_its_folder() {
+    let _guard = lock();
+    let root = std::env::temp_dir().join(format!("auto-pob-oldpath-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let user = root.join("user");
+    let builds = user.join("Path of Building/Builds");
+    std::fs::create_dir_all(builds.join("sub")).unwrap();
+    let xml = std::fs::read_to_string(super::fixtures_dir().join("new.xml")).unwrap();
+    std::fs::write(builds.join("sub/Old.xml"), &xml).unwrap();
+    let recorded = format!("{}//Path of Building/Builds/sub/Old.xml", user.display());
+    std::fs::write(
+        user.join("Path of Building/Settings.xml"),
+        format!(
+            "<PathOfBuilding>\n\t<Mode mode=\"BUILD\"><Arg string=\"{recorded}\"/><Arg string=\"Old\"/></Mode>\n</PathOfBuilding>\n"
+        ),
+    )
+    .unwrap();
+    let pob = pob_farm("oldpath");
+    let mut backend = PobBackend::start_with(Game::Poe1, &pob, &user, canned(&canned_web()))
+        .expect("starting PoB");
+    assert!(
+        backend.build_loaded().unwrap(),
+        "the recorded build reopens"
+    );
+    let (file, sub): (String, String) = backend
+        .lua
+        .load("return pob.build.dbFileName, pob.build.dbFileSubPath")
+        .eval()
+        .unwrap();
+    assert_eq!(file, builds.join("sub/Old.xml").to_str().unwrap());
+    assert_eq!(sub, "sub/");
+    // the exit save records the folded path
+    backend.shutdown();
+    let saved = std::fs::read_to_string(user.join("Path of Building/Settings.xml")).unwrap();
+    assert!(!saved.contains("//"), "{saved}");
+    assert_eq!(
+        std::fs::read_to_string(builds.join("sub/Old.xml")).unwrap(),
+        xml
+    );
+    drop(backend);
+    let _ = std::fs::remove_dir_all(&pob);
+    let _ = std::fs::remove_dir_all(&root);
+}

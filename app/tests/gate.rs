@@ -4440,3 +4440,39 @@ fn undo_and_redo_stay_in_their_tab() {
     assert_eq!(allocated(&mut s), tree1);
     assert_eq!(items(&mut s), items0);
 }
+
+/// A quoted search word is put into a Lua pattern unescaped (PassiveTreeView.lua:789), so
+/// `"[x"` raises in PoB's own Draw, and every frame after it while the text stays. The search
+/// is refused instead, with PoB's reason; the last good search and the tree view stay. Other
+/// pattern characters search as in PoB.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_search_pob_cant_read_is_refused_and_the_tree_keeps_working() {
+    let _guard = lock();
+    let mut s = attack_session("odd-search");
+    s.backend.apply(search("life"), &|_| {}).expect("search");
+    let before = s
+        .backend
+        .tree_state_view()
+        .expect("tree view")
+        .search_matches;
+    assert!(!before.is_empty());
+    let error = s
+        .backend
+        .apply(search("\"[x\""), &|_| {})
+        .expect_err("a malformed pattern")
+        .to_string();
+    assert_eq!(error, "malformed pattern (missing ']')");
+    let state = s
+        .backend
+        .tree_state_view()
+        .expect("the tree view still works");
+    assert_eq!(state.search, "life");
+    assert_eq!(state.search_matches, before);
+    for text in [
+        "[x", "50%", "\"50%\"", "\"a(b\"", "%", "\"", "\"\"", "(", "oil:", "",
+    ] {
+        s.backend.apply(search(text), &|_| {}).expect(text);
+        s.backend.tree_state_view().expect(text);
+    }
+}

@@ -994,6 +994,13 @@ end
 -- frame's Draw matched every node for the new text (PassiveTreeView.lua:780-802), or the text
 -- is unchanged and `fresh` says they were current before (only tree searches ran since).
 function glue.set_tree_search(text, fresh)
+	-- a quoted word goes into a Lua pattern unescaped (PassiveTreeView.lua:789): one PoB can't
+	-- read would raise in its Draw at every frame while the text stays, so it is refused, and
+	-- the last search stays
+	local ok, err = pcall(search_words, text)
+	if not ok then
+		error((tostring(err):gsub("^.-:%d+: ", "")), 0)
+	end
 	local viewer = pob.build.treeTab.viewer
 	local before = viewer.searchStrCached
 	viewer.searchStr = text

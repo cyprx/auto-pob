@@ -149,14 +149,58 @@ fn steps(input: &egui::InputState, arrows: &[(Key, i32)]) -> (i32, i32, bool, bo
 
 /// Takes the wheel and the keys out of this frame
 fn take(ui: &egui::Ui, arrows: &[(Key, i32)]) {
+    take_wheel(ui);
     ui.input_mut(|i| {
-        i.smooth_scroll_delta = egui::Vec2::ZERO;
         i.events.retain(|e| match e {
-            Event::MouseWheel { .. } => false,
             Event::Key { key, .. } => !arrows.iter().any(|(k, _)| k == key),
             _ => true,
         });
     });
+}
+
+fn wheel_taken_id() -> egui::Id {
+    egui::Id::NULL.with("pob_wheel_taken")
+}
+
+/// Takes the wheel out of this frame, and its remainder out of the frames after it: egui doles
+/// a notch out to the scroll areas over several frames (its smoothing), so a notch a control
+/// stepped on would still scroll the page behind it. [`end_taken_wheel`] ends that.
+fn take_wheel(ui: &egui::Ui) {
+    let had = ui.input_mut(|i| {
+        let had = i
+            .events
+            .iter()
+            .any(|e| matches!(e, Event::MouseWheel { .. }));
+        i.smooth_scroll_delta = egui::Vec2::ZERO;
+        i.events.retain(|e| !matches!(e, Event::MouseWheel { .. }));
+        had
+    });
+    if had {
+        ui.ctx().data_mut(|d| d.insert_temp(wheel_taken_id(), true));
+    }
+}
+
+/// For the app's `raw_input_hook`, before egui reads the next frame's input: after a frame
+/// whose wheel a control took, the wheel's scroll action is cancelled, so the part of the notch
+/// egui's smoothing still holds doesn't reach a scroll area (egui keeps it in its private
+/// wheel state; a `Cancel` phase is its public way to drop it). PoB steps the control and
+/// nothing else on that notch.
+pub fn end_taken_wheel(ctx: &egui::Context, raw: &mut egui::RawInput) {
+    if ctx
+        .data_mut(|d| d.remove_temp::<bool>(wheel_taken_id()))
+        .unwrap_or(false)
+    {
+        raw.events.insert(
+            0,
+            Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::Vec2::ZERO,
+                phase: egui::TouchPhase::Cancel,
+                source: egui::MouseWheelSource::Unknown,
+                modifiers: egui::Modifiers::NONE,
+            },
+        );
+    }
 }
 
 const DROPDOWN_KEYS: [(Key, i32); 4] = [
@@ -270,10 +314,7 @@ pub fn number_step(ui: &egui::Ui, response: &egui::Response) -> i32 {
         });
     }
     if wheel != 0 {
-        ui.input_mut(|i| {
-            i.smooth_scroll_delta = egui::Vec2::ZERO;
-            i.events.retain(|e| !matches!(e, Event::MouseWheel { .. }));
-        });
+        take_wheel(ui);
     }
     -(keys + wheel)
 }
@@ -408,6 +449,54 @@ mod tests {
             slide(&ctx, 0.5, vec![wheel(-1.0, Modifiers::NONE)]),
             0.55
         ));
+    }
+
+    /// A notch a slider took scrolls nothing behind it, in its own frame or the frames after it,
+    /// where egui's smoothing would dole the rest of the notch out to the scroll area
+    #[test]
+    fn a_taken_notch_leaves_no_remainder_to_scroll_the_page() {
+        let run = |hook: bool| {
+            let ctx = egui::Context::default();
+            let mut offset = 0.0;
+            let mut stepped = None;
+            let mut time = 1.0;
+            for frame in 0..30 {
+                let mut events = vec![Event::PointerMoved(Pos2::new(60.0, 20.0))];
+                if frame == 2 {
+                    events.push(wheel(-1.0, Modifiers::NONE));
+                }
+                time += 1.0 / 60.0;
+                let mut raw = RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 200.0))),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                };
+                if hook {
+                    end_taken_wheel(&ctx, &mut raw);
+                }
+                ctx.run_ui(raw, |ui| {
+                    let out = egui::ScrollArea::vertical().show(ui, |ui| {
+                        let mut v = 0.5;
+                        let r = ui.add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false));
+                        if let Some(to) = slider_step(ui, &r, 0.5) {
+                            stepped = Some(to);
+                        }
+                        ui.add_space(2000.0);
+                    });
+                    offset = out.state.clamped_offset().y;
+                })
+                .drop_without_applying_deltas();
+            }
+            (stepped, offset)
+        };
+        // the leak this guards against: without the hook the page moves after the step
+        let (stepped, offset) = run(false);
+        assert!(stepped.is_some());
+        assert!(offset > 0.0, "egui's smoothing no longer leaks: {offset}");
+        let (stepped, offset) = run(true);
+        assert!(stepped.is_some(), "the slider didn't step");
+        assert_eq!(offset, 0.0, "the page scrolled behind the slider");
     }
 
     /// `dropdown_step` on a dropped list of `len` entries, selected 0, with this frame's events

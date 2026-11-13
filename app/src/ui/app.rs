@@ -1786,6 +1786,13 @@ impl AutoPobApp {
                 self.send(command);
             }
         }
+        if self.tab != BuildTab::Calcs
+            && let Some(command) = self.calcs.flush()
+        {
+            // leaving the tab sends a count still being typed: PoB's box applies each key
+            // (CalcsTab.lua:70-85)
+            self.send(command);
+        }
         if self.tab != BuildTab::Config {
             // leaving the tab sends a custom modifier edit still being typed
             for command in self.config_ui.flush() {
@@ -5101,6 +5108,62 @@ mod tests {
         ] {
             frame(&mut app, &ctx, events);
         }
+        let sent = sent_since(&app, before);
+        assert!(
+            !sent.iter().any(|c| c.contains("SetCalcsCount")),
+            "{sent:?}"
+        );
+    }
+
+    /// PoB's count box applies each key (CalcsTab.lua:70-85): leaving the tab while typing
+    /// sends the count, once
+    #[test]
+    fn calcs_count_typed_then_tab_switch_is_flushed() {
+        let (mut app, ctx) = notes_app();
+        let mut view = crate::engine::views::CalcsView::default();
+        view.selector.stages = Some("1".into());
+        app.calcs.on_snapshot(&Snapshot::Calcs(Arc::new(view)));
+        app.tab = BuildTab::Calcs;
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        let pos = app.calcs.rects.map["stages"].center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![egui::Event::Text("3".into())],
+        ] {
+            frame(&mut app, &ctx, events);
+        }
+        let before = app.sent_full.len();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Num2, egui::Modifiers::COMMAND),
+        );
+        assert_eq!(app.tab, BuildTab::Skills);
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(
+            sent_since(&app, before),
+            ["SetCalcsCount { control: Stages, text: \"13\" }"]
+        );
+        assert!(!app.calcs.has_pending());
+        // coming back sends nothing more
+        let before = app.sent_full.len();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Num4, egui::Modifiers::COMMAND),
+        );
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
         let sent = sent_since(&app, before);
         assert!(
             !sent.iter().any(|c| c.contains("SetCalcsCount")),

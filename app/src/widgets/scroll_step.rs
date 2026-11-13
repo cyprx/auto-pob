@@ -106,13 +106,45 @@ pub fn note_tab_popup(ctx: &egui::Context) {
     ctx.data_mut(|d| d.insert_temp(tab_popup_id(), pass));
 }
 
-/// The open popup is the tab's own: one was noted this frame or the last. A dropped list of
-/// Build's, or a menu of another host, is not the tab's selected control (ItemSlotControl.lua
-/// :51 reads only the tab's selControl).
-pub fn tab_popup_open(ctx: &egui::Context) -> bool {
+fn tab_popup_ids_id() -> egui::Id {
+    egui::Id::NULL.with("pob_tab_popup_ids")
+}
+
+/// A tab's dropdown names its popup as its button is drawn, every frame, open or not: a list
+/// opened from code (the tree's right-click on a socket) is the tab's before its contents
+/// are first drawn
+pub fn note_dropdown(ctx: &egui::Context, popup: egui::Id) {
+    let scope: FocusScope = ctx.data(|d| d.get_temp(scope_id())).unwrap_or_default();
+    if scope.build_host {
+        return;
+    }
     let now = ctx.cumulative_pass_nr();
-    egui::Popup::is_any_open(ctx)
-        && ctx
+    ctx.data_mut(|d| {
+        let ids = d.get_temp_mut_or_default::<Vec<(u64, egui::Id)>>(tab_popup_ids_id());
+        ids.retain(|(pass, id)| pass + 1 >= now && *id != popup);
+        ids.push((now, popup));
+    });
+}
+
+/// The open popup is the tab's own: one of its dropdowns, drawn this frame or the last, is
+/// open, or a popup of the tab noted itself this frame or the last. A dropped list of Build's,
+/// or a menu of another host, is not the tab's selected control (ItemSlotControl.lua:51 reads
+/// only the tab's selControl).
+pub fn tab_popup_open(ctx: &egui::Context) -> bool {
+    if !egui::Popup::is_any_open(ctx) {
+        return false;
+    }
+    let now = ctx.cumulative_pass_nr();
+    let ids: Vec<egui::Id> = ctx.data(|d| {
+        d.get_temp::<Vec<(u64, egui::Id)>>(tab_popup_ids_id())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(pass, _)| pass + 1 >= now)
+            .map(|(_, id)| id)
+            .collect()
+    });
+    ids.into_iter().any(|id| egui::Popup::is_id_open(ctx, id))
+        || ctx
             .data(|d| d.get_temp::<u64>(tab_popup_id()))
             .is_some_and(|pass| pass + 1 >= now)
 }

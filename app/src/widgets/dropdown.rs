@@ -193,6 +193,7 @@ impl<'a> Dropdown<'a> {
         let button = ui.make_persistent_id(egui::IdSalt::new(self.salt));
         let search_id = button.with("search");
         let open_id = button.with("opened");
+        crate::widgets::scroll_step::note_dropdown(ui.ctx(), button.with("popup"));
         let open = egui::Popup::is_id_open(ui.ctx(), button.with("popup"));
         // Esc with a search empties it and keeps the list dropped (SearchHost.lua:109-111)
         let searching = ui
@@ -288,6 +289,32 @@ mod tests {
     use super::*;
     use eframe::egui::{Event, PointerButton, Pos2, RawInput, Rect, Vec2};
     use std::collections::HashMap;
+
+    /// A tab's dropdown opened from code (the tree's right-click on a jewel socket) is the
+    /// tab's popup in the very frame it opens, before its contents were ever drawn: the Items
+    /// tab's slot tooltips blank at once (ItemSlotControl.lua:51)
+    #[test]
+    fn a_dropdown_opened_from_code_is_the_tabs_popup_at_once() {
+        let ctx = egui::Context::default();
+        let mut seen = Vec::new();
+        for open in [false, true] {
+            ctx.run_ui(RawInput::default(), |ui| {
+                let salt = egui::IdSalt::new("tab_list");
+                Dropdown::from_id_salt("tab_list")
+                    .selected_text("one")
+                    .show_ui(ui, |ui| {
+                        item(ui, true, "one");
+                    });
+                if open {
+                    let popup = ui.make_persistent_id(egui::IdSalt::new(salt)).with("popup");
+                    egui::Popup::open_id(ui.ctx(), popup);
+                }
+                seen.push(crate::widgets::scroll_step::tab_popup_open(ui.ctx()));
+            })
+            .drop_without_applying_deltas();
+        }
+        assert_eq!(seen, [false, true]);
+    }
 
     struct Harness {
         ctx: egui::Context,

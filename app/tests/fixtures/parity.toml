@@ -269,7 +269,7 @@ ported = "app/src/ui/calcs/mod.rs search"
 note = "the same object as calcs.search, also held in the array part"
 
 [controls."calcs.#EditControl.buttonClear"]
-ported = "app/src/ui/calcs/mod.rs search"
+ported = "app/src/ui/calcs/mod.rs search: its x empties it (widgets/edit_box.rs clear_button)"
 note = "part of calcs.#EditControl"
 
 [controls."calcs.#EditControl.scrollBarH"]
@@ -295,7 +295,7 @@ note = "the tab's own scroll bar"
 ported = "app/src/ui/calcs/mod.rs search"
 
 [controls."calcs.search.buttonClear"]
-ported = "app/src/ui/calcs/mod.rs search"
+ported = "app/src/ui/calcs/mod.rs search: its x empties it (widgets/edit_box.rs clear_button)"
 note = "part of calcs.search"
 
 [controls."calcs.search.scrollBarH"]
@@ -639,7 +639,7 @@ ported = "app/src/ui/compare/config.rs search box over the option labels"
 note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; R25 already has Ctrl+F on Compare Config, so the box is implied"
 
 [controls."compare.configSearchEdit.buttonClear"]
-ported = "app/src/ui/compare/config.rs search box over the option labels"
+ported = "app/src/ui/compare/config.rs search box: its x empties it (widgets/edit_box.rs clear_button)"
 note = "part of compare.configSearchEdit"
 
 [controls."compare.configSearchEdit.scrollBarH"]
@@ -1131,7 +1131,7 @@ ported = "app/src/ui/import.rs build sharing"
 ported = "app/src/ui/import.rs build sharing"
 
 [controls."import.importCodeIn.buttonClear"]
-ported = "app/src/ui/import.rs build sharing"
+ported = "app/src/ui/import.rs code box: its x empties it (widgets/edit_box.rs clear_button)"
 note = "part of import.importCodeIn"
 
 [controls."import.importCodeIn.scrollBarH"]
@@ -1175,10 +1175,10 @@ ported = "app/src/ui/import.rs recent accounts dropdown"
 note = "part of import.siteAccountHistory"
 
 [controls."import.siteAccountName"]
-ported = "app/src/ui/import.rs import by account name"
+ported = "app/src/ui/import.rs import by account name: the box keeps what was typed, and Enter does nothing (no enterFunc, ImportTab.lua:340-341)"
 
 [controls."import.siteAccountName.buttonClear"]
-ported = "app/src/ui/import.rs import by account name"
+ported = "app/src/ui/import.rs account name box: its x empties it (widgets/edit_box.rs clear_button)"
 note = "part of import.siteAccountName"
 
 [controls."import.siteAccountName.scrollBarH"]

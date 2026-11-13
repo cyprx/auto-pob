@@ -88,6 +88,9 @@ pub struct ImportUi {
     clear_items: bool,
     ignore_weapon_swap: bool,
     account_box: EditBox,
+    /// The account name the view last held: the box takes it when it changes, and otherwise
+    /// keeps what was typed, as PoB's box keeps its text
+    account_seen: Option<String>,
     account_id: egui::Id,
     chain: Option<Chain>,
     ready: Vec<Command>,
@@ -135,6 +138,7 @@ impl Default for ImportUi {
             clear_items: true,
             ignore_weapon_swap: false,
             account_box: EditBox::default(),
+            account_seen: None,
             account_id: egui::Id::unique("import_account_name"),
             chain: None,
             ready: Vec::new(),
@@ -593,19 +597,34 @@ impl ImportUi {
                         hint: Some("Account name#1234"),
                         ..EditBoxOptions::default()
                     };
-                    let (r, _) =
-                        self.account_box
-                            .show(ui, self.account_id, &public.account, false, &opts);
+                    let current = if self.account_seen.as_ref() == Some(&public.account) {
+                        self.account_box.text.clone()
+                    } else {
+                        self.account_seen = Some(public.account.clone());
+                        public.account.clone()
+                    };
+                    let (r, _) = self
+                        .account_box
+                        .show(ui, self.account_id, &current, false, &opts);
                     mark(ui, "account_name", &r);
+                    // its "x" empties it (ImportTab.lua:341, clearable)
+                    if let Some(x) =
+                        crate::widgets::edit_box::clear_button(ui, &mut self.account_box.text)
+                    {
+                        mark(ui, "account_clear", &x);
+                        if x.clicked() {
+                            // the box keeps the keyboard, so the view doesn't refill it
+                            ui.memory_mut(|m| m.request_focus(self.account_id));
+                        }
+                    }
                     // PoB enables Start only for a name with its discriminator (NF-8)
                     let (_, can_start) = account_name_state(&self.account_box.text);
                     let name = self.account_box.text.trim().to_owned();
                     let start = ui.add_enabled(can_start, theme::primary_button("Start"));
                     mark(ui, "start", &start);
-                    // Only Start, or Enter in the box, asks for the list. Leaving the box with
-                    // the text (`entered`) is no request: nothing goes out the user didn't ask for.
-                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if start.clicked() || (enter && can_start) {
+                    // Only Start asks for the list: PoB's box has no Enter function
+                    // (ImportTab.lua:340-341), and leaving it is no request either
+                    if start.clicked() {
                         out.commands.push(Command::ListPublicCharacters {
                             account: name,
                             realm: self.realm,
@@ -846,7 +865,12 @@ impl ImportUi {
         if std::mem::take(&mut self.focus_code) {
             r.request_focus();
         }
-        if r.changed() {
+        // its "x" empties it (ImportTab.lua:670, clearable)
+        let cleared = crate::widgets::edit_box::clear_button(ui, &mut self.code);
+        if let Some(x) = &cleared {
+            mark(ui, "code_clear", x);
+        }
+        if r.changed() || cleared.is_some_and(|x| x.clicked()) {
             self.code_dirty = Some(now);
         }
         if let Some(since) = self.code_dirty {
@@ -1903,6 +1927,8 @@ pub(crate) mod tests {
             h.click(away);
             h.frame(vec![]);
             assert!(h.log.is_empty(), "blurring via {away} sent {:?}", h.log);
+            // and the box keeps the name, as PoB's keeps its text
+            assert_eq!(h.ui.account_box.text, "Someone#1234", "via {away}");
         }
         let mut h = Harness::new();
         h.frame(vec![]);
@@ -1916,9 +1942,37 @@ pub(crate) mod tests {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         }]);
+        h.frame(vec![]);
+        // PoB's box has no Enter function (ImportTab.lua:340-341): only Start asks
+        assert!(h.log.is_empty(), "Enter sent {:?}", h.log);
+        h.click("start");
         assert_eq!(
             h.log,
             ["ListPublicCharacters { account: \"Someone#1234\", realm: Pc }"]
+        );
+    }
+
+    /// The name and code boxes are clearable: an "x" empties them (EditControl.lua:73-77)
+    #[test]
+    fn the_name_and_code_boxes_clear_on_their_x() {
+        let mut h = Harness::new();
+        h.frame(vec![]);
+        h.click("mode:name");
+        h.click("account_name");
+        h.frame(vec![egui::Event::Text("Someone#1234".into())]);
+        h.frame(vec![]);
+        h.click("account_clear");
+        h.frame(vec![]);
+        assert_eq!(h.ui.account_box.text, "");
+        h.click("code_box");
+        h.frame(vec![egui::Event::Text("abc".into())]);
+        h.frame(vec![]);
+        h.click("code_clear");
+        assert_eq!(h.ui.code, "");
+        h.idle_for(1.0);
+        assert_eq!(
+            h.log.last().map(String::as_str),
+            Some("SetImportCode { text: \"\" }")
         );
     }
 
@@ -2014,8 +2068,16 @@ pub(crate) mod tests {
         assert!(h.has_text("Missing discriminator e.g. #1234"));
         h.click("start");
         assert!(h.log.is_empty(), "{:?}", h.log);
+        // the box keeps what was typed, as PoB's: the discriminator goes after it
         h.click("account_name");
-        h.frame(vec![egui::Event::Text("Someone#1234".into())]);
+        h.frame(vec![egui::Event::Key {
+            key: egui::Key::End,
+            physical_key: Some(egui::Key::End),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        h.frame(vec![egui::Event::Text("#1234".into())]);
         h.frame(vec![]);
         assert!(!h.has_text("Missing discriminator"));
         h.click("start");

@@ -369,7 +369,12 @@ impl CalcsUi {
         if std::mem::take(&mut self.focus_search) {
             response.request_focus();
         }
-        if response.changed() {
+        // its "x" empties it (CalcsTab.lua:35, clearable)
+        let cleared = crate::widgets::edit_box::clear_button(ui, buf);
+        if let Some(x) = &cleared {
+            self.rects.note(x, || "search_clear".into());
+        }
+        if response.changed() || cleared.is_some_and(|x| x.clicked()) {
             out.push(Command::SetCalcsSearch { text: buf.clone() });
         }
     }
@@ -917,6 +922,10 @@ mod tests {
         h.click("search");
         let sent = h.frame(vec![Event::Text("x".into())]);
         assert_eq!(debug(&sent), ["SetCalcsSearch { text: \"x\" }"]);
+        // the box is clearable: its "x" empties it (CalcsTab.lua:35)
+        h.frame(vec![]);
+        let sent = h.click("search_clear");
+        assert_eq!(debug(&sent), ["SetCalcsSearch { text: \"\" }"]);
     }
 
     #[test]

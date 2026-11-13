@@ -52,6 +52,19 @@ impl EditBoxOptions {
     }
 }
 
+/// A clearable box's "x" (EditControl.lua:73-77): shown while the box holds text; a click
+/// empties it. True when it was clicked.
+pub fn clear_button(ui: &mut egui::Ui, text: &mut String) -> Option<egui::Response> {
+    if text.is_empty() {
+        return None;
+    }
+    let x = ui.small_button("x");
+    if x.clicked() {
+        text.clear();
+    }
+    Some(x)
+}
+
 /// PoB's step of a `%D` box (EditControl.lua:680-700): up adds one to its number, or makes it
 /// 1; down takes one from a number above 0, or makes it 0
 pub fn stepped(text: &str, up: bool) -> String {

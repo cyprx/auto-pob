@@ -89,8 +89,8 @@ pub struct PobBackend {
 /// `TreeState.paths` and `TreeState.depends` as the glue last sent them
 struct TreePaths {
     token: i64,
-    paths: Vec<crate::engine::views::NodePath>,
-    depends: Vec<crate::engine::views::NodePath>,
+    paths: std::sync::Arc<[crate::engine::views::NodePath]>,
+    depends: std::sync::Arc<[crate::engine::views::NodePath]>,
 }
 
 /// R17: a timeless search step yields once this much of `GetTime()` has passed
@@ -2556,7 +2556,7 @@ impl Backend for PobBackend {
 
     fn tree_state_view(&mut self) -> Result<TreeState> {
         // the paths come only when they differ from the ones held: building and converting
-        // them was most of the view, which every edit resends
+        // them was most of the view, which every edit resends; a list held is shared, not copied
         let held = self.tree_paths.as_ref().map(|p| p.token);
         let (value, token, sent): (mlua::Value, i64, bool) =
             self.call("tree_state", (self.fresh_search, held))?;

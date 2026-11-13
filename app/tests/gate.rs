@@ -1803,7 +1803,7 @@ fn layout_includes_spec_only_nodes() {
         assert!(ids.contains(id), "allocated node {id} is not in the layout");
     }
     assert!(!state.paths.is_empty(), "the build can grow");
-    for path in &state.paths {
+    for path in state.paths.iter() {
         assert!(ids.contains(&path.node), "reachable node {}", path.node);
         assert!(path.path.iter().all(|id| ids.contains(id)));
     }
@@ -3177,8 +3177,8 @@ fn tree_paths_are_kept_but_never_stale() {
         let state = s.backend.tree_state_view().unwrap();
         let (paths, depends) = paths_from_scratch(s);
         assert!(!paths.is_empty(), "{what}");
-        assert!(state.paths == paths, "{what}: stale paths");
-        assert!(state.depends == depends, "{what}: stale dependants");
+        assert!(*state.paths == paths[..], "{what}: stale paths");
+        assert!(*state.depends == depends[..], "{what}: stale dependants");
         state
     };
     let state = check(&mut s, "open");
@@ -3202,7 +3202,11 @@ fn tree_paths_are_kept_but_never_stale() {
         .unwrap();
     assert_eq!(again, token);
     assert!(!sent, "unchanged paths were sent again");
-    check(&mut s, "config edit");
+    let edited = check(&mut s, "config edit");
+    // the engine shares the lists it holds rather than copying them
+    let again = s.backend.tree_state_view().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&edited.paths, &again.paths));
+    assert!(std::sync::Arc::ptr_eq(&edited.depends, &again.depends));
     // every kind of change
     let reachable = state.paths.iter().find(|p| p.path.len() == 1).unwrap().node;
     s.run(Command::AllocNode { id: reachable }).unwrap();
@@ -3323,8 +3327,8 @@ fn tree_paths_follow_jewels() {
     let check = |s: &mut Session, what: &str| {
         let state = s.backend.tree_state_view().unwrap();
         let (paths, depends) = paths_from_scratch(s);
-        assert!(state.paths == paths, "{what}: stale paths");
-        assert!(state.depends == depends, "{what}: stale dependants");
+        assert!(*state.paths == paths[..], "{what}: stale paths");
+        assert!(*state.depends == depends[..], "{what}: stale dependants");
         state
     };
     let before = check(&mut s, "open");

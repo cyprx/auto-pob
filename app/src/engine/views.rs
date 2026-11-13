@@ -496,10 +496,11 @@ pub struct TreeState {
     pub mastery_options: Vec<MasteryOptions>,
     /// Reachable unallocated nodes: the path of nodes that allocating one takes
     #[serde(default)]
-    pub paths: Vec<NodePath>,
+    /// Shared: the engine keeps the lists while they don't change
+    pub paths: std::sync::Arc<[NodePath]>,
     /// Allocated nodes: the nodes that deallocating one drops (`node.depends`)
     #[serde(default)]
-    pub depends: Vec<NodePath>,
+    pub depends: std::sync::Arc<[NodePath]>,
     #[serde(default)]
     pub search: String,
     #[serde(default)]

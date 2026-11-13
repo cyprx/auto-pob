@@ -434,7 +434,8 @@ fn wheel_notches(ui: &egui::Ui) -> (f32, bool) {
 }
 
 /// Uploads sprite sheets that aren't on the GPU yet. Returns them indexed like
-/// [`TreeLayout::sheets`].
+/// [`TreeLayout::sheets`]. Every sheet's pixels are taken and dropped, uploaded or not: the
+/// texture is what gets drawn, and keeping the decoded copy would hold it twice.
 fn upload_sheets(
     tab: &mut TreeTab,
     ctx: &egui::Context,
@@ -445,13 +446,19 @@ fn upload_sheets(
         .iter()
         .map(|sheet| {
             let sheet = sheet.as_ref()?;
-            let texture: &TextureHandle =
-                tab.textures.entry(sheet.path.clone()).or_insert_with(|| {
-                    let image = egui::ColorImage::from_rgba_unmultiplied(sheet.size, &sheet.rgba);
+            let rgba = sheet.take_rgba();
+            let texture: &TextureHandle = match tab.textures.entry(sheet.path.clone()) {
+                std::collections::hash_map::Entry::Occupied(held) => held.into_mut(),
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    // no pixels: this UI took them before and has the texture (an engine
+                    // serves one UI), so this can't happen; the sprites would be left out, as
+                    // for a sheet that couldn't be loaded
+                    let image = egui::ColorImage::from_rgba_unmultiplied(sheet.size, &rgba?);
                     let options = egui::TextureOptions::LINEAR
                         .with_mipmap_mode(Some(egui::TextureFilter::Linear));
-                    ctx.load_texture(sheet.path.display().to_string(), image, options)
-                });
+                    slot.insert(ctx.load_texture(sheet.path.display().to_string(), image, options))
+                }
+            };
             Some((
                 texture.id(),
                 Vec2::new(sheet.size[0] as f32, sheet.size[1] as f32),
@@ -599,5 +606,45 @@ mod tests {
         assert_eq!(tooltip_body(&n, Some(&r)), TooltipBody::Lines(&r.lines));
         assert_eq!(tooltip_body(&n, Some(&reply(6, 2))), TooltipBody::Instant);
         assert_eq!(tooltip_body(&n, Some(&reply(5, 0))), TooltipBody::Instant);
+    }
+
+    fn sheet_layout(sheet: &std::sync::Arc<crate::engine::SheetImage>) -> TreeLayout {
+        let mut layout = super::super::geometry::tests::layout(vec![], vec![]);
+        layout.sheets = vec![Some(std::sync::Arc::clone(sheet)), None];
+        layout
+    }
+
+    fn sheet() -> std::sync::Arc<crate::engine::SheetImage> {
+        std::sync::Arc::new(crate::engine::SheetImage::new(
+            "TreeData/3_29/skills-3.jpg".into(),
+            [2, 1],
+            vec![255; 8],
+        ))
+    }
+
+    #[test]
+    fn uploaded_sheets_drop_their_pixels() {
+        let ctx = egui::Context::default();
+        let mut tab = TreeTab::default();
+        let first = sheet();
+        let up = upload_sheets(&mut tab, &ctx, &sheet_layout(&first));
+        assert_eq!(up.len(), 2);
+        let (id, size) = up[0].expect("uploaded");
+        assert_eq!(size, Vec2::new(2.0, 1.0));
+        assert!(up[1].is_none());
+        // the texture holds the sheet now; the decoded copy is gone
+        assert!(!first.has_rgba());
+        // later frames draw from the texture
+        let again = upload_sheets(&mut tab, &ctx, &sheet_layout(&first));
+        assert_eq!(again[0].map(|s| s.0), Some(id));
+        // a later layout's fresh copy of a sheet already up is dropped too, not kept
+        let second = sheet();
+        let next = upload_sheets(&mut tab, &ctx, &sheet_layout(&second));
+        assert_eq!(next[0].map(|s| s.0), Some(id));
+        assert!(!second.has_rgba());
+        // without pixels nor a texture the sheet's sprites are left out, not a panic
+        let mut other = TreeTab::default();
+        assert!(upload_sheets(&mut other, &ctx, &sheet_layout(&first))[0].is_none());
+        assert!(other.textures.is_empty());
     }
 }

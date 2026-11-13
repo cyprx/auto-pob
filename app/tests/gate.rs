@@ -3769,7 +3769,20 @@ fn compare_only_nodes_match_pob() {
         if check.is_none() {
             return;
         }
+        // the layout first, as the engine sends it before the state
+        let sheets = s.backend.tree_layout_view().unwrap().sheets.len();
         let state = s.backend.tree_state_view().unwrap();
+        // PoB draws each with its allocated art (PassiveTreeView.lua:1124-1131): an icon on a
+        // sheet the layout sent
+        for node in state.compare_only.iter().filter(|n| n.kind != "Socket") {
+            let icon = node
+                .art
+                .as_ref()
+                .and_then(|a| a.icon)
+                .and_then(|i| i.sprite())
+                .unwrap_or_else(|| panic!("node {} has no art", node.id));
+            assert!(icon.sheet < sheets, "node {}", node.id);
+        }
         for node in &state.compare_only {
             let tip = s.backend.node_tooltip_view(node.id).unwrap();
             ours.push((node.id, tip));

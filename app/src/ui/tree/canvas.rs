@@ -32,8 +32,8 @@ type Sheet = (egui::TextureId, Vec2);
 
 const EDGE: Color32 = Color32::from_rgb(72, 62, 50);
 const HOVER: Color32 = Color32::WHITE;
-/// A node allocated in the compared spec only
-const COMPARE_ONLY: Color32 = Color32::from_rgb(0, 200, 0);
+/// A node allocated in the compared spec only: PoB tints its art green (`SetDrawColor(0, 1, 0)`)
+const COMPARE_ONLY: Color32 = Color32::from_rgb(0, 255, 0);
 /// The nodes a click would allocate
 const PATH: Color32 = Color32::from_rgb(120, 200, 255);
 /// The nodes a click would deallocate
@@ -215,7 +215,22 @@ pub fn show(
             continue;
         }
         let radius = (node_radius(&node.kind) * zoom).max(1.5);
-        painter.circle_filled(pos, radius, COMPARE_ONLY);
+        let art = |s: Option<crate::engine::LuaSprite>| {
+            let sprite = s?.sprite()?;
+            Some((sprite, sheets.get(sprite.sheet).copied().flatten()?))
+        };
+        let icon = node.art.as_ref().and_then(|a| art(a.icon));
+        let frame = node.art.as_ref().and_then(|a| art(a.frame));
+        match icon.or(frame) {
+            Some((sprite, _)) if sprite_size(sprite, zoom).x >= MIN_ICON_SIZE => {
+                for (sprite, sheet) in [icon, frame].into_iter().flatten() {
+                    draw_sprite(&painter, sheet, sprite, pos, zoom, COMPARE_ONLY);
+                }
+            }
+            _ => {
+                painter.circle_filled(pos, radius, COMPARE_ONLY);
+            }
+        }
         if compare_hover.is_some_and(|n| n.id == node.id) {
             painter.circle_stroke(pos, radius + 2.0, Stroke::new(2.0, HOVER));
         }

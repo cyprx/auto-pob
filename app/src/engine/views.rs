@@ -644,6 +644,37 @@ pub struct CompareOnlyNode {
     pub y: f32,
     pub kind: String,
     pub name: String,
+    /// Its allocated icon and frame, from the layout's sheets
+    #[serde(default)]
+    pub art: Option<CompareOnlyArt>,
+}
+
+/// A compare-only node's allocated art
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct CompareOnlyArt {
+    #[serde(default)]
+    pub icon: Option<LuaSprite>,
+    #[serde(default)]
+    pub frame: Option<LuaSprite>,
+}
+
+/// A sprite as the glue lists it: a 1-based sheet and a pixel rectangle
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct LuaSprite {
+    pub sheet: usize,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl LuaSprite {
+    pub fn sprite(&self) -> Option<Sprite> {
+        Some(Sprite {
+            sheet: self.sheet.checked_sub(1)?,
+            rect: [self.x, self.y, self.w, self.h],
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]

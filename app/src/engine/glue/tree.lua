@@ -8,6 +8,9 @@ local sheets, sheetIndex
 
 -- Looks up a sprite the way PoB's PassiveTree does, returning its sheet and pixel
 -- rectangle. PoB's own UVs can't be used: headless images report a 1x1 size.
+-- While set, a sprite on a sheet the last layout didn't send is left out
+local sheetsFrozen = false
+
 local function sprite(spriteType, name)
 	local tree = pob.build.spec.tree
 	local data = tree.skillSprites[spriteType]
@@ -28,6 +31,9 @@ local function sprite(spriteType, name)
 	end
 	local file = data.filename:gsub("%?%x+$", ""):gsub(".*/", "")
 	if not sheetIndex[file] then
+		if sheetsFrozen then
+			return nil
+		end
 		table.insert(sheets, "TreeData/" .. tree.treeVersion .. "/" .. file)
 		sheetIndex[file] = #sheets
 	end
@@ -398,6 +404,17 @@ local function compare_only(build, compareSpec, id)
 		and node.y ~= nil and node.type ~= "ClassStart" and node.type ~= "AscendClassStart"
 end
 
+-- A compare-only node's allocated icon and frame, on sheets the layout already has
+local function compare_only_art(node)
+	sheetsFrozen = true
+	local ok, art = pcall(nodeArt, node)
+	sheetsFrozen = false
+	if not ok then
+		return nil
+	end
+	return { icon = art.icon[2], frame = art.frame and art.frame[2] or nil }
+end
+
 -- Those nodes, sorted by id
 local function compare_only_nodes(build)
 	local compareSpec = viewed_compare_spec(build)
@@ -407,6 +424,9 @@ local function compare_only_nodes(build)
 			if compare_only(build, compareSpec, id) then
 				list[#list + 1] = {
 					id = id, x = node.x, y = node.y, kind = node.type, name = node.dn or "",
+					-- PoB draws its allocated art, tinted green (PassiveTreeView.lua:1108-1140),
+					-- from the sheets the layout sent
+					art = sheetIndex and compare_only_art(node) or nil,
 				}
 			end
 		end

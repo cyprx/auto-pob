@@ -1075,6 +1075,7 @@ mod tests {
             y: 300.0,
             kind: "Notable".into(),
             name: "Prismatic Heart".into(),
+            art: None,
         }];
         let mut h = Harness::new(l, Arc::new(state));
         let rect = h.tab.rect_for_test();

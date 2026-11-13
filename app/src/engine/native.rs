@@ -80,6 +80,20 @@ pub fn set_builds_root(lua: &Lua, root: Option<&Path>) -> bool {
     allowed
 }
 
+/// Arms the recursive `RemoveDir` for the Builds folder `root` as PoB holds it (R16), or says
+/// why not. A root that can't be resolved or isn't allowed disarms it first: a refused root never
+/// leaves an earlier one armed.
+pub(crate) fn arm_builds_root(lua: &Lua, root: &str) -> anyhow::Result<()> {
+    if fs::canonicalize(root).is_err() {
+        set_builds_root(lua, None);
+        anyhow::bail!("the Builds folder doesn't exist");
+    }
+    if !set_builds_root(lua, Some(Path::new(root))) {
+        anyhow::bail!("that Builds folder isn't allowed");
+    }
+    Ok(())
+}
+
 /// Where `path` is below the root, and whether it is a link: every part above it must be a real
 /// folder, the root itself is never it.
 fn locate(root: Option<&(PathBuf, PathBuf)>, path: &Path) -> Option<(PathBuf, bool)> {
@@ -597,6 +611,22 @@ mod tests {
     }
 
     #[test]
+    fn a_root_that_cant_be_resolved_disarms_the_old_one() {
+        let tmp = TempDir::new("rmgone");
+        let (old, gone) = (tmp.0.join("Builds"), tmp.0.join("Gone"));
+        fs::create_dir_all(old.join("victim/inner")).unwrap();
+        let lua = lua();
+        arm_builds_root(&lua, old.to_str().unwrap()).unwrap();
+        let error = arm_builds_root(&lua, gone.to_str().unwrap()).unwrap_err();
+        assert_eq!(error.to_string(), "the Builds folder doesn't exist");
+        assert_eq!(
+            remove(&lua, &old.join("victim")),
+            (None, Some("refused: outside the builds folder".to_string()))
+        );
+        assert!(old.join("victim/inner").is_dir());
+    }
+
+    #[test]
     fn a_link_to_a_folder_is_unlinked_and_its_target_stays() {
         use std::os::unix::fs::symlink;
         let tmp = TempDir::new("rmlink");
@@ -655,5 +685,20 @@ mod tests {
             .eval()
             .unwrap();
         assert_eq!(s, "hello hello hello");
+    }
+
+    /// An Abyss timeless jewel is 74 MB inflated, read the first time a search or the tree needs
+    /// it. Unoptimised, flate2's backend took about 2.1 s for it (a stall of the search's first
+    /// step); the dev profile optimises it as the release build does, about 0.25 s. Checked in
+    /// the workspace's Cargo.toml, not by timing, which a loaded machine makes flaky.
+    #[test]
+    fn inflate_is_optimised_in_every_build() {
+        let manifest = concat!(env!("CARGO_MANIFEST_DIR"), "/../Cargo.toml");
+        let doc: toml_edit::DocumentMut = fs::read_to_string(manifest).unwrap().parse().unwrap();
+        // the backend flate2 builds with here (`rust_backend`), its checksums and flate2 itself
+        for package in ["flate2", "miniz_oxide", "adler2", "simd-adler32"] {
+            let level = doc["profile"]["dev"]["package"][package]["opt-level"].as_integer();
+            assert_eq!(level, Some(3), "{package} isn't optimised in dev builds");
+        }
     }
 }

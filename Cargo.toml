@@ -60,3 +60,17 @@ default-members = ["app"]
 
 [dev-dependencies]
 zip = { version = "9.5.0", default-features = false, features = ["deflate"] }
+
+# Inflating PoB's timeless jewel data (an Abyss type is 74 MB) takes about 2 s unoptimised: the
+# gate and dev builds optimise flate2's backend, as the release build does
+[profile.dev.package.flate2]
+opt-level = 3
+
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+
+[profile.dev.package.adler2]
+opt-level = 3
+
+[profile.dev.package.simd-adler32]
+opt-level = 3

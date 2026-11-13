@@ -1494,6 +1494,17 @@ fn build_list_data_loss_guards() {
         assert_eq!(err(&mut s, command), "that Builds folder isn't allowed");
     }
     assert!(builds.join("sub/b.xml").is_file());
+    // M1: a root that can't be resolved disarms the one armed before it
+    s.backend
+        .lua
+        .globals()
+        .set("NEWROOT", real.clone())
+        .unwrap();
+    s.eval::<()>("pob.main.main.buildPath = NEWROOT");
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .expect("the real root arms");
     s.backend
         .lua
         .globals()
@@ -1509,11 +1520,61 @@ fn build_list_data_loss_guards() {
         ),
         "the Builds folder doesn't exist"
     );
+    assert_eq!(
+        try_remove(&s, &builds.join("sub")).1.as_deref(),
+        Some(refused),
+        "the old root is disarmed"
+    );
+    assert!(builds.join("sub/b.xml").is_file());
     s.backend.lua.globals().set("NEWROOT", real).unwrap();
     s.eval::<()>("pob.main.main.buildPath = NEWROOT");
     s.run(Command::ListBuilds {
         folder: String::new(),
     })
     .expect("the real root again");
+    assert_eq!(s.open_popups(), 0);
+
+    // Save As is as strict as the list's commands: no link on the way to its folder, a new
+    // folder included, and none at the file an overwrite would write through
+    s.run(Command::OpenBuild {
+        path: builds.join("dot.xml"),
+    })
+    .unwrap();
+    symlink(outside.join("written.xml"), builds.join("dang.xml")).unwrap();
+    symlink(outside.join("sentinel.xml"), sub.join("over.xml")).unwrap();
+    let before_files = tree(&builds);
+    for (folder, name) in [
+        ("x/l/", "through"),
+        ("inner/", "through"),
+        ("inner/made/", "through"),
+        ("x/l/made/", "through"),
+        ("", "dang"),
+        ("sub/", "over"),
+    ] {
+        for overwrite in [false, true] {
+            let command = Command::SaveAs {
+                folder: folder.into(),
+                name: name.into(),
+                overwrite,
+            };
+            let what = format!("{command:?}");
+            assert_eq!(err(&mut s, command), escapes, "{what}");
+        }
+    }
+    assert_eq!(tree(&builds), before_files, "Save As wrote in Builds");
+    assert_eq!(
+        tree(&outside),
+        outside_before,
+        "Save As wrote through a link"
+    );
+    assert!(!sub.join("made").exists());
+    // a real folder, new or not, still takes it
+    s.run(Command::SaveAs {
+        folder: "sub/made/".into(),
+        name: "saved".into(),
+        overwrite: false,
+    })
+    .expect("Save As into a new real folder");
+    assert!(sub.join("made/saved.xml").is_file());
     assert_eq!(s.open_popups(), 0);
 }

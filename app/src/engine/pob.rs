@@ -218,12 +218,7 @@ impl PobBackend {
     fn build_root(&self) -> Result<String> {
         let root: String = self.call("build_root", ())?;
         // a recursive RemoveDir may delete only below it (R16)
-        if std::fs::canonicalize(&root).is_err() {
-            anyhow::bail!("the Builds folder doesn't exist");
-        }
-        if !super::native::set_builds_root(&self.lua, Some(Path::new(&root))) {
-            anyhow::bail!("that Builds folder isn't allowed");
-        }
+        super::native::arm_builds_root(&self.lua, &root)?;
         Ok(root)
     }
 
@@ -444,6 +439,33 @@ impl PobBackend {
         let value: mlua::Value = self.call(name, args)?;
         self.lua.from_value(value).map_err(|e| anyhow!("{e}"))
     }
+}
+
+/// A popup list's rows from the glue's `row_keys` and `row_labels` (none for other kinds)
+fn popup_rows(control: &mlua::Table) -> mlua::Result<Vec<super::views::PopupRow>> {
+    let (Some(keys), Some(labels)) = (
+        control.raw_get::<Option<mlua::Table>>("row_keys")?,
+        control.raw_get::<Option<mlua::Table>>("row_labels")?,
+    ) else {
+        return Ok(Vec::new());
+    };
+    let text = |list: &mlua::Table, i: usize| -> mlua::Result<String> {
+        match list.raw_get::<mlua::Value>(i)? {
+            mlua::Value::String(text) => Ok(text.to_str()?.to_owned()),
+            other => Err(mlua::Error::external(format!(
+                "row {i} is a {}",
+                other.type_name()
+            ))),
+        }
+    };
+    (1..=keys.raw_len())
+        .map(|i| {
+            Ok(super::views::PopupRow {
+                key: text(&keys, i)?,
+                label: text(&labels, i)?,
+            })
+        })
+        .collect()
 }
 
 /// A config change touches the build and the config tab, and needs a recalculation (after
@@ -1129,6 +1151,19 @@ impl PobBackend {
                 name,
                 overwrite,
             } => {
+                // as strict as the build list's commands (R16): no link on the way to the
+                // folder, which may be new (the save makes it), and none at the file itself, which
+                // an overwrite would write through
+                // the glue's own checks first, in its order, so its messages stay
+                if name.is_empty() || name.contains(['/', '\\']) {
+                    anyhow::bail!("that isn't a valid build name");
+                }
+                if folder.contains("..") || folder.starts_with('/') {
+                    anyhow::bail!("that isn't a valid folder");
+                }
+                let root: String = self.call("build_root", ())?;
+                let folder = buildpaths::folder(&root, &folder, false, true)?;
+                buildpaths::save_target(&root, &folder, &name)?;
                 self.call::<_, ()>("save_as", (folder, name, overwrite))?;
                 // PoB's save rewrites the notes' `^_` escapes; the Summary's header names the
                 // build (R4)
@@ -2590,7 +2625,31 @@ impl Backend for PobBackend {
     }
 
     fn popup_view(&mut self) -> Result<Option<PopupView>> {
-        self.view("popup_view", ())
+        let mlua::Value::Table(view) = self.call::<_, mlua::Value>("popup_view", ())? else {
+            return Ok(None);
+        };
+        // a list's rows come as two flat lists (`row_keys`, `row_labels`), read here directly:
+        // a table per row, through serde, made the Mod Browser's 6188 rows cost about 6 ms
+        // per change (R28)
+        let lua_err = |e: mlua::Error| anyhow!("{e}");
+        let controls: mlua::Table = view.get("controls").map_err(lua_err)?;
+        let mut rows = Vec::new();
+        for control in controls.sequence_values::<mlua::Table>() {
+            let control = control.map_err(lua_err)?;
+            rows.push(popup_rows(&control).map_err(lua_err)?);
+            control.set("row_keys", mlua::Value::Nil).map_err(lua_err)?;
+            control
+                .set("row_labels", mlua::Value::Nil)
+                .map_err(lua_err)?;
+        }
+        let mut view: PopupView = self
+            .lua
+            .from_value(mlua::Value::Table(view))
+            .map_err(lua_err)?;
+        for (control, rows) in view.controls.iter_mut().zip(rows) {
+            control.rows = rows;
+        }
+        Ok(Some(view))
     }
 
     fn control_tooltip_view(

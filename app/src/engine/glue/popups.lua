@@ -732,10 +732,16 @@ local function control_view(name, control, kind, popup_x, popup_y)
 		view.text = control.buf or ""
 	elseif kind == "List" then
 		glue.list_sync(control)
+		-- the rows as two flat lists: a table per row made the Mod Browser's 6188 rows cost
+		-- 12k tables per view, and the garbage collection they caused (R28).
+		-- `glue.describe_control` turns them into `rows`.
+		local keys, labels = {}, {}
 		for i, value in ipairs(control.list) do
 			local ok, label = pcall(control.GetRowValue, control, 1, i, value)
-			view.rows[i] = { key = row_key(value, i), label = ok and text_of(label) or "" }
+			keys[i] = row_key(value, i)
+			labels[i] = ok and text_of(label) or ""
 		end
+		view.row_keys, view.row_labels = keys, labels
 		-- the selected row is `selIndex`: a Shift+click moves `selValue` but not the
 		-- selection (ListControl.lua:76-85)
 		local sel = control.selIndex and control.list[control.selIndex]
@@ -889,7 +895,14 @@ end
 -- gives them; nil for a kind the views don't have
 function glue.describe_control(name, control)
 	local kind = kind_of(control)
-	return kind and control_view(name, control, kind, 0, 0), kind
+	local view = kind and control_view(name, control, kind, 0, 0)
+	if view and view.row_keys then
+		for i, key in ipairs(view.row_keys) do
+			view.rows[i] = { key = key, label = view.row_labels[i] }
+		end
+		view.row_keys, view.row_labels = nil, nil
+	end
+	return view, kind
 end
 
 -- While a timeless search runs, only its window's Cancel is offered: PoB's press is

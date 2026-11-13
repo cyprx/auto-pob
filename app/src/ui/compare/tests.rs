@@ -170,6 +170,8 @@ pub(crate) fn sample() -> CompareView {
                 ours: "Yes".into(),
                 theirs: "No".into(),
                 common: false,
+                ours_control: None,
+                theirs_control: None,
             },
             CompareConfigRow {
                 var: "enemyIsBoss".into(),
@@ -177,6 +179,8 @@ pub(crate) fn sample() -> CompareView {
                 ours: "None".into(),
                 theirs: "Pinnacle".into(),
                 common: false,
+                ours_control: None,
+                theirs_control: None,
             },
             CompareConfigRow {
                 var: "bandit".into(),
@@ -184,6 +188,8 @@ pub(crate) fn sample() -> CompareView {
                 ours: "Kill all".into(),
                 theirs: "Kill all".into(),
                 common: true,
+                ours_control: None,
+                theirs_control: None,
             },
         ],
         switched: false,
@@ -1154,6 +1160,8 @@ fn the_config_search_matches_as_pobs() {
         ours: String::new(),
         theirs: String::new(),
         common: false,
+        ours_control: None,
+        theirs_control: None,
     };
     let boss = row("Is the enemy a Boss?");
     let charges = row("Do you use Power Charges?");
@@ -1221,4 +1229,34 @@ fn the_views_head_their_columns_with_both_names_in_pobs_colours() {
         );
         assert!(!h.drew("This build"), "{tab}");
     }
+}
+
+/// The Config view's rows carry PoB's boxes for both builds' values (CompareTab.lua:1127-1223):
+/// a click or typing goes out as the box's own `SetCompareControl`
+#[test]
+fn the_config_rows_are_pobs_boxes_for_both_builds() {
+    let mut view = sample();
+    let mut theirs = control("cfg_c_enemyIsBoss", PopupControlKind::Check);
+    theirs.checked = false;
+    let mut ours = control("cfg_p_enemyIsBoss", PopupControlKind::Edit);
+    ours.text = "2".into();
+    ours.digits = true;
+    view.config[0].theirs_control = Some(theirs);
+    view.config[0].ours_control = Some(ours);
+    let var = view.config[0].var.clone();
+    let mut h = Harness::new(Some(view));
+    h.click("sub:config");
+    assert!(h.ui.has_rect(&format!("config_row:{var}")));
+    let out = h.click("cfg_c_enemyIsBoss");
+    assert_eq!(
+        debug(&out.commands),
+        ["SetCompareControl { name: \"cfg_c_enemyIsBoss\", value: Check(true) }"]
+    );
+    h.click("edit_cfg_p_enemyIsBoss");
+    h.type_text("5");
+    let out = h.key(Key::Enter);
+    assert_eq!(
+        debug(&out.commands),
+        ["SetCompareControl { name: \"cfg_p_enemyIsBoss\", value: Text(\"25\") }"]
+    );
 }

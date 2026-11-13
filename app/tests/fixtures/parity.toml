@@ -896,7 +896,7 @@ ruled_out = "R9"
 note = "Compare Calcs sub-view out"
 
 [controls."compare.subTabConfig"]
-ported = "app/src/ui/compare/mod.rs sub_tabs Config (app/src/ui/compare/config.rs); columns headed by both build names in PoB's colours, PoB's empty-view line"
+ported = "app/src/ui/compare/mod.rs sub_tabs Config (app/src/ui/compare/config.rs): each row carries PoB's boxes for both builds (cfg_p_/cfg_c_ via SetCompareControl, CompareConfigRow.ours_control/theirs_control), gate compare_views_and_copies_match_pob; columns headed by both build names in PoB's colours"
 note = "Compare sub-tabs"
 
 [controls."compare.subTabItems"]

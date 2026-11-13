@@ -6,7 +6,8 @@ use super::{assert_sidebar, fixture_xml, fixtures_dir, golden, lock, pob_dir};
 use auto_pob::engine::upstream::{load_xml, upstream_lua};
 use auto_pob::engine::{
     Backend, CardLine, Command, CompareColour, CompareConfigRow, CompareItemRow, CompareRow,
-    CompareSkillRow, CompareSource, CompareView, ConfigValue, PopupInput,
+    CompareSkillRow, CompareSource, CompareView, ConfigValue, PopupControl, PopupControlKind,
+    PopupInput,
 };
 use mlua::LuaSerdeExt;
 use std::collections::BTreeMap;
@@ -915,6 +916,10 @@ impl Upstream {
     fn config_input(&self) -> BTreeMap<String, String> {
         self.json("return configInput()")
     }
+
+    fn config_boxes(&self) -> Vec<(String, String, String)> {
+        self.json("return configBoxes()")
+    }
 }
 
 fn our_item_state(s: &NetSession, slot: &str) -> ItemState {
@@ -989,8 +994,45 @@ fn same_views(s: &mut NetSession, up: &Upstream, what: &str) -> CompareView {
     let skills = up.skills();
     assert!(!skills.is_empty(), "{what}: no skill rows");
     assert_eq!(ours.skills, skills, "{what}: skills");
-    assert_eq!(ours.config, up.config(), "{what}: config");
+    let rows: Vec<CompareConfigRow> = ours
+        .config
+        .iter()
+        .map(|r| CompareConfigRow {
+            ours_control: None,
+            theirs_control: None,
+            ..r.clone()
+        })
+        .collect();
+    assert_eq!(rows, up.config(), "{what}: config");
+    assert_eq!(
+        config_boxes(&ours),
+        up.config_boxes(),
+        "{what}: config boxes"
+    );
     ours
+}
+
+/// What each Config row's two boxes hold, as upstream's `configBoxes` reads PoB's controls
+fn config_boxes(view: &CompareView) -> Vec<(String, String, String)> {
+    let value = |c: &Option<PopupControl>| {
+        let c = c.as_ref().expect("a box");
+        match c.kind {
+            PopupControlKind::Check => c.checked.to_string(),
+            PopupControlKind::Edit => c.text.clone(),
+            PopupControlKind::Dropdown => c.selected.to_string(),
+            other => panic!("a {other:?} box"),
+        }
+    };
+    view.config
+        .iter()
+        .map(|r| {
+            (
+                r.var.clone(),
+                value(&r.ours_control),
+                value(&r.theirs_control),
+            )
+        })
+        .collect()
 }
 
 /// Opens a build file in the session's Builds folder, as the list does
@@ -1427,6 +1469,79 @@ fn compare_views_and_copies_match_pob() {
             .filter(|c| c.name.ends_with("VersionSelect"))
             .collect::<Vec<_>>()
     );
+    // ---- the Config view's boxes: PoB's controls for both builds' values ----
+    // their check box: the comparison's option changes and it is recalculated
+    let boxes = same_views(&mut s, &up, "before the config boxes");
+    let theirs = boxes
+        .config
+        .iter()
+        .find_map(|r| {
+            let c = r.theirs_control.as_ref()?;
+            (c.kind == PopupControlKind::Check).then(|| (c.name.clone(), c.checked))
+        })
+        .expect("a check box row");
+    let start = our_config_input(&s);
+    run(
+        &mut s,
+        Command::SetCompareControl {
+            name: theirs.0.clone(),
+            value: PopupInput::Check(!theirs.1),
+        },
+    )
+    .unwrap();
+    up.call::<()>("pressConfigBox", (theirs.0.as_str(), "check", ()));
+    assert_eq!(our_config_input(&s), start, "their box changed our option");
+    same_summary(&mut s, &up, "their config box");
+    same_views(&mut s, &up, "their config box");
+    // our number box: this build's option, recalculated
+    let current = view(&mut s);
+    let ours_box = current
+        .config
+        .iter()
+        .find_map(|r| {
+            let c = r.ours_control.as_ref()?;
+            (c.kind == PopupControlKind::Edit && c.digits).then(|| (c.name.clone(), c.text.clone()))
+        })
+        .expect("a number box row");
+    let (ours_box, was) = ours_box;
+    let affected = run(
+        &mut s,
+        Command::SetCompareControl {
+            name: ours_box.clone(),
+            value: PopupInput::Text("3".into()),
+        },
+    )
+    .unwrap();
+    assert!(affected.config && affected.recalc && affected.compare);
+    up.call::<()>("pressConfigBox", (ours_box.as_str(), "text", "3"));
+    assert_ne!(our_config_input(&s), start);
+    assert_eq!(our_config_input(&s), up.config_input());
+    same_summary(&mut s, &up, "our config box");
+    same_views(&mut s, &up, "our config box");
+    // both back as they were: PoB's boxes add no undo state, so the Config undo below goes
+    // back past them
+    run(
+        &mut s,
+        Command::SetCompareControl {
+            name: ours_box.clone(),
+            value: PopupInput::Text(was.clone()),
+        },
+    )
+    .unwrap();
+    up.call::<()>("pressConfigBox", (ours_box.as_str(), "text", was.as_str()));
+    run(
+        &mut s,
+        Command::SetCompareControl {
+            name: theirs.0.clone(),
+            value: PopupInput::Check(theirs.1),
+        },
+    )
+    .unwrap();
+    up.call::<()>("pressConfigBox", (theirs.0.as_str(), "check", ()));
+    assert_eq!(our_config_input(&s), start);
+    // a check box clicked back leaves PoB's input false, not unset ("No", not "(not set)")
+    same_views(&mut s, &up, "the config boxes back");
+
     // the copy below starts from here
     let ours = same_views(&mut s, &up, "after the conversions");
     let start = our_config_input(&s);

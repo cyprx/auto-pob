@@ -44,6 +44,9 @@ local CONTROLS = {
 	{ "configToggleBtn", "CONFIG" },
 }
 
+-- The Config view's boxes, rebuilt and synced (defined with the Config rows below)
+local config_controls
+
 -- PoB's config option filter (CompareTab.lua:17)
 local config_visibility = LoadModule("Modules/ConfigVisibility")
 
@@ -222,6 +225,24 @@ end
 
 function glue.compare_set(name, kind, value, label)
 	local tab = compare_tab()
+	-- a Config view row's box, ours or theirs (CompareTab.lua:1127-1223): its callback writes
+	-- that build's input and flags it, as PoB's does
+	if type(name) == "string" and name:match("^cfg_[pc]_") then
+		local entry = active_entry(tab)
+		in_mode(tab, "CONFIG", function()
+			config_controls(tab, entry)
+			local control = tab.controls[name]
+			if not control then
+				error("no such control", 0)
+			end
+			local _, control_kind = glue.describe_control(name, control)
+			glue.in_popups(function()
+				glue.set_control(control, control_kind, kind, value, label)
+			end)
+		end)
+		sync(tab)
+		return
+	end
 	local mode = MODE_OF[name]
 	if mode == nil then
 		error("no such control", 0)
@@ -536,12 +557,51 @@ end
 -- Configurations" on). Values are PoB's `FormatConfigValue` texts. The sections are the ones
 -- `RebuildConfigControls` keeps, rebuilt when the Config view would rebuild them
 -- (CompareTab.lua:2025-2029). PoB's search box is ours (the UI filters the labels).
-local function config_rows(tab, entry)
+-- PoB's `syncControlValue` (CompareTab.lua:2005-2018, a file local): a row's box shows the
+-- input as it is now
+local function sync_config_control(ctrl, varData, val)
+	if varData.type == "check" then
+		ctrl.state = val or false
+	elseif varData.type == "count" or varData.type == "integer"
+			or varData.type == "countAllowZero" or varData.type == "float" then
+		local text = tostring(val or "")
+		if not ctrl.hasFocus and text ~= ctrl.buf then
+			ctrl:SetText(text)
+		end
+	elseif varData.type == "list" then
+		ctrl:SelByValue(val or (varData.list[1] and varData.list[1].val), "val")
+	end
+end
+
+-- The Config view's own boxes for both builds (`cfg_p_<var>`, `cfg_c_<var>`), rebuilt and
+-- synced as `LayoutConfigView` does before every draw (CompareTab.lua:2021-2039)
+function config_controls(tab, entry)
 	if tab.configCompareId ~= tab.activeCompareIndex or tab.configNeedsRebuild then
 		tab:RebuildConfigControls(entry)
 		tab.configCompareId = tab.activeCompareIndex
 		tab.configNeedsRebuild = false
 	end
+	local pInput = tab.primaryBuild.configTab.input or {}
+	local cInput = entry.configTab.input or {}
+	for var, info in pairs(tab.configControls) do
+		sync_config_control(info.primaryControl, info.varData, pInput[var])
+		sync_config_control(info.compareControl, info.varData, cInput[var])
+	end
+end
+
+-- A row's box as the views show it. PoB shows it while its row is scrolled into view; the UI
+-- scrolls, so it is shown. Its tooltip is the Config tab's static text only.
+local function config_box(name, control)
+	local view = glue.describe_control(name, control)
+	if view then
+		view.shown = true
+		view.hover_tooltip = false
+	end
+	return view
+end
+
+local function config_rows(tab, entry)
+	config_controls(tab, entry)
 	local pInput = tab.primaryBuild.configTab.input or {}
 	local cInput = entry.configTab.input or {}
 	local out = {}
@@ -553,6 +613,8 @@ local function config_rows(tab, entry)
 			ours = tab:FormatConfigValue(varData, pInput[var]),
 			theirs = tab:FormatConfigValue(varData, cInput[var]),
 			common = common,
+			ours_control = config_box("cfg_p_" .. var, tab.controls["cfg_p_" .. var]),
+			theirs_control = config_box("cfg_c_" .. var, tab.controls["cfg_c_" .. var]),
 		}
 	end
 	for _, section in ipairs(tab.configSections) do

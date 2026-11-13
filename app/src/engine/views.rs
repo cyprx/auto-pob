@@ -1320,6 +1320,8 @@ mod tests {
                 ours: "^x33FF77Yes".into(),
                 theirs: "^8(not set)".into(),
                 common: true,
+                ours_control: None,
+                theirs_control: None,
             }],
             switched: true,
         };
@@ -1751,6 +1753,12 @@ pub struct CompareConfigRow {
     /// is relevant to either build, or with "Show All Configurations" on
     #[serde(default)]
     pub common: bool,
+    /// PoB's box for this build's value (`cfg_p_<var>`), set with `SetCompareControl`
+    #[serde(default)]
+    pub ours_control: Option<PopupControl>,
+    /// PoB's box for the comparison's value (`cfg_c_<var>`)
+    #[serde(default)]
+    pub theirs_control: Option<PopupControl>,
 }
 
 /// The builds in one folder of the Builds folder (`BrowseBuilds`), by name

@@ -245,8 +245,24 @@ pub(super) fn show(
                         let colour = if row.common { weak } else { default };
                         let r = ui.label(pob_text(&row.label, 14.0, colour));
                         tab.rects.note(&r, || format!("config_row:{}", row.var));
-                        ui.label(pob_text(&row.ours, 14.0, default));
-                        ui.label(pob_text(&row.theirs, 14.0, default));
+                        // PoB's boxes for each build's value (CompareTab.lua:1127-1223),
+                        // its formatted value where there is none
+                        for (control, value) in [
+                            (&row.ours_control, &row.ours),
+                            (&row.theirs_control, &row.theirs),
+                        ] {
+                            match control {
+                                Some(control) => {
+                                    let commands =
+                                        tab.renderer.inline_controls(ui, &[control], tab.busy);
+                                    out.commands
+                                        .extend(commands.into_iter().map(super::readdress));
+                                }
+                                None => {
+                                    ui.label(pob_text(value, 14.0, default));
+                                }
+                            }
+                        }
                         ui.end_row();
                     }
                 });

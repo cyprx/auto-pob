@@ -330,6 +330,46 @@ function configFrame()
 	return rows
 end
 
+-- What each row's two boxes hold after a whole CONFIG frame (PoB syncs them as it lays the
+-- view out): a check box's state, a box's text or a dropdown's 0-based selection
+function configBoxes()
+	compareFrame("CONFIG")
+	local tab = build.compareTab
+	local function value(control)
+		if control.selIndex ~= nil and control.list then
+			return tostring(control.selIndex - 1)
+		elseif control.buf ~= nil then
+			return control.buf
+		end
+		return tostring(control.state and true or false)
+	end
+	local out = {}
+	for _, section in ipairs(tab.configSectionLayout) do
+		for _, row in ipairs(section.rows) do
+			local info = row.ctrlInfo
+			out[#out + 1] = { info.varData.var, value(info.primaryControl), value(info.compareControl) }
+		end
+	end
+	return out
+end
+
+-- A Config view box, ours (`cfg_p_<var>`) or theirs (`cfg_c_<var>`), used as a user would: a
+-- click on a check box, text typed into a box, a pick in a dropdown (1-based)
+function pressConfigBox(name, kind, value)
+	press("CONFIG", function(controls)
+		local control = controls[name]
+		assert(control, name .. " is not there")
+		if kind == "check" then
+			control.state = not control.state
+			control.changeFunc(control.state)
+		elseif kind == "text" then
+			control:SetText(value, true)
+		else
+			control:SetSel(value)
+		end
+	end)
+end
+
 -- "Show All Configurations" / "Hide Ineligible Configurations"
 function pressConfigToggle()
 	press("CONFIG", function(controls)

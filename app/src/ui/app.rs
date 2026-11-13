@@ -3368,6 +3368,38 @@ mod tests {
         out
     }
 
+    /// A last build that raised at start: the engine's start sends PoB's reason once, before
+    /// Ready, and the build list comes up with it as a notice above it
+    #[test]
+    fn a_last_build_that_raised_shows_one_notice_on_the_build_list() {
+        let mut app = AutoPobApp::new(Box::new(|| {
+            Engine::spawn_with(
+                |send| {
+                    send(Event::Message {
+                        title: "Couldn't reopen the last build".into(),
+                        text: "In 'OnFrame': CalcTools.lua:46: boom".into(),
+                    });
+                    Ok(Box::new(Fake::default()) as Box<dyn Backend>)
+                },
+                || {},
+            )
+        }));
+        let ctx = egui::Context::default();
+        pump_until(&mut app, &ctx, "list", |a| a.ready && a.list.is_some());
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        assert_eq!(app.screen, Screen::List);
+        let notice = "Couldn't reopen the last build: In 'OnFrame': CalcTools.lua:46: boom";
+        assert_eq!(app.notices, [notice]);
+        let texts = drawn_texts(&mut app, &ctx);
+        assert_eq!(
+            texts.iter().filter(|t| *t == notice).count(),
+            1,
+            "{texts:?}"
+        );
+    }
+
     #[test]
     fn the_save_questions_have_pobs_texts() {
         // Build.lua:1352-1379 "Save Changes" and :1449 "Save" / "Save As"

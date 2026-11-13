@@ -62,21 +62,26 @@ impl SkillsUi {
                 .iter()
                 .find(|s| s.id == view.active_set)
                 .map_or("", title);
-            let combo = crate::widgets::dropdown::Dropdown::from_id_salt("skills_set")
-                .selected_text(current)
-                .show_ui(ui, |ui| {
-                    for (i, set) in view.sets.iter().enumerate() {
-                        let item = crate::widgets::dropdown::item(
-                            ui,
-                            set.id == view.active_set,
-                            title(set),
-                        );
-                        self.rects.note(&item, || format!("set_item_{i}"));
-                        if item.clicked() && set.id != view.active_set {
-                            out.commands.push(Command::SelectSkillSet { id: set.id });
-                        }
-                    }
-                });
+            // PoB's selector takes a pick only with more than one set (SkillsTab.lua:99-101)
+            let combo = ui
+                .add_enabled_ui(view.sets.len() > 1, |ui| {
+                    crate::widgets::dropdown::Dropdown::from_id_salt("skills_set")
+                        .selected_text(current)
+                        .show_ui(ui, |ui| {
+                            for (i, set) in view.sets.iter().enumerate() {
+                                let item = crate::widgets::dropdown::item(
+                                    ui,
+                                    set.id == view.active_set,
+                                    title(set),
+                                );
+                                self.rects.note(&item, || format!("set_item_{i}"));
+                                if item.clicked() && set.id != view.active_set {
+                                    out.commands.push(Command::SelectSkillSet { id: set.id });
+                                }
+                            }
+                        })
+                })
+                .inner;
             self.rects.note(&combo.response, || "set".into());
             // the wheel and the arrows step it (DropDownControl.lua:476-516)
             let at = view
@@ -281,7 +286,8 @@ impl SkillsUi {
                         .find(|s| s.id == id)
                         .map_or("", title)
                         .to_owned();
-                    ui.label(format!("Delete the skill set \"{name}\"?"));
+                    // PoB's question (SkillSetListControl.lua:102)
+                    ui.label(format!("Are you sure you want to delete '{name}'?"));
                     ui.horizontal(|ui| {
                         let yes = ui.button("Delete");
                         self.rects.note(&yes, || "sets_confirm_delete".into());

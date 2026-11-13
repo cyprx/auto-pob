@@ -775,6 +775,9 @@ impl SkillSetEntry {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SocketGroupView {
     pub label: String,
+    /// PoB's `displayLabel`: the label, or the gems' names for a group with none
+    #[serde(default)]
+    pub name: String,
     /// The group list's row text, with PoB's colour codes
     pub display_label: String,
     #[serde(default)]

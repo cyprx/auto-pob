@@ -42,6 +42,8 @@ pub struct SkillsUi {
     pending_commands: HashMap<String, (String, Command)>,
     /// A group with gems the user asked to delete
     confirm_delete: Option<usize>,
+    /// Delete was pressed on an item's group: PoB's message says it can't be
+    item_group_message: bool,
     confirm_delete_all: bool,
     /// The group whose copy text we asked for
     copy_asked: Option<usize>,
@@ -109,6 +111,7 @@ impl SkillsUi {
     /// A confirm or the set manager is open, so shortcuts are left alone.
     pub fn has_dialog(&self) -> bool {
         self.confirm_delete.is_some()
+            || self.item_group_message
             || self.confirm_delete_all
             || self.sets.is_open()
             || self.picker.is_some()
@@ -118,6 +121,7 @@ impl SkillsUi {
     /// Returns the command that closes the gem picker's search, if one was open.
     pub fn close_dialogs(&mut self) -> Option<Command> {
         self.confirm_delete = None;
+        self.item_group_message = false;
         self.confirm_delete_all = false;
         self.copy_asked = None;
         self.clipboard = None;

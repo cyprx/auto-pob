@@ -233,6 +233,37 @@ fn delete_group_without_gems_is_immediate() {
 }
 
 #[test]
+fn the_delete_button_acts_on_the_selected_group() {
+    // SkillListControl.lua:33-38: PoB's Delete button, on the selected group
+    let mut h = Harness::new(sample());
+    h.click("row_1");
+    let o = h.click("delete");
+    assert_eq!(debug(&o.commands), ["DeleteSocketGroup { group: 1 }"]);
+    let mut h = Harness::new(sample());
+    h.click("row_0");
+    let o = h.click("delete");
+    assert!(o.commands.is_empty(), "a group with gems asks first");
+    h.frame(vec![]);
+    assert!(h.ui.rects.map.contains_key("confirm_delete"));
+}
+
+#[test]
+fn deleting_an_items_group_says_why_not() {
+    // SkillListControl.lua:165-166: the Delete key on an item's group gets PoB's message
+    let mut v = sample();
+    v.groups.push(item_group());
+    let mut h = Harness::new(v);
+    h.click("row_2");
+    let o = h.press(Key::Delete);
+    h.frame(vec![]);
+    assert!(o.commands.is_empty());
+    assert!(h.ui.has_dialog());
+    let o = h.click("item_group_ok");
+    assert!(o.commands.is_empty());
+    assert!(!h.ui.has_dialog());
+}
+
+#[test]
 fn item_group_offers_only_pob_fields() {
     let mut v = sample();
     v.groups.push(item_group());

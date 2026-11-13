@@ -61,6 +61,19 @@ impl SkillsUi {
             if all.clicked() {
                 self.confirm_delete_all = true;
             }
+            // PoB's Delete acts on the selected group, not one of an item (SkillListControl.lua:
+            // 33-38)
+            let selected = view.groups.get(self.selected);
+            let delete = ui.add_enabled(
+                selected.is_some_and(|g| g.source.is_none()),
+                egui::Button::new("Delete"),
+            );
+            self.rects.note(&delete, || "delete".into());
+            if delete.clicked()
+                && let Some(g) = selected
+            {
+                self.ask_delete(self.selected, g, out);
+            }
         });
         let default = ui.visuals().text_color();
         // PoB's usage tips under its list (SkillsTab.lua:110-118)
@@ -203,7 +216,7 @@ impl SkillsUi {
         if copy && g.source.is_none() {
             self.ask_copy(i, out);
         }
-        if ui.input(crate::ui::shortcuts::list_delete) && g.source.is_none() {
+        if ui.input(crate::ui::shortcuts::list_delete) {
             self.ask_delete(i, g, out);
         }
         if let Some(to) = ui.input_mut(|inp| crate::ui::shortcuts::list_key(inp, len, Some(i))) {
@@ -217,9 +230,12 @@ impl SkillsUi {
         out.queries.push(Command::CopySocketGroup { group });
     }
 
-    /// A group with gems is deleted only after the user confirms, as in PoB.
+    /// A group with gems is deleted only after the user confirms, as in PoB; an item's group
+    /// is not deleted, PoB says why (SkillListControl.lua:165-189).
     fn ask_delete(&mut self, group: usize, g: &SocketGroupView, out: &mut SkillsOutput) {
-        if g.gems.is_empty() {
+        if g.source.is_some() {
+            self.item_group_message = true;
+        } else if g.gems.is_empty() {
             self.delete_group(group, out);
         } else {
             self.confirm_delete = Some(group);
@@ -289,20 +305,41 @@ impl SkillsUi {
         view: &SkillsView,
         out: &mut SkillsOutput,
     ) {
-        if let Some(group) = self.confirm_delete {
-            let name = view
-                .groups
-                .get(group)
-                .map_or(String::new(), |g| g.label.clone());
-            // Esc is PoB's Cancel (PopupDialog.lua:72-77)
-            let window = egui::Id::unique("skills_delete");
-            let mut choice = crate::widgets::escape::escape(ctx, window).then_some(false);
-            egui::Window::new("Delete socket group")
+        if self.item_group_message {
+            let window = egui::Id::unique("skills_item_group_message");
+            let mut close = crate::widgets::escape::escape(ctx, window);
+            egui::Window::new("Delete Socket Group")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.label(format!("Delete the socket group \"{name}\" and its gems?"));
+                    ui.label(
+                        "This socket group cannot be deleted as it is created by an equipped item.",
+                    );
+                    let ok = ui.button("Ok");
+                    self.rects.note(&ok, || "item_group_ok".into());
+                    close |= ok.clicked();
+                });
+            crate::widgets::escape::note(ctx, window);
+            if close {
+                self.item_group_message = false;
+            }
+        }
+        if let Some(group) = self.confirm_delete {
+            let name = view
+                .groups
+                .get(group)
+                .map_or(String::new(), |g| g.name.clone());
+            // Esc is PoB's Cancel (PopupDialog.lua:72-77)
+            let window = egui::Id::unique("skills_delete");
+            let mut choice = crate::widgets::escape::escape(ctx, window).then_some(false);
+            // PoB's text (SkillListControl.lua:178)
+            egui::Window::new("Delete Socket Group")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(format!("Are you sure you want to delete '{name}'?"));
                     ui.horizontal(|ui| {
                         let yes = ui.button("Delete");
                         self.rects.note(&yes, || "confirm_delete".into());
@@ -326,14 +363,15 @@ impl SkillsUi {
             // Esc is PoB's Cancel (PopupDialog.lua:72-77)
             let window = egui::Id::unique("skills_delete_all");
             let mut choice = crate::widgets::escape::escape(ctx, window).then_some(false);
-            egui::Window::new("Delete all socket groups")
+            // PoB's text (SkillListControl.lua:40)
+            egui::Window::new("Delete All")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.label("Delete every socket group in this skill set?");
+                    ui.label("Are you sure you want to delete all socket groups in this build?");
                     ui.horizontal(|ui| {
-                        let yes = ui.button("Delete All");
+                        let yes = ui.button("Delete");
                         self.rects.note(&yes, || "confirm_delete_all".into());
                         if yes.clicked() {
                             choice = Some(true);
@@ -440,6 +478,12 @@ impl SkillsUi {
                         if item.clicked() && i != list.selected {
                             chosen = Some(i);
                         }
+                        // each entry's own description (SkillsTab.lua:132-137)
+                        if let Some(line) = help.get(i).filter(|l| !l.is_empty()) {
+                            item.on_hover_ui(|ui| {
+                                ui.label(pob_text(&format!("^7{line}"), 14.0, default));
+                            });
+                        }
                     }
                 })
         });
@@ -453,11 +497,10 @@ impl SkillsUi {
                 list.selected,
             )
         });
-        if !help.is_empty() {
+        // the closed dropdown: the chosen entry's description
+        if let Some(line) = help.get(list.selected).filter(|l| !l.is_empty()) {
             combo.inner.response.on_hover_ui(|ui| {
-                for line in help {
-                    ui.label(pob_text(line, 14.0, default));
-                }
+                ui.label(pob_text(&format!("^7{line}"), 14.0, default));
             });
         }
         chosen

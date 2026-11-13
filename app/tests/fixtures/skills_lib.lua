@@ -36,6 +36,7 @@ local function groupDump(tab, index, group)
 	local c = tab.controls
 	local out = {
 		label = c.groupLabel.buf,
+		name = group.displayLabel or "",
 		display_label = c.groupList:GetRowValue(1, index, group),
 		slot = c.groupSlot:GetSelValue().slotName,
 		enabled = c.groupEnabled.state and true or false,

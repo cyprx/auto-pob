@@ -168,15 +168,15 @@ impl SkillsUi {
                     if pick.clicked() {
                         self.open_picker(gi, GemTarget::Imbued);
                     }
-                    if imbued.name.is_some() {
-                        let clear = ui.button("x");
-                        self.rects.note(&clear, || "imbued_clear".into());
-                        if clear.clicked() {
-                            out.commands.push(Command::SetImbuedSupport {
-                                group: gi,
-                                gem_id: None,
-                            });
-                        }
+                    // PoB's "x" is there whenever the picker is, on the same terms
+                    // (SkillsTab.lua:330-337)
+                    let clear = ui.button("x").on_hover_text("Remove this imbued support.");
+                    self.rects.note(&clear, || "imbued_clear".into());
+                    if clear.clicked() {
+                        out.commands.push(Command::SetImbuedSupport {
+                            group: gi,
+                            gem_id: None,
+                        });
                     }
                 });
             });
@@ -187,7 +187,9 @@ impl SkillsUi {
                     ui.label(pob_text(line, 14.0, default));
                 }
                 if g.can_optimise {
-                    let opt = ui.button("Optimise");
+                    let opt = ui.button("Optimise Sockets").on_hover_text(
+                        "Rebuild the item's sockets to match the groups assigned to it.",
+                    );
                     self.rects.note(&opt, || "optimise".into());
                     if opt.clicked() {
                         out.commands.push(Command::OptimiseSockets { group: gi });
@@ -210,12 +212,14 @@ impl SkillsUi {
             .striped(true)
             .min_col_width(24.0)
             .show(ui, |ui| {
+                // PoB's headers (SkillsTab.lua:407-411)
                 ui.label("");
-                ui.label("Gem");
-                ui.label("Lvl");
-                ui.label("Qual");
+                ui.label("Gem name:");
+                ui.label("Level:");
+                ui.label("Quality:");
+                ui.label("Enabled:");
                 if has_count {
-                    ui.label("Cnt");
+                    ui.label("Count:");
                 }
                 ui.end_row();
                 for (si, gem) in g.gems.iter().enumerate() {
@@ -294,23 +298,13 @@ impl SkillsUi {
         out: &mut SkillsOutput,
     ) {
         let default = ui.visuals().text_color();
-        let mut on = gem.enabled;
-        let check = ui.checkbox(&mut on, "");
-        self.rects.note(&check, || format!("gem_{si}_enabled"));
-        self.hover_tip.track(
-            &check,
-            HoverTarget::GemEnabled {
+        // PoB's order: delete, name, level, quality, enabled, count (SkillsTab.lua:738-1009)
+        let del = ui.button("x").on_hover_text("Remove this gem.");
+        self.rects.note(&del, || format!("gem_{si}_delete"));
+        if del.clicked() {
+            out.commands.push(Command::DeleteGem {
                 group: gi,
                 slot: si,
-            },
-            self.now,
-            &mut out.queries,
-        );
-        if check.changed() {
-            out.commands.push(Command::SetGemEnabled {
-                group: gi,
-                slot: si,
-                on,
             });
         }
         // unknown gems are red; a gem that fits its socket gets a border in its colour
@@ -336,9 +330,6 @@ impl SkillsUi {
             self.open_picker(gi, GemTarget::Slot(si));
         }
         self.gem_tooltip_hover(&name, gi, si, gem, out);
-        if let Some(error) = &gem.error {
-            name.on_hover_text(error);
-        }
         self.field(
             ui,
             &format!("g{gi}_s{si}_level"),
@@ -374,6 +365,25 @@ impl SkillsUi {
             self.now,
             &mut out.queries,
         );
+        let mut on = gem.enabled;
+        let check = ui.checkbox(&mut on, "");
+        self.rects.note(&check, || format!("gem_{si}_enabled"));
+        self.hover_tip.track(
+            &check,
+            HoverTarget::GemEnabled {
+                group: gi,
+                slot: si,
+            },
+            self.now,
+            &mut out.queries,
+        );
+        if check.changed() {
+            out.commands.push(Command::SetGemEnabled {
+                group: gi,
+                slot: si,
+                on,
+            });
+        }
         if has_count {
             match gem.count {
                 Some(count) => {
@@ -405,13 +415,9 @@ impl SkillsUi {
                 }
             }
         }
-        let del = ui.button("x");
-        self.rects.note(&del, || format!("gem_{si}_delete"));
-        if del.clicked() {
-            out.commands.push(Command::DeleteGem {
-                group: gi,
-                slot: si,
-            });
+        // PoB's parser or calculator error, in red after the row (SkillsTab.lua:1004-1009)
+        if let Some(error) = &gem.error {
+            ui.colored_label(ERROR, error);
         }
         ui.end_row();
         // a Vaal gem's two toggles go on a second line

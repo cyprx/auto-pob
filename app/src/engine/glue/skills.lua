@@ -66,6 +66,7 @@ local function group_view(tab, index, group)
 	local c = tab.controls
 	local view = {
 		label = group.label or "",
+		name = group.displayLabel or "",
 		display_label = c.groupList:GetRowValue(1, index, group),
 		slot = group.slot,
 		enabled = group.enabled and true or false,

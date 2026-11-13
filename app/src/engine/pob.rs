@@ -2629,12 +2629,22 @@ impl Backend for PobBackend {
                 })
             }
             BackgroundTask::ItemDb => {
-                let query = match &self.item_db {
-                    Some(query) if !self.item_db_failed => query,
+                // the open panel's own work goes first, as `next_background` offers it. Once
+                // its database has loaded (the uniques load before the rares) only the load
+                // ahead is left, which the panel's step would never run.
+                let panel = match &self.item_db {
+                    Some(query) if !self.item_db_failed => self
+                        .call::<_, bool>("item_db_pending", db_name(query.db))
+                        .unwrap_or(false)
+                        .then_some(query),
+                    _ => None,
+                };
+                let query = match panel {
+                    Some(query) => query,
                     // a slice of the load ahead of a panel open (`PreloadItemDbs`). Nothing
                     // shows it: a failure only stops it, and the panel's own job reports the
                     // load's failure when it opens (`glue.item_db_step`).
-                    _ => {
+                    None => {
                         if let Err(e) = self.call::<_, ()>("item_db_preload_step", ()) {
                             log::warn!("item database load: {e:#}");
                             self.item_db_preload = false;

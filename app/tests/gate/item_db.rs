@@ -884,3 +884,42 @@ fn item_databases_preload_survives_edits_and_an_early_open() {
     assert_eq!(json_of(&lists(&mut s, ItemDb::Rares)), want);
     assert_eq!(s.backend.next_background(), None);
 }
+
+/// The uniques load before the rares: a Uniques panel opened while the load runs ahead ends
+/// its own work first, then the rest of the load runs, and the loop goes idle.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn item_databases_preload_ends_after_an_early_uniques_open() {
+    let _guard = lock();
+    let mut s = Session::start("item-db-preload-uniques");
+    s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+    s.run(Command::PreloadItemDbs).unwrap();
+    s.run(Command::SetItemDb(ItemDbQuery {
+        db: ItemDb::Uniques,
+        slot: 0,
+        kind: 0,
+        league: 0,
+        requirement: 0,
+        obtainable: 0,
+        sort: 0,
+        search: String::new(),
+        search_mode: 0,
+    }))
+    .unwrap();
+    let mut steps = 0;
+    while let Some(task) = s.backend.next_background() {
+        s.backend.background_step(task, &|_| {}).unwrap();
+        steps += 1;
+        assert!(steps < 1000, "the load never ends");
+    }
+    let view = panel(&mut s);
+    assert!(!view.loading && !view.rows.is_empty());
+    assert!(!databases_loading(&mut s));
+    let rares_loaded: bool = s
+        .backend
+        .lua
+        .load("return pob.main.main.rareDB.loading == nil")
+        .eval()
+        .unwrap();
+    assert!(rares_loaded, "the rest of the load never ran");
+}

@@ -257,9 +257,14 @@ impl NotesUi {
             self.insert_colour(ui.ctx(), &code, now);
         }
         if self.preview {
+            // the coloured text at the box's zoom, which Ctrl+wheel over it changes too
+            let font = self.line_height as f32 * TEXT_SCALE;
             egui::ScrollArea::vertical()
                 .auto_shrink(false)
-                .show(ui, |ui| ui.label(pob_text(&self.text, size + 1.0, default)));
+                .show(ui, |ui| {
+                    let response = ui.label(pob_text(&self.text, font, default));
+                    self.zoom_keys(ui, &response);
+                });
         } else {
             egui::ScrollArea::vertical()
                 .auto_shrink(false)
@@ -749,5 +754,65 @@ mod tests {
         assert_eq!(ui.line_height, NOTES_LINE_HEIGHT + 1);
         run(&mut ui, 0.5, vec![over, wheel(-1.0)]);
         assert_eq!(ui.line_height, NOTES_LINE_HEIGHT);
+    }
+
+    /// The preview shows the text at the box's zoom, and Ctrl+wheel over it zooms it
+    #[test]
+    fn the_preview_follows_the_notes_zoom() {
+        let ctx = egui::Context::default();
+        let mut ui = NotesUi {
+            text: "^1red".into(),
+            preview: true,
+            line_height: 30,
+            ..NotesUi::default()
+        };
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let run = |ui: &mut NotesUi, events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |ui_| {
+                    ui.show(ui_, 0.0);
+                },
+            );
+            let shapes = std::mem::take(&mut out.shapes);
+            out.drop_without_applying_deltas();
+            shapes
+        };
+        run(&mut ui, vec![]);
+        // find the preview's text: its size is the box's
+        let shapes = run(&mut ui, vec![]);
+        let size = shapes
+            .iter()
+            .find_map(|c| match &c.shape {
+                egui::Shape::Text(t) if t.galley.job.text == "red" => {
+                    Some(t.galley.job.sections[0].format.font_id.size)
+                }
+                _ => None,
+            })
+            .expect("the preview's text");
+        assert!((size - 30.0 * TEXT_SCALE).abs() < 1e-3, "{size}");
+        let at = shapes
+            .iter()
+            .find_map(|c| match &c.shape {
+                egui::Shape::Text(t) if t.galley.job.text == "red" => {
+                    Some(t.pos + egui::vec2(2.0, 2.0))
+                }
+                _ => None,
+            })
+            .unwrap();
+        let wheel = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::COMMAND,
+            source: egui::MouseWheelSource::Wheel,
+        };
+        run(&mut ui, vec![egui::Event::PointerMoved(at)]);
+        run(&mut ui, vec![egui::Event::PointerMoved(at), wheel]);
+        assert_eq!(ui.line_height, 31);
     }
 }

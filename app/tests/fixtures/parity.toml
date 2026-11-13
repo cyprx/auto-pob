@@ -957,7 +957,7 @@ ported = "app/src/ui/config.rs dropdowns"
 note = "part of config.#DropDownControl"
 
 [controls."config.#EditControl"]
-ported = "app/src/ui/config.rs edit boxes with PoB's tooltipFunc on hover (HoverTooltip ConfigOption, R22); number boxes take PoB's filter and 10-character limit (ConfigTab.lua:273), and the integer ones step on + and -, Up, Down and the wheel from their value or placeholder (config.rs Accept, step_number)"
+ported = "app/src/ui/config.rs edit boxes with PoB's tooltipFunc on hover (HoverTooltip ConfigOption, R22); number boxes take PoB's filter and 10-character limit (ConfigTab.lua:273), and the integer ones step on + and -, Up, Down and the wheel from their value or placeholder (config.rs Accept, step_number); the value sent is PoB's tonumber(buf): no number ('-' alone) clears, a count of 0 is stored (parse_number_input; gate config_number_text_matches_pob)"
 note = "PoB adds no what-if comparison to number inputs (ConfigTab.lua:719-721)"
 
 [controls."config.#EditControl.buttonDown"]

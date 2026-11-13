@@ -1203,6 +1203,85 @@ fn config_sets_round_trip() {
     assert!(format!("{err:#}").contains("no config set"), "{err:#}");
 }
 
+/// PoB's number boxes set their option to `tonumber(buf)` (ConfigTab.lua:273-280): a count of
+/// "0" is stored, and "-" alone clears the option. What our Config tab sends for that text
+/// leaves the build as upstream's own box does.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn config_number_text_matches_pob() {
+    use auto_pob::engine::ConfigValue;
+    use auto_pob::ui::config::{NumberInput, parse_number_input};
+    let _guard = lock();
+    let mut s = Session::start("config-number-text");
+    let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "attack").unwrap();
+    s.open_fixture("attack", &xml);
+    let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
+    load_xml(&lua, &attack_xml(), "attack").unwrap();
+    let kind_of = |s: &mut Session, var: &str| {
+        s.config()
+            .sections
+            .iter()
+            .flat_map(|section| section.options.iter())
+            .find(|o| o.var == var)
+            .map(|o| (o.kind, o.allow_zero))
+            .unwrap_or_else(|| panic!("no option {var}"))
+    };
+    let input = |code: &str| format!("local v = build.configTab.input.{code} return v");
+    for (var, texts) in [
+        ("overrideEmptyRedSockets", ["3", "0"]),
+        ("enemyRadius", ["5", "-"]),
+    ] {
+        let (kind, allow_zero) = kind_of(&mut s, var);
+        for text in texts {
+            // what our box sends for the text
+            let value = match parse_number_input(text, kind, allow_zero) {
+                NumberInput::Empty => ConfigValue::Clear,
+                NumberInput::Valid(n) => ConfigValue::Number(n),
+                NumberInput::Invalid => panic!("{var} {text:?}: nothing sent"),
+            };
+            s.run(Command::SetConfig {
+                var: var.into(),
+                value,
+            })
+            .unwrap();
+            lua.load(format!(
+                r#"build.configTab.varControls.{var}:SetText({text:?}, true)
+                runCallback("OnFrame")"#
+            ))
+            .exec()
+            .unwrap();
+            let ours: Option<f64> = s
+                .backend
+                .lua
+                .load(format!(
+                    "local v = pob.build.configTab.input.{var} return v"
+                ))
+                .eval()
+                .unwrap();
+            let theirs: Option<f64> = lua.load(input(var)).eval().unwrap();
+            assert_eq!(ours, theirs, "{var} {text:?}");
+        }
+    }
+    // the stored 0 shows as 0, and the cleared option shows nothing
+    let shown = |s: &mut Session, var: &str| {
+        s.config()
+            .sections
+            .iter()
+            .flat_map(|section| section.options.iter())
+            .find(|o| o.var == var)
+            .unwrap()
+            .value
+            .clone()
+    };
+    assert_eq!(
+        shown(&mut s, "overrideEmptyRedSockets"),
+        Some(serde_json::json!(0))
+    );
+    assert_eq!(shown(&mut s, "enemyRadius"), None);
+    let theirs = golden_of(&lua, Game::Poe1.pob_version()).unwrap();
+    assert_view_matches("attack", "stat", &s.stats().stats, &theirs.stats);
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn custom_mods_change_stats() {

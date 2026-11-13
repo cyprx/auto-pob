@@ -24,45 +24,48 @@ const HIDDEN_OPACITY: f32 = 0.45;
 /// What a number field holds.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum NumberInput {
-    /// Nothing typed: clears the option
+    /// Nothing typed, or text that is no number: clears the option
     Empty,
     Valid(f64),
-    /// Not a number of this kind; nothing is sent
+    /// A number this field doesn't send; nothing is sent
     Invalid,
 }
 
-/// Parses what the user typed into a count, integer or float field. No exponents.
-pub fn parse_number_input(text: &str, kind: ConfigKind, allow_zero: bool) -> NumberInput {
+/// Parses what the user typed into a count, integer or float field as PoB does: its box sets
+/// the option to `tonumber(buf)` (ConfigTab.lua:273-280), so text that is no number, such as
+/// "-" alone, clears it, and a count of 0 is stored. The box's filter leaves digits, "-" and
+/// "." only, so no exponents. A negative count is not sent: the countAllowZero box steps no
+/// lower than 0 (controller ruling, review I4).
+pub fn parse_number_input(text: &str, kind: ConfigKind, _allow_zero: bool) -> NumberInput {
     let text = text.trim();
     if text.is_empty() {
         return NumberInput::Empty;
     }
     let (negative, body) = match text.strip_prefix('-') {
-        Some(rest) if kind != ConfigKind::Count => (true, rest),
-        _ => (false, text),
+        Some(rest) => (true, rest),
+        None => (false, text),
     };
     let digits_only = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    let well_formed = match kind {
-        ConfigKind::Float => match body.split_once('.') {
-            None => digits_only(body),
-            Some((int, frac)) => {
-                (digits_only(int) || int.is_empty())
-                    && (digits_only(frac) || frac.is_empty())
-                    && !(int.is_empty() && frac.is_empty())
-            }
-        },
-        _ => digits_only(body),
+    // Lua's number syntax, as far as the filter lets it be typed
+    let well_formed = match body.split_once('.') {
+        None => digits_only(body),
+        Some((int, frac)) => {
+            (digits_only(int) || int.is_empty())
+                && (digits_only(frac) || frac.is_empty())
+                && !(int.is_empty() && frac.is_empty())
+        }
     };
-    if !well_formed {
-        return NumberInput::Invalid;
-    }
-    let Ok(value) = body.parse::<f64>() else {
-        return NumberInput::Invalid;
+    // tonumber gives nil: PoB's option is cleared
+    let Some(value) = well_formed.then(|| body.parse::<f64>().ok()).flatten() else {
+        return NumberInput::Empty;
     };
-    if kind == ConfigKind::Count && value == 0.0 && !allow_zero {
-        return NumberInput::Invalid;
+    let value = if negative { -value } else { value };
+    match kind {
+        // the engine takes whole numbers only for these; PoB's filter has no "." for them
+        ConfigKind::Count | ConfigKind::Integer if value.fract() != 0.0 => NumberInput::Invalid,
+        ConfigKind::Count if value < 0.0 => NumberInput::Invalid,
+        _ => NumberInput::Valid(value),
     }
-    NumberInput::Valid(if negative { -value } else { value })
 }
 
 /// Whether the option's label matches `query` as PoB's search does (ConfigTab.lua:172-183):
@@ -1235,9 +1238,14 @@ mod tests {
             parse_number_input(" 12 ", ConfigKind::Count, false),
             Valid(12.0)
         );
-        assert_eq!(parse_number_input("0", ConfigKind::Count, false), Invalid);
+        // PoB stores tonumber(buf): a count of 0 is a value, allowed to be zero or not
+        assert_eq!(
+            parse_number_input("0", ConfigKind::Count, false),
+            Valid(0.0)
+        );
         assert_eq!(parse_number_input("0", ConfigKind::Count, true), Valid(0.0));
         assert_eq!(parse_number_input("-5", ConfigKind::Count, false), Invalid);
+        assert_eq!(parse_number_input("-5", ConfigKind::Count, true), Invalid);
         assert_eq!(
             parse_number_input("-5", ConfigKind::Integer, false),
             Valid(-5.0)
@@ -1254,14 +1262,24 @@ mod tests {
             parse_number_input("-3.5", ConfigKind::Float, false),
             Valid(-3.5)
         );
-        assert_eq!(parse_number_input("1e9", ConfigKind::Float, false), Invalid);
         assert_eq!(
-            parse_number_input("1.2.3", ConfigKind::Float, false),
-            Invalid
+            parse_number_input("5.", ConfigKind::Float, false),
+            Valid(5.0)
         );
-        assert_eq!(parse_number_input("-", ConfigKind::Integer, false), Invalid);
-        assert_eq!(parse_number_input(".", ConfigKind::Float, false), Invalid);
-        assert_eq!(parse_number_input("12a", ConfigKind::Count, false), Invalid);
+        assert_eq!(
+            parse_number_input(".5", ConfigKind::Float, false),
+            Valid(0.5)
+        );
+        // tonumber gives nil for these: PoB's option is cleared
+        for text in ["-", ".", "1e9", "1.2.3", "12a", "5-", "--5"] {
+            for kind in [ConfigKind::Integer, ConfigKind::Float, ConfigKind::Count] {
+                assert_eq!(
+                    parse_number_input(text, kind, true),
+                    Empty,
+                    "{text} {kind:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1486,6 +1504,35 @@ mod tests {
         assert_eq!(
             debug(&sent),
             ["SetConfig { var: \"n\", value: Number(1234567890.0) }"]
+        );
+    }
+
+    /// PoB's number box sets its option to tonumber(buf) (ConfigTab.lua:273-280): a count of
+    /// "0" is stored, and "-" alone, no number, clears the option
+    #[test]
+    fn a_count_of_0_is_sent_and_a_lone_minus_clears() {
+        let mut h = with_number(ConfigKind::Count, Some(2.0), None);
+        h.click("field:n");
+        h.frame(vec![Event::Key {
+            key: egui::Key::Backspace,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }]);
+        let sent = h.frame(vec![Event::Text("0".into())]);
+        assert_eq!(
+            debug(&sent),
+            ["SetConfig { var: \"n\", value: Number(0.0) }"]
+        );
+        let mut h = with_number(ConfigKind::Integer, None, None);
+        h.click("field:n");
+        let sent = h.frame(vec![Event::Text("-".into())]);
+        assert_eq!(debug(&sent), ["SetConfig { var: \"n\", value: Clear }"]);
+        let sent = h.frame(vec![Event::Text("5".into())]);
+        assert_eq!(
+            debug(&sent),
+            ["SetConfig { var: \"n\", value: Number(-5.0) }"]
         );
     }
 

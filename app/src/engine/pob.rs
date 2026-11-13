@@ -61,6 +61,8 @@ pub struct PobBackend {
     options_lost: bool,
     /// Lua's heap after the last memory release, in bytes
     released_lua_bytes: usize,
+    /// The UI hides the Compare tab (`SetCompareShown`): a recalculation leaves its view out
+    compare_hidden: bool,
     /// The UI shows the build list: it asked for a listing since it last opened or imported
     /// a build, or no build was loaded at start. The exit save then records PoB's LIST mode,
     /// as PoB's would after its CloseBuild (Build.lua:953-956), not the build left behind it.
@@ -242,6 +244,7 @@ impl PobBackend {
             item_db_preload: false,
             options_lost: false,
             released_lua_bytes: 0,
+            compare_hidden: false,
             on_list,
             net,
             timeless_job: false,
@@ -440,6 +443,14 @@ impl PobBackend {
             affected.popup = true;
             affected.settings = true;
         }
+        // the escapes the old build showed are gone with it: the next build's views decide
+        // again whether text coming back holds them (`bytes_text`). An Options window that
+        // stays may show escaped text (a Builds path that isn't UTF-8) its edits send back,
+        // and the UI keeps its view, so the flag stays while it is open.
+        // a failed check keeps the flag (the safe side) and the rest of the clean-up goes on
+        if !self.call::<_, bool>("popup_live", ()).unwrap_or(true) {
+            super::bytes_text::reset();
+        }
         if self.item_db.take().is_some() {
             self.item_db_failed = false;
             self.item_db_ended = true;
@@ -615,30 +626,35 @@ impl PobBackend {
 
     /// A view from a glue function's result (see `view`)
     fn view_of<T: serde::de::DeserializeOwned>(&self, value: mlua::Value) -> Result<T> {
-        // a view that serde would take can still hold a private-use character that is one of
-        // our escapes (U+F780-U+F7FF): it must be escaped too, or an edit sends it back as a
-        // raw byte (`bytes_text`)
-        let scan: mlua::Function = self
-            .lua
-            .globals()
-            .get("AutoPobHasEscapes")
-            .map_err(|e| anyhow!("{e}"))?;
-        if scan.call::<bool>(&value).map_err(|e| anyhow!("{e}"))? {
-            let fixed = lossy_strings(&self.lua, &value, 0)
-                .map_err(|e| anyhow!("{e}"))?
-                .unwrap_or(value);
-            return self.lua.from_value(fixed).map_err(|e| anyhow!("{e}"));
-        }
-        match self.lua.from_value(value.clone()) {
-            Ok(view) => Ok(view),
-            Err(e) => {
-                // PoB's strings are bytes: a build's notes, names or item text can hold bytes
-                // that aren't UTF-8 (a file from a Windows-1252 editor), which serde refuses.
-                // Such a view shows them escaped (`bytes_text`) instead of failing.
-                match lossy_strings(&self.lua, &value, 0).map_err(|e| anyhow!("{e}"))? {
-                    Some(fixed) => self.lua.from_value(fixed).map_err(|e| anyhow!("{e}")),
-                    None => Err(anyhow!("{e}")),
-                }
+        view_of(&self.lua, value)
+    }
+}
+
+/// A view from a glue result: serde's, with every string that isn't UTF-8 or holds an
+/// escape character escaped (`bytes_text`)
+fn view_of<T: serde::de::DeserializeOwned>(lua: &mlua::Lua, value: mlua::Value) -> Result<T> {
+    // a view that serde would take can still hold a private-use character that is one of
+    // our escapes (U+F780-U+F7FF): it must be escaped too, or an edit sends it back as a
+    // raw byte (`bytes_text`)
+    let scan: mlua::Function = lua
+        .globals()
+        .get("AutoPobHasEscapes")
+        .map_err(|e| anyhow!("{e}"))?;
+    if scan.call::<bool>(&value).map_err(|e| anyhow!("{e}"))? {
+        let fixed = lossy_strings(lua, &value, 0)
+            .map_err(|e| anyhow!("{e}"))?
+            .unwrap_or(value);
+        return lua.from_value(fixed).map_err(|e| anyhow!("{e}"));
+    }
+    match lua.from_value(value.clone()) {
+        Ok(view) => Ok(view),
+        Err(e) => {
+            // PoB's strings are bytes: a build's notes, names or item text can hold bytes
+            // that aren't UTF-8 (a file from a Windows-1252 editor), which serde refuses.
+            // Such a view shows them escaped (`bytes_text`) instead of failing.
+            match lossy_strings(lua, &value, 0).map_err(|e| anyhow!("{e}"))? {
+                Some(fixed) => lua.from_value(fixed).map_err(|e| anyhow!("{e}")),
+                None => Err(anyhow!("{e}")),
             }
         }
     }
@@ -717,6 +733,29 @@ fn popup_rows(control: &mlua::Table) -> mlua::Result<Vec<super::views::PopupRow>
             })
         })
         .collect()
+}
+
+/// A popup's view from the glue's table. A list's rows come as two flat lists (`row_keys`,
+/// `row_labels`), read here directly: a table per row, through serde, made the Mod Browser's
+/// 6188 rows cost about 6 ms per change (R28). The rest goes through `view_of`, so a label,
+/// an edit's text or a choice that isn't UTF-8 shows escaped instead of failing the popup.
+fn popup_view_of(lua: &mlua::Lua, view: mlua::Table) -> Result<PopupView> {
+    let lua_err = |e: mlua::Error| anyhow!("{e}");
+    let controls: mlua::Table = view.get("controls").map_err(lua_err)?;
+    let mut rows = Vec::new();
+    for control in controls.sequence_values::<mlua::Table>() {
+        let control = control.map_err(lua_err)?;
+        rows.push(popup_rows(&control).map_err(lua_err)?);
+        control.set("row_keys", mlua::Value::Nil).map_err(lua_err)?;
+        control
+            .set("row_labels", mlua::Value::Nil)
+            .map_err(lua_err)?;
+    }
+    let mut view: PopupView = view_of(lua, mlua::Value::Table(view))?;
+    for (control, rows) in view.controls.iter_mut().zip(rows) {
+        control.rows = rows;
+    }
+    Ok(view)
 }
 
 /// A config change touches the build and the config tab, and needs a recalculation (after
@@ -856,6 +895,13 @@ fn compare_changed() -> Affected {
     }
 }
 
+/// A folder below the Builds folder as the list and Save As spell it: never absolute and no
+/// `..` part. A name with dots in it ("v1..2") is a folder like any other: PoB's name boxes
+/// refuse only `.` and `..`.
+fn folder_allowed(folder: &str) -> bool {
+    !folder.starts_with('/') && !folder.split(['/', '\\']).any(|part| part == "..")
+}
+
 /// Commands that leave or replace the build (R14).
 pub(crate) fn leaves_build(command: &Command) -> bool {
     matches!(
@@ -979,6 +1025,7 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::SelectCompare { .. }
             | Command::RemoveCompare { .. }
             | Command::SetCompareOverlay { .. }
+            | Command::SetCompareShown { .. }
             // a cancel runs PoB's failure path, which leaves the build alone (R12)
             | Command::CancelRequest { .. }
             | Command::Wake
@@ -1211,7 +1258,7 @@ impl PobBackend {
                     self.heatmap_on = false;
                     self.power_failed = false;
                 }
-                if folder.contains("..") || folder.starts_with('/') {
+                if !folder_allowed(&folder) {
                     anyhow::bail!("that isn't a valid folder");
                 }
                 self.folder = buildpaths::folder(&self.build_root()?, &folder, false, false)?;
@@ -1309,7 +1356,14 @@ impl PobBackend {
             Command::OpenBuild { path } => {
                 self.on_list = false;
                 self.reset_heatmap();
-                self.call_path::<_, ()>("open_build", path.to_string_lossy().into_owned())?;
+                // the path's own bytes: a file name that isn't UTF-8 opens as itself
+                let path = {
+                    use std::os::unix::ffi::OsStrExt;
+                    self.lua
+                        .create_string(path.as_os_str().as_bytes())
+                        .map_err(|e| anyhow!("{e}"))?
+                };
+                self.call_path::<_, ()>("open_build", path)?;
                 self.all_views()
             }
             Command::ImportShareCode { code } => {
@@ -1427,7 +1481,7 @@ impl PobBackend {
                 if name.is_empty() || name.contains(['/', '\\']) {
                     anyhow::bail!("that isn't a valid build name");
                 }
-                if folder.contains("..") || folder.starts_with('/') {
+                if !folder_allowed(&folder) {
                     anyhow::bail!("that isn't a valid folder");
                 }
                 let root: String = self.call("build_root", ())?;
@@ -1826,6 +1880,15 @@ impl PobBackend {
                 self.call::<_, ()>("compare_overlay", on)?;
                 Ok(Affected {
                     tree: true,
+                    ..Affected::default()
+                })
+            }
+            Command::SetCompareShown { on } => {
+                self.compare_hidden = !on;
+                // showing always answers with a fresh view: the UI waits for it before it
+                // lets the tab's controls act on the one it holds
+                Ok(Affected {
+                    compare: on,
                     ..Affected::default()
                 })
             }
@@ -2635,7 +2698,23 @@ impl Backend for PobBackend {
         // the entries are file names (valid UTF-8, buildpaths): they come and go as they are,
         // never escaped, as the paths of the commands about them do (`call_path`)
         let value: mlua::Value = self.call_path("list_builds", self.folder.clone())?;
-        let mut view: BuildListView = self.lua.from_value(value).map_err(|e| anyhow!("{e}"))?;
+        let mut view: BuildListView = match self.lua.from_value(value.clone()) {
+            Ok(view) => view,
+            // a file name that isn't UTF-8, which PoB on Linux lists and opens: the list
+            // shows it escaped (`bytes_text`), and its path is its own bytes again
+            Err(e) => {
+                let fixed = lossy_strings(&self.lua, &value, 0)
+                    .map_err(|e| anyhow!("{e}"))?
+                    .ok_or_else(|| anyhow!("{e}"))?;
+                let mut view: BuildListView =
+                    self.lua.from_value(fixed).map_err(|e| anyhow!("{e}"))?;
+                for entry in &mut view.entries {
+                    let shown = entry.path.to_string_lossy().into_owned();
+                    entry.path = super::bytes_text::path_from_escaped(&shown);
+                }
+                view
+            }
+        };
         // a missing Builds folder was already refused by the listing
         let root = self.build_root()?;
         view.tree = buildpaths::folder_tree(&root);
@@ -2973,28 +3052,7 @@ impl Backend for PobBackend {
         let mlua::Value::Table(view) = self.call::<_, mlua::Value>("popup_view", ())? else {
             return Ok(None);
         };
-        // a list's rows come as two flat lists (`row_keys`, `row_labels`), read here directly:
-        // a table per row, through serde, made the Mod Browser's 6188 rows cost about 6 ms
-        // per change (R28)
-        let lua_err = |e: mlua::Error| anyhow!("{e}");
-        let controls: mlua::Table = view.get("controls").map_err(lua_err)?;
-        let mut rows = Vec::new();
-        for control in controls.sequence_values::<mlua::Table>() {
-            let control = control.map_err(lua_err)?;
-            rows.push(popup_rows(&control).map_err(lua_err)?);
-            control.set("row_keys", mlua::Value::Nil).map_err(lua_err)?;
-            control
-                .set("row_labels", mlua::Value::Nil)
-                .map_err(lua_err)?;
-        }
-        let mut view: PopupView = self
-            .lua
-            .from_value(mlua::Value::Table(view))
-            .map_err(lua_err)?;
-        for (control, rows) in view.controls.iter_mut().zip(rows) {
-            control.rows = rows;
-        }
-        Ok(Some(view))
+        popup_view_of(&self.lua, view).map(Some)
     }
 
     fn control_tooltip_view(
@@ -3133,6 +3191,10 @@ impl Backend for PobBackend {
         self.view("compare_view", ())
     }
 
+    fn compare_shown(&self) -> bool {
+        !self.compare_hidden
+    }
+
     fn browse_view(&mut self, folder: &str) -> Result<BuildBrowseView> {
         // PoB's `main.buildPath`, read only: unlike `build_root` nothing is set up
         let root: String = self.call("build_root", ())?;
@@ -3216,6 +3278,75 @@ impl Engine {
 mod tests {
     use super::*;
     use crate::engine::BuySource;
+
+    /// A popup whose label, edit text, choices and tooltip hold bytes that aren't UTF-8, or a
+    /// real character in the escapes' range: the view shows them escaped (`bytes_text`), as
+    /// every other view does, where serde failed the whole popup
+    #[test]
+    fn a_popup_with_text_that_isnt_utf8_shows_it_escaped() {
+        use crate::engine::views::{PopupControl, PopupControlKind};
+        let lua = mlua::Lua::new();
+        super::super::native::register_compression(&lua).unwrap();
+        let control = PopupControl {
+            name: "edit".into(),
+            kind: PopupControlKind::Edit,
+            label: String::new(),
+            pos: [0.0, 0.0],
+            size: [10.0, 10.0],
+            shown: true,
+            enabled: true,
+            choices: vec!["a".into()],
+            selected: 0,
+            value: 0.0,
+            divisions: None,
+            checked: false,
+            text: String::new(),
+            ascii_only: false,
+            digits: false,
+            signed: false,
+            numeric: false,
+            limit: None,
+            tooltip_text: Some(String::new()),
+            hover_tooltip: false,
+            rows: vec![],
+            row_selected: None,
+            row_highlight: None,
+            note: None,
+            reorder: false,
+        };
+        let view = PopupView {
+            kind: PopupKind::Craft,
+            title: "t".into(),
+            controls: vec![control],
+            enter: None,
+        };
+        let mlua::Value::Table(table) = lua.to_value(&view).unwrap() else {
+            panic!("not a table");
+        };
+        let fill: mlua::Function = lua
+            .load(
+                r#"return function(view)
+                    local c = view.controls[1]
+                    c.label = "Caf\233"
+                    c.text = "X\239\158\169Y"
+                    c.choices[1] = "\252"
+                    c.tooltip_text = "\146"
+                    c.row_keys = { "k\233" }
+                    c.row_labels = { "l\233" }
+                end"#,
+            )
+            .eval()
+            .unwrap();
+        fill.call::<()>(&table).unwrap();
+        let view = popup_view_of(&lua, table).expect("the popup view");
+        let c = &view.controls[0];
+        assert_eq!(c.label, "Caf\u{F7E9}");
+        assert_eq!(c.text, "X\u{F7EF}\u{F79E}\u{F7A9}Y");
+        assert_eq!(c.choices, ["\u{F7FC}"]);
+        assert_eq!(c.tooltip_text.as_deref(), Some("\u{F792}"));
+        assert_eq!(c.rows[0].key, "k\u{F7E9}");
+        assert_eq!(c.rows[0].label, "l\u{F7E9}");
+    }
 
     #[test]
     fn queries_do_not_end_the_popup_session() {
@@ -3448,6 +3579,7 @@ mod tests {
             Command::SelectCompare { index: 1 },
             Command::RemoveCompare { index: 0 },
             Command::SetCompareOverlay { on: true },
+            Command::SetCompareShown { on: false },
             Command::BrowseBuilds {
                 folder: "a/".into(),
             },

@@ -95,6 +95,76 @@ pub fn stepped(text: &str, up: bool, signed: bool) -> String {
     }
 }
 
+/// Starts the undo of text box `id` over: the view put other text in (another set, a loadout),
+/// as PoB's `SetText` resets its box's undo (EditControl.lua:103). Ctrl+Z would otherwise
+/// bring back the text the box showed before, and an edit would send it.
+pub fn forget_undo(ctx: &egui::Context, id: egui::Id) {
+    if let Some(mut state) = egui::TextEdit::load_state(ctx, id) {
+        state.clear_undoer();
+        state.store(ctx, id);
+    }
+}
+
+/// What a box's undo goes by (PoB's `SetText` resets its box's undo, EditControl.lua:103):
+/// the view's text the box last followed, and the texts it sent whose echo hasn't come yet.
+/// Other text from the view starts the undo over; an echo of the box's own edit doesn't.
+#[derive(Default)]
+pub struct UndoWatch {
+    view: Option<String>,
+    echoes: Vec<String>,
+}
+
+/// The most sends kept waiting for their echo (a box sending at each key)
+const ECHOES: usize = 64;
+
+impl UndoWatch {
+    /// The box sent `text`: its echo keeps the undo.
+    pub fn sent(&mut self, text: &str) {
+        if self.echoes.len() == ECHOES {
+            self.echoes.remove(0);
+        }
+        self.echoes.push(text.to_owned());
+    }
+
+    /// The box, unfocused and with the engine caught up, follows the view's `current`.
+    /// Returns whether its undo must start over: the text is the view's own, not the box's.
+    /// An echo is taken once, with the sends before it; once other text came, no older send
+    /// is an echo any more.
+    pub fn follow(&mut self, current: &str) -> bool {
+        match &self.view {
+            Some(view) if view == current => return false,
+            None => {
+                self.view = Some(current.to_owned());
+                return false;
+            }
+            Some(_) => {}
+        }
+        self.view = Some(current.to_owned());
+        match self.echoes.iter().position(|e| same_echo(e, current)) {
+            Some(i) => {
+                self.echoes.drain(..=i);
+                false
+            }
+            None => {
+                self.echoes.clear();
+                true
+            }
+        }
+    }
+}
+
+/// Whether the view's `shown` is the echo of `sent`, as the engine may have normalised it:
+/// the same text, the same text trimmed, or the same number ("05" and "5", "1.50" and "1.5")
+fn same_echo(sent: &str, shown: &str) -> bool {
+    if sent == shown || sent.trim() == shown.trim() {
+        return true;
+    }
+    match (sent.trim().parse::<f64>(), shown.trim().parse::<f64>()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
 #[derive(Default)]
 pub struct EditBox {
     pub(crate) text: String,
@@ -109,6 +179,8 @@ pub struct EditBox {
     pub(crate) refused: bool,
     /// What `show` returned last came from a step, to be sent as `Command::Step`
     pub(crate) stepped: bool,
+    /// Whether text from the view starts the box's undo over
+    watch: UndoWatch,
 }
 
 impl EditBox {
@@ -164,6 +236,11 @@ impl EditBox {
         let focused = ui.memory(|m| m.has_focus(id));
         // a box that lost focus this frame still holds its edit: the view must not replace it
         if !focused && (!busy || !self.seeded) && !self.pending {
+            // only other text from the view starts the undo over: not the view the box showed
+            // before its edit, nor that edit's echo
+            if self.watch.follow(current) {
+                forget_undo(ui.ctx(), id);
+            }
             self.text.clear();
             self.text.push_str(current);
             self.sent.clear();
@@ -205,6 +282,7 @@ impl EditBox {
         } else if response.lost_focus() || (self.pending && !response.has_focus()) {
             if self.text != self.sent {
                 self.sent.clone_from(&self.text);
+                self.watch.sent(&self.text);
                 send = Some(self.text.clone());
             }
             self.pending = false;
@@ -220,6 +298,7 @@ impl EditBox {
             return None;
         }
         self.sent.clone_from(&self.text);
+        self.watch.sent(&self.text);
         Some(self.text.clone())
     }
 
@@ -553,6 +632,121 @@ mod tests {
         fn type_text(&mut self, text: &str) -> Vec<String> {
             self.frame(vec![Event::Text(text.to_owned())])
         }
+    }
+
+    /// Text the view puts in (another set, a loadout) starts the box's undo over, as PoB's
+    /// `SetText` does (EditControl.lua:103): Ctrl+Z doesn't bring back the other set's text
+    #[test]
+    fn undo_stops_at_text_the_view_put_in() {
+        let mut h = Harness::new("old set");
+        h.focus();
+        h.type_text("x");
+        h.time += 2.0;
+        h.frame(vec![]);
+        assert_eq!(h.click_away(), ["oldx set"]);
+        h.current = "new set".into();
+        h.frame(vec![]);
+        h.focus();
+        for _ in 0..3 {
+            h.time += 2.0;
+            h.frame(vec![Event::Key {
+                key: Key::Z,
+                physical_key: Some(Key::Z),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            }]);
+        }
+        assert_eq!(h.a.text, "new set");
+        assert!(h.click_away().is_empty());
+    }
+
+    /// The echo of the box's own edit keeps its undo, and so does the unchanged view the box
+    /// shows until the echo comes (the engine not marked busy): Ctrl+Z after the view caught
+    /// up still takes the edit back
+    #[test]
+    fn undo_survives_the_echo_of_the_boxs_own_edit() {
+        let mut h = Harness::new("old set");
+        h.focus();
+        h.type_text("x");
+        h.time += 2.0;
+        h.frame(vec![]);
+        assert_eq!(h.click_away(), ["oldx set"]);
+        // a frame of the view from before the edit, then its echo
+        h.frame(vec![]);
+        h.current = "oldx set".into();
+        h.frame(vec![]);
+        h.focus();
+        for _ in 0..3 {
+            h.time += 2.0;
+            h.frame(vec![Event::Key {
+                key: Key::Z,
+                physical_key: Some(Key::Z),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            }]);
+        }
+        assert_eq!(h.a.text, "old set");
+    }
+
+    fn undo_keys(h: &mut Harness) {
+        for _ in 0..3 {
+            h.time += 2.0;
+            h.frame(vec![Event::Key {
+                key: Key::Z,
+                physical_key: Some(Key::Z),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            }]);
+        }
+    }
+
+    /// The box's last edit coming back later (the set switched away and back) is no echo:
+    /// Ctrl+Z doesn't bring in the other set's text the box was focused on in between
+    #[test]
+    fn undo_after_a_set_switch_and_back_keeps_this_sets_text() {
+        let mut h = Harness::new("A");
+        h.focus();
+        h.type_text("x");
+        h.time += 2.0;
+        h.frame(vec![]);
+        assert_eq!(h.click_away(), ["Ax"]);
+        h.current = "Ax".into();
+        h.frame(vec![]);
+        // set 2, focused and left without typing
+        h.current = "C".into();
+        h.frame(vec![]);
+        h.focus();
+        h.time += 2.0;
+        h.frame(vec![]);
+        assert!(h.click_away().is_empty());
+        // back to set 1
+        h.current = "Ax".into();
+        h.frame(vec![]);
+        h.focus();
+        undo_keys(&mut h);
+        assert_eq!(h.a.text, "Ax");
+        assert!(h.click_away().is_empty());
+    }
+
+    /// An echo the engine normalised ("05" comes back as "5") is still the box's own: PoB
+    /// doesn't `SetText` its box then, so its undo stays (review M7)
+    #[test]
+    fn a_normalised_echo_keeps_the_undo() {
+        let mut h = Harness::new("");
+        h.focus();
+        h.type_text("05");
+        h.time += 2.0;
+        h.frame(vec![]);
+        assert_eq!(h.click_away(), ["05"]);
+        h.current = "5".into();
+        h.frame(vec![]);
+        assert_eq!(h.a.text, "5");
+        h.focus();
+        undo_keys(&mut h);
+        assert_eq!(h.a.text, "");
     }
 
     #[test]

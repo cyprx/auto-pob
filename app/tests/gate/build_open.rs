@@ -632,3 +632,40 @@ fn starting_on_the_build_the_exit_save_recorded() {
     );
     assert!(!next.build_list_view().unwrap().build_open);
 }
+
+/// A last build saved with a tree search PoB can't read (`"[x"`): PoB's Draw raised at the
+/// start-up reopen, so auto-pob started on the list. The search is blanked as the build
+/// loads, so it reopens.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_last_build_with_a_search_pob_cant_read_reopens_at_start() {
+    use auto_pob::engine::pob::PobBackend;
+    use auto_pob::game::Game;
+    let _guard = lock();
+    let s = LongtailSession::start("restart-bad-search", &|_| {
+        "<PathOfBuilding>\n\t<Mode mode=\"LIST\"><Arg boolean=\"false\"/><Arg string=\"\"/></Mode>\n</PathOfBuilding>\n".into()
+    });
+    let builds = settings_folder(&s.user).join("Builds");
+    let bad = builds.join("bad.xml");
+    fs::write(
+        &bad,
+        fs::read_to_string(fixture_xml("attack"))
+            .unwrap()
+            .replace("searchStr=\"\"", "searchStr=\"&quot;[x&quot;\""),
+    )
+    .unwrap();
+    fs::write(
+        s.settings_path(),
+        format!(
+            "<PathOfBuilding>\n\t<Mode mode=\"BUILD\"><Arg string=\"{}\"/><Arg string=\"bad\"/></Mode>\n</PathOfBuilding>\n",
+            bad.display()
+        ),
+    )
+    .unwrap();
+    let mut next = PobBackend::start_with(Game::Poe1, &s.pob, &s.user, canned(&canned_web()))
+        .unwrap_or_else(|e| panic!("starting on the recorded build: {e:#}"));
+    assert_eq!(next.take_startup_notice(), None);
+    assert!(next.build_loaded().unwrap(), "PoB went to its list");
+    assert_eq!(next.build_view().unwrap().name, "bad");
+    assert_eq!(next.tree_state_view().unwrap().search, "");
+}

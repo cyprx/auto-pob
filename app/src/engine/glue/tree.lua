@@ -378,21 +378,8 @@ local function compare_state(build)
 	return compare_colours(build, compareSpec), compareSpec and tab.activeCompareSpec - 1 or nil
 end
 
--- The words PassiveTreeView:Draw splits the search text into (PassiveTreeView.lua:783-798).
-local function search_words(search)
-	search = search:lower()
-	local words = {}
-	for matchstring in search:gmatch('"([^"]*)"') do
-		words[#words + 1] = matchstring
-		search = search:gsub('"' .. matchstring:gsub("([%(%)])", "%%%1") .. '"', "")
-	end
-	for matchstring in search:gmatch("(%S*)") do
-		if matchstring:match("%S") ~= nil then
-			words[#words + 1] = matchstring
-		end
-	end
-	return words
-end
+-- The words PassiveTreeView:Draw splits the search text into (bootstrap.lua)
+local search_words = AutoPobSearchWords
 
 -- Ids of the nodes the viewer would highlight for its search text: Draw caches
 -- `DoesNodeMatchSearchParams` for every node when the text changes (PassiveTreeView.lua:780-802).
@@ -994,6 +981,13 @@ end
 -- frame's Draw matched every node for the new text (PassiveTreeView.lua:780-802), or the text
 -- is unchanged and `fresh` says they were current before (only tree searches ran since).
 function glue.set_tree_search(text, fresh)
+	-- a quoted word goes into a Lua pattern unescaped (PassiveTreeView.lua:789): one PoB can't
+	-- read would raise in its Draw at every frame while the text stays, so it is refused, and
+	-- the last search stays
+	local ok, err = pcall(search_words, text)
+	if not ok then
+		error((tostring(err):gsub("^.-:%d+: ", "")), 0)
+	end
 	local viewer = pob.build.treeTab.viewer
 	local before = viewer.searchStrCached
 	viewer.searchStr = text

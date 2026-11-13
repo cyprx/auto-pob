@@ -94,10 +94,10 @@ pub(crate) fn entry(root: &str, path: &Path, walks: bool) -> Result<String> {
     if walks && full.is_dir() && tree_has_links(&full) {
         return Err(outside());
     }
-    let parent_rel = parent_rel
-        .to_str()
-        .ok_or_else(|| anyhow!("no such build"))?;
-    let name = name.to_str().ok_or_else(|| anyhow!("no such build"))?;
+    // PoB lists such a file and opens it (8103395); these commands need a UTF-8 path
+    let not_utf8 = || anyhow!("that build's file name isn't UTF-8");
+    let parent_rel = parent_rel.to_str().ok_or_else(not_utf8)?;
+    let name = name.to_str().ok_or_else(not_utf8)?;
     let folder = if parent_rel.is_empty() {
         String::new()
     } else {
@@ -398,6 +398,24 @@ mod tests {
         assert_eq!(entry(&root, &b, true).unwrap(), format!("{root}sub/b.xml"));
         let sub = tree.0.join("Builds/sub");
         assert_eq!(entry(&root, &sub, true).unwrap(), format!("{root}sub"));
+    }
+
+    /// A file whose name isn't UTF-8 is listed and opens, but the list's other commands
+    /// refuse it: they say why, not that it doesn't exist (review M6)
+    #[test]
+    fn a_name_that_isnt_utf8_is_refused_with_its_reason() {
+        use std::os::unix::ffi::OsStrExt;
+        let tree = Tree::new("latin");
+        let root = tree.root();
+        let path = tree
+            .0
+            .join("Builds")
+            .join(std::ffi::OsStr::from_bytes(b"caf\xE9.xml"));
+        fs::write(&path, "x").unwrap();
+        assert_eq!(
+            refusal(entry(&root, &path, false)),
+            "that build's file name isn't UTF-8"
+        );
     }
 
     #[test]

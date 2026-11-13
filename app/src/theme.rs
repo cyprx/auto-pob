@@ -220,17 +220,13 @@ pub fn list_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R
     out
 }
 
-/// Draws `add`, an `egui_extras` table, with its hovered row in [`list_row`]'s warm fill.
-/// Only the hovered fill changes (the one value egui_extras reads for a hovered row), so
-/// borders and the pressed look of anything else in the table stay as they are.
-pub fn table_rows<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+/// Gives an `egui_extras` table body's hovered row [`list_row`]'s warm fill: call it on the
+/// body's own ui (`TableBody::ui_mut`) before its rows. Only the hovered fill changes (the one
+/// value egui_extras reads for a hovered row), and only inside the body, so the header and
+/// the scroll bar, which is drawn in the table's outer ui, keep their look.
+pub fn table_rows(ui: &mut egui::Ui) {
     let hovered = &mut ui.visuals_mut().widgets.hovered;
-    let old = (hovered.bg_fill, hovered.weak_bg_fill);
     (hovered.bg_fill, hovered.weak_bg_fill) = (ROW_HOVERED, ROW_HOVERED);
-    let out = add(ui);
-    let hovered = &mut ui.visuals_mut().widgets.hovered;
-    (hovered.bg_fill, hovered.weak_bg_fill) = old;
-    out
 }
 
 /// A list row's border: none to see
@@ -833,6 +829,61 @@ mod tests {
         // below the 20 pt header, on the second row
         let hovered = run(hover_at(Pos2::new(40.0, 50.0)), table);
         assert!(warm(&hovered), "{:?}", hovered.painted);
+    }
+
+    /// A sortable table's scroll bar handle under the pointer keeps egui's hovered look, not
+    /// the rows' warm fill: only the body's rows take it. Today's floating bar paints its
+    /// handle in the text colour; a solid bar paints it in the hovered fill, so both are
+    /// checked.
+    #[test]
+    fn a_hovered_table_scroll_bar_keeps_its_own_fill() {
+        for solid in [false, true] {
+            let table = |ui: &mut egui::Ui| {
+                if solid {
+                    ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+                    ui.spacing_mut().scroll.foreground_color = false;
+                }
+                let columns = [crate::widgets::list::ListColumn {
+                    title: "Name",
+                    width: 150.0,
+                }];
+                crate::widgets::list::list(
+                    ui,
+                    egui::Id::unique("scroll-table"),
+                    &columns,
+                    60,
+                    |i, row| {
+                        row.col(|ui| {
+                            ui.label(format!("row {i}"));
+                        });
+                    },
+                    &mut None,
+                );
+                Rect::NOTHING
+            };
+            // on the handle, near the top (a solid bar sits beside the rows)
+            let x = if solid { 157.0 } else { 149.0 };
+            let mut frames = hover_at(Pos2::new(x, 40.0));
+            frames.extend(vec![vec![]; 10]);
+            let hovered = run(frames, table);
+            let bar: Vec<_> = hovered
+                .painted
+                .iter()
+                .filter(|p| p.rect.min.x > 130.0 && p.rect.width() < 20.0)
+                .collect();
+            assert!(bar.len() >= 2, "solid {solid}: {:?}", hovered.painted);
+            assert!(
+                !bar.iter().any(|p| p.fill == ROW_HOVERED),
+                "solid {solid}: {bar:?}"
+            );
+            // the rows still light up under the pointer
+            let row = run(hover_at(Pos2::new(40.0, 50.0)), table);
+            assert!(
+                row.painted.iter().any(|p| p.fill == ROW_HOVERED),
+                "solid {solid}: {:?}",
+                row.painted
+            );
+        }
     }
 
     /// A button drawn after a list row still lights up: `list_row` puts the look back

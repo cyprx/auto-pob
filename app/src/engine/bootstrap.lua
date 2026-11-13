@@ -214,6 +214,51 @@ end
 mainObject.continuousIntegrationMode = nil
 
 runCallback("OnInit")
+
+-- The words PassiveTreeView:Draw splits a tree search into (PassiveTreeView.lua:783-798). A
+-- quoted word goes into a Lua pattern unescaped, so a search such as "[x" raises; the glue
+-- refuses such a search (glue.set_tree_search) and uses this split for its matches.
+function AutoPobSearchWords(search)
+	search = search:lower()
+	local words = {}
+	for matchstring in search:gmatch('"([^"]*)"') do
+		words[#words + 1] = matchstring
+		search = search:gsub('"' .. matchstring:gsub("([%(%)])", "%%%1") .. '"', "")
+	end
+	for matchstring in search:gmatch("(%S*)") do
+		if matchstring:match("%S") ~= nil then
+			words[#words + 1] = matchstring
+		end
+	end
+	return words
+end
+
+-- A build file can hold a search PoB can't read (an older auto-pob saved one): PoB's Draw
+-- would raise at every frame, so the build wouldn't open, the one reopened at start
+-- included. The viewer's Load blanks such a search, from before the first frame on.
+-- The class is loaded only when PoB hasn't yet, as its getClass does (Common.lua:68-75): a
+-- second load would replace the class, and viewers made before would keep the plain Load.
+-- Installing twice changes nothing.
+function AutoPobGuardTreeSearch()
+	local class = common.classes.PassiveTreeView
+	if not class then
+		LoadModule("Classes/PassiveTreeView")
+		class = common.classes.PassiveTreeView
+	end
+	if class.autoPobGuarded then
+		return
+	end
+	class.autoPobGuarded = true
+	local load = class.Load
+	class.Load = function(self, ...)
+		load(self, ...)
+		if not pcall(AutoPobSearchWords, self.searchStr) then
+			self.searchStr = ""
+			self.searchStrSaved = ""
+		end
+	end
+end
+AutoPobGuardTreeSearch()
 -- Options' Save would rewrite manifest.xml in the pinned PoB folder to switch branches; the
 -- folder is read-only for us and the beta branch is ruled out (R13)
 mainObject.main.SetManifestBranch = function() end

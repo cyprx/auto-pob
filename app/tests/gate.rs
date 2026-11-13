@@ -1142,6 +1142,110 @@ fn dynamic_tooltips_are_recorded() {
     );
 }
 
+/// Every option's tooltip, recorded afresh as the view did before its lines were cached by
+/// text: PoB's `tooltipFunc` or `tooltipText` into a recorder, each line stripped
+const FRESH_CONFIG_TOOLTIPS: &str = r#"
+    local tab = pob.build.configTab
+    local out = {}
+    for _, varData in ipairs(LoadModule("Modules/ConfigOptions")) do
+        local control = varData.var and tab.varControls[varData.var]
+        if control then
+            local recorder = glue.tooltip()
+            local ok
+            if varData.tooltipFunc then
+                local index = control.selIndex
+                local value = control.list and index and control.list[index]
+                ok = pcall(varData.tooltipFunc, recorder, "BODY", index, value)
+            else
+                local text
+                ok, text = pcall(control.GetProperty, control, "tooltipText")
+                if ok and text and text ~= "" then recorder:AddLine(14, text) end
+            end
+            local lines = {}
+            if ok then
+                for _, line in ipairs(recorder:lines()) do
+                    if line.text then
+                        lines[#lines + 1] = { size = line.size, text = StripEscapes(tostring(line.text)) }
+                    else
+                        lines[#lines + 1] = line
+                    end
+                end
+            end
+            out[#out + 1] = { var = varData.var, lines = lines }
+        end
+    end
+    return out
+"#;
+
+/// The view's tooltips equal a fresh recording of each, plus the invalid line for an invalid
+/// option; returns how many options have one
+fn assert_config_tooltips_fresh(s: &mut Session, what: &str) -> usize {
+    use auto_pob::engine::TooltipLine;
+    #[derive(serde::Deserialize)]
+    struct Fresh {
+        var: String,
+        #[serde(default)]
+        lines: Vec<TooltipLine>,
+    }
+    let value: mlua::Value = s.backend.lua.load(FRESH_CONFIG_TOOLTIPS).eval().unwrap();
+    let fresh: Vec<Fresh> = s.backend.lua.from_value(value).unwrap();
+    let view = s.config();
+    let mut with_lines = 0;
+    for f in &fresh {
+        let ours = option(&view, &f.var);
+        let mut expected = f.lines.clone();
+        if ours.invalid {
+            expected.push(TooltipLine::Line {
+                size: 14,
+                text: "This config option is conditional with missing source and is invalid."
+                    .into(),
+            });
+        }
+        assert_eq!(ours.tooltip, expected, "{what}: {}", f.var);
+        with_lines += usize::from(!expected.is_empty());
+    }
+    with_lines
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn config_tooltips_stay_fresh() {
+    let _guard = lock();
+    let mut s = Session::start("config-tooltips-fresh");
+    let fixture = |name: &str| fixtures().into_iter().find(|(n, _)| n == name).unwrap().1;
+    s.open_fixture("attack", &fixture("attack"));
+    let first = assert_config_tooltips_fresh(&mut s, "open");
+    assert!(first > 100, "only {first} options have a tooltip");
+    // twice in a row: the second view takes the kept lines
+    assert_config_tooltips_fresh(&mut s, "again");
+    // a `tooltipFunc` tooltip that grows with the choice
+    s.run(set(
+        "pantheonMajorGod",
+        ConfigValue::Choice("Lunaris".into()),
+    ))
+    .unwrap();
+    assert_config_tooltips_fresh(&mut s, "pantheon");
+    // an option set while its condition isn't met gets the invalid line on a kept tooltip
+    s.run(set(
+        "absolutionSkillDamageCountedOnce",
+        ConfigValue::Bool(true),
+    ))
+    .unwrap();
+    assert!(option(&s.config(), "absolutionSkillDamageCountedOnce").invalid);
+    assert_config_tooltips_fresh(&mut s, "invalid");
+    assert_config_tooltips_fresh(&mut s, "invalid again");
+    s.run(Command::NewConfigSet { title: "B".into() }).unwrap();
+    assert_config_tooltips_fresh(&mut s, "new set");
+    s.run(Command::SelectConfigSet { id: 1 }).unwrap();
+    assert_config_tooltips_fresh(&mut s, "set switch");
+    s.run(Command::Undo(Tab::Config)).unwrap();
+    assert_config_tooltips_fresh(&mut s, "undo");
+    s.open_fixture("minion", &fixture("minion"));
+    assert_config_tooltips_fresh(&mut s, "another build");
+    s.open_fixture("attack", &fixture("attack"));
+    assert_config_tooltips_fresh(&mut s, "back");
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn config_sets_round_trip() {
@@ -4180,6 +4284,67 @@ fn a_private_use_character_round_trips_beside_bytes_that_are_not_utf8() {
     assert!(s.builds_dir().join("y\u{F7E9}.xml").exists());
 }
 
+/// Once a build with bytes that aren't UTF-8 is left, the next build with none sends a
+/// private-use character in the escapes' range as itself: the escapes went with the build
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_build_opened_after_one_with_escapes_saves_a_private_use_character_as_itself() {
+    let _guard = lock();
+    let mut s = Session::start("escapes-reset");
+    let mut bytes = fs::read_to_string(fixture_xml("attack"))
+        .unwrap()
+        .replace("<Notes>", "<Notes>caf\u{1} notes")
+        .into_bytes();
+    for b in &mut bytes {
+        if *b == 1 {
+            *b = 0xE9;
+        }
+    }
+    let latin = s.builds_dir().join("latin.xml");
+    fs::create_dir_all(latin.parent().unwrap()).unwrap();
+    fs::write(&latin, bytes).unwrap();
+    s.run(Command::OpenBuild {
+        path: latin.clone(),
+    })
+    .expect("open");
+    let notes = s.backend.notes_view().expect("notes view");
+    assert!(notes.text.contains('\u{F7E9}'), "{:?}", notes.text);
+    // an import that fails keeps the build, and its escapes still go back as bytes
+    s.run(Command::ImportShareCode {
+        code: "not a code".into(),
+    })
+    .expect_err("not a code");
+    s.run(Command::SetNotes {
+        text: format!("{} more", notes.text),
+    })
+    .expect("notes");
+    s.run(Command::Save).expect("save");
+    let saved = fs::read(&latin).unwrap();
+    let needle = b"caf\xE9 notes";
+    assert!(
+        saved.windows(needle.len()).any(|w| w == needle),
+        "the byte didn't go back as itself"
+    );
+    let clean = s.builds_dir().join("clean.xml");
+    fs::copy(fixture_xml("attack"), &clean).unwrap();
+    s.run(Command::OpenBuild {
+        path: clean.clone(),
+    })
+    .expect("open the clean build");
+    s.backend.notes_view().expect("notes view");
+    s.run(Command::SetNotes {
+        text: "pua \u{F7E9} here".into(),
+    })
+    .expect("notes");
+    s.run(Command::Save).expect("save");
+    let saved = fs::read(&clean).unwrap();
+    let needle = "pua \u{F7E9} here".as_bytes();
+    assert!(
+        saved.windows(needle.len()).any(|w| w == needle),
+        "the character went out as a byte"
+    );
+}
+
 /// A build file named with a real character in the escapes' range (U+F7E9), in a process
 /// that never showed an escape: the build view gives its name and path as they are, and Save
 /// As with the name its box opens on writes that same file, not a new one
@@ -4378,4 +4543,151 @@ fn undo_and_redo_stay_in_their_tab() {
     assert_eq!(label(&mut s), "Edited");
     assert_eq!(allocated(&mut s), tree1);
     assert_eq!(items(&mut s), items0);
+}
+
+/// A quoted search word is put into a Lua pattern unescaped (PassiveTreeView.lua:789), so
+/// `"[x"` raises in PoB's own Draw, and every frame after it while the text stays. The search
+/// is refused instead, with PoB's reason; the last good search and the tree view stay. Other
+/// pattern characters search as in PoB.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_search_pob_cant_read_is_refused_and_the_tree_keeps_working() {
+    let _guard = lock();
+    let mut s = attack_session("odd-search");
+    s.backend.apply(search("life"), &|_| {}).expect("search");
+    let before = s
+        .backend
+        .tree_state_view()
+        .expect("tree view")
+        .search_matches;
+    assert!(!before.is_empty());
+    let error = s
+        .backend
+        .apply(search("\"[x\""), &|_| {})
+        .expect_err("a malformed pattern")
+        .to_string();
+    assert_eq!(error, "malformed pattern (missing ']')");
+    let state = s
+        .backend
+        .tree_state_view()
+        .expect("the tree view still works");
+    assert_eq!(state.search, "life");
+    assert_eq!(state.search_matches, before);
+    for text in [
+        "[x", "50%", "\"50%\"", "\"a(b\"", "%", "\"", "\"\"", "(", "oil:", "",
+    ] {
+        s.backend.apply(search(text), &|_| {}).expect(text);
+        s.backend.tree_state_view().expect(text);
+    }
+}
+
+/// A build file saved with a search PoB can't read (main could save one before the search
+/// was refused): PoB's Draw raised at every frame, so the build didn't open. It opens with
+/// the search blank.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_build_saved_with_a_search_pob_cant_read_opens() {
+    let _guard = lock();
+    let mut s = Session::start("saved-bad-search");
+    let xml = fs::read_to_string(fixture_xml("attack"))
+        .unwrap()
+        .replace("searchStr=\"\"", "searchStr=\"&quot;[x&quot;\"");
+    let path = s.builds_dir().join("bad.xml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, xml).unwrap();
+    s.run(Command::OpenBuild { path }).expect("open");
+    let state = s.backend.tree_state_view().expect("tree view");
+    assert_eq!(state.search, "");
+    assert!(!s.backend.build_view().unwrap().unsaved);
+}
+
+/// A build file whose name isn't UTF-8 (a Windows-1252 "é"): PoB on Linux lists it and opens
+/// it. The list shows its name escaped, and its path opens and saves that same file.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_build_file_named_with_bytes_that_arent_utf8_opens() {
+    use std::os::unix::ffi::OsStrExt;
+    let _guard = lock();
+    let mut s = Session::start("latin-name");
+    let builds = s.builds_dir();
+    fs::create_dir_all(&builds).unwrap();
+    let named = builds.join(std::ffi::OsStr::from_bytes(b"caf\xE9.xml"));
+    fs::copy(fixture_xml("attack"), &named).unwrap();
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .expect("list");
+    let list = s.backend.build_list_view().expect("the list view");
+    let entry = list
+        .entries
+        .iter()
+        .find(|e| e.name == "caf\u{F7E9}")
+        .unwrap_or_else(|| {
+            panic!(
+                "{:?}",
+                list.entries.iter().map(|e| &e.name).collect::<Vec<_>>()
+            )
+        });
+    assert_eq!(entry.path, named);
+    s.run(Command::OpenBuild {
+        path: entry.path.clone(),
+    })
+    .expect("open");
+    assert_eq!(s.backend.build_view().unwrap().name, "caf\u{F7E9}");
+    s.run(Command::SetNotes {
+        text: "saved here".into(),
+    })
+    .expect("notes");
+    s.run(Command::Save).expect("save");
+    let saved = fs::read(&named).unwrap();
+    assert!(
+        saved.windows(10).any(|w| w == b"saved here"),
+        "saved elsewhere"
+    );
+    assert_eq!(
+        fs::read_dir(&builds).unwrap().count(),
+        1,
+        "another file was written"
+    );
+}
+
+/// A failing `popup_live` doesn't stop the rest of leaving a build: the escapes flag is
+/// kept (the safe side) and the open goes on (review M4)
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_failing_popup_check_leaves_the_build_change_working() {
+    let _guard = lock();
+    let mut s = attack_session("popup-live-fails");
+    s.backend
+        .lua
+        .load("glue.popup_live = function() error('boom') end")
+        .exec()
+        .unwrap();
+    let path = s.builds_dir().join("attack.xml");
+    s.run(Command::OpenBuild { path })
+        .expect("the open goes on");
+    assert_eq!(s.backend.build_view().unwrap().name, "attack");
+}
+
+/// The bad-search guard loads PoB's viewer class only when PoB hasn't, and installs once:
+/// the class and its Load stay the ones every viewer has (review M5)
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn the_bad_search_guard_keeps_pobs_viewer_class() {
+    let _guard = lock();
+    let s = attack_session("guard-class");
+    let same: bool = s
+        .backend
+        .lua
+        .load(
+            "local class = common.classes.PassiveTreeView
+            local load = class.Load
+            AutoPobGuardTreeSearch()
+            return common.classes.PassiveTreeView == class
+                and class.Load == load
+                and getmetatable(pob.build.treeTab.viewer).__index == class",
+        )
+        .eval()
+        .unwrap();
+    assert!(same, "the class or its Load was replaced");
 }

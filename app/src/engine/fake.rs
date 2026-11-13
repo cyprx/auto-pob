@@ -113,6 +113,13 @@ pub struct Fake {
     pub network_recalc: bool,
     /// How long `shutdown` takes, as PoB's exit save of `Settings.xml` does
     pub shutdown_delay: std::time::Duration,
+    /// `SetCompareShown { on: false }` holds the Compare view back from recalculations, as
+    /// PobBackend does
+    compare_hidden: bool,
+    /// What `compare_view` answers; `None` is "no comparison loaded"
+    pub compare: Option<CompareView>,
+    /// How long `compare_view` takes
+    pub compare_delay: std::time::Duration,
 }
 
 impl Fake {
@@ -146,6 +153,9 @@ impl Fake {
                 short_link: None,
                 network_recalc: false,
                 shutdown_delay: std::time::Duration::ZERO,
+                compare_hidden: false,
+                compare: None,
+                compare_delay: std::time::Duration::ZERO,
             },
             log,
         )
@@ -336,6 +346,15 @@ impl Fake {
                 tree: true,
                 ..Affected::default()
             }),
+            Command::SetCompareShown { on } => {
+                self.compare_hidden = !on;
+                // showing always answers with a fresh view: the UI waits for it before it
+                // lets the tab's controls act on the one it holds
+                Ok(Affected {
+                    compare: on,
+                    ..Affected::default()
+                })
+            }
             Command::Help => Ok(Affected {
                 help: true,
                 ..Affected::default()
@@ -730,7 +749,12 @@ impl Backend for Fake {
 
     fn compare_view(&mut self) -> anyhow::Result<Option<CompareView>> {
         self.log.lock().unwrap().compare_views += 1;
-        Ok(None)
+        std::thread::sleep(self.compare_delay);
+        Ok(self.compare.clone())
+    }
+
+    fn compare_shown(&self) -> bool {
+        !self.compare_hidden
     }
 
     fn browse_view(&mut self, folder: &str) -> anyhow::Result<BuildBrowseView> {

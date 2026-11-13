@@ -727,3 +727,53 @@ fn a_fresh_user_folder_does_not_shrink_the_ui() {
     let written = misc_attributes(&std::fs::read_to_string(&path).unwrap());
     assert_eq!(written["dpiScaleOverridePercent"], "0");
 }
+
+/// A Builds path that isn't UTF-8 shows escaped in the Options window. A build change while
+/// the window is open (R19) resets the escapes flag; the path typed after it still goes back
+/// to PoB as its bytes.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_builds_path_that_isnt_utf8_survives_a_build_change_in_options() {
+    use std::os::unix::ffi::OsStrExt;
+    let _guard = lock();
+    let mut s = LongtailSession::start("options-latin-path", &|_| {
+        "<PathOfBuilding>\n\t<Mode mode=\"LIST\"><Arg boolean=\"false\"/><Arg string=\"\"/></Mode>\n</PathOfBuilding>\n".into()
+    });
+    let folder = super::longtail_harness::settings_folder(&s.user);
+    let latin = folder.join(std::ffi::OsStr::from_bytes(b"Caf\xE9 Builds"));
+    std::fs::create_dir_all(&latin).unwrap();
+    let attack = folder.join("Builds/attack.xml");
+    std::fs::create_dir_all(attack.parent().unwrap()).unwrap();
+    std::fs::copy(super::fixture_xml("attack"), &attack).unwrap();
+    let lua_path: String = latin
+        .as_os_str()
+        .as_bytes()
+        .iter()
+        .map(|&b| format!("\\{b}"))
+        .collect();
+    s.eval::<()>(&format!("pob.main.main.buildPath = \"{lua_path}/\""));
+    let view = open_options(&mut s);
+    let shown = view
+        .controls
+        .iter()
+        .find(|c| c.name == "buildPath")
+        .expect("the path box")
+        .text
+        .clone();
+    assert!(shown.contains("Caf\u{F7E9} Builds"), "{shown:?}");
+    s.run(Command::OpenBuild { path: attack })
+        .expect("a build change with the window open");
+    // the UI keeps the window's view from before the change: nothing reads it again here
+    // the user adds to the path the window shows
+    set(&mut s, "buildPath", PopupInput::Text(format!("{shown}2")));
+    press(&mut s, "save");
+    let saved: mlua::LuaString = s.eval("return pob.main.main.buildPath");
+    let mut want = latin.as_os_str().as_bytes().to_vec();
+    want.extend_from_slice(b"/2/");
+    assert_eq!(
+        saved.as_bytes().to_vec(),
+        want,
+        "{}",
+        String::from_utf8_lossy(&saved.as_bytes())
+    );
+}

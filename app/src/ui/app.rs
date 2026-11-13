@@ -163,6 +163,12 @@ pub struct AutoPobApp {
     compare: CompareUi,
     /// `SetCompareOverlay { on: true }` is the engine's state: the Compare tab's Tree view is up
     compare_overlay: bool,
+    /// What the engine was last told by `SetCompareShown`: whether the Compare tab is on
+    /// screen. The engine starts with it on.
+    compare_shown: bool,
+    /// The seq of the last `SetCompareShown { on: true }`: until its answer comes, the tab's
+    /// held view may be from before edits made elsewhere, so it is dimmed and its controls off
+    compare_wait: Option<u64>,
     import_ui: ImportUi,
     /// The pending network requests (the finished ones are turned into notices)
     requests: RequestsView,
@@ -182,12 +188,17 @@ pub struct AutoPobApp {
     release: Option<Release>,
 
     notices: Vec<String>,
+    /// How often an error notice still up was given again (more than once)
+    notice_repeats: std::collections::HashMap<String, u32>,
     pending_save: Option<PendingSave>,
     save_as: Option<SaveAsDialog>,
     prompt: Option<Pending>,
     import: Option<String>,
     /// Actions waiting for the next frame (they need the egui context).
     ready_actions: Vec<Pending>,
+    /// The build changed: every text box's egui state (its undo above all) goes at the next
+    /// frame, as PoB's boxes are new with each build
+    forget_text_states: bool,
     /// A loadout switch went out: the box with the keyboard was for the sets before, so it
     /// lets go and shows the new sets' text (PoB sets its controls' text from the new sets)
     release_focus: bool,
@@ -259,6 +270,8 @@ impl AutoPobApp {
             notes: NotesUi::default(),
             compare: CompareUi::default(),
             compare_overlay: false,
+            compare_shown: true,
+            compare_wait: None,
             import_ui: ImportUi::default(),
             requests: RequestsView::default(),
             confirm: None,
@@ -271,11 +284,13 @@ impl AutoPobApp {
             release_rx: None,
             release: None,
             notices: Vec::new(),
+            notice_repeats: std::collections::HashMap::new(),
             pending_save: None,
             save_as: None,
             prompt: None,
             import: None,
             ready_actions: Vec::new(),
+            forget_text_states: false,
             release_focus: false,
             allow_close: false,
             help: HelpUi::default(),
@@ -598,6 +613,27 @@ impl AutoPobApp {
         self.last_sent > self.last_snapshot
     }
 
+    /// Off the Compare tab, an edit's recalculation doesn't rebuild its view, so the engine is
+    /// told when the tab shows: hiding needs no answer, showing is answered with a fresh view,
+    /// which the tab waits for (`compare_wait`).
+    fn sync_compare_shown(&mut self) {
+        let shown = self.screen == Screen::Build && self.tab == BuildTab::Compare;
+        if shown == self.compare_shown {
+            return;
+        }
+        self.compare_shown = shown;
+        if shown {
+            self.compare_wait = Some(self.send(Command::SetCompareShown { on: true }));
+        } else {
+            self.engine.send(Command::SetCompareShown { on: false });
+        }
+    }
+
+    /// The Compare tab still waits for the view its showing asked for
+    fn compare_waiting(&self) -> bool {
+        self.compare_wait.is_some_and(|s| self.last_snapshot < s)
+    }
+
     fn current_unsaved(&self) -> bool {
         self.screen == Screen::Build
             && self.entering.is_none()
@@ -645,14 +681,16 @@ impl AutoPobApp {
                     self.reset_build_state();
                 }
                 // an import that answered at once replaced the build: its first view comes
-                // before the new build's others
-                if matches!(snapshot, Snapshot::Build(_)) && self.import_seq == Some(seq) {
+                // before the new build's others. Its batch may hold later commands, whose seq
+                // the views then carry.
+                let import_answered = self.import_seq.is_some_and(|at| seq >= at);
+                if matches!(snapshot, Snapshot::Build(_)) && import_answered {
                     self.import_seq = None;
                     self.reset_for_new_build();
                 }
                 // a link's answer is its request, with no new build yet: the import is over as
                 // far as the reset goes (a code's has no request left, every one was cancelled)
-                if self.import_seq == Some(seq)
+                if import_answered
                     && matches!(&snapshot, Snapshot::Requests(view) if !view.pending.is_empty())
                 {
                     self.import_seq = None;
@@ -807,6 +845,7 @@ impl AutoPobApp {
 
     /// Forgets the build's per-build UI state, as for another build.
     fn reset_build_state(&mut self) {
+        self.forget_text_states = true;
         self.tree.reset();
         self.calcs.reset();
         self.skills.reset();
@@ -886,6 +925,11 @@ impl AutoPobApp {
             self.list_ui.move_refused();
         }
         self.tree.on_command_error();
+        // the view the Compare tab waits for may have failed: what it holds is all there is,
+        // so it is no longer dimmed (`behind` keeps its controls off until a snapshot comes)
+        if self.compare_wait.is_some_and(|s| seq >= s) {
+            self.compare_wait = None;
+        }
         // the Compare tab's Import popup shows its own failure, as PoB's does
         if self.compare.import_failed(seq, &message) {
             return;
@@ -921,7 +965,15 @@ impl AutoPobApp {
                 }
             }
         }
-        self.notices.push(message);
+        // the same reason again while its notice is up (a search PoB can't read, refused at
+        // each send while it stays in the box; a retried action) is one notice, which counts
+        // the times, so a retry that failed again still shows
+        if self.notices.contains(&message) {
+            *self.notice_repeats.entry(message).or_insert(1) += 1;
+        } else {
+            self.notice_repeats.remove(&message);
+            self.notices.push(message);
+        }
     }
 
     fn save_succeeded(&mut self) {
@@ -1138,6 +1190,10 @@ impl AutoPobApp {
     fn show_frame(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.process_events();
+        // Ctrl+Z in the next build's box must not bring the last build's text back
+        if std::mem::take(&mut self.forget_text_states) {
+            ctx.data_mut(|d| d.remove_by_type::<egui::text_edit::TextEditState>());
+        }
         crate::widgets::scroll_step::set_options(&ctx, self.scroll_options);
         self.right_click_paste(&ctx);
 
@@ -1436,12 +1492,17 @@ impl AutoPobApp {
                     if ui.small_button("x").clicked() {
                         dismiss = Some(i);
                     }
-                    ui.colored_label(ui.visuals().error_fg_color, notice);
+                    let colour = ui.visuals().error_fg_color;
+                    match self.notice_repeats.get(notice) {
+                        Some(&n) if n > 1 => ui.colored_label(colour, format!("{notice} (×{n})")),
+                        _ => ui.colored_label(colour, notice),
+                    };
                 });
             }
         });
         if let Some(i) = dismiss {
-            self.notices.remove(i);
+            let notice = self.notices.remove(i);
+            self.notice_repeats.remove(&notice);
         }
     }
 
@@ -1794,7 +1855,17 @@ impl AutoPobApp {
                     notes_command = self.notes.show(ui, now);
                 }
                 BuildTab::Compare => {
-                    compare_out = self.compare.show(ui, behind);
+                    // told before the tab's first frame, so that frame already waits
+                    self.sync_compare_shown();
+                    let waiting = self.compare_waiting();
+                    compare_out = ui
+                        .scope(|ui| {
+                            if waiting {
+                                ui.multiply_opacity(0.5);
+                            }
+                            self.compare.show(ui, behind || waiting)
+                        })
+                        .inner;
                     // R7's overlay: our tree, coloured against the comparison
                     if compare_out.tree {
                         self.tree.set_enabled_sockets(self.items.enabled_sockets());
@@ -1883,6 +1954,7 @@ impl AutoPobApp {
             self.compare_overlay = overlay;
             self.send(Command::SetCompareOverlay { on: overlay });
         }
+        self.sync_compare_shown();
         if self.tab != BuildTab::Skills {
             // leaving the tab sends an edit still being typed and closes its dialogs
             if let Some(command) = self.skills.flush() {
@@ -2183,6 +2255,7 @@ impl AutoPobApp {
                 self.top_bar.discard();
                 self.calcs.discard();
                 self.config_ui.discard();
+                self.items.discard();
                 self.ready_actions.push(pending);
             }
             Resolution::Stay => {}
@@ -3367,6 +3440,38 @@ mod tests {
         out
     }
 
+    /// A last build that raised at start: the engine's start sends PoB's reason once, before
+    /// Ready, and the build list comes up with it as a notice above it
+    #[test]
+    fn a_last_build_that_raised_shows_one_notice_on_the_build_list() {
+        let mut app = AutoPobApp::new(Box::new(|| {
+            Engine::spawn_with(
+                |send| {
+                    send(Event::Message {
+                        title: "Couldn't reopen the last build".into(),
+                        text: "In 'OnFrame': CalcTools.lua:46: boom".into(),
+                    });
+                    Ok(Box::new(Fake::default()) as Box<dyn Backend>)
+                },
+                || {},
+            )
+        }));
+        let ctx = egui::Context::default();
+        pump_until(&mut app, &ctx, "list", |a| a.ready && a.list.is_some());
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        assert_eq!(app.screen, Screen::List);
+        let notice = "Couldn't reopen the last build: In 'OnFrame': CalcTools.lua:46: boom";
+        assert_eq!(app.notices, [notice]);
+        let texts = drawn_texts(&mut app, &ctx);
+        assert_eq!(
+            texts.iter().filter(|t| *t == notice).count(),
+            1,
+            "{texts:?}"
+        );
+    }
+
     #[test]
     fn the_save_questions_have_pobs_texts() {
         // Build.lua:1352-1379 "Save Changes" and :1449 "Save" / "Save As"
@@ -3547,7 +3652,8 @@ mod tests {
     #[test]
     fn ctrl_shift_z_undoes_as_pob_and_ctrl_y_redoes() {
         let (mut app, ctx) = open_new_build();
-        let before = app.last_sent;
+        // one command: UI state such as `SetCompareShown` goes past `send` and isn't counted
+        let before = app.sent_full.len();
         // PoB checks only Ctrl on its "z" (TreeTab.lua:359): Ctrl+Shift+Z is undo too
         frame(
             &mut app,
@@ -3557,7 +3663,7 @@ mod tests {
                 egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
             ),
         );
-        assert_eq!(app.last_sent, before + 1);
+        assert_eq!(app.sent_full[before..], ["Undo(Tree)".to_owned()]);
         assert_eq!(app.sent_log.last().map(String::as_str), Some("Undo"));
         frame(
             &mut app,
@@ -4154,6 +4260,42 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_search_shows_one_notice_while_it_stays() {
+        let (mut app, _ctx) = tree_app();
+        let notices = app.notices.len();
+        // each debounced send of a search PoB can't read is refused with the same reason
+        for seq in [80, 81, 82] {
+            app.on_event(Event::Error {
+                seq,
+                message: "malformed pattern (missing ']')".into(),
+            });
+        }
+        assert_eq!(app.notices.len(), notices + 1, "{:?}", app.notices);
+        // each refusal still shows: the notice counts them
+        let (mut app2, ctx) = (app, egui::Context::default());
+        let texts = drawn_texts(&mut app2, &ctx);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t == "malformed pattern (missing ']') (×3)"),
+            "{texts:?}"
+        );
+        let mut app = app2;
+        // another reason is another notice; one dismissed comes back at the next refusal
+        app.on_event(Event::Error {
+            seq: 83,
+            message: "other".into(),
+        });
+        assert_eq!(app.notices.len(), notices + 2);
+        app.notices.retain(|n| !n.starts_with("malformed"));
+        app.on_event(Event::Error {
+            seq: 84,
+            message: "malformed pattern (missing ']')".into(),
+        });
+        assert_eq!(app.notices.len(), notices + 2);
+    }
+
+    #[test]
     fn errors_are_notices_and_a_failed_breakdown_answer_is_not() {
         let (mut app, _ctx) = tree_app();
         let notices = app.notices.len();
@@ -4291,6 +4433,36 @@ mod tests {
         app.tab = BuildTab::Notes;
         frame(&mut app, &ctx, vec![]);
         assert_eq!(sent_since(&app, before), [QUALITY]);
+    }
+
+    /// Don't Save drops a quality still being typed, as it drops every other box's edit
+    #[test]
+    fn dont_save_drops_a_quality_being_typed() {
+        for leave in [
+            Pending::BackToList,
+            Pending::Close,
+            Pending::Open("/b/other.xml".into()),
+            Pending::New,
+        ] {
+            let (mut app, ctx) = items_app_typing();
+            app.build = Some(Arc::new(BuildView {
+                unsaved: true,
+                ..(**app.build.as_ref().unwrap()).clone()
+            }));
+            let before = app.sent_full.len();
+            app.request(leave.clone());
+            frame(&mut app, &ctx, vec![]);
+            assert_eq!(app.prompt, Some(leave.clone()), "no question");
+            app.answer_prompt(leave.clone(), PromptChoice::Discard);
+            for _ in 0..3 {
+                frame(&mut app, &ctx, vec![]);
+            }
+            let sent = sent_since(&app, before);
+            assert!(
+                !sent.iter().any(|c| c.starts_with("SetItemQuality")),
+                "{leave:?}: {sent:?}"
+            );
+        }
     }
 
     #[test]
@@ -5401,6 +5573,91 @@ mod tests {
         build.loadout_selected = Some(1);
         app.build = Some(Arc::new(build));
         frame(app, ctx, vec![]);
+    }
+
+    /// A text box's undo goes with the build: Ctrl+Z in the next build's box doesn't bring
+    /// back the last build's text (PoB's boxes are new with each build)
+    #[test]
+    fn a_box_forgets_its_undo_with_the_build() {
+        let mut first = sample_config();
+        first.custom_mods[1].text = "old line".into();
+        let (mut app, ctx) = config_app(first);
+        click(&mut app, &ctx, "mod_text:1");
+        type_text(&mut app, &ctx, "+5 life");
+        click(&mut app, &ctx, "mod_title:1");
+        // another build, its own custom modifiers
+        app.reset_build_state();
+        let mut view = sample_config();
+        view.custom_mods[1].text = "+9 mana".into();
+        app.config = Some(Arc::new(view));
+        app.tab = BuildTab::Config;
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "mod_text:1");
+        for _ in 0..3 {
+            frame(&mut app, &ctx, ctrl(egui::Key::Z));
+        }
+        click(&mut app, &ctx, "mod_title:1");
+        // nothing was typed in this build: nothing to undo, nothing to send
+        let sent = sent_since(&app, before);
+        assert!(
+            !sent.iter().any(|c| c.starts_with("SetCustomModText")),
+            "the last build's text came back: {sent:?}"
+        );
+    }
+
+    /// Other text from the view (another config set) starts a box's undo over: Ctrl+Z
+    /// doesn't bring back the other set's text, as PoB's `SetText` resets it
+    #[test]
+    fn a_box_forgets_its_undo_when_the_view_changes_its_text() {
+        let mut first = sample_config();
+        first.custom_mods[1].text = "old line".into();
+        let (mut app, ctx) = config_app(first);
+        click(&mut app, &ctx, "mod_text:1");
+        type_text(&mut app, &ctx, "+5 life");
+        click(&mut app, &ctx, "mod_title:1");
+        // the other set's view
+        let mut view = sample_config();
+        view.custom_mods[1].text = "+9 mana".into();
+        app.config = Some(Arc::new(view));
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "mod_text:1");
+        for _ in 0..3 {
+            frame(&mut app, &ctx, ctrl(egui::Key::Z));
+        }
+        click(&mut app, &ctx, "mod_title:1");
+        let sent = sent_since(&app, before);
+        assert!(
+            !sent.iter().any(|c| c.starts_with("SetCustomModText")),
+            "the other set's text came back: {sent:?}"
+        );
+    }
+
+    /// The echo of the box's own edit keeps its undo: Ctrl+Z after the view caught up still
+    /// takes the edit back
+    #[test]
+    fn a_box_keeps_its_undo_through_its_own_echo() {
+        let (mut app, ctx) = config_app(sample_config());
+        click(&mut app, &ctx, "mod_text:1");
+        type_text(&mut app, &ctx, "+5 life");
+        click(&mut app, &ctx, "mod_title:1");
+        // the engine's view after the edit
+        let mut view = sample_config();
+        view.custom_mods[1].text = "+5 life".into();
+        app.config = Some(Arc::new(view));
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "mod_text:1");
+        frame(&mut app, &ctx, ctrl(egui::Key::Z));
+        click(&mut app, &ctx, "mod_title:1");
+        assert_eq!(
+            sent_since(&app, before),
+            ["SetCustomModText { group: 1, text: \"\" }"]
+        );
     }
 
     /// A box with the keyboard and no edit at a loadout switch lets go too: it would keep the
@@ -7382,6 +7639,45 @@ mod tests {
             snapshot: Snapshot::Build(Arc::new((**app.build.as_ref().unwrap()).clone())),
         });
         assert_eq!(app.tab, BuildTab::Tree);
+    }
+
+    #[test]
+    fn an_import_answered_in_a_later_commands_batch_still_resets() {
+        // a command sent after the import (a tab's state, a hover question) lands in the same
+        // batch, whose views carry its seq, not the import's
+        let (mut app, ctx) = import_app();
+        deliver(&mut app, valid_share());
+        frame(&mut app, &ctx, vec![]);
+        click_mark(&mut app, &ctx, "mode:this");
+        click_mark(&mut app, &ctx, "import_code");
+        click_mark(&mut app, &ctx, "confirm_yes");
+        let seq = app.last_sent + 1;
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: requests_snapshot(&[], vec![]),
+        });
+        assert_eq!(app.import_seq, Some(seq - 1));
+        app.tab = BuildTab::Import;
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::Build(Arc::new((**app.build.as_ref().unwrap()).clone())),
+        });
+        assert_eq!(app.import_seq, None);
+        assert_eq!(app.tab, BuildTab::Tree, "the new build's reset was skipped");
+
+        // a link: its pending request ends the import's reset the same way
+        let (mut app, ctx) = import_app();
+        deliver(&mut app, valid_share());
+        frame(&mut app, &ctx, vec![]);
+        click_mark(&mut app, &ctx, "mode:this");
+        click_mark(&mut app, &ctx, "import_code");
+        click_mark(&mut app, &ctx, "confirm_yes");
+        let seq = app.last_sent + 1;
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: requests_snapshot(&[(7, "Fetching build from pobb.in")], vec![]),
+        });
+        assert_eq!(app.import_seq, None);
     }
 
     #[test]

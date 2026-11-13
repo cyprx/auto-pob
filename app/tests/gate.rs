@@ -4199,9 +4199,28 @@ fn a_build_opened_after_one_with_escapes_saves_a_private_use_character_as_itself
     let latin = s.builds_dir().join("latin.xml");
     fs::create_dir_all(latin.parent().unwrap()).unwrap();
     fs::write(&latin, bytes).unwrap();
-    s.run(Command::OpenBuild { path: latin }).expect("open");
+    s.run(Command::OpenBuild {
+        path: latin.clone(),
+    })
+    .expect("open");
     let notes = s.backend.notes_view().expect("notes view");
     assert!(notes.text.contains('\u{F7E9}'), "{:?}", notes.text);
+    // an import that fails keeps the build, and its escapes still go back as bytes
+    s.run(Command::ImportShareCode {
+        code: "not a code".into(),
+    })
+    .expect_err("not a code");
+    s.run(Command::SetNotes {
+        text: format!("{} more", notes.text),
+    })
+    .expect("notes");
+    s.run(Command::Save).expect("save");
+    let saved = fs::read(&latin).unwrap();
+    let needle = b"caf\xE9 notes";
+    assert!(
+        saved.windows(needle.len()).any(|w| w == needle),
+        "the byte didn't go back as itself"
+    );
     let clean = s.builds_dir().join("clean.xml");
     fs::copy(fixture_xml("attack"), &clean).unwrap();
     s.run(Command::OpenBuild {

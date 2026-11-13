@@ -1,7 +1,7 @@
 //! Gate tests: our engine against reference data from unmodified upstream PoB.
 //!
 //! Run with
-//! `AUTO_POB_POB_DIR=<pinned PoB> cargo test -p auto-pob --test gate -- --ignored --test-threads=1`.
+//! `AUTO_POB_POB_DIR=<pinned PoB> cargo test -p auto-pob --features gate-probes --test gate -- --ignored --test-threads=1`.
 
 use auto_pob::engine::pob::PobBackend;
 use auto_pob::engine::upstream::{Golden, golden_of, load_xml, run_recipe, upstream_lua};
@@ -102,6 +102,24 @@ fn pob_dir() -> PathBuf {
         .expect("AUTO_POB_POB_DIR doesn't exist")
 }
 
+/// The pinned `Data/TimelessJewelData`, by file: size and modification time. PoB caches an
+/// inflated LUT there as a `.bin` (DataJewelFileLoader.lua:84-90), and upstream's wrapper,
+/// whose `NewFileSearch` finds nothing, rewrites it on every load: a gate that loads a timeless
+/// jewel runs on a farm (`timeless::farm`) and checks this is the same after it.
+fn pinned_luts() -> std::collections::BTreeMap<String, (u64, std::time::SystemTime)> {
+    fs::read_dir(pob_dir().join("Data/TimelessJewelData"))
+        .unwrap()
+        .map(|e| {
+            let e = e.unwrap();
+            let meta = fs::symlink_metadata(e.path()).unwrap();
+            (
+                e.file_name().to_string_lossy().to_string(),
+                (meta.len(), meta.modified().unwrap()),
+            )
+        })
+        .collect()
+}
+
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
@@ -139,6 +157,25 @@ fn golden(name: &str) -> Golden {
     let text = fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("reading {}: {e}; run the golden example", path.display()));
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("parsing {}: {e}", path.display()))
+}
+
+/// The golden files hold PoB's numbers as serde_json wrote them, the shortest text that reads
+/// back as the same double; reading must give that double back, or an exact comparison fails
+/// on a number PoB and the engine agree on (10.296650000000001 read as 10.29665 without
+/// serde_json's `float_roundtrip`)
+#[test]
+fn golden_numbers_read_back_exactly() {
+    for value in [
+        10.296650000000001_f64,
+        0.1 + 0.2,
+        1.0 / 3.0,
+        673.412_836_640_095_4,
+        1e-7,
+    ] {
+        let text = serde_json::to_string(&value).unwrap();
+        let back: f64 = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.to_bits(), value.to_bits(), "{text}");
+    }
 }
 
 /// Builds the fixture in upstream PoB: from its recipe, or from its XML when it has none.
@@ -269,14 +306,18 @@ impl Drop for Session {
 
 impl Session {
     fn start(test: &str) -> Session {
+        Session::start_on(test, &pob_dir())
+    }
+
+    /// `start` on another PoB folder, such as a `timeless::farm`
+    fn start_on(test: &str, pob: &Path) -> Session {
         let user =
             std::env::temp_dir().join(format!("auto-pob-gate-{test}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&user);
         // an empty canned web: a request a test did not mean to make fails with
         // `no canned response` instead of reaching the internet
         let net = net_harness::canned(&net_harness::canned_web());
-        let backend =
-            PobBackend::start_with(Game::Poe1, &pob_dir(), &user, net).expect("starting PoB");
+        let backend = PobBackend::start_with(Game::Poe1, pob, &user, net).expect("starting PoB");
         Session { backend, user }
     }
 
@@ -1633,6 +1674,62 @@ fn invalid_options_are_flagged() {
         option(&view, "resistancePenalty").selected.as_deref(),
         Some("-60")
     );
+}
+
+/// A Boss Skill Preset greys out "Enemy Damage Type" (ConfigOptions.lua:2286-2289), and
+/// "None" gives it back (2319-2323). Ours shows it greyed out as PoB does and refuses a choice
+/// there, which PoB's preset would put back anyway.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_greyed_out_option_is_greyed_out_as_in_pob() {
+    let _guard = lock();
+    let mut s = Session::start("config-greyed");
+    let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "attack").unwrap();
+    s.open_fixture("attack", &xml);
+    let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
+    load_xml(&lua, &attack_xml(), "attack").unwrap();
+    let upstream_enabled = |preset: &str| -> bool {
+        lua.load(format!(
+            r#"
+            local preset = build.configTab.varControls.presetBossSkills
+            for index, item in ipairs(preset.list) do
+                if item.val == "{preset}" then preset:SetSel(index) end
+            end
+            build.buildFlag = true
+            runCallback("OnFrame")
+            return build.configTab.varControls.enemyDamageType:IsEnabled() and true or false
+            "#
+        ))
+        .eval()
+        .unwrap()
+    };
+    let var = "enemyDamageType";
+    assert!(option(&s.config(), var).enabled);
+    let preset = option(&s.config(), "presetBossSkills")
+        .choices
+        .iter()
+        .find(|c| c.value != "None")
+        .expect("a boss skill")
+        .value
+        .clone();
+    s.run(set("presetBossSkills", ConfigValue::Choice(preset.clone())))
+        .unwrap();
+    let view = s.config();
+    assert!(!upstream_enabled(&preset), "upstream greys it out");
+    assert!(!option(&view, var).enabled, "ours shows it greyed out");
+    let before = option(&view, var).value.clone();
+    let err = s
+        .run(set(var, ConfigValue::Choice("Untyped".into())))
+        .unwrap_err();
+    assert!(err.to_string().contains("isn't available"), "{err}");
+    assert_eq!(option(&s.config(), var).value, before);
+
+    s.run(set("presetBossSkills", ConfigValue::Choice("None".into())))
+        .unwrap();
+    assert!(upstream_enabled("None"));
+    assert!(option(&s.config(), var).enabled);
+    s.run(set(var, ConfigValue::Choice("Untyped".into())))
+        .unwrap();
 }
 
 #[test]
@@ -3423,11 +3520,16 @@ fn socket_jewel(s: &mut Session, pick: &str, text: &str) -> usize {
 }
 
 /// Jewels that change the tree's reach or its nodes: the paths and dependants follow them.
+/// The timeless jewel's LUT is cached next to PoB's data, so the test runs on a farm and
+/// leaves the pinned folder's LUTs as they were.
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn tree_paths_follow_jewels() {
     let _guard = lock();
-    let mut s = attack_session("tree-paths-jewels");
+    let pinned_before = pinned_luts();
+    let pob = timeless::farm("paths");
+    let mut s = Session::start_on("tree-paths-jewels", &pob);
+    s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
     let check = |s: &mut Session, what: &str| {
         let state = s.backend.tree_state_view().unwrap();
         let (paths, depends) = paths_from_scratch(s);
@@ -3483,6 +3585,17 @@ fn tree_paths_follow_jewels() {
          Passives in radius are Conquered by the Karui\nCorrupted",
     );
     check(&mut s, "timeless jewel");
+    assert!(
+        pob.join("Data/TimelessJewelData/LethalPride.bin").is_file(),
+        "the jewel read no LUT in the farm"
+    );
+    assert_eq!(
+        pinned_luts(),
+        pinned_before,
+        "the pinned TimelessJewelData changed"
+    );
+    drop(s);
+    let _ = fs::remove_dir_all(&pob);
 }
 
 /// A tree switch between two identical searches matches the new tree's nodes, not the old

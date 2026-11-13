@@ -2,7 +2,7 @@
 //! loadouts (R21), against upstream PoB pressing the same controls. Upstream's side is
 //! `fixtures/longtail_lib.lua`'s top-bar part: PoB's own buttons, dropdown picks and frames.
 
-use super::{Session, fixture_xml, lock, pob_dir};
+use super::{Session, fixture_xml, lock, pinned_luts, pob_dir};
 use auto_pob::engine::upstream::{golden_of, load_xml, upstream_lua};
 use auto_pob::engine::views::ItemTooltipLine;
 use auto_pob::engine::{Backend, BuildView, Command, PopupInput, PopupKind, PopupView, StatsView};
@@ -1133,23 +1133,6 @@ fn pinned_files() -> BTreeMap<PathBuf, (u64, std::time::SystemTime)> {
     out
 }
 
-/// The timeless LUT caches in the pinned PoB folder, by name: `pinned_files` leaves them out,
-/// and none may appear there (the searches run in a folder of their own)
-fn pinned_bins() -> Vec<String> {
-    let dir = pob_dir().join("Data/TimelessJewelData");
-    let mut bins: Vec<String> = fs::read_dir(&dir)
-        .map(|entries| {
-            entries
-                .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| p.extension().is_some_and(|e| e == "bin"))
-                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
-                .collect()
-        })
-        .unwrap_or_default();
-    bins.sort();
-    bins
-}
-
 /// What the user folder holds: every folder (an empty one too) and every file with its bytes
 /// and modification time, so a write of the same bytes shows as well
 #[derive(Debug, Clone, PartialEq)]
@@ -1414,7 +1397,8 @@ fn no_silent_writes_longtail() {
     let _guard = lock();
     let started = std::time::Instant::now();
     let pinned = pinned_files();
-    let pinned_bins_before = pinned_bins();
+    // `pinned_files` leaves the LUT caches out; this sees them, by size and time too
+    let pinned_luts_before = pinned_luts();
     // the engine has no path to auto-pob.toml: this guards against one appearing
     let config = auto_pob::settings::config_path();
     let config_before = fs::read(&config).ok();
@@ -2022,6 +2006,7 @@ fn no_silent_writes_longtail() {
         Command::CopyBuild {
             path: s.builds().join("dot.xml"),
             name: "dot2".into(),
+            escaped: false,
         },
         &["dot2.xml"],
     );
@@ -2029,6 +2014,7 @@ fn no_silent_writes_longtail() {
         Command::RenameBuild {
             path: s.builds().join("dot2.xml"),
             name: "dot3".into(),
+            escaped: false,
         },
         &["dot2.xml", "dot3.xml"],
     );
@@ -2108,8 +2094,8 @@ fn no_silent_writes_longtail() {
     assert!(!bins.is_empty(), "the search read no LUT");
     assert!(pinned_files() == pinned, "the pinned PoB folder changed");
     assert_eq!(
-        pinned_bins(),
-        pinned_bins_before,
+        pinned_luts(),
+        pinned_luts_before,
         "a LUT cache was written into the pinned PoB folder"
     );
     assert_eq!(

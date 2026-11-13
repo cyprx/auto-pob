@@ -8,6 +8,8 @@ cd "$root"
 
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
+# the gate's probe counters exist only with this feature (scripts/gate.sh builds with it)
+cargo clippy --workspace --all-targets --features auto-pob/gate-probes -- -D warnings
 cargo test --workspace
 scripts/test-install.sh
 

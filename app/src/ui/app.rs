@@ -1616,11 +1616,27 @@ impl AutoPobApp {
             ListScreenAction::NewFolder(name) => {
                 self.send(Command::NewFolder { name });
             }
-            ListScreenAction::Rename { path, name } => {
-                self.send(Command::RenameBuild { path, name });
+            ListScreenAction::Rename {
+                path,
+                name,
+                escaped,
+            } => {
+                self.send(Command::RenameBuild {
+                    path,
+                    name,
+                    escaped,
+                });
             }
-            ListScreenAction::Copy { path, name } => {
-                self.send(Command::CopyBuild { path, name });
+            ListScreenAction::Copy {
+                path,
+                name,
+                escaped,
+            } => {
+                self.send(Command::CopyBuild {
+                    path,
+                    name,
+                    escaped,
+                });
             }
             ListScreenAction::Delete { path, kind } => {
                 self.send(Command::DeleteBuild { path, kind });
@@ -3050,10 +3066,12 @@ mod tests {
             ListScreenAction::Rename {
                 path: path.clone(),
                 name: "n".into(),
+                escaped: false,
             },
             ListScreenAction::Copy {
                 path: path.clone(),
                 name: "c".into(),
+                escaped: false,
             },
             ListScreenAction::Delete {
                 path: path.clone(),
@@ -3078,8 +3096,8 @@ mod tests {
             sent_since(&app, before),
             [
                 r#"NewFolder { name: "f" }"#,
-                r#"RenameBuild { path: "/b/one.xml", name: "n" }"#,
-                r#"CopyBuild { path: "/b/one.xml", name: "c" }"#,
+                r#"RenameBuild { path: "/b/one.xml", name: "n", escaped: false }"#,
+                r#"CopyBuild { path: "/b/one.xml", name: "c", escaped: false }"#,
                 r#"DeleteBuild { path: "/b/one.xml", kind: Folder }"#,
                 r#"MoveBuild { path: "/b/one.xml", folder: "sub/" }"#,
                 r#"CopyBuildTo { path: "/b/one.xml", folder: "sub/" }"#,
@@ -3091,6 +3109,7 @@ mod tests {
         let seq = app.send(Command::RenameBuild {
             path: "/b/one.xml".into(),
             name: "two".into(),
+            escaped: false,
         });
         app.on_event(Event::Error {
             seq,
@@ -3777,6 +3796,7 @@ mod tests {
             allow_zero: false,
             label: label.into(),
             shown: true,
+            enabled: true,
             invalid: false,
             value: None,
             placeholder: None,

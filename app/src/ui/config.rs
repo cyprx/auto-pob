@@ -853,8 +853,12 @@ impl ConfigUi {
                 label.on_hover_ui(|ui| tooltip_ui(ui, &option.tooltip));
             }
         });
+        // a control PoB greys out takes no input (a Boss Skill Preset's "Enemy Damage Type")
         let widget = scoped(ui, dim, |ui| {
-            self.option_widget(ui, option, behind, commands)
+            ui.add_enabled_ui(option.enabled, |ui| {
+                self.option_widget(ui, option, behind, commands)
+            })
+            .inner
         });
         // PoB's own tooltip, with its comparison, replaces the static one once it is here
         let now = ui.input(|i| i.time);
@@ -1311,6 +1315,7 @@ mod tests {
             allow_zero: false,
             label: label.into(),
             shown: true,
+            enabled: true,
             invalid: false,
             value: None,
             placeholder: None,
@@ -1718,6 +1723,44 @@ mod tests {
             debug(&h.click("minus:n")),
             ["SetConfig { var: \"n\", value: Number(0.0) }"]
         );
+    }
+
+    /// A control PoB greys out (a Boss Skill Preset's "Enemy Damage Type", ConfigOptions.lua:
+    /// 2286-2289) neither opens nor steps on the wheel, and asks for no tooltip, as PoB's
+    /// disabled dropdown draws none (DropDownControl.lua:292)
+    #[test]
+    fn a_greyed_out_list_takes_no_input() {
+        let mut h = Harness::new();
+        let mut list = option("Enemy Damage Type:");
+        list.var = "enemyDamageType".into();
+        list.kind = ConfigKind::List;
+        list.enabled = false;
+        list.value = Some(serde_json::json!("Average"));
+        list.selected = Some("Average".into());
+        list.choices = ["Average", "Untyped"]
+            .map(|v| crate::engine::views::Choice {
+                label: v.into(),
+                value: v.into(),
+            })
+            .to_vec();
+        h.view.sections[0].options.push(list);
+        h.frame(vec![]);
+        h.frame(vec![]);
+        let mut sent = h.click("list:enemyDamageType");
+        assert!(
+            !h.ui.rects.contains_key("list:enemyDamageType:Untyped"),
+            "the list opened"
+        );
+        sent.extend(h.hover("list:enemyDamageType"));
+        let wheel = Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: Modifiers::NONE,
+        };
+        sent.extend(h.frame(vec![wheel]));
+        assert!(sent.is_empty(), "{:?}", debug(&sent));
     }
 
     fn with_number(kind: ConfigKind, value: Option<f64>, placeholder: Option<f64>) -> Harness {

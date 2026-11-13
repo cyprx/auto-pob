@@ -118,6 +118,7 @@ local function option_view(tab, varData, control)
 	end
 	view.label = strip(label)
 	view.shown = control:IsShown() and true or false
+	view.enabled = control:IsEnabled() and true or false
 	-- `false` is a value, so don't use `or`
 	local value = tab.input[varData.var]
 	if type(value) == "boolean" or type(value) == "number" or type(value) == "string" then
@@ -234,6 +235,11 @@ function glue.set_config(var, value)
 	local _, by_var = option_list()
 	local kind = by_var[var].type
 	local current = tab.input[var]
+	-- a greyed-out control takes no input (a Boss Skill Preset's "Enemy Damage Type",
+	-- ConfigOptions.lua:2286-2289); only its own value is let through
+	if not control:IsEnabled() and tostring(value) ~= tostring(current) then
+		bad_value(var, "isn't available now")
+	end
 	if kind == "check" then
 		if value == nil then value = false end
 		if type(value) ~= "boolean" then bad_value(var, "takes on or off") end

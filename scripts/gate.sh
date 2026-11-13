@@ -65,7 +65,7 @@ unset CI
 export AUTO_POB_POB_DIR
 
 cd "$root" || exit 2
-build=$(cargo test -p auto-pob --test gate --no-run 2>&1)
+build=$(cargo test -p auto-pob --features gate-probes --test gate --no-run 2>&1)
 code=$?
 if [[ $code -ne 0 ]]; then
     printf '%s\n' "$build" >&2

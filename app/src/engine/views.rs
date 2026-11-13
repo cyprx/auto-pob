@@ -88,6 +88,11 @@ pub struct BuildListView {
     /// PoB's `main.filterBuildList`: the search text the list is filtered by
     #[serde(default)]
     pub filter: String,
+    /// Names and folders are escaped: the Builds tree holds a name that isn't UTF-8, whose
+    /// bytes show as U+F780+ (`bytes_text`). A Rename or Copy sends it back with the name.
+    /// Filled in by the engine.
+    #[serde(default)]
+    pub escaped: bool,
     /// The engine has a build the UI should show: PoB reopened the build its last exit
     /// recorded, so it starts on that build, not on its list. Filled in by the engine.
     #[serde(default)]
@@ -280,6 +285,10 @@ pub struct ConfigOption {
     pub allow_zero: bool,
     pub label: String,
     pub shown: bool,
+    /// PoB's control takes input (`IsEnabled`): a Boss Skill Preset greys out "Enemy Damage
+    /// Type" (ConfigOptions.lua:2286-2289)
+    #[serde(default = "enabled_default")]
+    pub enabled: bool,
     /// PoB's "set but invalid" state: the option has a non-default value but its condition
     /// isn't met any more. PoB colours its label red; the tooltip then ends with a warning line.
     #[serde(default)]
@@ -297,6 +306,10 @@ pub struct ConfigOption {
     pub choices: Vec<Choice>,
     #[serde(default)]
     pub tooltip: Vec<TooltipLine>,
+}
+
+fn enabled_default() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -1480,6 +1493,7 @@ mod tests {
                         allow_zero: false,
                         label: "Use power charges?".into(),
                         shown: true,
+                        enabled: true,
                         invalid: false,
                         selected: None,
                         value: Some(serde_json::json!(true)),
@@ -1493,6 +1507,7 @@ mod tests {
                         allow_zero: false,
                         label: "Enemy is a Boss?".into(),
                         shown: true,
+                        enabled: true,
                         invalid: false,
                         selected: None,
                         value: Some(serde_json::json!("None")),

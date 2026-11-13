@@ -365,6 +365,15 @@ fn mod_browser_matches_pob() {
         .find(|c| c.name == "listControl")
         .map_or(0, |c| c.rows.len());
     eprintln!("mod browser rows: {rows}");
+    // the view's rows come as two flat lists, not a table per row: the 6188 rows' tables and
+    // the collection they caused were most of the view's cost on every change (M-9)
+    let kb: f64 = lua_value(
+        &s.backend.lua,
+        "collectgarbage('stop') local before = collectgarbage('count') glue.popup_view() \
+         local kb = collectgarbage('count') - before collectgarbage('restart') return kb",
+    );
+    eprintln!("mod browser view: {kb:.0} KB of Lua allocation");
+    assert!(kb < 400.0, "the Mod Browser's view allocated {kb:.0} KB");
     s.run(Command::SetPopupControl {
         name: "search".into(),
         value: PopupInput::Text("life regen".into()),

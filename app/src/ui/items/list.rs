@@ -154,7 +154,9 @@ impl ItemsUi {
             }
             // PoB's buttons beside Sort (ItemListControl.lua:22-68). Del Unused deletes without
             // asking; both are enabled while the shown (filtered) list has a row
-            let any = !view.listed.is_empty();
+            // PoB's questions are modal: the buttons wait while one is open
+            let free = !self.has_dialog();
+            let any = !view.listed.is_empty() && free;
             let unused = ui.add_enabled(any, egui::Button::new("Del Unused"));
             self.rects.note(&unused, || "delete_unused".into());
             if unused.clicked() {
@@ -170,7 +172,7 @@ impl ItemsUi {
                 .selected
                 .and_then(|id| view.items.iter().find(|e| e.id == id))
                 .filter(|e| view.listed.contains(&e.id));
-            let delete = ui.add_enabled(selected.is_some(), egui::Button::new("Delete"));
+            let delete = ui.add_enabled(selected.is_some() && free, egui::Button::new("Delete"));
             self.rects.note(&delete, || "delete".into());
             if delete.clicked()
                 && let Some(entry) = selected
@@ -318,7 +320,7 @@ impl ItemsUi {
         if self.has_dialog() || self.modal || ui.ctx().text_edit_focused() {
             return;
         }
-        if ui.input(|inp| inp.events.iter().any(|e| matches!(e, egui::Event::Copy))) {
+        if ui.input(crate::ui::shortcuts::list_copy) {
             self.copy_asked = Some(entry.id);
             out.queries.push(Command::CopyItem { id: entry.id });
         }

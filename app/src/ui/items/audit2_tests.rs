@@ -111,6 +111,74 @@ fn db_rows_take_the_list_keys_and_ctrl_c() {
     );
 }
 
+/// PoB's popups are modal: while one is open, the selected DB list's keys do nothing
+#[test]
+fn db_row_keys_wait_for_a_dialog() {
+    let mut h = Harness::new(sample());
+    h.open_db();
+    h.click("db_row_0");
+    let first = h.ui.db.selected.clone();
+    let quiet = |h: &mut Harness| {
+        h.key(Key::ArrowDown, Modifiers::NONE);
+        let o = h.frame(vec![Event::Copy]);
+        assert!(o.queries.is_empty(), "{:?}", o.queries);
+        assert_eq!(h.ui.db.selected, first);
+    };
+    h.ui.set_modal(true);
+    quiet(&mut h);
+    h.ui.set_modal(false);
+    h.ui.confirm_delete_all = true;
+    quiet(&mut h);
+    h.ui.confirm_delete_all = false;
+    h.key(Key::ArrowDown, Modifiers::NONE);
+    assert_ne!(h.ui.db.selected, first);
+}
+
+/// PoB's questions are modal: Del Unused, Del All and Delete do nothing under one
+#[test]
+fn the_delete_buttons_wait_for_an_open_question() {
+    let mut h = Harness::new(sample());
+    h.click("row_1");
+    for ask in [true, false] {
+        if ask {
+            h.ui.confirm_delete_all = true;
+        } else {
+            h.ui.confirm_delete = Some((2, "In use".into()));
+        }
+        h.frame(vec![]);
+        for key in ["delete_unused", "delete_all", "delete"] {
+            let o = h.click(key);
+            assert!(o.commands.is_empty(), "{key}: {:?}", o.commands);
+        }
+        assert_eq!(h.ui.confirm_delete_all, ask);
+        assert_eq!(h.ui.confirm_delete.is_some(), !ask);
+        h.ui.confirm_delete_all = false;
+        h.ui.confirm_delete = None;
+    }
+}
+
+/// PoB copies on C while Ctrl is down, Shift held or not (ListControl.lua:384); egui-winit
+/// sends Ctrl+Shift+C as the key, not as `Event::Copy`
+#[test]
+fn ctrl_shift_c_copies_the_selected_row() {
+    let ctrl_shift = Modifiers::COMMAND | Modifiers::SHIFT;
+    let mut h = Harness::new(sample());
+    h.open_db();
+    h.click("db_row_0");
+    let o = h.key(Key::C, ctrl_shift);
+    assert_eq!(
+        debug(&o.queries),
+        ["CopyDbItem { db: Uniques, name: \"Goldrim\" }"]
+    );
+    h.click("row_1");
+    let o = h.key(Key::C, ctrl_shift);
+    let copies: Vec<_> = debug(&o.queries)
+        .into_iter()
+        .filter(|q| q.starts_with("Copy"))
+        .collect();
+    assert_eq!(copies, ["CopyItem { id: 1 }"]);
+}
+
 /// The search box is PoB's: `%c`, 100 bytes, and an "x" that empties it and searches at once
 /// (ItemDBControl.lua:51, EditControl.lua:73-77)
 #[test]

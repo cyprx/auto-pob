@@ -384,6 +384,7 @@ impl ItemsUi {
                 .resizable(self.db.expanded)
                 .default_size(300.0)
                 .show(ui, |ui| {
+                    self.db.keys_blocked = self.has_dialog() || self.modal;
                     let o = db::show(ui, self.db_view.as_deref(), &mut self.db, now);
                     out.commands.extend(o.commands);
                     out.queries.extend(o.queries);

@@ -190,6 +190,12 @@ pub fn keep_arrows(ctx: &egui::Context, id: egui::Id) {
     });
 }
 
+/// PoB's list copies its selected row on C while Ctrl is down, Shift or not
+/// (ListControl.lua:384): egui-winit sends Ctrl+C as `Event::Copy`, Ctrl+Shift+C as the key
+pub fn list_copy(input: &egui::InputState) -> bool {
+    copy(input)
+}
+
 /// PoB's list deletes on Delete and Backspace (ListControl.lua:392)
 pub fn list_delete(input: &egui::InputState) -> bool {
     pressed(input, Key::Delete, false) || pressed(input, Key::Backspace, false)

@@ -40,7 +40,7 @@ pub struct DbState {
     seen: (String, f64),
     percent: Option<u32>,
     failed: Option<String>,
-    selected: Option<String>,
+    pub(super) selected: Option<String>,
     tip: HoverTip,
     pub(crate) rects: Rects,
     /// The search box's id, and Ctrl+F's ask that it take the keyboard when next drawn
@@ -57,6 +57,9 @@ pub struct DbState {
     /// selection to, to scroll into view (DropDownControl/ListControl ScrollSelIntoView)
     rows_view: (f32, f32),
     scroll_to: Option<usize>,
+    /// A dialog of the tab's or the app's is open: the rows' keys are left alone, as PoB's
+    /// popups are modal
+    pub(super) keys_blocked: bool,
 }
 
 fn default_query(db: ItemDb) -> ItemDbQuery {
@@ -93,6 +96,7 @@ impl Default for DbState {
             copy_asked: None,
             rows_view: (0.0, 0.0),
             scroll_to: None,
+            keys_blocked: false,
         }
     }
 }
@@ -577,7 +581,7 @@ fn rows(ui: &mut egui::Ui, view: &ItemDbView, state: &mut DbState, out: &mut Ite
     } else if ui.input(|i| i.pointer.any_click()) || ui.ctx().text_edit_focused() {
         state.list_focus = false;
     }
-    if !state.list_focus {
+    if !state.list_focus || state.keys_blocked {
         return;
     }
     // Up, Down, Home and End move the selection (ListControl.lua:375-382)
@@ -593,7 +597,7 @@ fn rows(ui: &mut egui::Ui, view: &ItemDbView, state: &mut DbState, out: &mut Ite
     // Ctrl+C copies the selected row's text, as PoB's OnSelCopy (ItemDBControl.lua:368-370)
     if let Some(name) = state.selected.clone()
         && view.rows.iter().any(|r| r.name == name)
-        && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)))
+        && ui.input(crate::ui::shortcuts::list_copy)
     {
         state.copy_asked = Some(name.clone());
         out.queries.push(Command::CopyDbItem { db, name });

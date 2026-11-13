@@ -557,6 +557,10 @@ pub struct TreeState {
     /// 0-based
     #[serde(default)]
     pub compare_spec: Option<usize>,
+    /// The nodes allocated in the compared spec that this spec doesn't have (a cluster jewel's
+    /// subgraph): PoB draws them green and gives them a tooltip (PassiveTreeView.lua:1102-1153)
+    #[serde(default)]
+    pub compare_only: Vec<CompareOnlyNode>,
     #[serde(default)]
     pub power_stats: Vec<String>,
     #[serde(default)]
@@ -630,6 +634,16 @@ pub struct NodePath {
     pub node: u32,
     #[serde(default)]
     pub path: Vec<u32>,
+}
+
+/// A node of the compared spec only, where PoB draws it
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct CompareOnlyNode {
+    pub id: u32,
+    pub x: f32,
+    pub y: f32,
+    pub kind: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]

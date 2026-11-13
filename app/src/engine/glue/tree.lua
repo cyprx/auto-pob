@@ -390,6 +390,31 @@ local function viewed_compare_spec(build)
 	return tab.isComparing and tab.specList[tab.activeCompareSpec] or nil
 end
 
+-- A node PoB draws although this build's spec doesn't have it: allocated in the compared spec
+-- only, such as a cluster jewel's subgraph (PassiveTreeView.lua:1102-1107, 308-320)
+local function compare_only(build, compareSpec, id)
+	local node = compareSpec and compareSpec.nodes[id]
+	return node ~= nil and not build.spec.nodes[id] and node.alloc and node.x ~= nil
+		and node.y ~= nil and node.type ~= "ClassStart" and node.type ~= "AscendClassStart"
+end
+
+-- Those nodes, sorted by id
+local function compare_only_nodes(build)
+	local compareSpec = viewed_compare_spec(build)
+	local list = {}
+	if compareSpec then
+		for id, node in pairs(compareSpec.nodes) do
+			if compare_only(build, compareSpec, id) then
+				list[#list + 1] = {
+					id = id, x = node.x, y = node.y, kind = node.type, name = node.dn or "",
+				}
+			end
+		end
+		table.sort(list, function(a, b) return a.id < b.id end)
+	end
+	return list
+end
+
 -- The words PassiveTreeView:Draw splits the search text into (bootstrap.lua)
 local search_words = AutoPobSearchWords
 
@@ -509,6 +534,7 @@ function glue.tree_state(fresh, held)
 		search_matches = search_matches(build, fresh),
 		compare = compare,
 		compare_spec = compareSpec,
+		compare_only = compare_only_nodes(build),
 		jewels = jewel_sockets(build),
 		specs = spec_entries(),
 		active_spec = build.treeTab.activeSpec - 1,
@@ -1030,8 +1056,24 @@ end
 function glue.node_tooltip(id, trace)
 	local build = pob.build
 	local node = build.spec.nodes[id]
+	local viewed = viewed_compare_spec(build)
 	if not node then
-		return nil
+		-- a node of the compared spec only has PoB's own tooltip for it (PassiveTreeView.lua:
+		-- 1143-1147), except a mastery without effects
+		local other = compare_only(build, viewed, id) and viewed.nodes[id]
+		if not other or (other.type == "Mastery" and not other.masteryEffects) then
+			return nil
+		end
+		local viewer = build.treeTab.viewer
+		local tooltip = glue.tooltip()
+		local compareSpec = viewer.compareSpec
+		viewer.compareSpec = viewed
+		local ok, err = pcall(viewer.AddCompareNodeTooltip, viewer, tooltip, other, build)
+		viewer.compareSpec = compareSpec
+		if not ok then
+			error(tostring(err):match("[^\n]+") or "couldn't build the tooltip", 0)
+		end
+		return { id = id, lines = tooltip:lines(), trace = {} }
 	end
 	local tab = build.treeTab
 	local viewer = tab.viewer
@@ -1052,7 +1094,7 @@ function glue.node_tooltip(id, trace)
 	end
 	-- as TreeTab:Draw sets it (TreeTab.lua:445), or the Compare tab's overlay
 	-- (CompareTab.lua:3392)
-	viewer.compareSpec = viewed_compare_spec(build)
+	viewer.compareSpec = viewed
 	local ok, err = pcall(viewer.AddNodeTooltip, viewer, tooltip, node, build)
 	viewer.tracePath, viewer.compareSpec, viewer.traceMode = tracePath, compareSpec, traceMode
 	if not ok then

@@ -1063,6 +1063,41 @@ mod tests {
         h.frame(vec![]);
     }
 
+    /// A node of the compared spec only is hovered where none of ours is, and asks for its
+    /// tooltip; a click on it does nothing (PassiveTreeView.lua:308-320, 1143)
+    #[test]
+    fn a_compare_only_node_is_hovered_and_asks_for_its_tooltip() {
+        let (l, s) = sample();
+        let mut state = (*s).clone();
+        state.compare_only = vec![crate::engine::CompareOnlyNode {
+            id: 70_000,
+            x: 300.0,
+            y: 300.0,
+            kind: "Notable".into(),
+            name: "Prismatic Heart".into(),
+        }];
+        let mut h = Harness::new(l, Arc::new(state));
+        let rect = h.tab.rect_for_test();
+        let pos = h.tab.camera.to_screen(rect, [300.0, 300.0]);
+        h.time = 2.0;
+        h.frame(vec![Event::PointerMoved(pos)]);
+        assert_eq!(h.tab.hover, Some(70_000));
+        h.time = 2.2;
+        assert_eq!(
+            debug(&h.frame(vec![]).queries),
+            ["PreviewNode { id: 70000 }"]
+        );
+        h.tab
+            .on_snapshot(&Snapshot::NodeTooltip(Arc::new(NodeTooltip {
+                id: 70_000,
+                trace: vec![],
+                lines: vec![],
+            })));
+        h.frame(vec![]);
+        let out = h.click_at(pos);
+        assert!(out.commands.is_empty(), "{:?}", out.commands);
+    }
+
     #[test]
     fn hovering_another_node_restarts_the_wait() {
         let (l, s) = sample();

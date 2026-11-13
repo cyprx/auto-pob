@@ -879,6 +879,7 @@ pub fn empty_tree_state() -> TreeState {
         specs: vec![],
         active_spec: 0,
         compare_spec: None,
+        compare_only: vec![],
         power_stats: vec![],
         heatmap: None,
         max_depth: None,

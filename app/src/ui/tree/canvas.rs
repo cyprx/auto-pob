@@ -32,6 +32,8 @@ type Sheet = (egui::TextureId, Vec2);
 
 const EDGE: Color32 = Color32::from_rgb(72, 62, 50);
 const HOVER: Color32 = Color32::WHITE;
+/// A node allocated in the compared spec only
+const COMPARE_ONLY: Color32 = Color32::from_rgb(0, 200, 0);
 /// The nodes a click would allocate
 const PATH: Color32 = Color32::from_rgb(120, 200, 255);
 /// The nodes a click would deallocate
@@ -83,9 +85,21 @@ pub fn show(
     let shift = ui.input(|i| i.modifiers.shift);
     let hovered_id = tab.trace_step(layout, hovered.map(|i| layout.nodes[i].id), shift);
     let hovered = hovered_id.and_then(|id| tab.index.get(&id).copied());
+    // where none of ours is, a node of the compared spec only (PassiveTreeView.lua:308-320)
+    let compare_hover = response
+        .hover_pos()
+        .filter(|_| valid_zoom && !response.dragged() && !shift && hovered_id.is_none())
+        .and_then(|p| {
+            let at = Vec2::from(camera.to_tree(rect, p));
+            state
+                .compare_only
+                .iter()
+                .find(|n| (Vec2::new(n.x, n.y) - at).length() <= node_radius(&n.kind))
+        });
     let mut actions = Vec::new();
-    if hovered_id != tab.hover {
-        actions.push(CanvasAction::Hover(hovered_id));
+    let hover_id = hovered_id.or(compare_hover.map(|n| n.id));
+    if hover_id != tab.hover {
+        actions.push(CanvasAction::Hover(hover_id));
     }
 
     // the nodes a click on the hovered one would add or drop
@@ -193,6 +207,36 @@ pub fn show(
         if tab.derived.matches.contains(&node.id) && (tab.edge_search_off || rect.contains(pos)) {
             overlays::draw_search_ring(&painter, pos, radius);
         }
+    }
+    // the compared spec's own nodes, green as PoB tints them (PassiveTreeView.lua:1102-1140)
+    for node in &state.compare_only {
+        let pos = to_screen([node.x, node.y]);
+        if !visible.contains(pos) {
+            continue;
+        }
+        let radius = (node_radius(&node.kind) * zoom).max(1.5);
+        painter.circle_filled(pos, radius, COMPARE_ONLY);
+        if compare_hover.is_some_and(|n| n.id == node.id) {
+            painter.circle_stroke(pos, radius + 2.0, Stroke::new(2.0, HOVER));
+        }
+    }
+    if let Some(node) = compare_hover {
+        let reply = tab
+            .tooltip
+            .as_deref()
+            .filter(|t| t.id == node.id && t.trace.is_empty() && !t.lines.is_empty());
+        Tooltip::for_widget(&response)
+            .at_pointer()
+            .show(|ui| match reply {
+                Some(t) => tooltip_ui(ui, &t.lines),
+                None => {
+                    ui.strong(if node.name.is_empty() {
+                        &node.kind
+                    } else {
+                        &node.name
+                    });
+                }
+            });
     }
     // PoB's "Show search circles at viewport edge": a match outside the view shows as a
     // smaller ring at the edge nearest to it (PassiveTreeView.lua:1017-1031)

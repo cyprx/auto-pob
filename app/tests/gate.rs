@@ -3748,6 +3748,51 @@ fn a_build_with_bytes_that_are_not_utf8_shows_in_every_view() {
     );
 }
 
+/// A build's text can hold a real private-use character in the escapes' range (U+F7E9 here)
+/// in a view serde takes, beside a byte that isn't UTF-8 elsewhere. Every view escapes it, in
+/// whatever order the views come, so an edit saves it as it was, not as the byte 0xE9.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_private_use_character_round_trips_beside_bytes_that_are_not_utf8() {
+    let _guard = lock();
+    let mut s = Session::start("private-use");
+    let good = fs::read_to_string(fixture_xml("attack")).unwrap();
+    let mut bytes = good
+        .replace("label=\"\"", "label=\"X\u{F7E9}Y\"")
+        .replace("<Notes>", "<Notes>caf\u{1} notes")
+        .into_bytes();
+    for b in &mut bytes {
+        if *b == 1 {
+            *b = 0xE9;
+        }
+    }
+    let path = s.builds_dir().join("pua.xml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, bytes).unwrap();
+    s.run(Command::OpenBuild { path: path.clone() })
+        .expect("open");
+    // the engine's order: Skills before Notes
+    let skills = s.backend.skills_view().expect("skills view");
+    let label = skills.groups[0].label.clone();
+    assert_eq!(
+        label, "X\u{F7EF}\u{F79F}\u{F7A9}Y",
+        "the character isn't escaped"
+    );
+    s.backend.notes_view().expect("notes view");
+    s.run(Command::SetGroupLabel {
+        group: 0,
+        text: format!("{label}!"),
+    })
+    .expect("label");
+    s.run(Command::Save).expect("save");
+    let saved = fs::read(&path).unwrap();
+    let needle = "label=\"X\u{F7E9}Y!\"".as_bytes();
+    assert!(
+        saved.windows(needle.len()).any(|w| w == needle),
+        "the label changed on save"
+    );
+}
+
 /// A build code PoB can't load raises in Build:Init (here a gem level that isn't a number:
 /// CalcTools.lua:46). PoB reuses one build object, and its next Init ran SyncLoadouts against
 /// the half-loaded tabs (Build.lua:601-604, 859), so every later open, import or new build

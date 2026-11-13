@@ -461,6 +461,20 @@ impl PobBackend {
         args: impl IntoLuaMulti,
     ) -> Result<T> {
         let value: mlua::Value = self.call(name, args)?;
+        // a view that serde would take can still hold a private-use character that is one of
+        // our escapes (U+F780-U+F7FF): it must be escaped too, or an edit sends it back as a
+        // raw byte (`bytes_text`)
+        let scan: mlua::Function = self
+            .lua
+            .globals()
+            .get("AutoPobHasEscapes")
+            .map_err(|e| anyhow!("{e}"))?;
+        if scan.call::<bool>(&value).map_err(|e| anyhow!("{e}"))? {
+            let fixed = lossy_strings(&self.lua, &value, 0)
+                .map_err(|e| anyhow!("{e}"))?
+                .unwrap_or(value);
+            return self.lua.from_value(fixed).map_err(|e| anyhow!("{e}"));
+        }
         match self.lua.from_value(value.clone()) {
             Ok(view) => Ok(view),
             Err(e) => {

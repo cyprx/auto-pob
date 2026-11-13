@@ -29,7 +29,7 @@ fn is_escape(c: char) -> bool {
 }
 
 /// The UTF-8 of an escape character starts EF 9E or EF 9F
-fn has_escape_bytes(bytes: &[u8]) -> bool {
+pub fn has_escape_bytes(bytes: &[u8]) -> bool {
     bytes
         .windows(2)
         .any(|w| w[0] == 0xEF && (w[1] == 0x9E || w[1] == 0x9F))

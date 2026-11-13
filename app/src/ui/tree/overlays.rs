@@ -18,17 +18,56 @@ pub fn heat_strength(value: f64, max: f64) -> f32 {
     ((value.max(0.0) / max * 1.5).sqrt() as f32).clamp(0.0, 1.0)
 }
 
-/// The glow colour of a node's power, in PoB's default red/blue theme
-/// (PassiveTreeView.lua:911-934). `None` when there is nothing to show.
-pub fn heat_color(power: &NodePower, entry: &NodePowerEntry) -> Option<Color32> {
+/// PoB's "Node Power colours" option (`main.nodePowerTheme`, Main.lua:957-964): the colours of
+/// offence and of defence
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PowerTheme {
+    #[default]
+    RedBlue,
+    RedGreen,
+    GreenBlue,
+}
+
+impl PowerTheme {
+    /// The setting's value; anything else is PoB's default
+    pub fn parse(value: &str) -> PowerTheme {
+        match value {
+            "RED/GREEN" => PowerTheme::RedGreen,
+            "GREEN/BLUE" => PowerTheme::GreenBlue,
+            _ => PowerTheme::RedBlue,
+        }
+    }
+
+    /// The offence and defence colour names, as the heat map's tooltip says them
+    pub fn names(self) -> (&'static str, &'static str) {
+        match self {
+            PowerTheme::RedBlue => ("red", "blue"),
+            PowerTheme::RedGreen => ("red", "green"),
+            PowerTheme::GreenBlue => ("green", "blue"),
+        }
+    }
+}
+
+/// The glow colour of a node's power in the theme (PassiveTreeView.lua:907-934). `None` when
+/// there is nothing to show.
+pub fn heat_color(power: &NodePower, entry: &NodePowerEntry, theme: PowerTheme) -> Option<Color32> {
     let channel = |v: f32| (v * 255.0).round() as u8;
     let (r, g, b) = if power.stat.is_some() {
-        (heat_strength(entry.single, power.max_single), 0.0, 0.0)
+        let stat = heat_strength(entry.single, power.max_single);
+        match theme {
+            PowerTheme::RedBlue => (stat, 0.0, 0.0),
+            PowerTheme::RedGreen => (0.0, stat, 0.0),
+            PowerTheme::GreenBlue => (0.0, 0.0, stat),
+        }
     } else {
         let dps = heat_strength(entry.offence.unwrap_or(0.0), power.max_offence);
         let def = heat_strength(entry.defence.unwrap_or(0.0), power.max_defence);
         let mix = ((dps - 0.5).max(0.0) + (def - 0.5).max(0.0)) / 2.0;
-        (dps, mix, def)
+        match theme {
+            PowerTheme::RedBlue => (dps, mix, def),
+            PowerTheme::RedGreen => (dps, def, mix),
+            PowerTheme::GreenBlue => (mix, dps, def),
+        }
     };
     (r.max(g).max(b) > 0.02).then(|| Color32::from_rgb(channel(r), channel(g), channel(b)))
 }
@@ -157,19 +196,50 @@ mod tests {
 
     #[test]
     fn single_stat_uses_the_red_channel_only() {
-        let c = heat_color(&power(Some("Life")), &entry(100.0, 0.0, 0.0)).unwrap();
+        let c = heat_color(
+            &power(Some("Life")),
+            &entry(100.0, 0.0, 0.0),
+            PowerTheme::RedBlue,
+        )
+        .unwrap();
         assert_eq!((c.g(), c.b()), (0, 0));
         assert!(c.r() > 200);
         assert_eq!(
-            heat_color(&power(Some("Life")), &entry(-3.0, 0.0, 0.0)),
+            heat_color(
+                &power(Some("Life")),
+                &entry(-3.0, 0.0, 0.0),
+                PowerTheme::RedBlue
+            ),
             None
         );
     }
 
     #[test]
     fn without_a_stat_offence_and_defence_mix() {
-        let c = heat_color(&power(None), &entry(0.0, 10.0, 20.0)).unwrap();
+        let c = heat_color(&power(None), &entry(0.0, 10.0, 20.0), PowerTheme::RedBlue).unwrap();
         assert_eq!((c.r(), c.b()), (255, 255));
         assert!(c.g() > 100);
+    }
+
+    #[test]
+    fn the_theme_picks_the_channels() {
+        // PassiveTreeView.lua:913-933: the single stat and offence/defence/mix per theme
+        let single = |t| heat_color(&power(Some("Life")), &entry(100.0, 0.0, 0.0), t).unwrap();
+        assert!(single(PowerTheme::RedGreen).g() > 200);
+        assert_eq!(single(PowerTheme::RedGreen).r(), 0);
+        assert!(single(PowerTheme::GreenBlue).b() > 200);
+        let both = |t| heat_color(&power(None), &entry(0.0, 10.0, 0.0), t).unwrap();
+        // offence only: red in red/blue and red/green, green in green/blue
+        assert!(both(PowerTheme::RedGreen).r() > 200);
+        assert_eq!(both(PowerTheme::RedGreen).g(), 0);
+        assert!(both(PowerTheme::GreenBlue).g() > 200);
+        // the mix goes to the theme's third channel: blue in red/green, red in green/blue
+        assert_eq!(
+            both(PowerTheme::GreenBlue).r(),
+            both(PowerTheme::RedGreen).b()
+        );
+        assert!(both(PowerTheme::GreenBlue).r() < 100);
+        assert_eq!(PowerTheme::parse("GREEN/BLUE"), PowerTheme::GreenBlue);
+        assert_eq!(PowerTheme::parse("x"), PowerTheme::RedBlue);
     }
 }

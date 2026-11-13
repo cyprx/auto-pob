@@ -469,9 +469,12 @@ impl AutoPobApp {
         }
     }
 
-    /// What the UI does for PoB's settings: the zoom and the window title (R13).
+    /// What the UI does for PoB's settings: the zoom, the window title and the tree view's
+    /// heat map colours and edge search circles (R13).
     fn apply_ui_settings(&mut self, ctx: &egui::Context) {
         let effects = options::ui_effects(self.options.rows());
+        self.tree
+            .set_ui_settings(effects.power_theme, effects.edge_search);
         if (effects.zoom - self.applied_zoom).abs() > f32::EPSILON {
             ctx.set_zoom_factor(effects.zoom);
             self.applied_zoom = effects.zoom;

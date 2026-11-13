@@ -94,6 +94,8 @@ pub(super) struct Toolbar {
     manager: Option<usize>,
     /// The tree selector's tooltip (TreeTab.lua:51-104)
     pub(super) spec_tip: crate::ui::hover::HoverTip,
+    /// PoB's "Node Power colours", which the heat map's tooltip names
+    pub(super) power_theme: super::overlays::PowerTheme,
     /// Its questions, moved to the output when the toolbar is done
     tip_queries: Vec<Command>,
 }
@@ -627,7 +629,14 @@ impl Toolbar {
                     }
                 }
             });
-        rects.note(&combo.response, || "heat_stat".into());
+        // PoB's tooltip on its Show Node Power box (TreeTab.lua:282-285)
+        let (offence, defence) = self.power_theme.names();
+        let combo_response = combo.response.clone().on_hover_text(format!(
+            "When enabled, an estimate of the offensive and defensive strength of\neach \
+             unallocated passive is calculated and displayed visually.\nOffensive power shows \
+             as {offence}, defensive power as {defence}."
+        ));
+        rects.note(&combo_response, || "heat_stat".into());
         // its entries: Off, then the stats
         let at = state
             .heatmap

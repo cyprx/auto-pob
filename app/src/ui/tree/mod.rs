@@ -106,6 +106,10 @@ impl Derived {
 
 #[derive(Default)]
 pub struct TreeTab {
+    /// PoB's "Node Power colours" option
+    pub(super) power_theme: overlays::PowerTheme,
+    /// PoB's "Show search circles at viewport edge" is off
+    pub(super) edge_search_off: bool,
     pub(super) camera: Camera,
     /// Wheel travel short of a whole notch, for a trackpad's small scrolls
     pub(super) wheel_rest: f32,
@@ -202,6 +206,14 @@ impl TreeTab {
         self.toolbar
             .class_dialog(ui.ctx(), &mut self.rects, &mut commands);
         commands
+    }
+
+    /// PoB's options the canvas follows: the heat map's colours and whether search matches
+    /// outside the view show at its edge
+    pub fn set_ui_settings(&mut self, theme: overlays::PowerTheme, edge_search: bool) {
+        self.power_theme = theme;
+        self.edge_search_off = !edge_search;
+        self.toolbar.power_theme = theme;
     }
 
     /// An answer to a hover question (the tree selector's tooltip)

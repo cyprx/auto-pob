@@ -427,8 +427,29 @@ local function item_slots(tab, entry)
 	return rows
 end
 
+-- One side's card in PoB's expanded mode, as `DrawItemExpanded` draws it: the name, the base's
+-- figures, the mod lines marked against the other side's mods ("+ " only here, "> " higher,
+-- "< " lower, by `buildModMap`), and Corrupted, Split, Mirrored. Colour codes kept, in order.
+local function item_card(tab, item, other_mods)
+	local lines = {}
+	local draw_string = DrawString
+	DrawString = function(x, y, align, height, font, text)
+		lines[#lines + 1] = { text = text, y = y }
+	end
+	-- drawn from y = 0, so each line's y is its place in the card
+	local ok, err = pcall(tab.DrawItemExpanded, tab, item, 0, 0, 0, other_mods)
+	DrawString = draw_string
+	if not ok then
+		error(err, 0)
+	end
+	return lines
+end
+
 local function item_rows(tab, entry)
 	local helpers = trade_helpers()
+	-- the cards are drawn only in expanded mode (CompareTab.lua:3819-3846), so they are sent
+	-- only then
+	local expanded = tab.itemsExpandedMode
 	local out = {}
 	for i, row in ipairs(item_slots(tab, entry)) do
 		out[i] = {
@@ -447,6 +468,10 @@ local function item_rows(tab, entry)
 			ours_colour = helpers.getRarityColor(row.pItem),
 			theirs_colour = helpers.getRarityColor(row.cItem),
 		}
+		if expanded then
+			out[i].ours_card = item_card(tab, row.pItem, helpers.buildModMap(row.cItem))
+			out[i].theirs_card = item_card(tab, row.cItem, helpers.buildModMap(row.pItem))
+		end
 	end
 	return out
 end
@@ -466,10 +491,12 @@ local function skill_rows(tab, entry)
 	if not ok then
 		error(err, 0)
 	end
-	-- the first two are the builds' names, drawn `colWidth` apart in the tab's own coordinates
-	-- (CompareTab.lua:4370-4371); the rows are drawn in the list's viewport, the comparison's
-	-- column from `colWidth` on (CompareTab.lua:4446-4454)
-	local right = strings[2] and (strings[2].x - strings[1].x) or 0
+	-- the first two are the builds' names: the comparison's at `vp.x - offset + colWidth + 10`,
+	-- with `offset` the skills scrollbar's (CompareTab.lua:4358-4371); the rows are drawn in
+	-- the list's viewport, the comparison's column from `colWidth - offset` on
+	-- (CompareTab.lua:4446-4454). `vp.x` is 0 here, so the split holds however far PoB's bar
+	-- is scrolled.
+	local right = strings[2] and (strings[2].x - 10) or 0
 	local rows, row = {}, nil
 	for i = 3, #strings do
 		local s = strings[i]

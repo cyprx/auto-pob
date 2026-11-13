@@ -477,13 +477,19 @@ pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send
     if flags.settings {
         emit(seq, send, backend.settings_view(), Snapshot::Settings);
     }
+    // a folder that can't be listed is still an answer, for the picker to show
     if let Some(folder) = &flags.browse {
-        emit(
+        let view = backend
+            .browse_view(folder)
+            .unwrap_or_else(|e| BuildBrowseView {
+                folder: folder.clone(),
+                entries: Vec::new(),
+                error: Some(format!("{e:#}")),
+            });
+        send(Event::Snapshot {
             seq,
-            send,
-            backend.browse_view(folder),
-            Snapshot::BuildBrowse,
-        );
+            snapshot: Snapshot::BuildBrowse(Arc::new(view)),
+        });
     }
     if flags.help {
         emit(seq, send, backend.help_view(), Snapshot::Help);
@@ -861,6 +867,11 @@ fn run_loop_with_delay(
                 shutdown = true;
                 break;
             }
+            // the picker waits for an answer to its question, failed or not
+            let browse = match &command {
+                Command::BrowseBuilds { folder } => Some(folder.clone()),
+                _ => None,
+            };
             match backend.apply(command, send) {
                 Ok(mut a) => {
                     // the link answers this press, not the batch (R20)
@@ -873,10 +884,21 @@ fn run_loop_with_delay(
                     affected.merge(a)
                 }
                 Err(e) => {
-                    send(Event::Error {
-                        seq,
-                        message: format!("{e:#}"),
-                    });
+                    let message = format!("{e:#}");
+                    if let Some(folder) = browse {
+                        // answered now, in the batch's order; an earlier question's answer
+                        // would be stale, a later one's still wins
+                        affected.browse = None;
+                        send(Event::Snapshot {
+                            seq,
+                            snapshot: Snapshot::BuildBrowse(Arc::new(BuildBrowseView {
+                                folder,
+                                entries: Vec::new(),
+                                error: Some(message.clone()),
+                            })),
+                        });
+                    }
+                    send(Event::Error { seq, message });
                     affected.merge(Affected::ALL_VIEWS);
                 }
             }
@@ -2521,6 +2543,57 @@ mod tests {
                 ["apply BrowseBuilds { folder: \"sub/\" }"]
             );
         }
+        // a folder that can't be listed is answered too, with why, not with an error the
+        // picker would never see
+        let (mut fake, _log) = Fake::new();
+        let events = run_queued(
+            &mut fake,
+            vec![Command::BrowseBuilds {
+                folder: "gone/".into(),
+            }],
+        );
+        assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
+        assert!(
+            events.iter().any(|e| matches!(e, Event::Snapshot {
+                snapshot: Snapshot::BuildBrowse(view), ..
+            } if view.folder == "gone/"
+                && view.entries.is_empty()
+                && view.error.as_deref() == Some("no such folder"))),
+            "{events:?}"
+        );
+        // a BrowseBuilds that itself fails (a Lua call after its work) is answered with that
+        // error, and an earlier question in the batch isn't answered after it
+        let (mut fake, _log) = Fake::new();
+        fake.fail_browse = Some("glue broke".into());
+        let events = run_queued(
+            &mut fake,
+            vec![
+                Command::BrowseBuilds {
+                    folder: "sub/".into(),
+                },
+                Command::BrowseBuilds {
+                    folder: "other/".into(),
+                },
+            ],
+        );
+        let answers: Vec<(String, Option<String>)> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Snapshot {
+                    snapshot: Snapshot::BuildBrowse(view),
+                    ..
+                } => Some((view.folder.clone(), view.error.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            answers,
+            [
+                ("sub/".to_string(), Some("glue broke".to_string())),
+                ("other/".to_string(), Some("glue broke".to_string())),
+            ],
+            "{events:?}"
+        );
         let browse = Command::BrowseBuilds { folder: "".into() };
         assert_eq!(crate::engine::pob::cancels_requests(&browse), None);
         assert!(!crate::engine::pob::ends_popup_session(&browse));

@@ -670,7 +670,7 @@ ported = "app/src/ui/compare/mod.rs header 'Load build…' menu (LoadCompare, Im
 note = "entries, load and remove (R5)"
 
 [controls."compare.itemsExpandedCheck"]
-ported = "app/src/ui/compare/items.rs expanded mode: both items' tooltips inline per row (PoB's DrawItemExpanded cards), the box sent as SetCompareControl"
+ported = "app/src/ui/compare/items.rs expanded mode: PoB's DrawItemExpanded cards per row, mods marked against the other side's (buildModMap), from the engine's CompareItemRow cards; the box sent as SetCompareControl"
 
 [controls."compare.itemsHScrollBar"]
 ported = "app/src/ui/compare/items.rs ScrollArea"

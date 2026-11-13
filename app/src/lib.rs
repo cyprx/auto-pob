@@ -9,6 +9,9 @@ pub mod ui;
 pub mod update_notice;
 pub mod widgets;
 
+#[cfg(test)]
+pub(crate) mod test_dir;
+
 /// The first command-line argument that is a `pob:` link (the first item is the program name).
 pub fn pob_link_from_args(args: impl Iterator<Item = String>) -> Option<String> {
     args.skip(1).find(|arg| {

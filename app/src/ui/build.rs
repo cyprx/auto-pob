@@ -215,20 +215,21 @@ fn level(
         hint: None,
     };
     let id = egui::Id::unique("top_bar_level");
-    // a keystroke in Auto is a Manual level in PoB, even one that retypes the shown level
-    let focused = ui.memory(|m| m.has_focus(id));
+    // a keystroke in Auto is a Manual level in PoB, even one that retypes the shown level;
+    // one the `%D` filter or the length limit drops changes nothing (EditControl.lua:140-181)
+    let before = state.level.text.clone();
+    let selected = egui::TextEdit::load_state(ui.ctx(), id)
+        .and_then(|s| s.cursor.char_range())
+        .is_some_and(|r| !r.is_empty());
+    let current = view.level.to_string();
+    let (response, sent) = state.level.show(ui, id, &current, busy, &opts);
     if view.level_auto
-        && focused
-        && ui.input(|i| {
-            i.events
-                .iter()
-                .any(|e| matches!(e, egui::Event::Text(_) | egui::Event::Paste(_)))
-        })
+        && response.has_focus()
+        && response.changed()
+        && (state.level.text != before || selected)
     {
         state.typed_in_auto = true;
     }
-    let current = view.level.to_string();
-    let (response, sent) = state.level.show(ui, id, &current, busy, &opts);
     note(ui, "level", response.rect);
     if let Some(tooltip) = &view.level_tooltip {
         response.on_hover_ui(|ui| {
@@ -760,6 +761,32 @@ mod tests {
         let mut h = Harness::new(view());
         h.click("level");
         h.retype("90");
+        assert!(h.click_away().is_empty());
+    }
+
+    #[test]
+    fn a_non_digit_in_auto_stays_auto() {
+        // PoB's `%D` filter drops the key before its callback runs (EditControl.lua:162-168)
+        let mut h = Harness::new(BuildView {
+            level_auto: true,
+            ..view()
+        });
+        h.click("level");
+        h.frame(vec![Event::Text("x".into())]);
+        h.frame(vec![]);
+        assert!(!h.state.typed_in_auto, "a dropped key made it Manual");
+        assert!(h.click_away().is_empty());
+        // a fourth digit is past the limit and changes nothing either
+        let mut h = Harness::new(BuildView {
+            level: 100,
+            level_auto: true,
+            ..view()
+        });
+        h.click("level");
+        h.key(Key::End);
+        h.frame(vec![Event::Text("5".into())]);
+        h.frame(vec![]);
+        assert!(!h.state.typed_in_auto, "a refused key made it Manual");
         assert!(h.click_away().is_empty());
     }
 

@@ -5,8 +5,8 @@ use super::net_harness::{NetSession, canned, canned_web, net_session};
 use super::{assert_sidebar, fixture_xml, fixtures_dir, golden, lock, pob_dir};
 use auto_pob::engine::upstream::{load_xml, upstream_lua};
 use auto_pob::engine::{
-    Backend, Command, CompareColour, CompareConfigRow, CompareItemRow, CompareRow, CompareSkillRow,
-    CompareSource, CompareView, ConfigValue, PopupInput,
+    Backend, CardLine, Command, CompareColour, CompareConfigRow, CompareItemRow, CompareRow,
+    CompareSkillRow, CompareSource, CompareView, ConfigValue, PopupInput,
 };
 use mlua::LuaSerdeExt;
 use std::collections::BTreeMap;
@@ -811,6 +811,8 @@ impl Upstream {
                     ours_name,
                     ours_colour,
                     theirs_colour,
+                    ours_card: vec![],
+                    theirs_card: vec![],
                 }
             })
             .collect()
@@ -1112,6 +1114,38 @@ fn compare_views_and_copies_match_pob() {
             .iter()
             .any(|r| !r.differ && r.theirs_label.is_some())
     );
+    // PoB's skills scrollbar scrolled past the columns' gap: each side keeps its lines. The
+    // bar only scrolls when the columns are wider than the screen, so the text is made wide
+    // for this check (headless widths are 1).
+    s.backend
+        .lua
+        .load("glue_width = DrawStringWidth DrawStringWidth = function() return 1500 end")
+        .exec()
+        .unwrap();
+    let unscrolled = view(&mut s).skills;
+    s.backend
+        .lua
+        .load("pob.build.compareTab.controls.skillsHScrollBar.offset = 900")
+        .exec()
+        .unwrap();
+    let scrolled = view(&mut s).skills;
+    let offset: i64 = s
+        .backend
+        .lua
+        .load("return pob.build.compareTab.controls.skillsHScrollBar.offset")
+        .eval()
+        .unwrap();
+    s.backend
+        .lua
+        .load(
+            "DrawStringWidth = glue_width glue_width = nil \
+             pob.build.compareTab.controls.skillsHScrollBar.offset = 0",
+        )
+        .exec()
+        .unwrap();
+    assert_eq!(offset, 900, "PoB's bar didn't keep the scroll");
+    assert_eq!(scrolled, unscrolled, "a scrolled bar moved lines across");
+    assert_eq!(view(&mut s).skills, ours.skills);
 
     // ---- Their items' tooltips: a base slot and a jewel socket ----
     same_their_tooltip(&mut s, &up, "Body Armour");
@@ -1445,6 +1479,50 @@ fn compare_views_and_copies_match_pob() {
         .expect("their jewel in an unallocated socket")
         .slot
         .clone();
+    // ---- Expanded mode: PoB's cards, each mod marked against the other side's (the rings
+    // carry the same mods with other values) ----
+    let expand = |s: &mut NetSession, on: bool| {
+        run(
+            s,
+            Command::SetCompareControl {
+                name: "itemsExpandedCheck".into(),
+                value: PopupInput::Check(on),
+            },
+        )
+        .unwrap();
+        up.call::<()>("setItemsExpanded", on);
+    };
+    expand(&mut s, true);
+    let rows = view(&mut s).items;
+    let cards: Vec<Vec<CardLine>> = up.json("return itemsExpandedFrame()");
+    let ours_cards: Vec<Vec<CardLine>> = rows
+        .iter()
+        .flat_map(|r| [r.ours_card.clone(), r.theirs_card.clone()])
+        .collect();
+    assert_eq!(ours_cards, cards, "expanded cards");
+    assert!(
+        rows.iter()
+            .all(|r| !r.ours_card.is_empty() && !r.theirs_card.is_empty())
+    );
+    let marked = |mark: &str| {
+        ours_cards.iter().flatten().any(|l| {
+            l.text.starts_with(&format!("^x33FF77{mark}"))
+                || l.text.starts_with(&format!("^xDD0022{mark}"))
+        })
+    };
+    assert!(marked("+ "), "no mod only on one side: {ours_cards:?}");
+    assert!(
+        marked("> ") || marked("< "),
+        "no mod with another value: {ours_cards:?}"
+    );
+    // the compact rows again, with no cards
+    expand(&mut s, false);
+    assert!(
+        same_views(&mut s, &up, "gear, ring3 compact")
+            .items
+            .iter()
+            .all(|r| r.ours_card.is_empty() && r.theirs_card.is_empty())
+    );
     assert_eq!(
         err(
             &mut s,

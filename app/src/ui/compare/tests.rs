@@ -307,13 +307,6 @@ impl Harness {
         })
     }
 
-    /// The colour of the last section of the drawn text `text`
-    fn last_colour_of(&self, text: &str) -> Option<egui::Color32> {
-        self.texts.iter().find_map(|g| {
-            (g.job.text == text).then(|| g.job.sections.last().map(|s| s.format.color))?
-        })
-    }
-
     fn drew(&self, text: &str) -> bool {
         self.texts.iter().any(|g| g.job.text == text)
     }
@@ -392,6 +385,7 @@ fn load_menu_sends_each_source() {
                     path: format!("/b/{folder}{n}.xml").into(),
                 })
                 .collect(),
+            error: None,
         }))
     };
     // a saved build: the engine lists the folder's builds, the build list its folders
@@ -476,6 +470,134 @@ fn load_menu_sends_each_source() {
     assert_eq!(
         debug(&out.commands),
         ["ImportFromUrl { url: \"https://pobb.in/abc\", mode: Comparison }"]
+    );
+}
+
+/// A folder the engine can't list (a Builds folder that went) is said in the picker, which
+/// stops waiting; going elsewhere waits again for that folder's answer
+#[test]
+fn a_failed_browse_says_so_instead_of_spinning() {
+    let mut h = Harness::new(None);
+    h.click("load");
+    let out = h.click("load:saved");
+    assert_eq!(debug(&out.queries), ["BrowseBuilds { folder: \"\" }"]);
+    h.frame(vec![]);
+    assert!(!h.ui.has_rect("browse_error"));
+    let failed = |folder: &str| {
+        Snapshot::BuildBrowse(Arc::new(BuildBrowseView {
+            folder: folder.into(),
+            entries: vec![],
+            error: Some("no such folder".into()),
+        }))
+    };
+    // another folder's failure is not this one's
+    h.ui.on_snapshot(&failed("sub/"));
+    h.frame(vec![]);
+    assert!(!h.ui.has_rect("browse_error"));
+    h.ui.on_snapshot(&failed(""));
+    h.frame(vec![]);
+    assert!(h.ui.has_rect("browse_error"));
+    assert!(h.drew("Couldn't list this folder: no such folder"));
+    assert!(!h.drew("No builds here."));
+    // an answer replaces the message
+    h.ui.on_snapshot(&Snapshot::BuildBrowse(Arc::new(BuildBrowseView::default())));
+    h.frame(vec![]);
+    assert!(!h.ui.has_rect("browse_error"));
+    assert!(h.drew("No builds here."));
+}
+
+/// A folder of thousands of builds lays out only the rows in view
+#[test]
+fn the_saved_build_picker_lays_out_only_the_rows_in_view() {
+    let mut h = Harness::new(None);
+    h.click("load");
+    h.click("load:saved");
+    let entries = (0..5000)
+        .map(|i| BuildBrowseEntry {
+            name: format!("build {i:04}"),
+            path: format!("/b/build {i:04}.xml").into(),
+        })
+        .collect();
+    h.ui.on_snapshot(&Snapshot::BuildBrowse(Arc::new(BuildBrowseView {
+        folder: String::new(),
+        entries,
+        error: None,
+    })));
+    h.frame(vec![]);
+    h.frame(vec![]);
+    assert!(h.ui.has_rect("saved:0"));
+    assert!(!h.ui.has_rect("saved:4999"));
+    // the rows are as tall as the list was told, so a scroll lands where it should
+    let style = h.ctx.global_style();
+    let step = style.spacing.interact_size.y + style.spacing.item_spacing.y;
+    let gap = h.ui.rect("saved:1").min.y - h.ui.rect("saved:0").min.y;
+    assert!((gap - step).abs() < 0.5, "{gap} vs {step}");
+    let laid_out = h
+        .texts
+        .iter()
+        .filter(|g| g.text().starts_with("build "))
+        .count();
+    assert!(
+        (1..100).contains(&laid_out),
+        "{laid_out} rows drawn of 5000"
+    );
+    let out = h.click("saved:3");
+    assert_eq!(
+        debug(&out.commands),
+        ["LoadCompare { source: File(\"/b/build 0003.xml\") }"]
+    );
+}
+
+/// A name wider than PoB's 310 px box is cut with "..." (`fitItemName`), the warning
+/// included; a short one is drawn whole, and in expanded mode nothing is cut
+#[test]
+fn long_item_names_are_cut_with_dots_as_pob() {
+    let long = "Beast Grip Exceptionally Long Unique Name Of The Ancient Vaal Empire";
+    let mut view = sample();
+    view.items = vec![
+        CompareItemRow {
+            ours_name: Some(long.into()),
+            ..item_row(
+                "Body Armour",
+                Some(2),
+                Some(long),
+                "^xFF9922(different)",
+                true,
+            )
+        },
+        CompareItemRow {
+            theirs_unallocated: true,
+            ..item_row(
+                "Jewel 100",
+                None,
+                Some("Cobalt Jewel"),
+                "^xDD0022(missing)",
+                true,
+            )
+        },
+    ];
+    let mut h = Harness::new(Some(view));
+    h.click("sub:items");
+    let cut: Vec<String> = h
+        .texts
+        .iter()
+        .map(|g| g.job.text.clone())
+        .filter(|t| t.ends_with("...") && long.starts_with(t.trim_end_matches("...")))
+        .collect();
+    assert_eq!(cut.len(), 2, "both sides cut: {cut:?}");
+    assert!(cut[0].len() > 10 && cut[0].len() < long.len(), "{cut:?}");
+    assert!(!h.drew(long), "the whole name was drawn");
+    // the warning counts toward the width, as PoB fits `name .. warning`
+    assert!(
+        h.texts
+            .iter()
+            .any(|g| g.job.text.starts_with("Cobalt Jewel  (tree missing")
+                && g.job.text.ends_with("...")),
+        "{:?}",
+        h.texts
+            .iter()
+            .map(|g| g.job.text.clone())
+            .collect::<Vec<_>>()
     );
 }
 
@@ -579,14 +701,15 @@ fn copy_item_sends_slot_and_use() {
     assert!(h.drew("Kaom's Heart"));
     assert_eq!(h.colour_of("Tabula Rasa"), Some(colour("^xAF6025")));
     assert_eq!(h.colour_of("Ming's Heart"), Some(colour("^7")));
-    assert_eq!(
-        h.colour_of("Cobalt Jewel  (tree missing allocated node)"),
-        Some(colour("^x8888FF"))
-    );
-    assert_eq!(
-        h.last_colour_of("Cobalt Jewel  (tree missing allocated node)"),
-        Some(colour("^xFF9922"))
-    );
+    // the name and its warning, cut to PoB's box: name colour first, the warning's last
+    let warned = h
+        .texts
+        .iter()
+        .find(|g| g.job.text.starts_with("Cobalt Jewel  (tree"))
+        .expect("the warned jewel");
+    let sections = &warned.job.sections;
+    assert_eq!(sections.first().unwrap().format.color, colour("^x8888FF"));
+    assert_eq!(sections.last().unwrap().format.color, colour("^xFF9922"));
     assert_eq!(h.colour_of("Prismatic Jewel"), Some(colour("^xFFFF77")));
     assert_eq!(h.colour_of("Missing slot"), Some(colour("^xBBBBBB")));
     let out = h.click("copy:Body Armour");
@@ -739,25 +862,10 @@ fn switched_is_taken_once() {
     assert!(!ui.take_switched());
 }
 
-fn tooltip_reply(query: &ItemTooltipQuery, text: &str) -> Snapshot {
-    Snapshot::ItemTooltip(Arc::new(ItemTooltipView {
-        query: query.clone(),
-        tooltip: crate::engine::views::ItemTooltip {
-            lines: vec![crate::engine::views::ItemTooltipLine::Line {
-                size: 14,
-                text: format!("^7{text}"),
-                font: None,
-                center: false,
-                background: None,
-                mod_line: None,
-            }],
-            ..Default::default()
-        },
-    }))
-}
-
+/// PoB's expanded mode draws each row's two cards as `DrawItemExpanded` does, the mods marked
+/// against the other side's in PoB's colours; it asks the engine nothing more
 #[test]
-fn expanded_mode_shows_both_tooltips_inline_one_question_at_a_time() {
+fn expanded_mode_draws_pobs_cards_with_their_marks() {
     let mut h = Harness::new(Some(sample()));
     h.click("sub:items");
     // PoB's box, sent as a check
@@ -772,64 +880,92 @@ fn expanded_mode_shows_both_tooltips_inline_one_question_at_a_time() {
         .find(|c| c.name == EXPANDED_CHECK)
         .unwrap()
         .checked = true;
-    h.ui.on_snapshot(&Snapshot::Compare(Some(Arc::new(view.clone()))));
-    let q = |id, slot: &str, theirs| ItemTooltipQuery {
-        id,
-        slot: Some(slot.into()),
-        theirs,
-        shift: false,
-        shared: None,
+    let card = |lines: &[(&str, f32)]| -> Vec<crate::engine::views::CardLine> {
+        lines
+            .iter()
+            .map(|(text, y)| crate::engine::views::CardLine {
+                text: (*text).into(),
+                y: *y,
+            })
+            .collect()
     };
-    // the rows' items in order, ours then theirs, each asked once the last is answered
-    let expected = [
-        q(2, "Body Armour", false),
-        q(0, "Body Armour", true),
-        q(0, "Ring 3", true),
-        q(1, "Ring 1", false),
-        q(4, "Jewel 100", false),
-        q(0, "Jewel 100", true),
-    ];
-    for (i, query) in expected.iter().enumerate() {
+    // PoB's places: the name 18 px, a line 16, 2 px after the figures and after a section
+    view.items[0].ours_card = card(&[
+        ("^xAF6025Doom Loop", 0.0),
+        ("^x7F7F7FArmour: ^x8888FF500", 18.0),
+        ("^x33FF77+ ^x8888FF+40 to maximum Life", 36.0),
+        ("^x33FF77> ^x8888FF+30% to Fire Resistance", 52.0),
+    ]);
+    view.items[0].theirs_card = card(&[
+        ("^xAF6025Tabula Rasa", 0.0),
+        ("^xDD0022< ^x8888FF+20% to Fire Resistance", 18.0),
+        ("^xDD0022Corrupted", 36.0),
+    ]);
+    view.items[2].theirs_card = card(&[("^8(empty)", 0.0)]);
+    h.ui.on_snapshot(&Snapshot::Compare(Some(Arc::new(view))));
+    for _ in 0..3 {
         let out = h.frame(vec![]);
-        assert_eq!(
-            debug(&out.queries),
-            debug(&[Command::ItemTooltip(query.clone())]),
-            "question {i}"
-        );
-        // nothing more until it is answered
-        assert!(h.frame(vec![]).queries.is_empty(), "question {i} twice");
-        h.ui.on_snapshot(&tooltip_reply(query, &format!("card {i}")));
+        assert!(out.queries.is_empty(), "{:?}", out.queries);
     }
-    let out = h.frame(vec![]);
-    assert!(out.queries.is_empty(), "{:?}", out.queries);
-    h.frame(vec![]);
-    assert!(
-        h.drew("card 0") && h.drew("card 5"),
-        "the cards aren't inline"
+    let colour = |code: &str| crate::widgets::pob_colour(code, egui::Color32::WHITE);
+    assert_eq!(
+        h.colour_of("+ +40 to maximum Life"),
+        Some(colour("^x33FF77"))
     );
-    assert!(h.ui.expanded.has_card(&expected[3]));
+    assert_eq!(
+        h.colour_of("> +30% to Fire Resistance"),
+        Some(colour("^x33FF77"))
+    );
+    assert_eq!(
+        h.colour_of("< +20% to Fire Resistance"),
+        Some(colour("^xDD0022"))
+    );
+    assert_eq!(h.colour_of("Corrupted"), Some(colour("^xDD0022")));
+    assert!(h.drew("Armour: 500") && h.drew("(empty)"));
+    // the name heads its card, larger; ours on the left, theirs on the right
+    let size = |text: &str| {
+        h.texts
+            .iter()
+            .find(|g| g.job.text == text)
+            .and_then(|g| g.job.sections.first())
+            .map(|s| s.format.font_id.size)
+    };
+    assert_eq!(size("Doom Loop"), Some(16.0));
+    // PoB's slot line is 16 px too
+    assert_eq!(size("Body Armour:"), Some(16.0));
+    // PoB's 2 px after the figures, none between two lines of one section
+    let line = |i: usize| h.ui.rect(&format!("card:ours:Body Armour:{i}"));
+    let after_figures = line(2).min.y - line(1).max.y;
+    let in_section = line(3).min.y - line(2).max.y;
+    assert!(
+        (after_figures - in_section - 2.0).abs() < 0.01,
+        "{after_figures} vs {in_section}"
+    );
+    assert_eq!(size("+ +40 to maximum Life"), Some(14.0));
+    // the mod after PoB's mark keeps its own colour
+    let line = h
+        .texts
+        .iter()
+        .find(|g| g.job.text == "+ +40 to maximum Life")
+        .unwrap();
+    assert_eq!(
+        line.job.sections.last().unwrap().format.color,
+        colour("^x8888FF")
+    );
+    assert!(h.ui.rect("card:ours:Body Armour").max.x <= h.ui.rect("card:theirs:Body Armour").min.x);
+    // the names aren't drawn twice
+    assert_eq!(
+        h.texts
+            .iter()
+            .filter(|g| g.job.text == "Tabula Rasa")
+            .count(),
+        1
+    );
     // the buttons stay
     let out = h.click("equip:Body Armour");
     assert_eq!(
         debug(&out.commands),
         ["CopyCompareItem { slot: \"Body Armour\", and_use: true }"]
-    );
-    // a new view asks again
-    let mut changed = view;
-    changed.items.pop();
-    h.ui.on_snapshot(&Snapshot::Compare(Some(Arc::new(changed))));
-    assert!(!h.ui.expanded.has_card(&expected[0]));
-    let out = h.frame(vec![]);
-    assert_eq!(
-        debug(&out.queries),
-        debug(&[Command::ItemTooltip(expected[0].clone())])
-    );
-    // an item the engine never answers for is given up on
-    h.time += 3.0;
-    let out = h.frame(vec![]);
-    assert_eq!(
-        debug(&out.queries),
-        debug(&[Command::ItemTooltip(expected[1].clone())])
     );
 }
 

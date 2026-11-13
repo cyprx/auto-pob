@@ -1,20 +1,20 @@
 //! The Items view: PoB's slot rows for both builds, each item with its tooltip on hover, PoB's
 //! difference label, and its Buy (R10), Copy and Equip buttons (R8). In PoB's expanded mode
-//! each row shows both items' tooltips inline, asked for one at a time.
+//! each row shows both items' cards as PoB draws them (`DrawItemExpanded`), each mod marked
+//! against the other side's.
 
 use super::{CompareOutput, CompareUi};
 use crate::engine::ItemTooltipQuery;
-use crate::engine::views::{CompareItemRow, CompareView, ItemTooltipView};
+use crate::engine::views::{CardLine, CompareItemRow, CompareView};
 use crate::engine::{BuySource, Command, PopupKind};
-use crate::widgets::{item_tooltip_ui, pob_text};
+use crate::widgets::pob_text;
 use eframe::egui;
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 /// PoB's warning after a jewel whose socket the tree doesn't allocate
 const UNALLOCATED: &str = "^xFF9922  (tree missing allocated node)";
-/// An inline tooltip not answered in this long (an item that vanished) is given up on
-const EXPANDED_TIMEOUT: f64 = 2.0;
+/// The room PoB gives a name in a row: its 310 px box less 8 px of padding, for 16 px text
+/// (TradeHelpers.lua:465-509), scaled to the 14 px the names are drawn at here
+const NAME_ROOM: f32 = (310.0 - 8.0) * 14.0 / 16.0;
 
 /// PoB's `getSlotDiffLabel` marker, as the engine sends it
 pub(super) fn diff_label(row: &CompareItemRow) -> &str {
@@ -41,77 +41,6 @@ fn queries(row: &CompareItemRow) -> [Option<ItemTooltipQuery>; 2] {
     ]
 }
 
-/// The key of a question: the engine answers the latest one only, so they go one at a time
-fn key(query: &ItemTooltipQuery) -> (u32, Option<String>, bool) {
-    (query.id, query.slot.clone(), query.theirs)
-}
-
-/// The expanded mode's tooltips: answered ones, the one asked and when, and the ones the
-/// engine never answered (gone)
-#[derive(Default)]
-pub(super) struct Expanded {
-    cards: HashMap<(u32, Option<String>, bool), Arc<ItemTooltipView>>,
-    asked: Option<(ItemTooltipQuery, f64)>,
-    gone: HashSet<(u32, Option<String>, bool)>,
-    /// The rows' questions still unanswered this frame, in order
-    wanted: Vec<ItemTooltipQuery>,
-}
-
-impl Expanded {
-    pub(super) fn reset(&mut self) {
-        *self = Self::default();
-    }
-
-    pub(super) fn on_reply(&mut self, view: &Arc<ItemTooltipView>) {
-        if self.asked.as_ref().is_some_and(|(q, _)| *q == view.query) {
-            self.asked = None;
-            self.cards.insert(key(&view.query), view.clone());
-        }
-    }
-
-    /// The next question to send, once the last one is answered or given up on.
-    pub(super) fn next_query(&mut self, now: f64) -> Option<Command> {
-        let wanted = std::mem::take(&mut self.wanted);
-        if let Some((query, since)) = &self.asked {
-            if now - since < EXPANDED_TIMEOUT {
-                return None;
-            }
-            self.gone.insert(key(query));
-            self.asked = None;
-        }
-        let next = wanted
-            .into_iter()
-            .find(|q| !self.cards.contains_key(&key(q)) && !self.gone.contains(&key(q)))?;
-        self.asked = Some((next.clone(), now));
-        Some(Command::ItemTooltip(next))
-    }
-
-    /// Draws a row's inline tooltip, or notes that it is wanted.
-    fn card(&mut self, ui: &mut egui::Ui, query: Option<ItemTooltipQuery>) {
-        let Some(query) = query else {
-            ui.weak("(empty)");
-            return;
-        };
-        match self.cards.get(&key(&query)) {
-            Some(card) => {
-                item_tooltip_ui(ui, &card.tooltip);
-            }
-            None if self.gone.contains(&key(&query)) => {
-                ui.weak("(no tooltip)");
-            }
-            None => {
-                ui.spinner();
-                self.wanted.push(query);
-            }
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn has_card(&self, query: &ItemTooltipQuery) -> bool {
-        self.cards.contains_key(&key(query))
-    }
-}
-
 pub(super) fn show(
     ui: &mut egui::Ui,
     tab: &mut CompareUi,
@@ -128,13 +57,34 @@ pub(super) fn show(
             if expanded {
                 for row in &view.items {
                     ui.separator();
+                    // PoB's line above the cards: the slot, our warning, the marker and the
+                    // buttons; the names are the cards' own (CompareTab.lua:3819-3846)
                     ui.horizontal_wrapped(|ui| {
-                        show_row(ui, tab, row, out, default, weak, false);
+                        let mut label = format!("^7{}:", row.label);
+                        if row.ours_unallocated {
+                            label.push_str(UNALLOCATED);
+                        }
+                        // PoB draws it at 16 px (CompareTab.lua:3822)
+                        let r = ui.label(pob_text(&label, 16.0, default));
+                        tab.rects.note(&r, || format!("label:{}", row.slot));
+                        ui.label(pob_text(diff_label(row), 14.0, default));
+                        buttons(ui, tab, row, out, default);
                     });
-                    let [ours, theirs] = queries(row);
                     ui.columns(2, |columns| {
-                        tab.expanded.card(&mut columns[0], ours);
-                        tab.expanded.card(&mut columns[1], theirs);
+                        card(
+                            &mut columns[0],
+                            tab,
+                            &row.ours_card,
+                            &format!("card:ours:{}", row.slot),
+                            default,
+                        );
+                        card(
+                            &mut columns[1],
+                            tab,
+                            &row.theirs_card,
+                            &format!("card:theirs:{}", row.slot),
+                            default,
+                        );
                     });
                 }
                 return;
@@ -150,32 +100,76 @@ pub(super) fn show(
                     ui.label("");
                     ui.end_row();
                     for row in &view.items {
-                        show_row(ui, tab, row, out, default, weak, true);
+                        show_row(ui, tab, row, out, default, weak);
                         ui.end_row();
                     }
                 });
         });
 }
 
-/// This build's item name as PoB draws it: from the row, else from the Items view, else its id
-fn ours_name(tab: &CompareUi, row: &CompareItemRow, id: u32) -> String {
+/// This build's item name as PoB draws it, colour code apart: from the row, else from the
+/// Items view, else its id
+fn ours_name(tab: &CompareUi, row: &CompareItemRow, id: u32) -> (String, String) {
     let colour = if row.ours_colour.is_empty() {
         "^7"
     } else {
         &row.ours_colour
     };
     match &row.ours_name {
-        Some(name) => format!("{colour}{name}"),
-        None => tab
-            .item_names
-            .get(&id)
-            .cloned()
-            .unwrap_or_else(|| format!("^7Item {id}")),
+        Some(name) => (colour.to_owned(), name.clone()),
+        // the Items view's names carry their colour already
+        None => match tab.item_names.get(&id) {
+            Some(name) => (String::new(), name.clone()),
+            None => ("^7".to_owned(), format!("Item {id}")),
+        },
     }
 }
 
-/// One row: label, both names (hover tooltips unless the tooltips are inline), PoB's marker and
-/// the buttons
+/// One side's card: PoB's lines in order, the name at PoB's larger size, with PoB's 2 px
+/// gaps after the base's figures and between mod sections; "(empty)" for no item
+fn card(
+    ui: &mut egui::Ui,
+    tab: &mut CompareUi,
+    lines: &[CardLine],
+    key: &str,
+    default: egui::Color32,
+) {
+    let empty = matches!(lines, [only] if only.text == "^8(empty)");
+    let r = ui
+        .vertical(|ui| {
+            let mut last: Option<(f32, f32)> = None;
+            for (i, line) in lines.iter().enumerate() {
+                let name = i == 0 && !empty;
+                // what PoB adds beyond a line's own step (18 px for the name, 16 for a line)
+                if let Some((y, step)) = last {
+                    let gap = line.y - y - step;
+                    if gap > 0.0 {
+                        ui.add_space(gap);
+                    }
+                }
+                last = Some((line.y, if name { 18.0 } else { 16.0 }));
+                let r = ui.label(pob_text(
+                    &line.text,
+                    if name { 16.0 } else { 14.0 },
+                    default,
+                ));
+                tab.rects.note(&r, || format!("{key}:{i}"));
+            }
+        })
+        .response;
+    tab.rects.note(&r, || key.to_owned());
+}
+
+/// A name as PoB fits it into its box: cut with "..." when too wide (`fitItemName`), the
+/// warning included, as PoB fits `name .. warning`
+fn fitted(ui: &egui::Ui, colour: &str, name: &str, default: egui::Color32) -> String {
+    let painter = ui.painter();
+    crate::widgets::fit_with_dots(colour, name, |text| {
+        painter.layout_job(pob_text(text, 14.0, default)).size().x <= NAME_ROOM
+    })
+}
+
+/// One row: label, both names (their tooltips on hover), PoB's marker and the buttons
 fn show_row(
     ui: &mut egui::Ui,
     tab: &mut CompareUi,
@@ -183,18 +177,18 @@ fn show_row(
     out: &mut CompareOutput,
     default: egui::Color32,
     weak: egui::Color32,
-    hover: bool,
 ) {
     let [our_query, their_query] = queries(row);
     ui.label(pob_text(&row.label, 14.0, default));
     let ours = match row.ours {
         Some(id) => {
-            let mut name = ours_name(tab, row, id);
+            let (colour, mut name) = ours_name(tab, row, id);
             if row.ours_unallocated {
                 name.push_str(UNALLOCATED);
             }
+            let name = fitted(ui, &colour, &name, default);
             let r = ui.label(pob_text(&name, 14.0, default));
-            if hover && let Some(query) = our_query {
+            if let Some(query) = our_query {
                 tab.tip.note(&r, query);
             }
             r
@@ -209,12 +203,13 @@ fn show_row(
             } else {
                 &row.theirs_colour
             };
-            let mut name = format!("{colour}{name}");
+            let mut name = name.clone();
             if row.theirs_unallocated {
                 name.push_str(UNALLOCATED);
             }
+            let name = fitted(ui, colour, &name, default);
             let r = ui.label(pob_text(&name, 14.0, default));
-            if hover && let Some(query) = their_query {
+            if let Some(query) = their_query {
                 tab.tip.note(&r, query);
             }
             r
@@ -223,6 +218,17 @@ fn show_row(
     };
     tab.rects.note(&theirs, || format!("theirs:{}", row.slot));
     ui.label(pob_text(diff_label(row), 14.0, default));
+    buttons(ui, tab, row, out, default);
+}
+
+/// A row's Buy, Copy and Equip (or "Missing slot"), where the comparison has an item
+fn buttons(
+    ui: &mut egui::Ui,
+    tab: &mut CompareUi,
+    row: &CompareItemRow,
+    out: &mut CompareOutput,
+    default: egui::Color32,
+) {
     ui.horizontal(|ui| {
         if !row.can_copy {
             return;

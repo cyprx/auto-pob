@@ -290,23 +290,27 @@ pub(crate) fn folder_tree(root: &str) -> Vec<crate::engine::views::FolderNode> {
 /// order, each in PoB's spelling. Reads the disk and nothing else.
 pub(crate) fn browse(root: &str, folder: &str) -> Result<crate::engine::views::BuildBrowseView> {
     use crate::engine::views::{BuildBrowseEntry, BuildBrowseView};
+    // a Builds folder that went is a missing folder to the picker, not a missing build
+    let real = real_root(&root_dir(root)).map_err(|_| anyhow!("no such folder"))?;
     let rel = self::folder(root, folder, true, true)?;
-    let dir = real_root(&root_dir(root))?.join(&rel);
+    let dir = real.join(&rel);
     let mut entries = Vec::new();
     for entry in fs::read_dir(&dir).map_err(|_| anyhow!("no such folder"))? {
         let Ok(entry) = entry else {
             continue;
         };
-        let Ok(meta) = fs::symlink_metadata(entry.path()) else {
-            continue;
-        };
+        // the name first: a folder of other files costs no stat per entry
         let Some(file) = entry.file_name().to_str().map(str::to_owned) else {
             continue;
         };
         let Some(name) = file.strip_suffix(".xml") else {
             continue;
         };
-        if !meta.file_type().is_file() || name.is_empty() {
+        // the entry's own type, a link's included: never followed
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if !kind.is_file() || name.is_empty() {
             continue;
         }
         entries.push(BuildBrowseEntry {
@@ -323,6 +327,7 @@ pub(crate) fn browse(root: &str, folder: &str) -> Result<crate::engine::views::B
     Ok(BuildBrowseView {
         folder: rel,
         entries,
+        error: None,
     })
 }
 
@@ -668,6 +673,12 @@ mod tests {
         }
         assert_eq!(
             browse(&root, "none").expect_err("missing").to_string(),
+            "no such folder"
+        );
+        // a Builds folder that went is a missing folder too, not a missing build
+        let gone = format!("{}/gone/", tree.0.display());
+        assert_eq!(
+            browse(&gone, "").expect_err("no root").to_string(),
             "no such folder"
         );
         // nothing was written or moved

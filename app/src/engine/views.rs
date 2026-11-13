@@ -1208,6 +1208,20 @@ mod tests {
                     ours_name: Some("Doom Loop".into()),
                     ours_colour: "^xFFFF77".into(),
                     theirs_colour: "^xAF6025".into(),
+                    ours_card: vec![
+                        CardLine {
+                            text: "^xAF6025Doom Loop".into(),
+                            y: 0.0,
+                        },
+                        CardLine {
+                            text: "^x33FF77+ +10 to Life".into(),
+                            y: 18.0,
+                        },
+                    ],
+                    theirs_card: vec![CardLine {
+                        text: "^8(empty)".into(),
+                        y: 0.0,
+                    }],
                 },
                 CompareItemRow {
                     slot: "Ring 2".into(),
@@ -1223,6 +1237,8 @@ mod tests {
                     ours_name: None,
                     ours_colour: "^7".into(),
                     theirs_colour: "^7".into(),
+                    ours_card: vec![],
+                    theirs_card: vec![],
                 },
             ],
             skills: vec![CompareSkillRow {
@@ -1263,7 +1279,10 @@ mod tests {
                   differ = true, can_copy = true, can_equip = true,
                   diff_label = "^xFFFF77(different)", ours_unallocated = false,
                   theirs_unallocated = true, ours_name = "Doom Loop", ours_colour = "^xFFFF77",
-                  theirs_colour = "^xAF6025" },
+                  theirs_colour = "^xAF6025",
+                  ours_card = { { text = "^xAF6025Doom Loop", y = 0 },
+                    { text = "^x33FF77+ +10 to Life", y = 18 } },
+                  theirs_card = { { text = "^8(empty)", y = 0 } } },
                 { slot = "Ring 2", label = "Ring 2", differ = false, can_copy = false,
                   can_equip = false, diff_label = "^8(both empty)", ours_unallocated = false,
                   theirs_unallocated = false, ours_colour = "^7", theirs_colour = "^7" },
@@ -1286,6 +1305,7 @@ mod tests {
                 row("showAnimations", "true", SettingEffect::NoEffect),
             ],
             saved_overrides: BTreeMap::from([("defaultCharLevel".to_string(), "90".to_string())]),
+            options_lost: true,
         };
         let json = serde_json::to_string(&view).unwrap();
         assert_eq!(serde_json::from_str::<SettingsView>(&json).unwrap(), view);
@@ -1618,6 +1638,23 @@ pub struct CompareItemRow {
     pub ours_colour: String,
     #[serde(default)]
     pub theirs_colour: String,
+    /// PoB's expanded-mode card of each side (`DrawItemExpanded`), one entry per line drawn,
+    /// colour codes kept: the name, the base's figures, the mods marked against the other
+    /// side's ("+ " only on this side, "> " a higher value, "< " a lower one), Corrupted and
+    /// the like; "(empty)" for no item. Empty while expanded mode is off.
+    #[serde(default)]
+    pub ours_card: Vec<CardLine>,
+    #[serde(default)]
+    pub theirs_card: Vec<CardLine>,
+}
+
+/// One line of an expanded-mode item card
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CardLine {
+    pub text: String,
+    /// Where PoB draws it, from the card's top: the name takes 18 px and a line 16, and PoB
+    /// leaves 2 px after the base's figures and after each section of mods
+    pub y: f32,
 }
 
 /// One pair of socket groups of the Compare tab's Skills view, matched as PoB's view matches
@@ -1656,6 +1693,9 @@ pub struct BuildBrowseView {
     pub folder: String,
     /// The build files, `name` without ".xml"
     pub entries: Vec<BuildBrowseEntry>,
+    /// Why the folder couldn't be listed (`entries` is then empty): the picker says so
+    /// instead of waiting for an answer that won't come
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1890,6 +1930,10 @@ pub struct SettingsView {
     /// The overrides an Options Save changed since the last view, for the UI to write (R12)
     #[serde(default)]
     pub saved_overrides: BTreeMap<String, String>,
+    /// A save PoB made by itself (a sign-in's token) cancelled the open Options window and its
+    /// unsaved edits since the last view; said once
+    #[serde(default)]
+    pub options_lost: bool,
 }
 
 /// The network requests: the pending ones in the order they began, and the ones finished since

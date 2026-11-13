@@ -27,7 +27,7 @@ pub use views::ExternalUrl;
 pub use views::{
     AccountView, AscendancyChoice, BreakdownColumn, BreakdownRow, BreakdownSection, BreakdownView,
     BuildListEntry, BuildListView, BuildSort, BuildView, CalcsCell, CalcsRow, CalcsSection,
-    CalcsSelector, CalcsSub, CalcsView, CellRef, CharacterEntry, Choice, ClassChoice,
+    CalcsSelector, CalcsSub, CalcsView, CardLine, CellRef, CharacterEntry, Choice, ClassChoice,
     CompareColour, CompareConfigRow, CompareItemRow, CompareRow, CompareSkillRow, CompareView,
     ConfigKind, ConfigOption, ConfigSection, ConfigSet, ConfigView, ControlTooltipView,
     CustomModGroup, DbRow, DisplayItemView, DpsMark, DropList, EquippedIn, FinishedRequest,

@@ -175,8 +175,6 @@ pub struct CompareUi {
     /// The engine hasn't caught up: buttons that act on a view wait for the next one
     busy: bool,
     tip: ItemTip,
-    /// The Items view's inline tooltips in expanded mode
-    expanded: items::Expanded,
     /// PoB switched to its Compare tab and the app hasn't followed yet
     switched: bool,
     pub(crate) rects: Rects,
@@ -245,7 +243,6 @@ impl CompareUi {
                 if self.view.as_deref() != Some(&**view) {
                     // what the engine says about an item may have changed
                     self.tip = ItemTip::default();
-                    self.expanded.reset();
                 }
                 self.view = Some(view.clone());
             }
@@ -254,7 +251,6 @@ impl CompareUi {
                 self.view = None;
                 self.sub = SubTab::Summary;
                 self.tip = ItemTip::default();
-                self.expanded.reset();
                 self.renderer.reset();
                 self.config_filter.clear();
             }
@@ -267,7 +263,6 @@ impl CompareUi {
                 self.our_specs = Some((titles, state.active_spec));
             }
             Snapshot::Items(view) => {
-                self.expanded.reset();
                 self.item_names = view
                     .items
                     .iter()
@@ -276,7 +271,6 @@ impl CompareUi {
             }
             Snapshot::ItemTooltip(view) => {
                 self.tip.on_reply(view);
-                self.expanded.on_reply(view);
             }
             _ => {}
         }
@@ -316,9 +310,6 @@ impl CompareUi {
         }
         self.dialogs(ui.ctx(), &mut out);
         if let Some(query) = self.tip.end_frame(ui.ctx(), now) {
-            out.queries.push(query);
-        }
-        if let Some(query) = self.expanded.next_query(now) {
             out.queries.push(query);
         }
         out

@@ -188,6 +188,9 @@ pub struct AutoPobApp {
     import: Option<String>,
     /// Actions waiting for the next frame (they need the egui context).
     ready_actions: Vec<Pending>,
+    /// The build changed: every text box's egui state (its undo above all) goes at the next
+    /// frame, as PoB's boxes are new with each build
+    forget_text_states: bool,
     /// A loadout switch went out: the box with the keyboard was for the sets before, so it
     /// lets go and shows the new sets' text (PoB sets its controls' text from the new sets)
     release_focus: bool,
@@ -276,6 +279,7 @@ impl AutoPobApp {
             prompt: None,
             import: None,
             ready_actions: Vec::new(),
+            forget_text_states: false,
             release_focus: false,
             allow_close: false,
             help: HelpUi::default(),
@@ -807,6 +811,7 @@ impl AutoPobApp {
 
     /// Forgets the build's per-build UI state, as for another build.
     fn reset_build_state(&mut self) {
+        self.forget_text_states = true;
         self.tree.reset();
         self.calcs.reset();
         self.skills.reset();
@@ -1138,6 +1143,10 @@ impl AutoPobApp {
     fn show_frame(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.process_events();
+        // Ctrl+Z in the next build's box must not bring the last build's text back
+        if std::mem::take(&mut self.forget_text_states) {
+            ctx.data_mut(|d| d.remove_by_type::<egui::text_edit::TextEditState>());
+        }
         crate::widgets::scroll_step::set_options(&ctx, self.scroll_options);
         self.right_click_paste(&ctx);
 
@@ -5464,6 +5473,38 @@ mod tests {
         build.loadout_selected = Some(1);
         app.build = Some(Arc::new(build));
         frame(app, ctx, vec![]);
+    }
+
+    /// A text box's undo goes with the build: Ctrl+Z in the next build's box doesn't bring
+    /// back the last build's text (PoB's boxes are new with each build)
+    #[test]
+    fn a_box_forgets_its_undo_with_the_build() {
+        let mut first = sample_config();
+        first.custom_mods[1].text = "old line".into();
+        let (mut app, ctx) = config_app(first);
+        click(&mut app, &ctx, "mod_text:1");
+        type_text(&mut app, &ctx, "+5 life");
+        click(&mut app, &ctx, "mod_title:1");
+        // another build, its own custom modifiers
+        app.reset_build_state();
+        let mut view = sample_config();
+        view.custom_mods[1].text = "+9 mana".into();
+        app.config = Some(Arc::new(view));
+        app.tab = BuildTab::Config;
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "mod_text:1");
+        for _ in 0..3 {
+            frame(&mut app, &ctx, ctrl(egui::Key::Z));
+        }
+        click(&mut app, &ctx, "mod_title:1");
+        // nothing was typed in this build: nothing to undo, nothing to send
+        let sent = sent_since(&app, before);
+        assert!(
+            !sent.iter().any(|c| c.starts_with("SetCustomModText")),
+            "the last build's text came back: {sent:?}"
+        );
     }
 
     /// A box with the keyboard and no edit at a loadout switch lets go too: it would keep the

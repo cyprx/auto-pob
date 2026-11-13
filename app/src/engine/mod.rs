@@ -1,4 +1,6 @@
 mod buildpaths;
+/// How many folders the Builds tree walk has read (the gate's cost checks)
+pub use buildpaths::tree_reads;
 pub mod bytes_text;
 pub mod commands;
 pub mod memory;

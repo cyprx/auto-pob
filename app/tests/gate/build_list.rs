@@ -2004,3 +2004,25 @@ fn the_list_folder_keeps_its_spelling_when_the_escapes_turn_on() {
     .expect("a new folder in it");
     assert!(inner.join("made").is_dir());
 }
+
+/// A list view whose Builds tree holds a folder name that isn't UTF-8 walks the tree once
+/// (review M1): the walk tells the spelling and is spelled after
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn an_escaped_list_view_walks_the_tree_once() {
+    use std::os::unix::ffi::OsStrExt;
+    let _guard = lock();
+    let mut s = super::Session::start("escaped-tree-once");
+    let builds = s.builds_dir();
+    fs::create_dir_all(builds.join("a/b")).unwrap();
+    fs::create_dir_all(builds.join(std::ffi::OsStr::from_bytes(b"d\xE9p"))).unwrap();
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .expect("list");
+    let before = auto_pob::engine::tree_reads();
+    let view = s.backend.build_list_view().expect("the list view");
+    assert!(view.tree.iter().any(|f| f.path == "d\u{F7E9}p/"));
+    // the root, a/, a/b/ and d\xE9p/, each once
+    assert_eq!(auto_pob::engine::tree_reads() - before, 4);
+}

@@ -253,9 +253,18 @@ thread_local! {
     static WALK_COUNTS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
+/// How many folders the tree walk has read, for the gate's cost checks
+static TREE_READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many folders the tree walk has read since the process started
+pub fn tree_reads() -> usize {
+    TREE_READS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn walk_read(dir: &Path) -> std::io::Result<fs::ReadDir> {
     #[cfg(test)]
     WALK_COUNTS.with(|c| c.set((c.get().0 + 1, c.get().1)));
+    TREE_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     fs::read_dir(dir)
 }
 
@@ -268,18 +277,51 @@ fn walk_stat(path: &Path) -> std::io::Result<fs::Metadata> {
 /// Every folder below `root`, links not followed (a link could lead out, or loop), shallowest
 /// first, each in name order. Each folder is read once, and only folders are looked at: a
 /// file's type comes from the listing, so a Builds folder of many builds costs no stat per build.
-/// `escaped`: the views spell names escaped (`spell`). The second part says whether a name
-/// isn't UTF-8, which the views must then all be escaped for.
+/// The tree for a list view whose own names are plain (`list_plain`: all UTF-8), and whether
+/// the views are spelled escaped: when the list isn't plain or a folder's name isn't UTF-8.
+#[cfg(test)]
 pub(crate) fn folder_tree(
     root: &str,
-    escaped: bool,
+    list_plain: bool,
 ) -> (Vec<crate::engine::views::FolderNode>, bool) {
+    let tree = folder_tree_raw(root);
+    let escaped = !list_plain || tree.invalid;
+    (tree.spelled(escaped), escaped)
+}
+
+/// The folder tree walked, its paths as bytes: spelled once the views' spelling is known
+pub(crate) struct RawTree {
+    nodes: Vec<(Vec<u8>, crate::engine::views::FolderNode)>,
+    /// A folder's name isn't UTF-8: the views must be spelled escaped
+    pub(crate) invalid: bool,
+}
+
+impl RawTree {
+    /// The nodes with their paths spelled (`spell`)
+    pub(crate) fn spelled(self, escaped: bool) -> Vec<crate::engine::views::FolderNode> {
+        self.nodes
+            .into_iter()
+            .map(|(path, mut node)| {
+                node.path = spell(&path, escaped);
+                node
+            })
+            .collect()
+    }
+}
+
+/// Every folder below `root` (see the walk's rules above), read once
+pub(crate) fn folder_tree_raw(root: &str) -> RawTree {
     use std::os::unix::ffi::OsStrExt;
     let mut invalid = false;
     use crate::engine::views::FolderNode;
-    let mut out: Vec<FolderNode> = Vec::new();
+    // the nodes with their paths as bytes, spelled once the whole tree is known
+    let mut out: Vec<(Vec<u8>, FolderNode)> = Vec::new();
     // a folder to read, its path below the root, and where it is in `out` (none for the root)
-    let mut level = vec![(PathBuf::from(root_dir(root)), String::new(), None)];
+    let mut level = vec![(
+        PathBuf::from(root_dir(root)),
+        Vec::<u8>::new(),
+        None::<usize>,
+    )];
     for depth in 0..=TREE_DEPTH {
         let mut next = Vec::new();
         for (dir, rel, at) in level {
@@ -303,7 +345,7 @@ pub(crate) fn folder_tree(
                 }
             }
             if let Some(at) = at {
-                let node: &mut FolderNode = &mut out[at];
+                let node: &mut FolderNode = &mut out[at].1;
                 node.empty = !any;
             }
             folders.sort_by_key(|e| e.file_name());
@@ -314,7 +356,6 @@ pub(crate) fn folder_tree(
                 // a name that isn't UTF-8 is a folder too, spelled escaped as the list is
                 let raw = entry.file_name();
                 invalid |= std::str::from_utf8(raw.as_bytes()).is_err();
-                let name = spell(raw.as_bytes(), escaped);
                 // looked at again, not followed: it may have changed since the listing
                 let Ok(meta) = walk_stat(&entry.path()) else {
                     continue;
@@ -322,22 +363,28 @@ pub(crate) fn folder_tree(
                 if !meta.is_dir() {
                     continue;
                 }
-                let path = format!("{rel}{name}/");
-                out.push(FolderNode {
-                    path: path.clone(),
-                    modified: meta
-                        .modified()
-                        .ok()
-                        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map_or(0, |d| d.as_secs()),
-                    empty: false,
-                });
+                let path = [&rel[..], raw.as_bytes(), b"/"].concat();
+                out.push((
+                    path.clone(),
+                    FolderNode {
+                        path: String::new(),
+                        modified: meta
+                            .modified()
+                            .ok()
+                            .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map_or(0, |d| d.as_secs()),
+                        empty: false,
+                    },
+                ));
                 next.push((entry.path(), path, Some(out.len() - 1)));
             }
         }
         level = next;
     }
-    (out, invalid)
+    RawTree {
+        nodes: out,
+        invalid,
+    }
 }
 
 /// The build files directly in `folder` below `root`, for the Compare tab's picker: regular
@@ -626,7 +673,7 @@ mod tests {
         fs::create_dir_all(tree.0.join("Builds/.dot")).unwrap();
         symlink(tree.0.join("outside"), tree.0.join("Builds/escape")).unwrap();
         symlink(tree.0.join("Builds/sub"), tree.0.join("Builds/sub/loop")).unwrap();
-        let folders = folder_tree(&tree.root(), false).0;
+        let folders = folder_tree(&tree.root(), true).0;
         let listed: Vec<(&str, bool)> =
             folders.iter().map(|f| (f.path.as_str(), f.empty)).collect();
         // shallowest first; the links are not folders here; `sub` holds b.xml and `deep`
@@ -646,7 +693,7 @@ mod tests {
             fs::write(tree.0.join(format!("Builds/sub/s{i}.xml")), "s").unwrap();
         }
         WALK_COUNTS.with(|c| c.set((0, 0)));
-        let folders = folder_tree(&tree.root(), false).0;
+        let folders = folder_tree(&tree.root(), true).0;
         assert_eq!(folders.len(), 2);
         // the root and each folder read once; a stat per folder, none per build
         assert_eq!(WALK_COUNTS.with(|c| c.get()), (3, 2));
@@ -660,7 +707,7 @@ mod tests {
             deep.push(format!("d{i}"));
         }
         fs::create_dir_all(&deep).unwrap();
-        let folders = folder_tree(&tree.root(), false).0;
+        let folders = folder_tree(&tree.root(), true).0;
         assert_eq!(folders.len(), TREE_DEPTH);
         let last = folders.last().unwrap();
         assert_eq!(last.path.matches('/').count(), TREE_DEPTH);

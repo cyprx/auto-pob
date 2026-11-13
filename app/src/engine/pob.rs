@@ -2781,12 +2781,17 @@ impl Backend for PobBackend {
         let folder = self.folder_arg(&self.folder)?;
         let value: mlua::Value = self.call_path("list_builds", folder)?;
         let root = self.build_root()?;
-        let plain = self.lua.from_value::<BuildListView>(value.clone()).ok();
-        let (tree, invalid) = buildpaths::folder_tree(&root, false);
-        let escaped = plain.is_none() || invalid;
-        let (mut view, tree) = match plain {
-            Some(view) if !escaped => (view, tree),
-            _ => {
+        // the tree is walked once; the list is read plain unless a folder's name already
+        // calls for the escaped spelling, or it can't be
+        let raw_tree = buildpaths::folder_tree_raw(&root);
+        let plain = match raw_tree.invalid {
+            true => None,
+            false => self.lua.from_value::<BuildListView>(value.clone()).ok(),
+        };
+        let escaped = plain.is_none();
+        let mut view = match plain {
+            Some(view) => view,
+            None => {
                 let fixed = lossy_strings(&self.lua, &value, 0)
                     .map_err(|e| anyhow!("{e}"))?
                     .unwrap_or(value);
@@ -2796,9 +2801,10 @@ impl Backend for PobBackend {
                     let shown = entry.path.to_string_lossy().into_owned();
                     entry.path = super::bytes_text::path_from_escaped(&shown);
                 }
-                (view, buildpaths::folder_tree(&root, true).0)
+                view
             }
         };
+        let tree = raw_tree.spelled(escaped);
         // the list's own folder is held in the spelling of the views; it follows a change
         if escaped != self.list_escaped {
             let bytes = Self::name_bytes(&self.folder, self.list_escaped);

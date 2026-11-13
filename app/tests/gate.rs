@@ -1142,6 +1142,110 @@ fn dynamic_tooltips_are_recorded() {
     );
 }
 
+/// Every option's tooltip, recorded afresh as the view did before its lines were cached by
+/// text: PoB's `tooltipFunc` or `tooltipText` into a recorder, each line stripped
+const FRESH_CONFIG_TOOLTIPS: &str = r#"
+    local tab = pob.build.configTab
+    local out = {}
+    for _, varData in ipairs(LoadModule("Modules/ConfigOptions")) do
+        local control = varData.var and tab.varControls[varData.var]
+        if control then
+            local recorder = glue.tooltip()
+            local ok
+            if varData.tooltipFunc then
+                local index = control.selIndex
+                local value = control.list and index and control.list[index]
+                ok = pcall(varData.tooltipFunc, recorder, "BODY", index, value)
+            else
+                local text
+                ok, text = pcall(control.GetProperty, control, "tooltipText")
+                if ok and text and text ~= "" then recorder:AddLine(14, text) end
+            end
+            local lines = {}
+            if ok then
+                for _, line in ipairs(recorder:lines()) do
+                    if line.text then
+                        lines[#lines + 1] = { size = line.size, text = StripEscapes(tostring(line.text)) }
+                    else
+                        lines[#lines + 1] = line
+                    end
+                end
+            end
+            out[#out + 1] = { var = varData.var, lines = lines }
+        end
+    end
+    return out
+"#;
+
+/// The view's tooltips equal a fresh recording of each, plus the invalid line for an invalid
+/// option; returns how many options have one
+fn assert_config_tooltips_fresh(s: &mut Session, what: &str) -> usize {
+    use auto_pob::engine::TooltipLine;
+    #[derive(serde::Deserialize)]
+    struct Fresh {
+        var: String,
+        #[serde(default)]
+        lines: Vec<TooltipLine>,
+    }
+    let value: mlua::Value = s.backend.lua.load(FRESH_CONFIG_TOOLTIPS).eval().unwrap();
+    let fresh: Vec<Fresh> = s.backend.lua.from_value(value).unwrap();
+    let view = s.config();
+    let mut with_lines = 0;
+    for f in &fresh {
+        let ours = option(&view, &f.var);
+        let mut expected = f.lines.clone();
+        if ours.invalid {
+            expected.push(TooltipLine::Line {
+                size: 14,
+                text: "This config option is conditional with missing source and is invalid."
+                    .into(),
+            });
+        }
+        assert_eq!(ours.tooltip, expected, "{what}: {}", f.var);
+        with_lines += usize::from(!expected.is_empty());
+    }
+    with_lines
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn config_tooltips_stay_fresh() {
+    let _guard = lock();
+    let mut s = Session::start("config-tooltips-fresh");
+    let fixture = |name: &str| fixtures().into_iter().find(|(n, _)| n == name).unwrap().1;
+    s.open_fixture("attack", &fixture("attack"));
+    let first = assert_config_tooltips_fresh(&mut s, "open");
+    assert!(first > 100, "only {first} options have a tooltip");
+    // twice in a row: the second view takes the kept lines
+    assert_config_tooltips_fresh(&mut s, "again");
+    // a `tooltipFunc` tooltip that grows with the choice
+    s.run(set(
+        "pantheonMajorGod",
+        ConfigValue::Choice("Lunaris".into()),
+    ))
+    .unwrap();
+    assert_config_tooltips_fresh(&mut s, "pantheon");
+    // an option set while its condition isn't met gets the invalid line on a kept tooltip
+    s.run(set(
+        "absolutionSkillDamageCountedOnce",
+        ConfigValue::Bool(true),
+    ))
+    .unwrap();
+    assert!(option(&s.config(), "absolutionSkillDamageCountedOnce").invalid);
+    assert_config_tooltips_fresh(&mut s, "invalid");
+    assert_config_tooltips_fresh(&mut s, "invalid again");
+    s.run(Command::NewConfigSet { title: "B".into() }).unwrap();
+    assert_config_tooltips_fresh(&mut s, "new set");
+    s.run(Command::SelectConfigSet { id: 1 }).unwrap();
+    assert_config_tooltips_fresh(&mut s, "set switch");
+    s.run(Command::Undo(Tab::Config)).unwrap();
+    assert_config_tooltips_fresh(&mut s, "undo");
+    s.open_fixture("minion", &fixture("minion"));
+    assert_config_tooltips_fresh(&mut s, "another build");
+    s.open_fixture("attack", &fixture("attack"));
+    assert_config_tooltips_fresh(&mut s, "back");
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn config_sets_round_trip() {

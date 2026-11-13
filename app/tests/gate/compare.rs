@@ -1782,3 +1782,64 @@ fn compare_views_and_copies_match_pob() {
     let secs = started.elapsed().as_secs_f64();
     assert!(secs < 40.0, "took {secs:.1}s");
 }
+
+/// The Compare views `commands` send, run as one batch through the engine's own loop
+fn compare_snapshots(s: &mut NetSession, commands: Vec<Command>) -> Vec<Option<CompareView>> {
+    use auto_pob::engine::{Event, Snapshot, run_loop};
+    let (tx, rx) = std::sync::mpsc::channel();
+    for (i, c) in commands.into_iter().enumerate() {
+        tx.send((i as u64 + 1, c)).unwrap();
+    }
+    drop(tx);
+    let views = std::cell::RefCell::new(Vec::new());
+    run_loop(&mut s.backend, &rx, &|e| match e {
+        Event::Snapshot {
+            snapshot: Snapshot::Compare(view),
+            ..
+        } => views.borrow_mut().push(view.map(|v| (*v).clone())),
+        Event::Error { message, .. } => panic!("{message}"),
+        _ => {}
+    });
+    views.into_inner()
+}
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_hidden_compare_tab_gets_its_view_when_shown() {
+    let _guard = lock();
+    let web = canned_web();
+    let mut s = net_session("compare-hidden", canned(&web), None);
+    s.open_fixture("attack");
+    load_file(&mut s, &fixture_xml("dot"));
+    let toggle = |on: bool| Command::SetConfig {
+        var: "usePowerCharges".into(),
+        value: ConfigValue::Bool(on),
+    };
+    let shown = |on| Command::SetCompareShown { on };
+    let before = view(&mut s);
+    // off the tab, an edit's recalculation sends no Compare view
+    let sent = compare_snapshots(&mut s, vec![shown(false), toggle(true)]);
+    assert!(sent.is_empty(), "{} sent", sent.len());
+    // back on it, a view comes, as fresh as one asked for now
+    let sent = compare_snapshots(&mut s, vec![shown(true)]);
+    assert_eq!(sent.len(), 1);
+    let fresh = view(&mut s);
+    assert_eq!(sent[0].as_ref(), Some(&fresh));
+    assert_ne!(
+        before.summary, fresh.summary,
+        "the edit didn't change the Summary"
+    );
+    // showing always answers: the tab waits for it
+    assert_eq!(compare_snapshots(&mut s, vec![shown(true)]), [Some(fresh)]);
+    // on the tab, each edit sends it
+    let sent = compare_snapshots(&mut s, vec![toggle(false)]);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].as_ref().map(|v| &v.summary), Some(&before.summary));
+    // off the tab, a change of the comparisons is still sent
+    let sent = compare_snapshots(
+        &mut s,
+        vec![shown(false), Command::RemoveCompare { index: 0 }],
+    );
+    assert_eq!(sent, [None]);
+    assert_eq!(compare_snapshots(&mut s, vec![shown(true)]), [None]);
+}

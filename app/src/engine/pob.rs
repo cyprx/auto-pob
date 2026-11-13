@@ -61,6 +61,8 @@ pub struct PobBackend {
     options_lost: bool,
     /// Lua's heap after the last memory release, in bytes
     released_lua_bytes: usize,
+    /// The UI hides the Compare tab (`SetCompareShown`): a recalculation leaves its view out
+    compare_hidden: bool,
     /// The UI shows the build list: it asked for a listing since it last opened or imported
     /// a build, or no build was loaded at start. The exit save then records PoB's LIST mode,
     /// as PoB's would after its CloseBuild (Build.lua:953-956), not the build left behind it.
@@ -242,6 +244,7 @@ impl PobBackend {
             item_db_preload: false,
             options_lost: false,
             released_lua_bytes: 0,
+            compare_hidden: false,
             on_list,
             net,
             timeless_job: false,
@@ -1022,6 +1025,7 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::SelectCompare { .. }
             | Command::RemoveCompare { .. }
             | Command::SetCompareOverlay { .. }
+            | Command::SetCompareShown { .. }
             // a cancel runs PoB's failure path, which leaves the build alone (R12)
             | Command::CancelRequest { .. }
             | Command::Wake
@@ -1876,6 +1880,15 @@ impl PobBackend {
                 self.call::<_, ()>("compare_overlay", on)?;
                 Ok(Affected {
                     tree: true,
+                    ..Affected::default()
+                })
+            }
+            Command::SetCompareShown { on } => {
+                self.compare_hidden = !on;
+                // showing always answers with a fresh view: the UI waits for it before it
+                // lets the tab's controls act on the one it holds
+                Ok(Affected {
+                    compare: on,
                     ..Affected::default()
                 })
             }
@@ -3178,6 +3191,10 @@ impl Backend for PobBackend {
         self.view("compare_view", ())
     }
 
+    fn compare_shown(&self) -> bool {
+        !self.compare_hidden
+    }
+
     fn browse_view(&mut self, folder: &str) -> Result<BuildBrowseView> {
         // PoB's `main.buildPath`, read only: unlike `build_root` nothing is set up
         let root: String = self.call("build_root", ())?;
@@ -3562,6 +3579,7 @@ mod tests {
             Command::SelectCompare { index: 1 },
             Command::RemoveCompare { index: 0 },
             Command::SetCompareOverlay { on: true },
+            Command::SetCompareShown { on: false },
             Command::BrowseBuilds {
                 folder: "a/".into(),
             },

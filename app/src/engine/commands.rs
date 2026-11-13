@@ -824,6 +824,13 @@ pub enum Command {
     SetCompareOverlay {
         on: bool,
     },
+    /// UI state: whether the Compare tab is on screen. While it isn't, a recalculation doesn't
+    /// rebuild the Compare view (the Summary's diff against this build's new stats, 5-10 ms an
+    /// edit); turning it on always answers with a fresh view. Commands that change the
+    /// comparisons still send it. No undo, not unsaved; the engine starts with it on.
+    SetCompareShown {
+        on: bool,
+    },
     /// PoB's tree version dropdowns on the Compare tab's Tree view: `leftVersionSelect` (this
     /// build's tree) or, with `theirs`, `rightVersionSelect` (the comparison's). The pick
     /// opens PoB's "Convert to Version" popup, whose "Convert" (`keep_copy: false`) or

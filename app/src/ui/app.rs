@@ -163,6 +163,12 @@ pub struct AutoPobApp {
     compare: CompareUi,
     /// `SetCompareOverlay { on: true }` is the engine's state: the Compare tab's Tree view is up
     compare_overlay: bool,
+    /// What the engine was last told by `SetCompareShown`: whether the Compare tab is on
+    /// screen. The engine starts with it on.
+    compare_shown: bool,
+    /// The seq of the last `SetCompareShown { on: true }`: until its answer comes, the tab's
+    /// held view may be from before edits made elsewhere, so it is dimmed and its controls off
+    compare_wait: Option<u64>,
     import_ui: ImportUi,
     /// The pending network requests (the finished ones are turned into notices)
     requests: RequestsView,
@@ -264,6 +270,8 @@ impl AutoPobApp {
             notes: NotesUi::default(),
             compare: CompareUi::default(),
             compare_overlay: false,
+            compare_shown: true,
+            compare_wait: None,
             import_ui: ImportUi::default(),
             requests: RequestsView::default(),
             confirm: None,
@@ -605,6 +613,27 @@ impl AutoPobApp {
         self.last_sent > self.last_snapshot
     }
 
+    /// Off the Compare tab, an edit's recalculation doesn't rebuild its view, so the engine is
+    /// told when the tab shows: hiding needs no answer, showing is answered with a fresh view,
+    /// which the tab waits for (`compare_wait`).
+    fn sync_compare_shown(&mut self) {
+        let shown = self.screen == Screen::Build && self.tab == BuildTab::Compare;
+        if shown == self.compare_shown {
+            return;
+        }
+        self.compare_shown = shown;
+        if shown {
+            self.compare_wait = Some(self.send(Command::SetCompareShown { on: true }));
+        } else {
+            self.engine.send(Command::SetCompareShown { on: false });
+        }
+    }
+
+    /// The Compare tab still waits for the view its showing asked for
+    fn compare_waiting(&self) -> bool {
+        self.compare_wait.is_some_and(|s| self.last_snapshot < s)
+    }
+
     fn current_unsaved(&self) -> bool {
         self.screen == Screen::Build
             && self.entering.is_none()
@@ -652,14 +681,16 @@ impl AutoPobApp {
                     self.reset_build_state();
                 }
                 // an import that answered at once replaced the build: its first view comes
-                // before the new build's others
-                if matches!(snapshot, Snapshot::Build(_)) && self.import_seq == Some(seq) {
+                // before the new build's others. Its batch may hold later commands, whose seq
+                // the views then carry.
+                let import_answered = self.import_seq.is_some_and(|at| seq >= at);
+                if matches!(snapshot, Snapshot::Build(_)) && import_answered {
                     self.import_seq = None;
                     self.reset_for_new_build();
                 }
                 // a link's answer is its request, with no new build yet: the import is over as
                 // far as the reset goes (a code's has no request left, every one was cancelled)
-                if self.import_seq == Some(seq)
+                if import_answered
                     && matches!(&snapshot, Snapshot::Requests(view) if !view.pending.is_empty())
                 {
                     self.import_seq = None;
@@ -894,6 +925,11 @@ impl AutoPobApp {
             self.list_ui.move_refused();
         }
         self.tree.on_command_error();
+        // the view the Compare tab waits for may have failed: what it holds is all there is,
+        // so it is no longer dimmed (`behind` keeps its controls off until a snapshot comes)
+        if self.compare_wait.is_some_and(|s| seq >= s) {
+            self.compare_wait = None;
+        }
         // the Compare tab's Import popup shows its own failure, as PoB's does
         if self.compare.import_failed(seq, &message) {
             return;
@@ -1819,7 +1855,17 @@ impl AutoPobApp {
                     notes_command = self.notes.show(ui, now);
                 }
                 BuildTab::Compare => {
-                    compare_out = self.compare.show(ui, behind);
+                    // told before the tab's first frame, so that frame already waits
+                    self.sync_compare_shown();
+                    let waiting = self.compare_waiting();
+                    compare_out = ui
+                        .scope(|ui| {
+                            if waiting {
+                                ui.multiply_opacity(0.5);
+                            }
+                            self.compare.show(ui, behind || waiting)
+                        })
+                        .inner;
                     // R7's overlay: our tree, coloured against the comparison
                     if compare_out.tree {
                         self.tree.set_enabled_sockets(self.items.enabled_sockets());
@@ -1908,6 +1954,7 @@ impl AutoPobApp {
             self.compare_overlay = overlay;
             self.send(Command::SetCompareOverlay { on: overlay });
         }
+        self.sync_compare_shown();
         if self.tab != BuildTab::Skills {
             // leaving the tab sends an edit still being typed and closes its dialogs
             if let Some(command) = self.skills.flush() {
@@ -3605,7 +3652,8 @@ mod tests {
     #[test]
     fn ctrl_shift_z_undoes_as_pob_and_ctrl_y_redoes() {
         let (mut app, ctx) = open_new_build();
-        let before = app.last_sent;
+        // one command: UI state such as `SetCompareShown` goes past `send` and isn't counted
+        let before = app.sent_full.len();
         // PoB checks only Ctrl on its "z" (TreeTab.lua:359): Ctrl+Shift+Z is undo too
         frame(
             &mut app,
@@ -3615,7 +3663,7 @@ mod tests {
                 egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
             ),
         );
-        assert_eq!(app.last_sent, before + 1);
+        assert_eq!(app.sent_full[before..], ["Undo(Tree)".to_owned()]);
         assert_eq!(app.sent_log.last().map(String::as_str), Some("Undo"));
         frame(
             &mut app,
@@ -7591,6 +7639,45 @@ mod tests {
             snapshot: Snapshot::Build(Arc::new((**app.build.as_ref().unwrap()).clone())),
         });
         assert_eq!(app.tab, BuildTab::Tree);
+    }
+
+    #[test]
+    fn an_import_answered_in_a_later_commands_batch_still_resets() {
+        // a command sent after the import (a tab's state, a hover question) lands in the same
+        // batch, whose views carry its seq, not the import's
+        let (mut app, ctx) = import_app();
+        deliver(&mut app, valid_share());
+        frame(&mut app, &ctx, vec![]);
+        click_mark(&mut app, &ctx, "mode:this");
+        click_mark(&mut app, &ctx, "import_code");
+        click_mark(&mut app, &ctx, "confirm_yes");
+        let seq = app.last_sent + 1;
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: requests_snapshot(&[], vec![]),
+        });
+        assert_eq!(app.import_seq, Some(seq - 1));
+        app.tab = BuildTab::Import;
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::Build(Arc::new((**app.build.as_ref().unwrap()).clone())),
+        });
+        assert_eq!(app.import_seq, None);
+        assert_eq!(app.tab, BuildTab::Tree, "the new build's reset was skipped");
+
+        // a link: its pending request ends the import's reset the same way
+        let (mut app, ctx) = import_app();
+        deliver(&mut app, valid_share());
+        frame(&mut app, &ctx, vec![]);
+        click_mark(&mut app, &ctx, "mode:this");
+        click_mark(&mut app, &ctx, "import_code");
+        click_mark(&mut app, &ctx, "confirm_yes");
+        let seq = app.last_sent + 1;
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: requests_snapshot(&[(7, "Fetching build from pobb.in")], vec![]),
+        });
+        assert_eq!(app.import_seq, None);
     }
 
     #[test]

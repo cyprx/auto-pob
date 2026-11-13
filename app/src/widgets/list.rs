@@ -110,9 +110,7 @@ pub fn list_with(
     let sort = list_sort(ui.ctx(), id);
     let mut clicked_row = false;
     let mut new_sort = None;
-    // a hovered row gets the list rows' warm fill. That also tints a hovered widget's fill in
-    // the table (the scroll bar's handle), so cells hold plain labels only.
-    theme::table_rows(ui, |ui| {
+    {
         let mut table = TableBuilder::new(ui)
             .id_salt(id)
             .striped(true)
@@ -155,7 +153,10 @@ pub fn list_with(
                     });
                 }
             })
-            .body(|body| {
+            .body(|mut body| {
+                // a hovered row gets the list rows' warm fill; so would a hovered widget in a
+                // cell, so cells hold plain labels only
+                theme::table_rows(body.ui_mut());
                 body.rows(ROW_HEIGHT, rows, |mut r| {
                     let i = r.index();
                     r.set_selected(*selected == Some(i));
@@ -170,7 +171,7 @@ pub fn list_with(
                     }
                 });
             });
-    });
+    }
 
     if let Some(s) = new_sort {
         ui.ctx().data_mut(|d| d.insert_temp(id, s));

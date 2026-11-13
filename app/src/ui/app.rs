@@ -182,6 +182,8 @@ pub struct AutoPobApp {
     release: Option<Release>,
 
     notices: Vec<String>,
+    /// How often an error notice still up was given again (more than once)
+    notice_repeats: std::collections::HashMap<String, u32>,
     pending_save: Option<PendingSave>,
     save_as: Option<SaveAsDialog>,
     prompt: Option<Pending>,
@@ -274,6 +276,7 @@ impl AutoPobApp {
             release_rx: None,
             release: None,
             notices: Vec::new(),
+            notice_repeats: std::collections::HashMap::new(),
             pending_save: None,
             save_as: None,
             prompt: None,
@@ -927,8 +930,12 @@ impl AutoPobApp {
             }
         }
         // the same reason again while its notice is up (a search PoB can't read, refused at
-        // each send while it stays in the box) is one notice
-        if !self.notices.contains(&message) {
+        // each send while it stays in the box; a retried action) is one notice, which counts
+        // the times, so a retry that failed again still shows
+        if self.notices.contains(&message) {
+            *self.notice_repeats.entry(message).or_insert(1) += 1;
+        } else {
+            self.notice_repeats.remove(&message);
             self.notices.push(message);
         }
     }
@@ -1449,12 +1456,17 @@ impl AutoPobApp {
                     if ui.small_button("x").clicked() {
                         dismiss = Some(i);
                     }
-                    ui.colored_label(ui.visuals().error_fg_color, notice);
+                    let colour = ui.visuals().error_fg_color;
+                    match self.notice_repeats.get(notice) {
+                        Some(&n) if n > 1 => ui.colored_label(colour, format!("{notice} (×{n})")),
+                        _ => ui.colored_label(colour, notice),
+                    };
                 });
             }
         });
         if let Some(i) = dismiss {
-            self.notices.remove(i);
+            let notice = self.notices.remove(i);
+            self.notice_repeats.remove(&notice);
         }
     }
 
@@ -4211,6 +4223,16 @@ mod tests {
             });
         }
         assert_eq!(app.notices.len(), notices + 1, "{:?}", app.notices);
+        // each refusal still shows: the notice counts them
+        let (mut app2, ctx) = (app, egui::Context::default());
+        let texts = drawn_texts(&mut app2, &ctx);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t == "malformed pattern (missing ']') (×3)"),
+            "{texts:?}"
+        );
+        let mut app = app2;
         // another reason is another notice; one dismissed comes back at the next refusal
         app.on_event(Event::Error {
             seq: 83,

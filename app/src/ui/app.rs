@@ -185,6 +185,9 @@ pub struct AutoPobApp {
     import: Option<String>,
     /// Actions waiting for the next frame (they need the egui context).
     ready_actions: Vec<Pending>,
+    /// A loadout switch went out: the box with the keyboard was for the sets before, so it
+    /// lets go and shows the new sets' text (PoB sets its controls' text from the new sets)
+    release_focus: bool,
     allow_close: bool,
     /// PoB's About window: its help and version history (R25)
     help: HelpUi,
@@ -269,6 +272,7 @@ impl AutoPobApp {
             prompt: None,
             import: None,
             ready_actions: Vec::new(),
+            release_focus: false,
             allow_close: false,
             help: HelpUi::default(),
             bar_rects: Vec::new(),
@@ -498,6 +502,7 @@ impl AutoPobApp {
             Command::SelectLoadout { .. } | Command::NewLoadout { .. }
         ) {
             self.flush_edits();
+            self.release_focus = true;
         }
         if let Command::OpenPopup(kind) = &command {
             // a late edit would end the new session (R4), so every pending one goes first
@@ -1600,6 +1605,13 @@ impl AutoPobApp {
             return;
         };
 
+        if std::mem::take(&mut self.release_focus) {
+            ui.ctx().memory_mut(|m| {
+                if let Some(id) = m.focused() {
+                    m.surrender_focus(id);
+                }
+            });
+        }
         // Shortcuts. Nothing fires under a modal. While a text field has focus, Ctrl+Z and
         // Ctrl+Y are left unconsumed for the field's own undo; Ctrl+S still saves.
         let modal = self.modal();
@@ -5120,6 +5132,16 @@ mod tests {
             "the edit went out after the switch: {sent:?}"
         );
         assert!(!app.skills.has_pending(), "the edit is still waiting");
+        // the box let go: typing on doesn't edit the new set's group with the old text
+        assert!(!ctx.text_edit_focused(), "the box kept the keyboard");
+        let before = app.sent_full.len();
+        frame(&mut app, &ctx, vec![egui::Event::Text("y".into())]);
+        frame(&mut app, &ctx, vec![]);
+        let sent = sent_since(&app, before);
+        assert!(
+            !sent.iter().any(|c| c.starts_with("SetGroupLabel")),
+            "{sent:?}"
+        );
     }
 
     #[test]

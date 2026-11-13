@@ -61,6 +61,10 @@ pub struct PobBackend {
     options_lost: bool,
     /// Lua's heap after the last memory release, in bytes
     released_lua_bytes: usize,
+    /// The UI hides the Compare tab (`SetCompareShown`): a recalculation leaves its view out
+    compare_hidden: bool,
+    /// A recalculation left the Compare view out; it is sent when the tab shows again
+    compare_stale: bool,
     /// The UI shows the build list: it asked for a listing since it last opened or imported
     /// a build, or no build was loaded at start. The exit save then records PoB's LIST mode,
     /// as PoB's would after its CloseBuild (Build.lua:953-956), not the build left behind it.
@@ -242,6 +246,8 @@ impl PobBackend {
             item_db_preload: false,
             options_lost: false,
             released_lua_bytes: 0,
+            compare_hidden: false,
+            compare_stale: false,
             on_list,
             net,
             timeless_job: false,
@@ -979,6 +985,7 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::SelectCompare { .. }
             | Command::RemoveCompare { .. }
             | Command::SetCompareOverlay { .. }
+            | Command::SetCompareShown { .. }
             // a cancel runs PoB's failure path, which leaves the build alone (R12)
             | Command::CancelRequest { .. }
             | Command::Wake
@@ -1826,6 +1833,13 @@ impl PobBackend {
                 self.call::<_, ()>("compare_overlay", on)?;
                 Ok(Affected {
                     tree: true,
+                    ..Affected::default()
+                })
+            }
+            Command::SetCompareShown { on } => {
+                self.compare_hidden = !on;
+                Ok(Affected {
+                    compare: on && self.compare_stale,
                     ..Affected::default()
                 })
             }
@@ -3130,7 +3144,13 @@ impl Backend for PobBackend {
     }
 
     fn compare_view(&mut self) -> Result<Option<CompareView>> {
+        self.compare_stale = false;
         self.view("compare_view", ())
+    }
+
+    fn compare_follows_calculation(&mut self) -> bool {
+        self.compare_stale |= self.compare_hidden;
+        !self.compare_hidden
     }
 
     fn browse_view(&mut self, folder: &str) -> Result<BuildBrowseView> {
@@ -3448,6 +3468,7 @@ mod tests {
             Command::SelectCompare { index: 1 },
             Command::RemoveCompare { index: 0 },
             Command::SetCompareOverlay { on: true },
+            Command::SetCompareShown { on: false },
             Command::BrowseBuilds {
                 folder: "a/".into(),
             },

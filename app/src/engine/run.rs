@@ -414,6 +414,11 @@ pub trait Backend {
     fn account_view(&mut self) -> anyhow::Result<AccountView>;
     /// The Compare tab; `None` with no comparison loaded (R4)
     fn compare_view(&mut self) -> anyhow::Result<Option<CompareView>>;
+    /// Whether a recalculation sends the Compare view: not while the UI hides the Compare tab
+    /// (`SetCompareShown`), when the backend remembers to send it once the tab shows again.
+    fn compare_follows_calculation(&mut self) -> bool {
+        true
+    }
     /// The builds in `folder` below the Builds folder; reads the disk only, changes nothing
     fn browse_view(&mut self, folder: &str) -> anyhow::Result<BuildBrowseView>;
     /// Hands back the memory the last busy stretch left behind. The loop calls it once it has
@@ -789,8 +794,10 @@ fn recalculate_if_asked(
     affected.display_item = true;
     // Draw restarts an open list on a new output revision (R14)
     affected.item_db = true;
-    // the Summary diffs the comparison against this build's stats (R4)
-    affected.compare = true;
+    // the Summary diffs the comparison against this build's stats (R4), when it is on screen
+    if backend.compare_follows_calculation() {
+        affected.compare = true;
+    }
 }
 
 /// Processes commands until `Shutdown` or until every sender is gone.
@@ -2530,6 +2537,46 @@ mod tests {
             assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
         }
         const { assert!(Affected::ALL_VIEWS.compare) };
+    }
+
+    #[test]
+    fn a_hidden_compare_tab_waits_for_its_view() {
+        use crate::engine::CompareSource;
+        let compares = |events: &[Event]| count_of(events, |s| matches!(s, Snapshot::Compare(_)));
+        let shown = |on| Command::SetCompareShown { on };
+        let (mut fake, log) = Fake::new();
+        // hidden: an edit's recalculation leaves the view out
+        let events = run_queued(&mut fake, vec![shown(false), set_config()]);
+        assert_eq!(log.lock().unwrap().recalculations, 1);
+        assert_eq!(compares(&events), 0);
+        assert_eq!(log.lock().unwrap().compare_views, 0);
+        // shown again: the view held back is sent, once
+        let events = run_queued(&mut fake, vec![shown(true)]);
+        assert_eq!(compares(&events), 1);
+        let events = run_queued(&mut fake, vec![shown(true)]);
+        assert_eq!(compares(&events), 0);
+        // shown: an edit sends it as before
+        let events = run_queued(&mut fake, vec![set_config()]);
+        assert_eq!(compares(&events), 1);
+        // hidden with nothing held back: showing sends nothing
+        let events = run_queued(&mut fake, vec![shown(false), shown(true)]);
+        assert_eq!(compares(&events), 0);
+        // hidden, a command that changes the comparisons still sends it, and nothing is held
+        let load = Command::LoadCompare {
+            source: CompareSource::Code("x".into()),
+        };
+        let events = run_queued(&mut fake, vec![shown(false), load]);
+        assert_eq!(compares(&events), 1);
+        let events = run_queued(&mut fake, vec![shown(true)]);
+        assert_eq!(compares(&events), 0);
+        // an edit in the same batch as such a command: sent with it, nothing held back
+        let load = Command::LoadCompare {
+            source: CompareSource::Code("x".into()),
+        };
+        let events = run_queued(&mut fake, vec![shown(false), set_config(), load]);
+        assert_eq!(compares(&events), 1);
+        let events = run_queued(&mut fake, vec![shown(true)]);
+        assert_eq!(compares(&events), 0);
     }
 
     #[test]

@@ -163,6 +163,9 @@ pub struct AutoPobApp {
     compare: CompareUi,
     /// `SetCompareOverlay { on: true }` is the engine's state: the Compare tab's Tree view is up
     compare_overlay: bool,
+    /// What the engine was last told by `SetCompareShown`: whether the Compare tab is on
+    /// screen. The engine starts with it on.
+    compare_shown: bool,
     import_ui: ImportUi,
     /// The pending network requests (the finished ones are turned into notices)
     requests: RequestsView,
@@ -259,6 +262,7 @@ impl AutoPobApp {
             notes: NotesUi::default(),
             compare: CompareUi::default(),
             compare_overlay: false,
+            compare_shown: true,
             import_ui: ImportUi::default(),
             requests: RequestsView::default(),
             confirm: None,
@@ -1882,6 +1886,13 @@ impl AutoPobApp {
         if overlay != self.compare_overlay {
             self.compare_overlay = overlay;
             self.send(Command::SetCompareOverlay { on: overlay });
+        }
+        // off the Compare tab, an edit's recalculation doesn't rebuild its view; coming back
+        // asks for it
+        let shown = self.screen == Screen::Build && self.tab == BuildTab::Compare;
+        if shown != self.compare_shown {
+            self.compare_shown = shown;
+            self.engine.send(Command::SetCompareShown { on: shown });
         }
         if self.tab != BuildTab::Skills {
             // leaving the tab sends an edit still being typed and closes its dialogs
@@ -3547,7 +3558,8 @@ mod tests {
     #[test]
     fn ctrl_shift_z_undoes_as_pob_and_ctrl_y_redoes() {
         let (mut app, ctx) = open_new_build();
-        let before = app.last_sent;
+        // one command: UI state such as `SetCompareShown` goes past `send` and isn't counted
+        let before = app.sent_full.len();
         // PoB checks only Ctrl on its "z" (TreeTab.lua:359): Ctrl+Shift+Z is undo too
         frame(
             &mut app,
@@ -3557,7 +3569,7 @@ mod tests {
                 egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
             ),
         );
-        assert_eq!(app.last_sent, before + 1);
+        assert_eq!(app.sent_full[before..], ["Undo(Tree)".to_owned()]);
         assert_eq!(app.sent_log.last().map(String::as_str), Some("Undo"));
         frame(
             &mut app,

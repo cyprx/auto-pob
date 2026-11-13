@@ -334,3 +334,42 @@ fn a_link_import_waits_for_its_download_in_the_popup() {
     frame(&mut app, &ctx, vec![]);
     assert!(!app.compare.has_dialog());
 }
+
+#[test]
+fn the_engine_knows_whether_the_compare_tab_shows() {
+    let (fake, log) = Fake::new();
+    let fake = std::sync::Mutex::new(Some(fake));
+    let mut app = AutoPobApp::new(Box::new(move || {
+        let fake = fake.lock().unwrap().take().expect("one engine");
+        Engine::spawn_with(move |_| Ok(Box::new(fake) as Box<dyn Backend>), || {})
+    }));
+    let ctx = egui::Context::default();
+    let shown = |log: &std::sync::Mutex<crate::engine::fake::Log>| -> Vec<String> {
+        log.lock()
+            .unwrap()
+            .requests
+            .iter()
+            .filter(|r| r.contains("SetCompareShown"))
+            .cloned()
+            .collect()
+    };
+    settle(&mut app, &ctx);
+    // the build list has no edits to hold the view back from
+    assert!(shown(&log).is_empty());
+    // a build opens on its Tree tab
+    app.enter_build(Command::NewBuild);
+    settle(&mut app, &ctx);
+    assert_eq!(shown(&log), ["apply SetCompareShown { on: false }"]);
+    app.tab = BuildTab::Compare;
+    settle(&mut app, &ctx);
+    assert_eq!(
+        shown(&log)[1..],
+        ["apply SetCompareShown { on: true }".to_owned()]
+    );
+    app.tab = BuildTab::Config;
+    settle(&mut app, &ctx);
+    assert_eq!(
+        shown(&log)[2..],
+        ["apply SetCompareShown { on: false }".to_owned()]
+    );
+}

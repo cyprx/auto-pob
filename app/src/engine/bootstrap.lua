@@ -177,6 +177,13 @@ end
 
 dofile("Launch.lua")
 
+-- Launch.lua sets the collector's pause to 400: a cycle starts only once the heap is 4x what
+-- the last one kept. A node power run then peaks near 950 MB on a small build, nearly all of
+-- it garbage (about 260 MB is live), and a gem DPS sort on top of it passes 1 GB. Lua's own
+-- default, 200, halves that headroom: the heat map peaks near 570 MB for about 14% more CPU.
+-- The collector's pace changes no calculated value.
+collectgarbage("setpause", 200)
+
 -- PoB never updates itself (R2): launch:OnInit checks at start and launch:OnFrame every 12 h.
 launch.CheckForUpdate = function() end
 

@@ -45,6 +45,25 @@ pub fn escapes() -> impl Iterator<Item = (char, u8)> {
     (0x80..=0xFFu8).map(|b| (escape(b), b))
 }
 
+/// `text` with each escape as its byte's Windows-1252 character: for text leaving the app
+/// (the OS clipboard), where the escapes mean nothing
+pub fn for_display(text: &str) -> Cow<'_, str> {
+    if !text.chars().any(is_escape) {
+        return Cow::Borrowed(text);
+    }
+    Cow::Owned(
+        text.chars()
+            .map(|c| {
+                if is_escape(c) {
+                    windows_1252((c as u32 - FIRST + 0x80) as u8)
+                } else {
+                    c
+                }
+            })
+            .collect(),
+    )
+}
+
 /// Whether `c` stands for one of PoB's bytes
 pub fn is_escape(c: char) -> bool {
     (FIRST..=LAST).contains(&(c as u32))

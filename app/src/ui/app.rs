@@ -1137,6 +1137,11 @@ impl AutoPobApp {
 
     /// Draws one frame. (`eframe::App::ui` calls this.)
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        self.show_frame(ui);
+        os_clipboard(ui.ctx());
+    }
+
+    fn show_frame(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.process_events();
         crate::widgets::scroll_step::set_options(&ctx, self.scroll_options);
@@ -2385,6 +2390,21 @@ mod compare_tests;
 #[cfg(test)]
 #[path = "app_trade_tests.rs"]
 mod trade_tests;
+
+/// Text copied for the OS clipboard leaves the app: an escape for one of PoB's bytes
+/// (`bytes_text`) goes out as the byte's Windows-1252 character, which other programs can read
+fn os_clipboard(ctx: &egui::Context) {
+    ctx.output_mut(|o| {
+        for command in &mut o.commands {
+            if let egui::OutputCommand::CopyText(text)
+            | egui::OutputCommand::TextSelectionSettled(text) = command
+                && let std::borrow::Cow::Owned(shown) = crate::engine::bytes_text::for_display(text)
+            {
+                *text = shown;
+            }
+        }
+    });
+}
 
 /// Takes Ctrl+W out of the frame, so no text box deletes a word on it
 fn strip_ctrl_w(ui: &egui::Ui) {
@@ -4752,6 +4772,27 @@ mod tests {
             .chain(copied_later)
             .collect();
         assert_eq!(all, ["https://example.test/tree"]);
+    }
+
+    /// Text the app copies leaves it: an escaped byte goes to the OS clipboard as its
+    /// Windows-1252 character, not as a private-use one
+    #[test]
+    fn copied_text_carries_escaped_bytes_as_windows_1252() {
+        let (mut app, ctx) = open_new_build();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.ctx().copy_text("Caf\u{F7E9} \u{F792}s".into());
+            app.show(ui);
+        });
+        let copied: Vec<String> = output
+            .platform_output
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                egui::OutputCommand::CopyText(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(copied, ["Caf\u{e9} \u{2019}s"]);
     }
 
     #[test]

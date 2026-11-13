@@ -615,6 +615,7 @@ impl AutoPobApp {
             Event::StartupFailed { message } => self.startup_error = Some(message),
             Event::Snapshot { seq, snapshot } => {
                 self.last_snapshot = self.last_snapshot.max(seq);
+                self.compare.import_settled(self.last_snapshot);
                 // The events are in order, so everything from the previous build has arrived
                 // by the new build's first snapshot. Only now is the tree tab's state for the
                 // old build (and any late power events) dropped.
@@ -855,6 +856,10 @@ impl AutoPobApp {
         if self.list_move_seq == Some(seq) {
             self.list_move_seq = None;
             self.list_ui.move_refused();
+        }
+        // the Compare tab's Import popup shows its own failure, as PoB's does
+        if self.compare.import_failed(seq, &message) {
+            return;
         }
         self.import_ui.on_error(seq);
         if self.import_seq == Some(seq) || self.entering == Some(seq) {
@@ -1794,7 +1799,16 @@ impl AutoPobApp {
             self.compare.close_dialog();
         }
         for command in compare_out.commands {
-            self.send(command);
+            let import = matches!(
+                &command,
+                Command::LoadCompare {
+                    source: crate::engine::CompareSource::Import { .. }
+                }
+            );
+            let seq = self.send(command);
+            if import {
+                self.compare.import_sent(seq);
+            }
         }
         // questions never leave the app waiting
         for query in compare_out.queries {

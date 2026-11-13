@@ -260,6 +260,7 @@ fn undo_on_the_compare_tree_view_is_the_tree_tabs() {
 
 #[test]
 fn a_comparison_pob_refuses_shows_pobs_text() {
+    // CompareTab.lua:1507-1514: a bad code leaves PoB's popup open with its red text
     let (mut app, ctx) = open_build();
     app.tab = BuildTab::Compare;
     frame(&mut app, &ctx, vec![]);
@@ -270,11 +271,17 @@ fn a_comparison_pob_refuses_shows_pobs_text() {
     frame(&mut app, &ctx, vec![Event::Text("bad".into())]);
     click(&mut app, &ctx, "dialog_load");
     settle(&mut app, &ctx);
+    assert!(app.compare.has_dialog(), "the popup closed");
     assert!(
-        app.notices
-            .iter()
-            .any(|n| n == "Invalid build code"),
-        "{:?}",
-        app.notices
+        app.compare.rects.map.contains_key("dialog_error"),
+        "no error in the popup"
     );
+    assert!(app.notices.is_empty(), "{:?}", app.notices);
+    // a good one closes it
+    click(&mut app, &ctx, "dialog_text");
+    frame(&mut app, &ctx, vec![Event::Text("x".into())]);
+    click(&mut app, &ctx, "dialog_load");
+    settle(&mut app, &ctx);
+    assert!(!app.compare.has_dialog(), "the popup stayed");
+    assert!(app.notices.is_empty(), "{:?}", app.notices);
 }

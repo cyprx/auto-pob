@@ -44,7 +44,12 @@ impl CompareUi {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| match &mut dialog {
                 Dialog::Saved { folder } => keep = self.saved(ui, folder, out),
-                Dialog::Import { text, name } => keep = self.import(ui, text, name, out),
+                Dialog::Import {
+                    text,
+                    name,
+                    sent,
+                    error,
+                } => self.import(ui, text, name, sent, error, out, &mut keep),
                 Dialog::Convert {
                     theirs,
                     index,
@@ -187,15 +192,20 @@ impl CompareUi {
     /// PoB's "Import Comparison Build" popup (CompareTab.lua:1462-1525): a code or a link, an
     /// optional name (100 bytes), Import, which Enter in the first box presses too. A link is
     /// downloaded as PoB's popup does, whether or not this build has a file; the comparison is
-    /// named by the name box, else "Imported from <site>" or "Imported build". Returns whether
-    /// it stays open.
+    /// named by the name box, else "Imported from <site>" or "Imported build". The popup stays
+    /// until the import is answered; PoB's failure text shows in it, in red. Clears `keep` when
+    /// it is cancelled.
+    #[allow(clippy::too_many_arguments)]
     fn import(
         &mut self,
         ui: &mut egui::Ui,
         text: &mut String,
         name: &mut String,
+        sent: &mut Option<Option<u64>>,
+        error: &mut Option<String>,
         out: &mut CompareOutput,
-    ) -> bool {
+        keep: &mut bool,
+    ) {
         ui.label("Paste a build code or URL to import as comparison:");
         let r = ui.add(egui::TextEdit::singleline(text).desired_width(450.0));
         self.rects.note(&r, || "dialog_text".into());
@@ -204,24 +214,28 @@ impl CompareUi {
             t.hint_text("Name (optional)").desired_width(450.0)
         });
         self.rects.note(&field, || "dialog_name".into());
-        let mut keep = true;
+        // PoB's state line under the Name box
+        if let Some(error) = error {
+            let r = ui.colored_label(theme::NEGATIVE, error.as_str());
+            self.rects.note(&r, || "dialog_error".into());
+        }
         ui.horizontal(|ui| {
-            let go = ui.add(theme::primary_button("Import"));
+            let go = ui.add_enabled(sent.is_none(), theme::primary_button("Import"));
             self.rects.note(&go, || "dialog_load".into());
             // PoB's Import does nothing for an empty box
-            if (go.clicked() || enter) && !text.is_empty() {
+            if (go.clicked() || (enter && sent.is_none())) && !text.is_empty() {
                 out.commands.push(Command::LoadCompare {
                     source: CompareSource::Import {
                         text: text.clone(),
                         name: (!name.is_empty()).then(|| name.clone()),
                     },
                 });
-                keep = false;
+                *sent = Some(None);
+                *error = None;
             }
             if ui.button("Cancel").clicked() {
-                keep = false;
+                *keep = false;
             }
         });
-        keep
     }
 }

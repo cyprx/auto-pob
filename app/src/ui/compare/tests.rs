@@ -451,6 +451,21 @@ fn load_menu_sends_each_source() {
         debug(&out.commands),
         ["LoadCompare { source: Import { text: \"eNrtWk1z\", name: Some(\"Mine\") } }"]
     );
+    // the popup waits for the answer: an error shows in it, in red, and it stays
+    assert!(h.ui.has_dialog());
+    h.ui.import_sent(7);
+    assert!(h.ui.import_failed(7, "Invalid build code"));
+    assert!(!h.ui.import_failed(7, "again"), "answered once");
+    h.frame(vec![]);
+    assert!(h.ui.has_dialog());
+    assert!(h.ui.rects.map.contains_key("dialog_error"));
+    // pressed again, and answered with no error: it closes
+    h.click("dialog_load");
+    h.ui.import_sent(8);
+    h.ui.import_settled(7);
+    assert!(h.ui.has_dialog(), "an older answer");
+    h.ui.import_settled(8);
+    assert!(!h.ui.has_dialog());
 
     // a link, with no build file (PoB downloads it in its popup, CompareTab.lua:1488-1503);
     // Enter in the box imports (CompareTab.lua:1469-1473)
@@ -464,6 +479,8 @@ fn load_menu_sends_each_source() {
         debug(&out.commands),
         ["LoadCompare { source: Import { text: \"https://pobb.in/abc\", name: None } }"]
     );
+    h.ui.import_sent(9);
+    h.ui.import_settled(9);
     assert!(!h.ui.has_dialog());
     // an empty box imports nothing
     h.click("load");

@@ -53,7 +53,15 @@ enum Dialog {
     Saved { folder: String },
     /// PoB's "Import Comparison Build" popup (CompareTab.lua:1462-1525): a code or a link,
     /// and an optional name
-    Import { text: String, name: String },
+    Import {
+        text: String,
+        name: String,
+        /// Import was pressed: `Some(None)` until the app says which command carries it,
+        /// then its number, until it is answered
+        sent: Option<Option<u64>>,
+        /// PoB's red text in the popup's state line (CompareTab.lua:1476-1479)
+        error: Option<String>,
+    },
     /// PoB's "Convert to Version" popup, opened by a pick in a Tree view version dropdown
     Convert {
         theirs: bool,
@@ -214,6 +222,41 @@ impl CompareUi {
         self.dialog = None;
     }
 
+    /// The Import popup's command went out as `seq`
+    pub fn import_sent(&mut self, seq: u64) {
+        if let Some(Dialog::Import { sent, .. }) = &mut self.dialog
+            && *sent == Some(None)
+        {
+            *sent = Some(Some(seq));
+        }
+    }
+
+    /// An error for command `seq`: the Import popup's own shows in it, in red, and the popup
+    /// stays for another try, as PoB's does (CompareTab.lua:1507-1514). Returns whether it was.
+    pub fn import_failed(&mut self, seq: u64, message: &str) -> bool {
+        match &mut self.dialog {
+            Some(Dialog::Import { sent, error, .. }) if *sent == Some(Some(seq)) => {
+                *sent = None;
+                *error = Some(message.to_owned());
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Every snapshot up to `seq` is here: an Import with no error has done its work (a code
+    /// added the comparison, a link's download is out), and the popup closes as PoB's does
+    pub fn import_settled(&mut self, seq: u64) {
+        if let Some(Dialog::Import {
+            sent: Some(Some(at)),
+            ..
+        }) = &self.dialog
+            && *at <= seq
+        {
+            self.dialog = None;
+        }
+    }
+
     /// PoB switched to its Compare tab (an Import-tab comparison landed), once.
     pub fn take_switched(&mut self) -> bool {
         std::mem::take(&mut self.switched)
@@ -365,6 +408,8 @@ impl CompareUi {
                     open = Some(Dialog::Import {
                         text: String::new(),
                         name: String::new(),
+                        sent: None,
+                        error: None,
                     });
                 }
             });

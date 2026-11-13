@@ -52,6 +52,9 @@ pub struct PobBackend {
     item_db_failed: bool,
     /// The database closed or the build changed; `ItemDb(None)` is still to be sent (R21)
     item_db_ended: bool,
+    /// The Items tab was shown (`PreloadItemDbs`): PoB's item database load runs as
+    /// background work until it ends, with no panel open
+    item_db_preload: bool,
     /// A save PoB made by itself cancelled the Options window; the next settings view says so
     options_lost: bool,
     /// Lua's heap after the last memory release, in bytes
@@ -70,8 +73,24 @@ pub struct PobBackend {
     trace: Vec<u32>,
     /// Nothing but tree searches ran since one whose frame matched every node of the build's
     /// spec, so the tree view's own results are current and the tree state reads them instead
-    /// of matching every node a second time
+    /// of matching every node a second time.
+    ///
+    /// Invariant: whatever may change the spec's nodes or their text must clear it. Today that
+    /// is every path that can: `apply` (any command but `SetTreeSearch`), `recalculate` and
+    /// `background_step`. A view or any other `Backend` method that ever edits the build, or
+    /// swaps the spec even for a moment, must clear it too, or a repeated identical search
+    /// reports the old spec's matches. The glue's `searchStrCached` check only covers a rebuild
+    /// of depends and paths (PassiveSpec.lua:1793), not a direct edit of a node.
     fresh_search: bool,
+    /// The tree state's paths and dependants as last sent, with the glue's token for them
+    tree_paths: Option<TreePaths>,
+}
+
+/// `TreeState.paths` and `TreeState.depends` as the glue last sent them
+struct TreePaths {
+    token: i64,
+    paths: std::sync::Arc<[crate::engine::views::NodePath]>,
+    depends: std::sync::Arc<[crate::engine::views::NodePath]>,
 }
 
 /// R17: a timeless search step yields once this much of `GetTime()` has passed
@@ -203,12 +222,14 @@ impl PobBackend {
             item_db: None,
             item_db_failed: false,
             item_db_ended: false,
+            item_db_preload: false,
             options_lost: false,
             released_lua_bytes: 0,
             on_list,
             net,
             timeless_job: false,
             fresh_search: false,
+            tree_paths: None,
             timeless_budget_ms: TIMELESS_BUDGET_MS,
             trace: Vec::new(),
         })
@@ -392,6 +413,9 @@ impl PobBackend {
     fn left_build(&mut self) -> Result<Affected> {
         let mut affected = Affected::default();
         self.reset_heatmap();
+        // the old tree's paths are no use to the next one: let both copies go
+        self.tree_paths = None;
+        self.call::<_, ()>("tree_paths_forget", ())?;
         // the session's timeless search ends with it (R17)
         self.timeless_job = false;
         // an Options window survives a build change (R19)
@@ -494,12 +518,86 @@ impl PobBackend {
         Ok(affected)
     }
 
+    /// One `ItemDb` step: the open panel's work, else a slice of the load ahead
+    fn item_db_step(&mut self, send: &dyn Fn(Event)) -> Result<Affected> {
+        #[derive(serde::Deserialize)]
+        struct Step {
+            percent: Option<u32>,
+            finished: bool,
+            #[serde(default)]
+            rejected: Option<String>,
+        }
+        // the open panel's own work goes first, as `next_background` offers it. Once
+        // its database has loaded (the uniques load before the rares) only the load
+        // ahead is left, which the panel's step would never run.
+        let panel = match &self.item_db {
+            Some(query) if !self.item_db_failed => self
+                .call::<_, bool>("item_db_pending", db_name(query.db))
+                .unwrap_or(false)
+                .then_some(query),
+            _ => None,
+        };
+        let query = match panel {
+            Some(query) => query,
+            // a slice of the load ahead of a panel open (`PreloadItemDbs`). Nothing
+            // shows it: a failure only stops it, and the panel's own job reports the
+            // load's failure when it opens (`glue.item_db_step`).
+            // Only once the Items tab asked for it: no other caller may load the databases.
+            None if !self.item_db_preload => return Ok(Affected::default()),
+            None => {
+                if let Err(e) = self.call::<_, ()>("item_db_preload_step", ()) {
+                    log::warn!("item database load: {e:#}");
+                    self.item_db_preload = false;
+                }
+                return Ok(Affected::default());
+            }
+        };
+        let step: Step = match self.view("item_db_step", db_name(query.db)) {
+            Ok(step) => step,
+            Err(e) => {
+                self.item_db_failed = true;
+                return Err(e);
+            }
+        };
+        if let Some(percent) = step.percent {
+            send(Event::Progress {
+                task: BackgroundTask::ItemDb,
+                percent,
+            });
+        }
+        // a query that waited out the load turned out bad: the panel closes, so the
+        // UI's query and PoB's controls agree, and the reason is the job's failure
+        if let Some(message) = step.rejected {
+            self.item_db = None;
+            self.item_db_ended = true;
+            let _ = self.call::<_, ()>("item_db_close", ());
+            send(Event::BackgroundFailed {
+                task: BackgroundTask::ItemDb,
+                message,
+            });
+            return Ok(Affected {
+                item_db: true,
+                ..Affected::default()
+            });
+        }
+        // the panel shows the rows once the list builder ends
+        Ok(Affected {
+            item_db: step.finished,
+            ..Affected::default()
+        })
+    }
+
     fn view<T: serde::de::DeserializeOwned>(
         &self,
         name: &str,
         args: impl IntoLuaMulti,
     ) -> Result<T> {
         let value: mlua::Value = self.call(name, args)?;
+        self.view_of(value)
+    }
+
+    /// A view from a glue function's result (see `view`)
+    fn view_of<T: serde::de::DeserializeOwned>(&self, value: mlua::Value) -> Result<T> {
         // a view that serde would take can still hold a private-use character that is one of
         // our escapes (U+F780-U+F7FF): it must be escaped too, or an edit sends it back as a
         // raw byte (`bytes_text`)
@@ -826,6 +924,7 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::ControlTooltip(_)
             | Command::SetItemDb(_)
             | Command::CloseItemDb
+            | Command::PreloadItemDbs
             | Command::ItemTooltip(_)
             | Command::CopyItem { .. }
             | Command::CopySharedItem { .. }
@@ -968,6 +1067,14 @@ impl PobBackend {
             }
             // ended above
             Command::CloseItemDb => Ok(Affected::default()),
+            Command::PreloadItemDbs => {
+                // nothing to run when PoB never registered the load or it already ended: the
+                // loop then never asks about it
+                self.item_db_preload = self
+                    .call::<_, bool>("item_db_preload_pending", ())
+                    .unwrap_or(false);
+                Ok(Affected::default())
+            }
             Command::ViewDbItem { db, name } => {
                 self.call::<_, ()>("item_db_view_item", (db_name(db), name))?;
                 Ok(display_changed())
@@ -2521,7 +2628,28 @@ impl Backend for PobBackend {
     }
 
     fn tree_state_view(&mut self) -> Result<TreeState> {
-        self.view("tree_state", self.fresh_search)
+        // the paths come only when they differ from the ones held: building and converting
+        // them was most of the view, which every edit resends; a list held is shared, not copied
+        let held = self.tree_paths.as_ref().map(|p| p.token);
+        let (value, token, sent): (mlua::Value, i64, bool) =
+            self.call("tree_state", (self.fresh_search, held))?;
+        let mut state: TreeState = self.view_of(value)?;
+        if sent {
+            self.tree_paths = Some(TreePaths {
+                token,
+                paths: state.paths.clone(),
+                depends: state.depends.clone(),
+            });
+        } else {
+            let held = self
+                .tree_paths
+                .as_ref()
+                .filter(|p| p.token == token)
+                .ok_or_else(|| anyhow!("the tree's paths went missing"))?;
+            state.paths = held.paths.clone();
+            state.depends = held.depends.clone();
+        }
+        Ok(state)
     }
 
     fn calcs_view(&mut self) -> Result<CalcsView> {
@@ -2588,6 +2716,17 @@ impl Backend for PobBackend {
         {
             return Some(BackgroundTask::ItemDb);
         }
+        // the load ahead of a panel open, at the same rank; it ends once PoB's load has.
+        // It goes before node power, so with the heat map on, the first Items visit holds the
+        // power job back by the load (about a second, once per session): the heat map isn't
+        // shown on the Items tab, and the panel's first open is what the load is for.
+        if self.item_db_preload
+            && self
+                .call::<_, bool>("item_db_preload_pending", ())
+                .unwrap_or(false)
+        {
+            return Some(BackgroundTask::ItemDb);
+        }
         let power = self.heatmap_on
             && !self.power_failed
             && self.call::<_, bool>("power_pending", ()).unwrap_or(false);
@@ -2600,8 +2739,6 @@ impl Backend for PobBackend {
         struct Step {
             percent: Option<u32>,
             finished: bool,
-            #[serde(default)]
-            rejected: Option<String>,
         }
         match task {
             BackgroundTask::Network => {
@@ -2678,42 +2815,16 @@ impl Backend for PobBackend {
                 })
             }
             BackgroundTask::ItemDb => {
-                let Some(query) = &self.item_db else {
-                    return Ok(Affected::default());
-                };
-                let step: Step = match self.view("item_db_step", db_name(query.db)) {
-                    Ok(step) => step,
-                    Err(e) => {
-                        self.item_db_failed = true;
-                        return Err(e);
-                    }
-                };
-                if let Some(percent) = step.percent {
-                    send(Event::Progress {
-                        task: BackgroundTask::ItemDb,
-                        percent,
-                    });
+                let result = self.item_db_step(send);
+                // once PoB's load has ended, by either job, the loop stops asking about it
+                if self.item_db_preload
+                    && !self
+                        .call::<_, bool>("item_db_preload_pending", ())
+                        .unwrap_or(false)
+                {
+                    self.item_db_preload = false;
                 }
-                // a query that waited out the load turned out bad: the panel closes, so the
-                // UI's query and PoB's controls agree, and the reason is the job's failure
-                if let Some(message) = step.rejected {
-                    self.item_db = None;
-                    self.item_db_ended = true;
-                    let _ = self.call::<_, ()>("item_db_close", ());
-                    send(Event::BackgroundFailed {
-                        task: BackgroundTask::ItemDb,
-                        message,
-                    });
-                    return Ok(Affected {
-                        item_db: true,
-                        ..Affected::default()
-                    });
-                }
-                // the panel shows the rows once the list builder ends
-                Ok(Affected {
-                    item_db: step.finished,
-                    ..Affected::default()
-                })
+                result
             }
             BackgroundTask::GemDps => {
                 let step: Step = match self.view("gem_dps_step", ()) {
@@ -3140,6 +3251,8 @@ mod tests {
                 search_mode: 0,
             }),
             Command::CloseItemDb,
+            // the Items tab shown: the load runs ahead, the popup's tab is left alone
+            Command::PreloadItemDbs,
             Command::CancelRequest { id: 1 },
         ];
         for command in keeps {

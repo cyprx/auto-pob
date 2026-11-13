@@ -785,3 +785,253 @@ fn item_databases_load_only_for_the_panel() {
         .unwrap();
     assert!(!left, "the load is still listed");
 }
+
+/// Whether PoB's item database load is still to run (both databases still loading)
+fn databases_loading(s: &mut Session) -> bool {
+    s.backend
+        .lua
+        .load(
+            "local m = pob.main.main
+            return (m.onFrameFuncs.LoadItems ~= nil and m.uniqueDB.loading and m.rareDB.loading)
+                and true or false",
+        )
+        .eval()
+        .unwrap()
+}
+
+/// Once the Items tab is shown the load runs as background work, so the first panel open
+/// finds the databases loaded; the work ends with the load, so the loop goes idle again.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn item_databases_preload_once_the_items_tab_shows() {
+    let _guard = lock();
+    let mut s = Session::start("item-db-preload");
+    s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+    assert!(
+        databases_loading(&mut s),
+        "the databases were loaded already"
+    );
+    assert_eq!(
+        s.backend.next_background(),
+        None,
+        "work before the tab showed"
+    );
+    let affected = s.run(Command::PreloadItemDbs).unwrap();
+    assert_eq!(affected, auto_pob::engine::Affected::default());
+    let mut steps = 0;
+    while let Some(task) = s.backend.next_background() {
+        assert_eq!(task, BackgroundTask::ItemDb);
+        let affected = s.backend.background_step(task, &|_| {}).unwrap();
+        assert_eq!(affected, auto_pob::engine::Affected::default());
+        steps += 1;
+        assert!(steps < 1000, "the load never ends");
+    }
+    assert!(steps > 1, "{steps} steps");
+    let done: bool = s
+        .backend
+        .lua
+        .load(
+            "local m = pob.main.main
+            return m.onFrameFuncs.LoadItems == nil and not m.uniqueDB.loading
+                and not m.rareDB.loading",
+        )
+        .eval()
+        .unwrap();
+    assert!(done, "the load did not end");
+    // the panel's first view has its rows, with no load to wait for
+    for db in [ItemDb::Uniques, ItemDb::Rares] {
+        s.run(Command::SetItemDb(ItemDbQuery {
+            db,
+            slot: 0,
+            kind: 0,
+            league: 0,
+            requirement: 0,
+            obtainable: 0,
+            sort: 0,
+            search: String::new(),
+            search_mode: 0,
+        }))
+        .unwrap();
+        let view = panel(&mut s);
+        assert!(!view.loading && !view.rows.is_empty(), "{db:?}");
+    }
+}
+
+/// Edits and a panel open that land while the load runs ahead leave it to finish as it would:
+/// the panel's job takes it over, and its rows are those of a panel that loaded on its own.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn item_databases_preload_survives_edits_and_an_early_open() {
+    let _guard = lock();
+    let want = {
+        let mut s = Session::start("item-db-preload-ref");
+        s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+        json_of(&lists(&mut s, ItemDb::Rares))
+    };
+    let mut s = Session::start("item-db-preload-early");
+    s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+    s.run(Command::PreloadItemDbs).unwrap();
+    for i in 0..3 {
+        let task = s.backend.next_background().expect("no load work");
+        s.backend.background_step(task, &|_| {}).unwrap();
+        s.run(Command::SetConfig {
+            var: "conditionFullLife".into(),
+            value: ConfigValue::Bool(i % 2 == 0),
+        })
+        .unwrap();
+    }
+    assert!(databases_loading(&mut s), "the load ended already");
+    assert_eq!(json_of(&lists(&mut s, ItemDb::Rares)), want);
+    assert_eq!(s.backend.next_background(), None);
+}
+
+/// The uniques load before the rares: a Uniques panel opened while the load runs ahead ends
+/// its own work first, then the rest of the load runs, and the loop goes idle.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn item_databases_preload_ends_after_an_early_uniques_open() {
+    let _guard = lock();
+    let mut s = Session::start("item-db-preload-uniques");
+    s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+    s.run(Command::PreloadItemDbs).unwrap();
+    s.run(Command::SetItemDb(ItemDbQuery {
+        db: ItemDb::Uniques,
+        slot: 0,
+        kind: 0,
+        league: 0,
+        requirement: 0,
+        obtainable: 0,
+        sort: 0,
+        search: String::new(),
+        search_mode: 0,
+    }))
+    .unwrap();
+    let mut steps = 0;
+    while let Some(task) = s.backend.next_background() {
+        s.backend.background_step(task, &|_| {}).unwrap();
+        steps += 1;
+        assert!(steps < 1000, "the load never ends");
+    }
+    let view = panel(&mut s);
+    assert!(!view.loading && !view.rows.is_empty());
+    assert!(!databases_loading(&mut s));
+    let rares_loaded: bool = s
+        .backend
+        .lua
+        .load("return pob.main.main.rareDB.loading == nil")
+        .eval()
+        .unwrap();
+    assert!(rares_loaded, "the rest of the load never ran");
+}
+
+/// An item database step with no panel open and no Items tab shown loads nothing: only the
+/// panel or the Items tab may start PoB's load.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn an_item_db_step_without_a_preload_loads_nothing() {
+    let _guard = lock();
+    let mut s = Session::start("item-db-no-preload");
+    s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+    for _ in 0..30 {
+        s.backend
+            .background_step(BackgroundTask::ItemDb, &|_| {})
+            .unwrap();
+    }
+    assert!(
+        databases_loading(&mut s),
+        "a stray step loaded the databases"
+    );
+}
+
+/// A preload asked for once PoB's load has ended leaves the loop alone: it doesn't ask the
+/// glue about the load on every turn.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_preload_after_the_load_ended_asks_nothing_more() {
+    let _guard = lock();
+    let mut s = Session::start("item-db-preload-late");
+    s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+    s.run(Command::PreloadItemDbs).unwrap();
+    let mut steps = 0;
+    while let Some(task) = s.backend.next_background() {
+        s.backend.background_step(task, &|_| {}).unwrap();
+        steps += 1;
+        assert!(steps < 1000, "the load never ends");
+    }
+    s.backend
+        .lua
+        .load(
+            "local pending = glue.item_db_preload_pending
+            preloadAsked = 0
+            glue.item_db_preload_pending = function(...)
+                preloadAsked = preloadAsked + 1
+                return pending(...)
+            end",
+        )
+        .exec()
+        .unwrap();
+    s.run(Command::PreloadItemDbs).unwrap();
+    for _ in 0..5 {
+        assert_eq!(s.backend.next_background(), None);
+    }
+    let asked: i64 = s.backend.lua.load("return preloadAsked").eval().unwrap();
+    assert!(asked <= 1, "asked {asked} times");
+}
+
+/// The load ahead belongs to PoB's `main`, not to the build: leaving the build, the build list,
+/// an import and a comparison in the middle of it leave it to finish as it would, and the
+/// loop then goes idle.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn item_databases_preload_survives_leaving_the_build() {
+    let _guard = lock();
+    let want = {
+        let mut s = Session::start("item-db-preload-leave-ref");
+        s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+        json_of(&lists(&mut s, ItemDb::Rares))
+    };
+    let mut s = Session::start("item-db-preload-leave");
+    let attack = s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+    s.run(Command::PreloadItemDbs).unwrap();
+    let step = |s: &mut Session| {
+        if let Some(task) = s.backend.next_background() {
+            s.backend.background_step(task, &|_| {}).unwrap();
+        }
+    };
+    step(&mut s);
+    step(&mut s);
+    s.open_fixture("minion", &fixtures_dir().join("minion.xml"));
+    step(&mut s);
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .unwrap();
+    step(&mut s);
+    let xml = std::fs::read_to_string(&attack).unwrap();
+    let code = super::share_code(&s, &xml);
+    s.run(Command::ImportShareCode { code }).unwrap();
+    step(&mut s);
+    s.run(Command::LoadCompare {
+        source: auto_pob::engine::CompareSource::File(attack.clone()),
+    })
+    .unwrap();
+    assert!(databases_loading(&mut s), "the load ended already");
+    let mut steps = 0;
+    while let Some(task) = s.backend.next_background() {
+        s.backend.background_step(task, &|_| {}).unwrap();
+        steps += 1;
+        assert!(steps < 1000, "the load never ends");
+    }
+    let done: bool = s
+        .backend
+        .lua
+        .load(
+            "local m = pob.main.main
+            return m.onFrameFuncs.LoadItems == nil and m.uniqueDB.loading == nil
+                and m.rareDB.loading == nil",
+        )
+        .eval()
+        .unwrap();
+    assert!(done, "the load did not end");
+    assert_eq!(json_of(&lists(&mut s, ItemDb::Rares)), want);
+}

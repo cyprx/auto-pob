@@ -376,8 +376,11 @@ impl GemPicker {
         let imbued = self.imbued();
         let mut hovered = None;
         // Only the entries in view are laid out: the list holds every gem, and laying them all
-        // out took about 4 ms a frame. An entry is one line; its height is the one last drawn.
-        // an empty list has one entry: its note
+        // out took about 4 ms a frame. `show_rows` places them by a fixed pitch, so every entry
+        // must stay one line of the same height (`entry_frame`, `gem_row`): its height is the
+        // one last drawn, and a taller entry would shift the range shown, the scrollbar and the
+        // keyboard's scroll target. Debug builds check it. An empty list has one entry: its
+        // note, alone or under the imbued "None", so its height moves nothing.
         let total = view.rows.len().max(1) + usize::from(imbued);
         let row_height = self.row_height.unwrap_or_else(|| {
             ui.spacing()
@@ -386,6 +389,8 @@ impl GemPicker {
                 .max(ui.text_style_height(&egui::TextStyle::Body))
         });
         let spacing = ui.spacing().item_spacing.y;
+        // the height of the first entry drawn this frame, for the debug check
+        let mut first_height = None;
         egui::ScrollArea::vertical()
             .max_height(360.0)
             .auto_shrink([false, true])
@@ -408,7 +413,7 @@ impl GemPicker {
                         let row = self.entry_frame(ui, 0, |ui| {
                             ui.label("None");
                         });
-                        self.note_height(&row);
+                        self.note_height(&row, &mut first_height);
                         self.rects.note(&row, || "picker_none".into());
                         if row.clicked() {
                             out.commands.push(Command::SetImbuedSupport {
@@ -427,7 +432,7 @@ impl GemPicker {
                     let response = self.entry_frame(ui, entry, |ui| {
                         gem_row(ui, gem, view.base_dps);
                     });
-                    self.note_height(&response);
+                    self.note_height(&response, &mut first_height);
                     self.rects.note(&response, || format!("picker_row_{i}"));
                     if response.hovered() {
                         hovered = Some(gem.gem_id.clone());
@@ -448,11 +453,20 @@ impl GemPicker {
         self.ask_tooltip(ui, hovered, now, out);
     }
 
-    fn note_height(&mut self, entry: &egui::Response) {
-        self.row_height = Some(entry.rect.height());
+    /// Keeps an entry's height as the list's pitch. Every entry drawn in a frame must have
+    /// the first one's height (`first`), as `show_rows` assumes.
+    fn note_height(&mut self, entry: &egui::Response, first: &mut Option<f32>) {
+        let height = entry.rect.height();
+        let first = *first.get_or_insert(height);
+        debug_assert!(
+            (height - first).abs() < 0.5,
+            "picker entries differ in height ({first} and {height}): show_rows needs them equal"
+        );
+        self.row_height = Some(height);
     }
 
-    /// One clickable list entry, highlighted when it is the keyboard's.
+    /// One clickable list entry, highlighted when it is the keyboard's. It must stay one line
+    /// as tall as every other entry: the list is laid out by `show_rows`' fixed pitch.
     fn entry_frame(
         &mut self,
         ui: &mut egui::Ui,
@@ -526,6 +540,8 @@ fn dps_change(dps: f64, base: f64) -> String {
     }
 }
 
+/// One gem's entry: a single line that never wraps, as tall as the others (see
+/// `entry_frame`).
 fn gem_row(ui: &mut egui::Ui, gem: &GemRow, base_dps: f64) {
     let default = ui.visuals().text_color();
     let dps_colour = gem
@@ -854,6 +870,38 @@ mod tests {
             "{:?}",
             o.commands
         );
+    }
+
+    /// Every kind of entry is one line of the same height, as `show_rows` assumes: the imbued
+    /// "None", gem rows with and without a DPS figure or mark, and long names.
+    #[test]
+    fn every_kind_of_entry_has_the_same_height() {
+        let mut h = Harness::new(GemTarget::Imbued, &["a", "b", "c"]);
+        let mut view = (*h.p.view.clone().unwrap()).clone();
+        view.rows[1].dps = Some(150.0);
+        view.rows[1].mark = Some(DpsMark::Plus);
+        view.rows[1].dps_colour = Some("^x33FF77".into());
+        view.rows[2].name = "A gem with a very long name ".repeat(4);
+        view.rows[2].tags = "Attack, AoE, Melee, Strike, Physical, Duration, Slam".into();
+        view.rows[2].mark = Some(DpsMark::Check);
+        h.p.on_search(Arc::new(view));
+        h.frame(vec![]);
+        h.p.rects.map.clear();
+        h.frame(vec![]);
+        let heights: Vec<f32> = [
+            "picker_none",
+            "picker_row_0",
+            "picker_row_1",
+            "picker_row_2",
+        ]
+        .iter()
+        .map(|k| h.p.rects.map[*k].height())
+        .collect();
+        assert!(
+            heights.iter().all(|x| (x - heights[0]).abs() < 0.5),
+            "{heights:?}"
+        );
+        assert_eq!(h.p.row_height, Some(heights[3]));
     }
 
     #[test]

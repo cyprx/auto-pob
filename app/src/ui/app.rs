@@ -132,6 +132,9 @@ pub struct AutoPobApp {
     calcs: CalcsUi,
     skills: SkillsUi,
     items: ItemsUi,
+    /// `PreloadItemDbs` went to this engine: the Items tab was shown once. The databases are
+    /// PoB's `main`'s, so they stay loaded across builds; a new engine starts a new app.
+    item_dbs_preloaded: bool,
     /// The crafting popup window, whichever tab opened it
     popup: PopupWindow,
     /// The tab that opened the popup: leaving it closes the window
@@ -239,6 +242,7 @@ impl AutoPobApp {
             calcs: CalcsUi::default(),
             skills: SkillsUi::default(),
             items: ItemsUi::default(),
+            item_dbs_preloaded: false,
             popup: PopupWindow::default(),
             popup_tab: None,
             failed_open: None,
@@ -1785,6 +1789,13 @@ impl AutoPobApp {
                     skills_out = self.skills.show(ui, now, behind);
                 }
                 BuildTab::Items => {
+                    // the first time the tab shows, PoB's item database load starts in the
+                    // background, so the panel's first open finds it done. It is no edit and
+                    // has nothing to answer.
+                    if !self.item_dbs_preloaded {
+                        self.item_dbs_preloaded = true;
+                        self.engine.send(Command::PreloadItemDbs);
+                    }
                     let now = ui.input(|i| i.time);
                     self.items.set_socket_scene(self.tree.socket_scene());
                     items_out = self.items.show(ui, now, behind);

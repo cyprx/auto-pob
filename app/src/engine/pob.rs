@@ -1451,6 +1451,15 @@ impl PobBackend {
                     CompareSource::File(path) => self
                         .call::<_, ()>("compare_load_file", path.to_string_lossy().into_owned())?,
                     CompareSource::Code(code) => self.call::<_, ()>("compare_load_code", code)?,
+                    CompareSource::Import { text, name } => {
+                        // a link is a request, which lands the comparison when it ends
+                        let request: Option<u64> = self.call("compare_import", (text, name))?;
+                        if request.is_some() {
+                            let mut affected = self.network_affected()?;
+                            affected.merge(compare_changed());
+                            return Ok(affected);
+                        }
+                    }
                 }
                 Ok(compare_changed())
             }

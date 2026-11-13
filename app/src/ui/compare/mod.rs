@@ -50,11 +50,10 @@ pub struct CompareOutput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Dialog {
     /// A build file, from this folder below the Builds folder
-    Saved {
-        folder: String,
-    },
-    Code(String),
-    Link(String),
+    Saved { folder: String },
+    /// PoB's "Import Comparison Build" popup (CompareTab.lua:1462-1525): a code or a link,
+    /// and an optional name
+    Import { text: String, name: String },
     /// PoB's "Convert to Version" popup, opened by a pick in a Tree view version dropdown
     Convert {
         theirs: bool,
@@ -349,7 +348,6 @@ impl CompareUi {
                     out.commands.push(Command::SelectCompare { index });
                 }
             }
-            let has_file = self.has_file;
             let rects = &mut self.rects;
             let mut open = None;
             let menu = ui.menu_button("Load build…", |ui| {
@@ -360,19 +358,14 @@ impl CompareUi {
                         folder: String::new(),
                     });
                 }
-                let code = ui.button("From a code…");
+                // PoB's "Import..." popup takes a code or a link, with or without a file
+                let code = ui.button("From a code or link…");
                 rects.note(&code, || "load:code".into());
                 if code.clicked() {
-                    open = Some(Dialog::Code(String::new()));
-                }
-                let link = ui
-                    .add_enabled(has_file, egui::Button::new("From a link…"))
-                    .on_disabled_hover_text(
-                        "PoB imports a comparison from a link only into a build saved to a file",
-                    );
-                rects.note(&link, || "load:link".into());
-                if link.clicked() {
-                    open = Some(Dialog::Link(String::new()));
+                    open = Some(Dialog::Import {
+                        text: String::new(),
+                        name: String::new(),
+                    });
                 }
             });
             self.rects.note(&menu.response, || "load".into());

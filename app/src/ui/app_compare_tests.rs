@@ -273,7 +273,7 @@ fn a_comparison_pob_refuses_shows_pobs_text() {
     assert!(
         app.notices
             .iter()
-            .any(|n| n == "Failed to import build for comparison."),
+            .any(|n| n == "Invalid build code"),
         "{:?}",
         app.notices
     );

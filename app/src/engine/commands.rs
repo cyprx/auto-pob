@@ -35,6 +35,10 @@ pub enum CompareSource {
     File(PathBuf),
     /// A share code
     Code(String),
+    /// PoB's "Import Comparison Build" popup (CompareTab.lua:1462-1525): a code or a build
+    /// site's link, and the name the comparison takes (PoB's "Imported from <site>" or
+    /// "Imported build" when `None`). A link is a request.
+    Import { text: String, name: Option<String> },
 }
 
 /// A platform of PoB's account import (PoB's ids `"PC"`, `"XBOX"`, `"SONY"`).

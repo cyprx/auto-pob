@@ -8,9 +8,9 @@ use super::{assert_sidebar, lock, pob_dir, set};
 use auto_pob::engine::pob::PobBackend;
 use auto_pob::engine::upstream::golden_of;
 use auto_pob::engine::{
-    Affected, Backend, BackgroundTask, CharacterEntry, CharacterPart, Command, ConfigValue, Engine,
-    Event, FinishedRequest, ImportMode, OAuthView, PopupKind, PublicStage, PublicView, Realm,
-    RequestsView, Snapshot, send_snapshots,
+    Affected, Backend, BackgroundTask, CharacterEntry, CharacterPart, Command, CompareSource,
+    ConfigValue, Engine, Event, FinishedRequest, ImportMode, OAuthView, PopupKind, PublicStage,
+    PublicView, Realm, RequestsView, Snapshot, send_snapshots,
 };
 use auto_pob::game::Game;
 use pob_runtime::net::Canned;
@@ -1382,6 +1382,71 @@ fn build_sites_match_pob() {
         s.backend.compare_view().unwrap().unwrap().entries,
         their_entries(&up)
     );
+
+    // ---- The Compare tab's own Import popup (CompareTab.lua:1462-1525): a link downloads in
+    // the popup, named after its site or by the Name box; a code imports at once ----
+    let up_popup = |up: &UpstreamNet, text: &str, name: &str| {
+        up.eval::<()>(&format!(
+            "build.compareTab:OpenImportPopup() local c = main.popups[1].controls \
+             c.input:SetText('{text}') c.name:SetText('{name}') c.go.onClick()"
+        ));
+    };
+    up_popup(&up, sites[0].link(), "");
+    up.pump(Duration::from_secs(15));
+    s.backend
+        .apply(
+            Command::LoadCompare {
+                source: CompareSource::Import {
+                    text: sites[0].link().into(),
+                    name: None,
+                },
+            },
+            &|_| {},
+        )
+        .expect("popup link");
+    let entry = finish_request(&mut s);
+    assert_eq!((entry.error.clone(), entry.new_build), (None, false));
+    let ours = s.backend.compare_view().unwrap().expect("a comparison");
+    assert_eq!(ours.entries, their_entries(&up));
+    assert_eq!(
+        ours.entries.last().map(String::as_str),
+        Some(format!("Imported from {}", sites[0].label).as_str())
+    );
+    up_popup(&up, &attack_code, "Mine");
+    s.backend
+        .apply(
+            Command::LoadCompare {
+                source: CompareSource::Import {
+                    text: attack_code.clone(),
+                    name: Some("Mine".into()),
+                },
+            },
+            &|_| {},
+        )
+        .expect("popup code");
+    let ours = s.backend.compare_view().unwrap().expect("a comparison");
+    assert_eq!(ours.entries, their_entries(&up));
+    assert_eq!(ours.entries.last().map(String::as_str), Some("Mine"));
+    // a code that isn't one: the popup's own text
+    up_popup(&up, "not a code", "");
+    let theirs = up.eval::<String>("return StripEscapes(main.popups[1].controls.state.label())");
+    up.eval::<()>("main:ClosePopup()");
+    let err = s
+        .backend
+        .apply(
+            Command::LoadCompare {
+                source: CompareSource::Import {
+                    text: "not a code".into(),
+                    name: None,
+                },
+            },
+            &|_| {},
+        )
+        .unwrap_err();
+    assert_eq!(format!("{err:#}"), theirs);
+    assert_eq!(theirs, "Invalid build code");
+    s.assert_clean("compare popup");
+    assert_eq!(up.eval::<usize>("return #main.popups"), 0);
 
     // ---- A failure leaves nothing stuck, and the same request then works ----
     let pobbin = sites.iter().find(|site| site.id == "POBBin").unwrap();

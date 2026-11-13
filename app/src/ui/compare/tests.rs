@@ -1,6 +1,6 @@
 use super::*;
 use crate::engine::views::{
-    BuildBrowseEntry, BuildBrowseView, BuildView, CompareConfigRow, CompareItemRow, CompareRow,
+    BuildBrowseEntry, BuildBrowseView, CompareConfigRow, CompareItemRow, CompareRow,
     CompareSkillRow, ConfigSet, PopupControlKind,
 };
 use crate::theme;
@@ -439,43 +439,37 @@ fn load_menu_sends_each_source() {
         ["LoadCompare { source: File(\"/b/dot.xml\") }"]
     );
 
-    // a code
+    // PoB's Import popup: a code, a name
     h.click("load");
     h.click("load:code");
     h.click("dialog_text");
     h.type_text("eNrtWk1z");
+    h.click("dialog_name");
+    h.type_text("Mine");
     let out = h.click("dialog_load");
     assert_eq!(
         debug(&out.commands),
-        ["LoadCompare { source: Code(\"eNrtWk1z\") }"]
+        ["LoadCompare { source: Import { text: \"eNrtWk1z\", name: Some(\"Mine\") } }"]
     );
 
-    // a link is PoB's Import tab mode 3, which PoB offers only for a build with a file
+    // a link, with no build file (PoB downloads it in its popup, CompareTab.lua:1488-1503);
+    // Enter in the box imports (CompareTab.lua:1469-1473)
     h.click("load");
-    h.click("load:link");
-    assert!(!h.ui.has_dialog(), "a link without a file");
-    h.ui.on_snapshot(&Snapshot::Build(Arc::new(BuildView {
-        name: "b".into(),
-        path: Some("/b/b.xml".into()),
-        class: "Witch".into(),
-        ascendancy: None,
-        level: 1,
-        unsaved: false,
-        can_undo: false,
-        can_redo: false,
-        ..BuildView::default()
-    })));
-    h.frame(vec![]);
-    h.click("load");
-    h.click("load:link");
+    h.click("load:code");
     assert!(h.ui.has_dialog());
     h.click("dialog_text");
     h.type_text("https://pobb.in/abc");
-    let out = h.click("dialog_load");
+    let out = h.key(Key::Enter);
     assert_eq!(
         debug(&out.commands),
-        ["ImportFromUrl { url: \"https://pobb.in/abc\", mode: Comparison }"]
+        ["LoadCompare { source: Import { text: \"https://pobb.in/abc\", name: None } }"]
     );
+    assert!(!h.ui.has_dialog());
+    // an empty box imports nothing
+    h.click("load");
+    h.click("load:code");
+    let out = h.click("dialog_load");
+    assert!(out.commands.is_empty());
 }
 
 /// A folder the engine can't list (a Builds folder that went) is said in the picker, which

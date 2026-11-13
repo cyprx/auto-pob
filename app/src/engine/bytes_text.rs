@@ -9,10 +9,11 @@
 //! The mapping is a bijection: a string that legitimately holds one of these characters
 //! has the character's own UTF-8 bytes escaped too when it is decoded. Text coming back is
 //! only turned into bytes once some text was decoded with an escape (`seen`), so a build with
-//! no such bytes sends its private-use characters as they are. The flag is process-wide and
-//! never resets: once a build showed escapes, a private-use character in this range typed or
-//! pasted later goes to PoB as a byte. Paths and file names are never escaped nor encoded
-//! (`Pob::call_path`, the build list).
+//! no such bytes sends its private-use characters as they are. The flag is process-wide; it
+//! resets when the engine leaves a build (`reset`, from `Pob::left_build`), so a later build
+//! with no such bytes sends a private-use character in this range typed or pasted as itself,
+//! not as a byte. Paths and file names are never escaped nor encoded (`Pob::call_path`, the
+//! build list).
 
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -188,6 +189,13 @@ pub fn encode_value(
         }
         other => Ok(other),
     }
+}
+
+/// Forgets that text was decoded with escapes: the build that showed them is gone, and every
+/// view of the next one is decoded again before the UI can send its text back. Comparisons
+/// go with the build, and paths and file names are never escaped.
+pub fn reset() {
+    SEEN.store(false, Ordering::Relaxed);
 }
 
 /// Whether any text was decoded with escapes (tests)

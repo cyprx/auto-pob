@@ -4180,6 +4180,48 @@ fn a_private_use_character_round_trips_beside_bytes_that_are_not_utf8() {
     assert!(s.builds_dir().join("y\u{F7E9}.xml").exists());
 }
 
+/// Once a build with bytes that aren't UTF-8 is left, the next build with none sends a
+/// private-use character in the escapes' range as itself: the escapes went with the build
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_build_opened_after_one_with_escapes_saves_a_private_use_character_as_itself() {
+    let _guard = lock();
+    let mut s = Session::start("escapes-reset");
+    let mut bytes = fs::read_to_string(fixture_xml("attack"))
+        .unwrap()
+        .replace("<Notes>", "<Notes>caf\u{1} notes")
+        .into_bytes();
+    for b in &mut bytes {
+        if *b == 1 {
+            *b = 0xE9;
+        }
+    }
+    let latin = s.builds_dir().join("latin.xml");
+    fs::create_dir_all(latin.parent().unwrap()).unwrap();
+    fs::write(&latin, bytes).unwrap();
+    s.run(Command::OpenBuild { path: latin }).expect("open");
+    let notes = s.backend.notes_view().expect("notes view");
+    assert!(notes.text.contains('\u{F7E9}'), "{:?}", notes.text);
+    let clean = s.builds_dir().join("clean.xml");
+    fs::copy(fixture_xml("attack"), &clean).unwrap();
+    s.run(Command::OpenBuild {
+        path: clean.clone(),
+    })
+    .expect("open the clean build");
+    s.backend.notes_view().expect("notes view");
+    s.run(Command::SetNotes {
+        text: "pua \u{F7E9} here".into(),
+    })
+    .expect("notes");
+    s.run(Command::Save).expect("save");
+    let saved = fs::read(&clean).unwrap();
+    let needle = "pua \u{F7E9} here".as_bytes();
+    assert!(
+        saved.windows(needle.len()).any(|w| w == needle),
+        "the character went out as a byte"
+    );
+}
+
 /// A build file named with a real character in the escapes' range (U+F7E9), in a process
 /// that never showed an escape: the build view gives its name and path as they are, and Save
 /// As with the name its box opens on writes that same file, not a new one

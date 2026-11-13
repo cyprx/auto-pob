@@ -355,8 +355,18 @@ fn handle_input(ui: &egui::Ui, tab: &mut TreeTab, response: &egui::Response) {
         if steps != 0.0 {
             factor = 1.2f32.powi(steps as i32 * if shift { 3 } else { 1 });
         } else if notches == 0.0 {
-            // a pinch on a touch screen or trackpad
-            factor = ui.input(|i| i.multi_touch().map_or(1.0, |t| t.zoom_delta));
+            // a trackpad's pinch, or a touch screen's
+            factor = ui.input(|i| {
+                let pinch: f32 = i
+                    .events
+                    .iter()
+                    .filter_map(|e| match e {
+                        egui::Event::Zoom(f) => Some(*f),
+                        _ => None,
+                    })
+                    .product();
+                pinch * i.multi_touch().map_or(1.0, |t| t.zoom_delta)
+            });
         }
         if factor != 1.0 {
             tab.camera.zoom_at(response.rect, pointer, factor);

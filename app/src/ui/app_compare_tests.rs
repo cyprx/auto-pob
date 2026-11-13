@@ -378,6 +378,58 @@ fn the_engine_knows_whether_the_compare_tab_shows() {
         shown(&log)[2..],
         ["apply SetCompareShown { on: false }".to_owned()]
     );
+    // PoB's switch to its Compare tab, as an Import-tab comparison lands
+    app.tab = BuildTab::Import;
+    settle(&mut app, &ctx);
+    let mut view = sample();
+    view.switched = true;
+    inject(&mut app, Some(view));
+    assert_eq!(app.tab, BuildTab::Compare);
+    settle(&mut app, &ctx);
+    assert_eq!(
+        shown(&log)[3..],
+        ["apply SetCompareShown { on: true }".to_owned()]
+    );
+    // a tab key (Ctrl+5) leaves it in the frame it is pressed
+    frame(
+        &mut app,
+        &ctx,
+        vec![Event::Key {
+            key: Key::Num5,
+            physical_key: Some(Key::Num5),
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        }],
+    );
+    assert_eq!(app.tab, BuildTab::Config);
+    settle(&mut app, &ctx);
+    assert_eq!(
+        shown(&log)[4..],
+        ["apply SetCompareShown { on: false }".to_owned()]
+    );
+    // back to the list from the Compare tab: the list has no edits, so nothing is said there;
+    // the next build opens on its Tree tab, which hides it
+    app.tab = BuildTab::Compare;
+    settle(&mut app, &ctx);
+    app.back_to_list();
+    // (the fake leaves the listing unanswered, so no settle here)
+    for _ in 0..10 {
+        frame(&mut app, &ctx, vec![]);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(app.screen, Screen::List);
+    assert_eq!(
+        shown(&log)[5..],
+        ["apply SetCompareShown { on: true }".to_owned()]
+    );
+    app.enter_build(Command::NewBuild);
+    settle(&mut app, &ctx);
+    assert_eq!(app.tab, BuildTab::Tree);
+    assert_eq!(
+        shown(&log)[6..],
+        ["apply SetCompareShown { on: false }".to_owned()]
+    );
 }
 
 #[test]

@@ -1820,7 +1820,7 @@ fn a_hidden_compare_tab_gets_its_view_when_shown() {
     // off the tab, an edit's recalculation sends no Compare view
     let sent = compare_snapshots(&mut s, vec![shown(false), toggle(true)]);
     assert!(sent.is_empty(), "{} sent", sent.len());
-    // back on it, the view held back comes, as fresh as one asked for now
+    // back on it, a view comes, as fresh as one asked for now
     let sent = compare_snapshots(&mut s, vec![shown(true)]);
     assert_eq!(sent.len(), 1);
     let fresh = view(&mut s);
@@ -1829,16 +1829,17 @@ fn a_hidden_compare_tab_gets_its_view_when_shown() {
         before.summary, fresh.summary,
         "the edit didn't change the Summary"
     );
-    assert!(compare_snapshots(&mut s, vec![shown(true)]).is_empty());
+    // showing always answers: the tab waits for it
+    assert_eq!(compare_snapshots(&mut s, vec![shown(true)]), [Some(fresh)]);
     // on the tab, each edit sends it
     let sent = compare_snapshots(&mut s, vec![toggle(false)]);
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].as_ref().map(|v| &v.summary), Some(&before.summary));
-    // off the tab, a change of the comparisons is still sent, and nothing more is owed
+    // off the tab, a change of the comparisons is still sent
     let sent = compare_snapshots(
         &mut s,
         vec![shown(false), Command::RemoveCompare { index: 0 }],
     );
     assert_eq!(sent, [None]);
-    assert!(compare_snapshots(&mut s, vec![shown(true)]).is_empty());
+    assert_eq!(compare_snapshots(&mut s, vec![shown(true)]), [None]);
 }

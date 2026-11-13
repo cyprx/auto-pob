@@ -1838,8 +1838,10 @@ impl PobBackend {
             }
             Command::SetCompareShown { on } => {
                 self.compare_hidden = !on;
+                // showing always answers with a fresh view: the UI waits for it before it
+                // lets the tab's controls act on the one it holds
                 Ok(Affected {
-                    compare: on && self.compare_stale,
+                    compare: on,
                     ..Affected::default()
                 })
             }

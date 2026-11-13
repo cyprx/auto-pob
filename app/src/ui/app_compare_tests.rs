@@ -35,10 +35,18 @@ fn settle(app: &mut AutoPobApp, ctx: &egui::Context) {
     frame(app, ctx, vec![]);
 }
 
-/// A new build on the build screen, everything answered.
+/// A new build on the build screen, everything answered. The engine answers the Compare
+/// view with `sample()`.
 fn open_build() -> (AutoPobApp, egui::Context) {
     let mut app = AutoPobApp::new(Box::new(|| {
-        Engine::spawn_with(|_| Ok(Box::new(Fake::new().0) as Box<dyn Backend>), || {})
+        Engine::spawn_with(
+            |_| {
+                let mut fake = Fake::new().0;
+                fake.compare = Some(sample());
+                Ok(Box::new(fake) as Box<dyn Backend>)
+            },
+            || {},
+        )
     }));
     let ctx = egui::Context::default();
     settle(&mut app, &ctx);
@@ -56,6 +64,13 @@ fn inject(app: &mut AutoPobApp, view: Option<CompareView>) {
 }
 
 use crate::engine::Event as Event_;
+
+/// The Compare tab entered and its answer in (`sample()`)
+fn show_compare(app: &mut AutoPobApp, ctx: &egui::Context) {
+    app.tab = BuildTab::Compare;
+    settle(app, ctx);
+    frame(app, ctx, vec![]);
+}
 
 fn click(app: &mut AutoPobApp, ctx: &egui::Context, key: &str) {
     let pos = app.compare.rect(key).center();
@@ -150,10 +165,7 @@ fn a_comparison_landing_under_a_window_keeps_its_tab() {
 #[test]
 fn the_tree_view_turns_the_overlay_on_and_off() {
     let (mut app, ctx) = open_build();
-    inject(&mut app, Some(sample()));
-    app.tab = BuildTab::Compare;
-    frame(&mut app, &ctx, vec![]);
-    frame(&mut app, &ctx, vec![]);
+    show_compare(&mut app, &ctx);
     let before = app.sent_full.len();
     click(&mut app, &ctx, "sub:tree");
     assert_eq!(overlays(&app, before), ["SetCompareOverlay { on: true }"]);
@@ -202,10 +214,7 @@ fn the_tree_view_turns_the_overlay_on_and_off() {
 #[test]
 fn leaving_the_tab_sends_a_typed_count_and_closes_the_load_window() {
     let (mut app, ctx) = open_build();
-    inject(&mut app, Some(sample()));
-    app.tab = BuildTab::Compare;
-    frame(&mut app, &ctx, vec![]);
-    frame(&mut app, &ctx, vec![]);
+    show_compare(&mut app, &ctx);
     click(&mut app, &ctx, "load");
     click(&mut app, &ctx, "load:code");
     assert!(app.compare.has_dialog());
@@ -238,10 +247,7 @@ fn a_comparison_import_never_replaces_the_build_screen() {
 #[test]
 fn undo_on_the_compare_tree_view_is_the_tree_tabs() {
     let (mut app, ctx) = open_build();
-    inject(&mut app, Some(sample()));
-    app.tab = BuildTab::Compare;
-    frame(&mut app, &ctx, vec![]);
-    frame(&mut app, &ctx, vec![]);
+    show_compare(&mut app, &ctx);
     // on the Summary there is nothing to undo
     app.undo_redo(false);
     click(&mut app, &ctx, "sub:tree");
@@ -371,5 +377,56 @@ fn the_engine_knows_whether_the_compare_tab_shows() {
     assert_eq!(
         shown(&log)[2..],
         ["apply SetCompareShown { on: false }".to_owned()]
+    );
+}
+
+#[test]
+fn entering_the_tab_after_a_hidden_edit_waits_for_its_view() {
+    // an engine slow to answer the Compare view
+    let mut app = AutoPobApp::new(Box::new(|| {
+        Engine::spawn_with(
+            |_| {
+                let mut fake = Fake::new().0;
+                fake.compare = Some(sample());
+                fake.compare_delay = Duration::from_millis(500);
+                Ok(Box::new(fake) as Box<dyn Backend>)
+            },
+            || {},
+        )
+    }));
+    let ctx = egui::Context::default();
+    settle(&mut app, &ctx);
+    app.enter_build(Command::NewBuild);
+    settle(&mut app, &ctx);
+    // an edit on the Tree tab: the engine leaves the Compare view out
+    app.send(Command::SetConfig {
+        var: "conditionFullLife".into(),
+        value: crate::engine::ConfigValue::Bool(true),
+    });
+    settle(&mut app, &ctx);
+    assert!(!app.compare_waiting());
+    // the tab's first frame already waits for the fresh view: what it holds is dimmed and
+    // its buttons are off
+    app.tab = BuildTab::Compare;
+    frame(&mut app, &ctx, vec![]);
+    assert!(app.compare_waiting());
+    let before = app.sent_full.len();
+    click(&mut app, &ctx, "remove");
+    assert!(app.compare_waiting(), "the view came too soon for the test");
+    assert!(
+        !app.sent_full[before..]
+            .iter()
+            .any(|c| c.starts_with("RemoveCompare")),
+        "{:?}",
+        &app.sent_full[before..]
+    );
+    // once it is in, they work
+    settle(&mut app, &ctx);
+    assert!(!app.compare_waiting());
+    let before = app.sent_full.len();
+    click(&mut app, &ctx, "remove");
+    assert_eq!(
+        app.sent_full[before..],
+        ["RemoveCompare { index: 0 }".to_owned()]
     );
 }

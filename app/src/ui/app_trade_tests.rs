@@ -71,7 +71,9 @@ fn open_build() -> (AutoPobApp, egui::Context, Arc<Mutex<Log>>) {
         let keep = keep.clone();
         Engine::spawn_with(
             move |_| {
-                let (fake, log) = Fake::new();
+                let (mut fake, log) = Fake::new();
+                // the Compare tab's answer
+                fake.compare = Some(compare_sample());
                 *keep.lock().unwrap() = Some(log);
                 Ok(Box::new(fake) as Box<dyn Backend>)
             },
@@ -291,12 +293,9 @@ fn buy_similar_offered_on_display_slot_menu_and_compare() {
     settle(&mut app, &ctx);
 
     // the Compare tab's Items rows: Buy where the comparison has an item
-    app.on_event(crate::engine::Event::Snapshot {
-        seq: app.last_sent,
-        snapshot: Snapshot::Compare(Some(Arc::new(compare_sample()))),
-    });
+    // entering it asks the engine for the view (`compare_sample()`)
     app.tab = BuildTab::Compare;
-    frame(&mut app, &ctx, vec![]);
+    settle(&mut app, &ctx);
     let pos = app.compare.rect("sub:items").center();
     click_at(&mut app, &ctx, pos, PointerButton::Primary);
     assert!(

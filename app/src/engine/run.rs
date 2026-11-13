@@ -2550,33 +2550,23 @@ mod tests {
         assert_eq!(log.lock().unwrap().recalculations, 1);
         assert_eq!(compares(&events), 0);
         assert_eq!(log.lock().unwrap().compare_views, 0);
-        // shown again: the view held back is sent, once
+        // shown again: always answered with a fresh view, which the tab waits for
         let events = run_queued(&mut fake, vec![shown(true)]);
         assert_eq!(compares(&events), 1);
         let events = run_queued(&mut fake, vec![shown(true)]);
-        assert_eq!(compares(&events), 0);
+        assert_eq!(compares(&events), 1);
         // shown: an edit sends it as before
         let events = run_queued(&mut fake, vec![set_config()]);
         assert_eq!(compares(&events), 1);
-        // hidden with nothing held back: showing sends nothing
-        let events = run_queued(&mut fake, vec![shown(false), shown(true)]);
-        assert_eq!(compares(&events), 0);
-        // hidden, a command that changes the comparisons still sends it, and nothing is held
+        // hidden, a command that changes the comparisons still sends it
         let load = Command::LoadCompare {
             source: CompareSource::Code("x".into()),
         };
         let events = run_queued(&mut fake, vec![shown(false), load]);
         assert_eq!(compares(&events), 1);
-        let events = run_queued(&mut fake, vec![shown(true)]);
-        assert_eq!(compares(&events), 0);
-        // an edit in the same batch as such a command: sent with it, nothing held back
-        let load = Command::LoadCompare {
-            source: CompareSource::Code("x".into()),
-        };
-        let events = run_queued(&mut fake, vec![shown(false), set_config(), load]);
+        // an edit and showing in one batch: one view
+        let events = run_queued(&mut fake, vec![shown(false), set_config(), shown(true)]);
         assert_eq!(compares(&events), 1);
-        let events = run_queued(&mut fake, vec![shown(true)]);
-        assert_eq!(compares(&events), 0);
     }
 
     #[test]

@@ -117,6 +117,10 @@ pub struct Fake {
     /// `compare_stale` says one was, as PobBackend does
     compare_hidden: bool,
     compare_stale: bool,
+    /// What `compare_view` answers; `None` is "no comparison loaded"
+    pub compare: Option<CompareView>,
+    /// How long `compare_view` takes
+    pub compare_delay: std::time::Duration,
 }
 
 impl Fake {
@@ -152,6 +156,8 @@ impl Fake {
                 shutdown_delay: std::time::Duration::ZERO,
                 compare_hidden: false,
                 compare_stale: false,
+                compare: None,
+                compare_delay: std::time::Duration::ZERO,
             },
             log,
         )
@@ -344,8 +350,10 @@ impl Fake {
             }),
             Command::SetCompareShown { on } => {
                 self.compare_hidden = !on;
+                // showing always answers with a fresh view: the UI waits for it before it
+                // lets the tab's controls act on the one it holds
                 Ok(Affected {
-                    compare: on && self.compare_stale,
+                    compare: on,
                     ..Affected::default()
                 })
             }
@@ -744,7 +752,8 @@ impl Backend for Fake {
     fn compare_view(&mut self) -> anyhow::Result<Option<CompareView>> {
         self.compare_stale = false;
         self.log.lock().unwrap().compare_views += 1;
-        Ok(None)
+        std::thread::sleep(self.compare_delay);
+        Ok(self.compare.clone())
     }
 
     fn compare_follows_calculation(&mut self) -> bool {

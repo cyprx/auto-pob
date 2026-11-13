@@ -166,6 +166,9 @@ pub struct AutoPobApp {
     /// What the engine was last told by `SetCompareShown`: whether the Compare tab is on
     /// screen. The engine starts with it on.
     compare_shown: bool,
+    /// The seq of the last `SetCompareShown { on: true }`: until its answer comes, the tab's
+    /// held view may be from before edits made elsewhere, so it is dimmed and its controls off
+    compare_wait: Option<u64>,
     import_ui: ImportUi,
     /// The pending network requests (the finished ones are turned into notices)
     requests: RequestsView,
@@ -263,6 +266,7 @@ impl AutoPobApp {
             compare: CompareUi::default(),
             compare_overlay: false,
             compare_shown: true,
+            compare_wait: None,
             import_ui: ImportUi::default(),
             requests: RequestsView::default(),
             confirm: None,
@@ -602,6 +606,27 @@ impl AutoPobApp {
         self.last_sent > self.last_snapshot
     }
 
+    /// Off the Compare tab, an edit's recalculation doesn't rebuild its view, so the engine is
+    /// told when the tab shows: hiding needs no answer, showing is answered with a fresh view,
+    /// which the tab waits for (`compare_wait`).
+    fn sync_compare_shown(&mut self) {
+        let shown = self.screen == Screen::Build && self.tab == BuildTab::Compare;
+        if shown == self.compare_shown {
+            return;
+        }
+        self.compare_shown = shown;
+        if shown {
+            self.compare_wait = Some(self.send(Command::SetCompareShown { on: true }));
+        } else {
+            self.engine.send(Command::SetCompareShown { on: false });
+        }
+    }
+
+    /// The Compare tab still waits for the view its showing asked for
+    fn compare_waiting(&self) -> bool {
+        self.compare_wait.is_some_and(|s| self.last_snapshot < s)
+    }
+
     fn current_unsaved(&self) -> bool {
         self.screen == Screen::Build
             && self.entering.is_none()
@@ -890,6 +915,11 @@ impl AutoPobApp {
             self.list_ui.move_refused();
         }
         self.tree.on_command_error();
+        // the view the Compare tab waits for may have failed: what it holds is all there is,
+        // so it is no longer dimmed (`behind` keeps its controls off until a snapshot comes)
+        if self.compare_wait.is_some_and(|s| seq >= s) {
+            self.compare_wait = None;
+        }
         // the Compare tab's Import popup shows its own failure, as PoB's does
         if self.compare.import_failed(seq, &message) {
             return;
@@ -1798,7 +1828,17 @@ impl AutoPobApp {
                     notes_command = self.notes.show(ui, now);
                 }
                 BuildTab::Compare => {
-                    compare_out = self.compare.show(ui, behind);
+                    // told before the tab's first frame, so that frame already waits
+                    self.sync_compare_shown();
+                    let waiting = self.compare_waiting();
+                    compare_out = ui
+                        .scope(|ui| {
+                            if waiting {
+                                ui.multiply_opacity(0.5);
+                            }
+                            self.compare.show(ui, behind || waiting)
+                        })
+                        .inner;
                     // R7's overlay: our tree, coloured against the comparison
                     if compare_out.tree {
                         self.tree.set_enabled_sockets(self.items.enabled_sockets());
@@ -1887,13 +1927,7 @@ impl AutoPobApp {
             self.compare_overlay = overlay;
             self.send(Command::SetCompareOverlay { on: overlay });
         }
-        // off the Compare tab, an edit's recalculation doesn't rebuild its view; coming back
-        // asks for it
-        let shown = self.screen == Screen::Build && self.tab == BuildTab::Compare;
-        if shown != self.compare_shown {
-            self.compare_shown = shown;
-            self.engine.send(Command::SetCompareShown { on: shown });
-        }
+        self.sync_compare_shown();
         if self.tab != BuildTab::Skills {
             // leaving the tab sends an edit still being typed and closes its dialogs
             if let Some(command) = self.skills.flush() {

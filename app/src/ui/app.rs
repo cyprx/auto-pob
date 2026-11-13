@@ -864,6 +864,7 @@ impl AutoPobApp {
             self.list_move_seq = None;
             self.list_ui.move_refused();
         }
+        self.tree.on_command_error();
         // the Compare tab's Import popup shows its own failure, as PoB's does
         if self.compare.import_failed(seq, &message) {
             return;

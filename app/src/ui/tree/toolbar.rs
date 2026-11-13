@@ -211,6 +211,16 @@ impl Toolbar {
         }
     }
 
+    /// A command failed: a shrink asked for but never listed as a request (PoB refused the
+    /// press) ends, its button reading Done as PoB's always does (TreeTab.lua:820-826)
+    pub(super) fn on_command_error(&mut self) {
+        if let Some(Dialog::Export { shrink, .. }) = &mut self.dialog
+            && *shrink == Shrink::Asked
+        {
+            *shrink = Shrink::Done;
+        }
+    }
+
     /// A link snapshot arrived.
     pub(super) fn link_arrived(&mut self) {
         self.link_fresh = true;

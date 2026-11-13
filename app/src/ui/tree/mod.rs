@@ -216,6 +216,11 @@ impl TreeTab {
         self.toolbar.power_theme = theme;
     }
 
+    /// A command failed (see `Toolbar::on_command_error`)
+    pub fn on_command_error(&mut self) {
+        self.toolbar.on_command_error();
+    }
+
     /// The engine's running requests, by label
     pub fn on_requests(&mut self, pending: &[&str]) {
         self.toolbar.on_requests(pending);
@@ -1593,6 +1598,71 @@ mod tests {
             debug(&out.commands),
             ["SetHeatmap { stat: Some(\"Life\"), max_depth: Some(7) }"]
         );
+    }
+
+    #[test]
+    fn a_refused_shrink_still_ends_as_done() {
+        // TreeTab.lua:820-826: the button always ends as Done
+        let mut h = heat_harness();
+        press(&mut h, "link_menu");
+        press(&mut h, "link_export");
+        h.tab
+            .on_snapshot(&Snapshot::TreeLink(Arc::new("https://x.test/tree".into())));
+        h.frame(vec![]);
+        press(&mut h, "export_shrink");
+        // the press failed before any request was listed
+        h.tab.on_command_error();
+        h.frame(vec![]);
+        assert!(press(&mut h, "export_shrink").commands.is_empty());
+        assert!(h.tab.has_dialog());
+    }
+
+    #[test]
+    fn a_search_match_off_screen_snaps_to_the_edge() {
+        // PassiveTreeView.lua:1017-1031: with the option on (PoB's default) a match outside
+        // the view shows at its edge; with it off, nowhere
+        let rings = |edge: bool| {
+            let (l, s) = sample();
+            let mut state = (*s).clone();
+            state.search_matches = vec![4];
+            let mut h = Harness::new(l, Arc::new(state));
+            h.tab.set_ui_settings(overlays::PowerTheme::RedBlue, edge);
+            h.frame(vec![]);
+            // node 4 at (600, 600) just off the view's right bottom
+            let rect = h.tab.rect.unwrap();
+            h.tab.camera.zoom = 0.5;
+            h.tab.camera.center =
+                egui::vec2(600.0, 600.0) - (rect.size() / 2.0 + egui::vec2(20.0, 20.0)) / 0.5;
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                time: Some(h.time + 1.0),
+                ..Default::default()
+            };
+            let mut output = h.ctx.run_ui(input, |ui| {
+                h.tab.show(ui, false);
+            });
+            output.textures_delta.clear();
+            let mut found = Vec::new();
+            fn walk(shape: &egui::Shape, out: &mut Vec<Pos2>) {
+                match shape {
+                    egui::Shape::Circle(c) if c.stroke.color == overlays::SEARCH_RING => {
+                        out.push(c.center)
+                    }
+                    egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                    _ => {}
+                }
+            }
+            output
+                .shapes
+                .iter()
+                .for_each(|c| walk(&c.shape, &mut found));
+            (found, rect)
+        };
+        let (found, rect) = rings(true);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(rect.expand(1.0).contains(found[0]), "{found:?} {rect:?}");
+        let (found, rect) = rings(false);
+        assert!(found.iter().all(|p| !rect.contains(*p)), "{found:?}");
     }
 
     #[test]

@@ -190,7 +190,8 @@ pub fn show(
         if on_path {
             painter.circle_stroke(pos, radius + 1.5, Stroke::new(1.5, highlight_colour));
         }
-        if tab.derived.matches.contains(&node.id) {
+        // with the edge option on, a match outside the view is drawn snapped, below
+        if tab.derived.matches.contains(&node.id) && (tab.edge_search_off || rect.contains(pos)) {
             overlays::draw_search_ring(&painter, pos, radius);
         }
     }
@@ -203,11 +204,12 @@ pub fn show(
             };
             let node = &layout.nodes[i];
             let pos = to_screen(node.pos);
-            if visible.contains(pos) {
+            if rect.contains(pos) {
                 continue;
             }
             let radius = (node_radius(&node.kind) * zoom).max(1.5) * EDGE_RING_SCALE;
-            let inset = radius + 6.0;
+            // PoB lets the ring overhang the edge a little (its `peekaboo_ratio` 1.15)
+            let inset = radius * 0.13;
             let at = egui::pos2(
                 pos.x.clamp(rect.left() + inset, rect.right() - inset),
                 pos.y.clamp(rect.top() + inset, rect.bottom() - inset),

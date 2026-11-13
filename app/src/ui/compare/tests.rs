@@ -319,11 +319,18 @@ impl Harness {
 
 #[test]
 fn compare_tab_hidden_until_a_build_is_open() {
-    // no comparison yet: only the load menu, no views, selectors, entries or Remove
+    // no comparison yet: the load menu, and PoB's "Compare with:" drop-down and Remove
+    // disabled (CompareTab.lua:228-282); no views or selectors
     let mut h = Harness::new(None);
     assert!(h.ui.has_rect("load"));
-    for key in ["entries", "remove", "sub:summary", "compareSpecSelect"] {
+    assert!(h.drew("Compare with:"));
+    for key in ["sub:summary", "compareSpecSelect"] {
         assert!(!h.ui.has_rect(key), "{key} drawn without a comparison");
+    }
+    for key in ["entries", "remove"] {
+        let out = h.click(key);
+        assert!(out.commands.is_empty(), "{key} acted without a comparison");
+        assert!(!h.ui.has_rect("entry:0"), "{key} dropped a list");
     }
     assert!(!h.ui.tree_shown());
     // one loaded: every part shows
@@ -804,7 +811,7 @@ fn compare_none_resets_the_tab() {
     assert!(!h.ui.has_pending(), "a count for a comparison that is gone");
     assert!(h.ui.config_filter.is_empty());
     h.frame(vec![]);
-    assert!(!h.ui.has_rect("sub:summary") && !h.ui.has_rect("entries"));
+    assert!(!h.ui.has_rect("sub:summary") && !h.ui.has_rect("compareSpecSelect"));
     // the load window the user opened stays
     assert!(h.ui.has_dialog());
     // a new comparison starts on the Summary
@@ -1118,4 +1125,77 @@ fn the_config_search_clears_on_its_x() {
     assert_eq!(h.ui.config_filter, "boss");
     h.click("config_search_clear");
     assert!(h.ui.config_filter.is_empty());
+}
+
+/// PoB's sub-tabs run Summary, Tree, Skills, Items, (Calcs,) Config (CompareTab.lua:197)
+#[test]
+fn the_sub_tabs_are_in_pobs_order() {
+    let h = Harness::new(Some(sample()));
+    let x = |key| h.ui.rect(key).center().x;
+    let order = [
+        "sub:summary",
+        "sub:tree",
+        "sub:skills",
+        "sub:items",
+        "sub:config",
+    ];
+    for pair in order.windows(2) {
+        assert!(x(pair[0]) < x(pair[1]), "{} after {}", pair[0], pair[1]);
+    }
+}
+
+/// PoB's config search is `matchOrPattern` on the escaped text: a substring, `|` between
+/// alternatives, `(...)` groups of alternatives, no trimming (CompareTab.lua:2091-2097)
+#[test]
+fn the_config_search_matches_as_pobs() {
+    let row = |label: &str| CompareConfigRow {
+        var: "x".into(),
+        label: label.into(),
+        ours: String::new(),
+        theirs: String::new(),
+        common: false,
+    };
+    let boss = row("Is the enemy a Boss?");
+    let charges = row("Do you use Power Charges?");
+    for (filter, on_boss, on_charges) in [
+        ("", true, true),
+        ("   ", true, true),
+        ("BOSS", true, false),
+        ("boss|power", true, true),
+        ("enemy a (boss|minion)", true, false),
+        ("(use|have) power", false, true),
+        // no trim: the space must be there
+        ("boss ", false, false),
+        (" boss", true, false),
+        // pattern characters are plain text
+        ("boss?", true, false),
+        ("b.ss", false, false),
+        // an unbalanced bracket is a Lua error, which matches nothing
+        ("(boss", false, false),
+        ("boss)", false, false),
+        ("|", false, false),
+    ] {
+        assert_eq!(
+            config::matches(&boss, filter),
+            on_boss,
+            "{filter:?} on boss"
+        );
+        assert_eq!(
+            config::matches(&charges, filter),
+            on_charges,
+            "{filter:?} on charges"
+        );
+    }
+}
+
+/// PoB's box drops control characters and holds 100 bytes (CompareTab.lua:936)
+#[test]
+fn the_config_search_box_takes_pobs_filter_and_limit() {
+    let mut h = Harness::new(Some(sample()));
+    h.click("sub:config");
+    h.click("config_search");
+    h.type_text("a\tb");
+    assert_eq!(h.ui.config_filter, "ab");
+    h.type_text(&"c".repeat(120));
+    assert_eq!(h.ui.config_filter.len(), 100);
 }

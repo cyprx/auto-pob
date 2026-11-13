@@ -318,37 +318,43 @@ impl CompareUi {
     /// PoB's "Compare with:" row: the entries, "Load build…" (PoB's "Import...") and Remove.
     fn header(&mut self, ui: &mut egui::Ui, out: &mut CompareOutput) {
         ui.horizontal_wrapped(|ui| {
-            if let Some(view) = self.view.clone() {
-                ui.label("Compare with:");
-                let active = view.entries.get(view.active).map_or("", String::as_str);
-                let rects = &mut self.rects;
-                let busy = self.busy;
+            // PoB draws the label and the drop-down always, the drop-down disabled while there
+            // is no comparison (CompareTab.lua:228-235)
+            ui.label("Compare with:");
+            let view = self.view.clone();
+            let entries = view.as_ref().map_or(&[][..], |v| &v.entries[..]);
+            let active = view.as_ref().map_or(0, |v| v.active);
+            let label = entries.get(active).map_or("", String::as_str);
+            let rects = &mut self.rects;
+            let busy = self.busy;
+            ui.add_enabled_ui(view.is_some(), |ui| {
                 let combo = crate::widgets::dropdown::Dropdown::from_id_salt("compare_entries")
-                    .selected_text(plain(active))
+                    .selected_text(plain(label))
                     .width(250.0)
                     .show_ui(ui, |ui| {
-                        for (i, entry) in view.entries.iter().enumerate() {
+                        for (i, entry) in entries.iter().enumerate() {
                             let item =
-                                crate::widgets::dropdown::item(ui, i == view.active, plain(entry));
+                                crate::widgets::dropdown::item(ui, i == active, plain(entry));
                             rects.note(&item, || format!("entry:{i}"));
-                            if item.clicked() && i != view.active && !busy {
+                            if item.clicked() && i != active && !busy {
                                 out.commands.push(Command::SelectCompare { index: i });
                             }
                         }
                     });
-                self.rects.note(&combo.response, || "entries".into());
+                rects.note(&combo.response, || "entries".into());
                 // the wheel and the arrows step it (DropDownControl.lua:476-516)
                 if !busy
+                    && view.is_some()
                     && let Some(index) = crate::widgets::scroll_step::combo_step(
                         ui,
                         &combo.response,
-                        view.entries.len(),
-                        view.active,
+                        entries.len(),
+                        active,
                     )
                 {
                     out.commands.push(Command::SelectCompare { index });
                 }
-            }
+            });
             let has_file = self.has_file;
             let rects = &mut self.rects;
             let mut open = None;
@@ -385,13 +391,15 @@ impl CompareUi {
                 self.dialog = Some(dialog);
                 ui.close();
             }
-            if let Some(view) = &self.view {
-                let remove = ui.add_enabled(!self.busy, egui::Button::new("Remove"));
-                self.rects.note(&remove, || "remove".into());
-                if remove.clicked() {
-                    out.commands
-                        .push(Command::RemoveCompare { index: view.active });
-                }
+            // PoB's Remove is there always, enabled with a comparison (CompareTab.lua:274-282)
+            let active = self.view.as_ref().map(|v| v.active);
+            let remove =
+                ui.add_enabled(active.is_some() && !self.busy, egui::Button::new("Remove"));
+            self.rects.note(&remove, || "remove".into());
+            if remove.clicked()
+                && let Some(index) = active
+            {
+                out.commands.push(Command::RemoveCompare { index });
             }
         });
     }
@@ -470,8 +478,9 @@ impl CompareUi {
             for (tab, label, key) in [
                 (SubTab::Summary, "Summary", "sub:summary"),
                 (SubTab::Tree, "Tree", "sub:tree"),
-                (SubTab::Items, "Items", "sub:items"),
+                // PoB's order: Skills before Items (CompareTab.lua:197)
                 (SubTab::Skills, "Skills", "sub:skills"),
+                (SubTab::Items, "Items", "sub:items"),
                 (SubTab::Config, "Config", "sub:config"),
             ] {
                 let r = ui.selectable_value(&mut self.sub, tab, label);

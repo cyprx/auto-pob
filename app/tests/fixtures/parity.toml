@@ -499,11 +499,11 @@ ported = "app/src/ui/compare/mod.rs selector captions drawn with their controls"
 note = "label of an R6 selector"
 
 [controls."compare.compareBuildLabel"]
-ported = "app/src/ui/compare/mod.rs header 'Compare with:'"
+ported = "app/src/ui/compare/mod.rs header 'Compare with:', drawn always as PoB's"
 note = "entries, load and remove (R5)"
 
 [controls."compare.compareBuildSelect"]
-ported = "app/src/ui/compare/mod.rs header entries combo (SelectCompare)"
+ported = "app/src/ui/compare/mod.rs header entries combo (SelectCompare), drawn disabled with no comparison as PoB's"
 note = "entries, load and remove (R5)"
 
 [controls."compare.compareBuildSelect.scrollBar"]
@@ -635,7 +635,7 @@ ported = "app/src/ui/compare/config.rs our config set combo (SelectConfigSet), o
 note = "part of compare.configPrimarySetSelect"
 
 [controls."compare.configSearchEdit"]
-ported = "app/src/ui/compare/config.rs search box over the option labels"
+ported = "app/src/ui/compare/config.rs search box over the option labels: PoB's %c filter and 100-byte limit, matchOrPattern (| alternatives, (..) groups, no trim)"
 note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; R25 already has Ctrl+F on Compare Config, so the box is implied"
 
 [controls."compare.configSearchEdit.buttonClear"]
@@ -845,7 +845,7 @@ ruled_out = "R5"
 note = "Re-import Current: the Import/Export tab has the same buttons"
 
 [controls."compare.removeBtn"]
-ported = "app/src/ui/compare/mod.rs header Remove (RemoveCompare)"
+ported = "app/src/ui/compare/mod.rs header Remove (RemoveCompare), drawn always, enabled with a comparison as PoB's"
 note = "entries, load and remove (R5)"
 
 [controls."compare.rightFooterAnchor"]
@@ -900,11 +900,11 @@ ported = "app/src/ui/compare/mod.rs sub_tabs Config (app/src/ui/compare/config.r
 note = "Compare sub-tabs"
 
 [controls."compare.subTabItems"]
-ported = "app/src/ui/compare/mod.rs sub_tabs Items (app/src/ui/compare/items.rs)"
+ported = "app/src/ui/compare/mod.rs sub_tabs Items (app/src/ui/compare/items.rs), after Skills as PoB's order (CompareTab.lua:197)"
 note = "Compare sub-tabs"
 
 [controls."compare.subTabSkills"]
-ported = "app/src/ui/compare/mod.rs sub_tabs Skills (app/src/ui/compare/skills.rs)"
+ported = "app/src/ui/compare/mod.rs sub_tabs Skills (app/src/ui/compare/skills.rs), before Items as PoB's order (CompareTab.lua:197)"
 note = "Compare sub-tabs"
 
 [controls."compare.subTabSummary"]

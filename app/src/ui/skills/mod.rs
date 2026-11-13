@@ -317,7 +317,7 @@ impl SkillsUi {
     ) -> egui::Response {
         let opts = EditBoxOptions {
             width,
-            char_limit: limit,
+            byte_limit: limit,
             ..EditBoxOptions::default()
         };
         let (response, sent) = self.boxes.show(ui, key.to_owned(), current, busy, &opts);

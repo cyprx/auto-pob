@@ -15,7 +15,7 @@ const QUALITY_DIGITS: usize = 2;
 fn quality_options() -> EditBoxOptions {
     EditBoxOptions {
         width: 40.0,
-        char_limit: Some(QUALITY_DIGITS),
+        byte_limit: Some(QUALITY_DIGITS),
         filter: Some(|c| c.is_ascii_digit()),
         hint: None,
     }

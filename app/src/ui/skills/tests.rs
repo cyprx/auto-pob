@@ -937,3 +937,23 @@ fn a_group_label_takes_fifty_characters() {
         )]
     );
 }
+
+/// The label box takes 50 bytes, not 50 characters (SkillsTab.lua:161, EditControl.lua:148)
+#[test]
+fn the_group_label_limit_counts_bytes() {
+    let mut h = Harness::new(sample());
+    h.click("g0_label");
+    h.frame(vec![Event::Key {
+        key: Key::A,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::COMMAND,
+    }]);
+    h.frame(vec![Event::Text("\u{65e5}".repeat(20))]);
+    h.frame(vec![]);
+    assert_eq!(
+        h.ui.boxes.text(&"g0_label".to_owned()).unwrap(),
+        "\u{65e5}".repeat(16)
+    );
+}

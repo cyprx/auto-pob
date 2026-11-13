@@ -86,7 +86,7 @@ fn same_numbers(a: &CalcsView, b: &CalcsView) -> bool {
 
 const COUNT_OPTIONS: EditBoxOptions = EditBoxOptions {
     width: 50.0,
-    char_limit: None,
+    byte_limit: None,
     filter: None,
     hint: None,
 };

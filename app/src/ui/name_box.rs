@@ -64,6 +64,17 @@ pub fn pasted(ui: &egui::Ui) -> bool {
 /// is one insertion: `Insert` drops the rejected characters and refuses nothing else, `ReplaceSel`
 /// refuses the whole text if it has one, and either refuses the whole text past the limit.
 pub fn spliced(before: &str, raw: &str, filter: Filter, limit: usize, pasted: bool) -> String {
+    spliced_by(before, raw, |c| filter.keeps(c), limit, pasted)
+}
+
+/// `spliced` with any filter: `keeps` says which characters the box takes
+pub fn spliced_by(
+    before: &str,
+    raw: &str,
+    keeps: impl Fn(char) -> bool,
+    limit: usize,
+    pasted: bool,
+) -> String {
     // the edit replaced `before[head..before.len() - tail]` with `raw[head..raw.len() - tail]`
     let head: usize = before
         .chars()
@@ -96,14 +107,14 @@ pub fn spliced(before: &str, raw: &str, filter: Filter, limit: usize, pasted: bo
             })
             .collect();
         let inserted = swapped.as_str();
-        let kept: String = inserted.chars().filter(|c| filter.keeps(*c)).collect();
+        let kept: String = inserted.chars().filter(|c| keeps(*c)).collect();
         if kept.is_empty() || (replacing && kept != inserted) {
             return before.to_owned();
         }
         out = kept;
     } else {
         for c in inserted.chars() {
-            if !filter.keeps(c) {
+            if !keeps(c) {
                 continue;
             }
             let held = if replacing { 0 } else { out.len() };

@@ -778,7 +778,7 @@ impl PopupWindow {
                 // the box's own filter and limit, as PoB's EditControl holds them
                 let opts = EditBoxOptions {
                     width: width.max(60.0),
-                    char_limit: c.limit,
+                    byte_limit: c.limit,
                     filter: c
                         .ascii_only
                         .then_some(|ch: char| crate::ui::name_box::Filter::Plain.keeps(ch)),

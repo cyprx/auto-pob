@@ -213,7 +213,7 @@ fn level(
     ui.label("Level");
     let opts = EditBoxOptions {
         width: 36.0,
-        char_limit: Some(3),
+        byte_limit: Some(3),
         filter: Some(|c| c.is_ascii_digit()),
         hint: None,
     };
@@ -230,6 +230,7 @@ fn level(
         && response.has_focus()
         && response.changed()
         && (state.level.text != before || selected)
+        && !state.level.refused
     {
         state.typed_in_auto = true;
     }
@@ -851,6 +852,20 @@ mod tests {
         h.frame(vec![Event::Text("5".into())]);
         h.frame(vec![]);
         assert!(!h.state.typed_in_auto, "a refused key made it Manual");
+        assert!(h.click_away().is_empty());
+        // over a selection, ReplaceSel refuses a non-digit whole: the text stays, and so Auto
+        let mut h = Harness::new(BuildView {
+            level_auto: true,
+            ..view()
+        });
+        h.click("level");
+        h.retype("x");
+        h.frame(vec![]);
+        assert!(
+            !h.state.typed_in_auto,
+            "a refused key over a selection made it Manual"
+        );
+        assert_eq!(h.state.level.text, "90");
         assert!(h.click_away().is_empty());
     }
 

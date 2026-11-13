@@ -1176,3 +1176,15 @@ fn a_popup_box_with_pobs_default_filter_keeps_ascii_and_its_limit() {
     h.frame(vec![]);
     assert_eq!(h.popup.box_text("title"), Some(" abcd"));
 }
+
+/// A popup box's limit counts bytes (EditControl.lua:148): a 3-byte character takes three
+#[test]
+fn a_popup_box_limit_counts_bytes() {
+    let mut edit = control("title", PopupControlKind::Edit, [0.0, 0.0], [200.0, 20.0]);
+    edit.limit = Some(7);
+    let mut h = Harness::new(popup(vec![edit]));
+    h.click("edit_title");
+    h.frame(vec![Event::Text("\u{65e5}\u{672c}\u{8a9e}ab".into())]);
+    h.frame(vec![]);
+    assert_eq!(h.popup.box_text("title"), Some("\u{65e5}\u{672c}a"));
+}

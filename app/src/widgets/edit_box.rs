@@ -15,8 +15,11 @@ use std::hash::{Hash, Hasher};
 /// How a box looks and what it accepts.
 pub struct EditBoxOptions {
     pub width: f32,
-    pub char_limit: Option<usize>,
-    /// Characters the box accepts, for typed and pasted text
+    /// The most bytes the box holds, as PoB's `EditControl` counts its limit (EditControl.lua:148)
+    pub byte_limit: Option<usize>,
+    /// Characters the box accepts, for typed and pasted text. With a filter or a limit the box
+    /// takes an edit as PoB's does (`name_box::spliced_by`): a paste turns non-ASCII bytes into
+    /// "?" and is refused whole past the limit, typed keys past it are refused one by one.
     pub filter: Option<fn(char) -> bool>,
     pub hint: Option<&'static str>,
 }
@@ -25,7 +28,7 @@ impl Default for EditBoxOptions {
     fn default() -> Self {
         Self {
             width: 50.0,
-            char_limit: None,
+            byte_limit: None,
             filter: None,
             hint: None,
         }
@@ -41,6 +44,9 @@ pub struct EditBox {
     pending: bool,
     /// The box has been drawn once, so `text` was seeded from the view
     seeded: bool,
+    /// The last frame's edit was refused whole by the filter or the limit: PoB made no edit
+    /// and called no change function
+    pub(crate) refused: bool,
 }
 
 impl EditBox {
@@ -62,25 +68,27 @@ impl EditBox {
             self.sent.push_str(current);
         }
         self.seeded = true;
-        if focused && let Some(filter) = opts.filter {
-            ui.input_mut(|i| {
-                for event in &mut i.events {
-                    if let egui::Event::Text(t) | egui::Event::Paste(t) = event {
-                        t.retain(filter);
-                    }
-                }
-            });
-        }
+        let guarded = opts.filter.is_some() || opts.byte_limit.is_some();
+        let before = guarded.then(|| self.text.clone());
+        let pasted = guarded && focused && crate::ui::name_box::pasted(ui);
         let mut edit = egui::TextEdit::singleline(&mut self.text)
             .id(id)
             .desired_width(opts.width);
-        if let Some(limit) = opts.char_limit {
-            edit = edit.char_limit(limit);
-        }
         if let Some(hint) = opts.hint {
             edit = edit.hint_text(hint);
         }
         let response = ui.add(edit);
+        self.refused = false;
+        if let Some(before) = before
+            && response.changed()
+        {
+            let keeps = opts.filter.unwrap_or(|_| true);
+            let limit = opts.byte_limit.unwrap_or(usize::MAX);
+            let raw = std::mem::take(&mut self.text);
+            self.text = crate::ui::name_box::spliced_by(&before, &raw, keeps, limit, pasted);
+            // typing over the text with itself is an edit; one the box drops is none
+            self.refused = raw != before && self.text == before;
+        }
         let mut send = None;
         if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.text.clone_from(&self.sent);
@@ -417,13 +425,34 @@ mod tests {
     fn filter_and_limit_apply_to_typed_and_pasted_text() {
         let mut h = Harness::new("");
         h.opts.filter = Some(|c| c.is_ascii_digit());
-        h.opts.char_limit = Some(2);
+        h.opts.byte_limit = Some(2);
         h.focus();
-        h.frame(vec![Event::Paste("a1b2c3".into())]);
+        // PoB's Insert drops the rejected characters, then refuses a text past the limit whole
+        h.frame(vec![Event::Paste("a1b2".into())]);
         assert_eq!(h.a.text, "12");
         h.a.text.clear();
+        h.frame(vec![Event::Paste("a1b2c3".into())]);
+        assert_eq!(h.a.text, "");
         h.type_text("x7y");
         assert_eq!(h.a.text, "7");
+        h.type_text("89");
+        assert_eq!(h.a.text, "78");
+    }
+
+    /// PoB's limit counts bytes (EditControl.lua:148), so a 3-byte character takes three
+    #[test]
+    fn the_limit_counts_bytes_not_characters() {
+        let mut h = Harness::new("");
+        h.opts.byte_limit = Some(4);
+        h.focus();
+        h.type_text("\u{65e5}\u{65e5}x");
+        assert_eq!(h.a.text, "\u{65e5}x");
+        // a paste turns each non-ASCII byte into "?" (EditControl.lua:533)
+        let mut h = Harness::new("");
+        h.opts.byte_limit = Some(50);
+        h.focus();
+        h.frame(vec![Event::Paste("a\u{e9}".into())]);
+        assert_eq!(h.a.text, "a??");
     }
 
     #[test]

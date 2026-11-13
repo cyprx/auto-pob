@@ -1669,8 +1669,8 @@ impl PobBackend {
                 self.call::<_, ()>("skills_add_group", ())?;
                 Ok(skills_changed())
             }
-            Command::DeleteSocketGroup { group } => {
-                self.call::<_, ()>("skills_delete_group", group + 1)?;
+            Command::DeleteSocketGroup { group, name } => {
+                self.call::<_, ()>("skills_delete_group", (group + 1, name))?;
                 Ok(skills_changed())
             }
             Command::DeleteAllSocketGroups => {

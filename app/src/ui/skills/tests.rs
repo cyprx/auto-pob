@@ -21,6 +21,7 @@ fn gem(name: &str) -> GemView {
 fn group(label: &str, gems: Vec<GemView>) -> SocketGroupView {
     SocketGroupView {
         label: label.into(),
+        name: label.into(),
         display_label: label.into(),
         enabled: true,
         slot_enabled: true,
@@ -221,7 +222,10 @@ fn delete_group_with_gems_asks_first() {
         "a confirm opened"
     );
     let o = h.click("confirm_delete");
-    assert_eq!(debug(&o.commands), ["DeleteSocketGroup { group: 0 }"]);
+    assert_eq!(
+        debug(&o.commands),
+        ["DeleteSocketGroup { group: 0, name: Some(\"Boneshatter\") }"]
+    );
 }
 
 #[test]
@@ -229,7 +233,10 @@ fn delete_group_without_gems_is_immediate() {
     let mut h = Harness::new(sample());
     h.click("row_1");
     let o = h.press(Key::Delete);
-    assert_eq!(debug(&o.commands), ["DeleteSocketGroup { group: 1 }"]);
+    assert_eq!(
+        debug(&o.commands),
+        ["DeleteSocketGroup { group: 1, name: Some(\"Empty\") }"]
+    );
 }
 
 #[test]
@@ -238,13 +245,49 @@ fn the_delete_button_acts_on_the_selected_group() {
     let mut h = Harness::new(sample());
     h.click("row_1");
     let o = h.click("delete");
-    assert_eq!(debug(&o.commands), ["DeleteSocketGroup { group: 1 }"]);
+    assert_eq!(
+        debug(&o.commands),
+        ["DeleteSocketGroup { group: 1, name: Some(\"Empty\") }"]
+    );
     let mut h = Harness::new(sample());
     h.click("row_0");
     let o = h.click("delete");
     assert!(o.commands.is_empty(), "a group with gems asks first");
     h.frame(vec![]);
     assert!(h.ui.rects.map.contains_key("confirm_delete"));
+}
+
+#[test]
+fn a_delete_leaves_nothing_selected() {
+    // SkillListControl.lua:176, 187: PoB's selValue = nil after a delete, so Delete is off
+    // until a group is selected again; a double-click on an empty group's Delete deletes it
+    // only, never the group that takes its place
+    let mut v = sample();
+    v.groups.push(group("Third", vec![]));
+    let mut h = Harness::new(v);
+    h.click("row_1");
+    let first = h.click("delete");
+    let second = h.click("delete");
+    assert_eq!(
+        debug(&first.commands),
+        ["DeleteSocketGroup { group: 1, name: Some(\"Empty\") }"]
+    );
+    assert!(second.commands.is_empty(), "{:?}", second.commands);
+    // nor the Delete key, before or after the snapshot
+    assert!(h.press(Key::Delete).commands.is_empty());
+    let mut v = sample();
+    v.groups.remove(1);
+    v.groups.push(group("Third", vec![]));
+    h.ui.on_snapshot(&Snapshot::Skills(Arc::new(v)));
+    h.frame(vec![]);
+    assert!(h.click("delete").commands.is_empty());
+    assert!(h.press(Key::Delete).commands.is_empty());
+    // selecting a group again turns it back on
+    h.click("row_1");
+    assert_eq!(
+        debug(&h.click("delete").commands),
+        ["DeleteSocketGroup { group: 1, name: Some(\"Third\") }"]
+    );
 }
 
 #[test]
@@ -826,7 +869,10 @@ fn group_list_keys_move_the_selection_and_backspace_deletes() {
     h.frame(vec![]);
     // the second group has no gems: it goes at once
     let o = h.press(Key::Backspace);
-    assert_eq!(debug(&o.commands), ["DeleteSocketGroup { group: 1 }"]);
+    assert_eq!(
+        debug(&o.commands),
+        ["DeleteSocketGroup { group: 1, name: Some(\"Empty\") }"]
+    );
 }
 
 #[test]

@@ -1929,7 +1929,10 @@ fn no_silent_writes_longtail() {
             to: 0,
         },
         Command::DeleteGem { group: 0, slot: 0 },
-        Command::DeleteSocketGroup { group: 0 },
+        Command::DeleteSocketGroup {
+            group: 0,
+            name: None,
+        },
         Command::SetItemListFilter { index: 0 },
         Command::EquipItem {
             slot: slot.clone(),

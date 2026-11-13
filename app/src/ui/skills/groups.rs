@@ -63,7 +63,8 @@ impl SkillsUi {
             }
             // PoB's Delete acts on the selected group, not one of an item (SkillListControl.lua:
             // 33-38)
-            let selected = view.groups.get(self.selected);
+            // nothing is selected after a delete, as PoB's `selValue = nil` (:176, 187)
+            let selected = view.groups.get(self.selected).filter(|_| !self.unselected);
             let delete = ui.add_enabled(
                 selected.is_some_and(|g| g.source.is_none()),
                 egui::Button::new("Delete"),
@@ -126,6 +127,7 @@ impl SkillsUi {
                         // the click selects the row first (ListControl.lua:338-370)
                         if row.clicked() {
                             self.selected = i;
+                            self.unselected = false;
                             row.request_focus();
                             if ctrl {
                                 out.commands.push(Command::SetGroupEnabled {
@@ -216,11 +218,12 @@ impl SkillsUi {
         if copy && g.source.is_none() {
             self.ask_copy(i, out);
         }
-        if ui.input(crate::ui::shortcuts::list_delete) {
+        if ui.input(crate::ui::shortcuts::list_delete) && !self.unselected {
             self.ask_delete(i, g, out);
         }
         if let Some(to) = ui.input_mut(|inp| crate::ui::shortcuts::list_key(inp, len, Some(i))) {
             self.selected = to;
+            self.unselected = false;
             self.focus_group = Some(to);
         }
     }
@@ -236,17 +239,25 @@ impl SkillsUi {
         if g.source.is_some() {
             self.item_group_message = true;
         } else if g.gems.is_empty() {
-            self.delete_group(group, out);
+            self.delete_group(group, g.name.clone(), out);
         } else {
             self.confirm_delete = Some(group);
+            self.confirm_name = g.name.clone();
         }
     }
 
-    fn delete_group(&mut self, group: usize, out: &mut SkillsOutput) {
+    /// PoB clears the list's selection after a delete (SkillListControl.lua:176, 187): Delete
+    /// and the Delete key do nothing until a group is selected again. `name` is the group's
+    /// `displayLabel` as shown, which the engine checks.
+    fn delete_group(&mut self, group: usize, name: String, out: &mut SkillsOutput) {
         if group < self.selected {
             self.selected -= 1;
         }
-        out.commands.push(Command::DeleteSocketGroup { group });
+        self.unselected = true;
+        out.commands.push(Command::DeleteSocketGroup {
+            group,
+            name: Some(name),
+        });
     }
 
     fn row_menu(
@@ -258,6 +269,7 @@ impl SkillsUi {
     ) {
         row.context_menu(|ui| {
             self.selected = i;
+            self.unselected = false;
             let main = ui.button("Set as main skill");
             self.rects.note(&main, || "menu_main".into());
             if main.clicked() {
@@ -353,7 +365,8 @@ impl SkillsUi {
                 });
             crate::widgets::escape::note(ctx, window);
             if choice == Some(true) {
-                self.delete_group(group, out);
+                let name = std::mem::take(&mut self.confirm_name);
+                self.delete_group(group, name, out);
             }
             if choice.is_some() {
                 self.confirm_delete = None;

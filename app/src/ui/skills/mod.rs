@@ -44,6 +44,10 @@ pub struct SkillsUi {
     confirm_delete: Option<usize>,
     /// Delete was pressed on an item's group: PoB's message says it can't be
     item_group_message: bool,
+    /// The group whose deletion is being asked about, as shown (`displayLabel`)
+    confirm_name: String,
+    /// A delete cleared the list's selection (PoB's `selValue = nil`)
+    unselected: bool,
     confirm_delete_all: bool,
     /// The group whose copy text we asked for
     copy_asked: Option<usize>,
@@ -167,6 +171,7 @@ impl SkillsUi {
                 }
                 if std::mem::take(&mut self.select_new) && n > old {
                     self.selected = n - 1;
+                    self.unselected = false;
                 }
                 self.selected = self.selected.min(n.saturating_sub(1));
                 self.view = Some(view.clone());

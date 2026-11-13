@@ -394,8 +394,12 @@ pub enum Command {
 
     /// Socket groups are 0-based, in the order of `SkillsView.groups`.
     AddSocketGroup,
+    /// `name` is PoB's `displayLabel` of the group the UI showed at `group`: the engine refuses
+    /// the delete when that place now holds another group (a command from a stale view), so a
+    /// second press never deletes the next group. `None` skips the check.
     DeleteSocketGroup {
         group: usize,
+        name: Option<String>,
     },
     DeleteAllSocketGroups,
     /// `to` is the group's final position.

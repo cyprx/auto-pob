@@ -181,8 +181,12 @@ function glue.skills_add_group()
 end
 
 -- OnSelDelete and its confirmation (SkillListControl.lua:150-186)
-function glue.skills_delete_group(index)
+function glue.skills_delete_group(index, expected)
 	local group = group_at(index)
+	-- the UI's view was stale: that place holds another group now
+	if expected ~= nil and (group.displayLabel or "") ~= expected then
+		error("the socket group list changed; nothing was deleted", 0)
+	end
 	if group.source then
 		error("this socket group is created by an equipped item and can't be deleted", 0)
 	end

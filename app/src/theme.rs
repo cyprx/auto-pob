@@ -197,12 +197,13 @@ pub fn row_frame<R>(
 // joined to the content below
 /// A main tab's height
 pub const TAB_HEIGHT: f32 = 30.0;
-/// Text to tab edge, each side
-const TAB_PADDING: f32 = 18.0;
+/// Text to tab edge, each side: the roomiest that lets the strip fit the panel
+const TAB_PADDINGS: [f32; 3] = [18.0, 12.0, 6.0];
 /// Between two tabs
 const TAB_GAP: f32 = 4.0;
 /// The band above the tabs
 const TAB_BAND_TOP: f32 = 5.0;
+/// The tabs' text size; when even the smallest padding is too wide, the body text's size
 const TAB_FONT_SIZE: f32 = 17.0;
 /// The selected tab's gold line
 pub const TAB_ACCENT: f32 = 2.0;
@@ -227,15 +228,47 @@ fn tab_colours(selected: bool, response: &egui::Response) -> (Color32, Color32, 
     }
 }
 
-/// One main tab
-fn main_tab(ui: &mut egui::Ui, selected: bool, text: &str) -> egui::Response {
-    // the heading font (Fontin small caps once `apply` ran), at the tab's size
+/// The text size and padding that let `labels` fit `width` on one row, roomiest first; the
+/// smallest of both when nothing fits (the strip then wraps)
+fn tab_metrics(ui: &egui::Ui, labels: &[&str], width: f32) -> (FontId, f32) {
+    // the heading font (Fontin small caps once `apply` ran)
     let family = TextStyle::Heading.resolve(ui.style()).family;
-    let font = FontId::new(TAB_FONT_SIZE, family);
+    let body = TextStyle::Body.resolve(ui.style()).size.min(TAB_FONT_SIZE);
+    let gaps = TAB_GAP * labels.len().saturating_sub(1) as f32;
+    let mut last = (FontId::new(body, family.clone()), TAB_PADDINGS[2]);
+    for size in [TAB_FONT_SIZE, body] {
+        let font = FontId::new(size, family.clone());
+        let text: f32 = labels
+            .iter()
+            .map(|l| {
+                ui.painter()
+                    .layout_no_wrap((*l).to_owned(), font.clone(), Color32::PLACEHOLDER)
+                    .size()
+                    .x
+            })
+            .sum();
+        for pad in TAB_PADDINGS {
+            // a point to spare, so rounding doesn't wrap a strip that fits
+            if text + 2.0 * pad * labels.len() as f32 + gaps <= width - 1.0 {
+                return (font, pad);
+            }
+        }
+        last = (font, TAB_PADDINGS[2]);
+    }
+    last
+}
+
+/// One main tab
+fn main_tab(
+    ui: &mut egui::Ui,
+    selected: bool,
+    text: &str,
+    (font, pad): &(FontId, f32),
+) -> egui::Response {
     let galley = ui
         .painter()
-        .layout_no_wrap(text.to_owned(), font, Color32::PLACEHOLDER);
-    let size = Vec2::new(galley.size().x + 2.0 * TAB_PADDING, TAB_HEIGHT);
+        .layout_no_wrap(text.to_owned(), font.clone(), Color32::PLACEHOLDER);
+    let size = Vec2::new(galley.size().x + 2.0 * pad, TAB_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::Role::Tab, ui.is_enabled(), selected, text)
@@ -269,23 +302,29 @@ fn main_tab(ui: &mut egui::Ui, selected: bool, text: &str) -> egui::Response {
 }
 
 /// The main tab strip: `labels` as tabs on a dark band spanning the panel, `selected` drawn
-/// joined to the content. The tabs' responses, in order.
+/// joined to the content. The tabs shrink their padding, then their text, to fit the panel;
+/// past that they wrap, the band and its line under the last row. The tabs' responses, in
+/// order.
 pub fn main_tabs(ui: &mut egui::Ui, labels: &[&str], selected: usize) -> Vec<egui::Response> {
     let clip = ui.clip_rect();
     let top = ui.cursor().top();
+    let metrics = tab_metrics(ui, labels, ui.available_width());
     let band = ui.painter().add(egui::Shape::Noop);
     ui.add_space(TAB_BAND_TOP);
     let tabs = ui
-        .horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = TAB_GAP;
+        .horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::splat(TAB_GAP);
             labels
                 .iter()
                 .enumerate()
-                .map(|(i, label)| main_tab(ui, i == selected, label))
+                .map(|(i, label)| main_tab(ui, i == selected, label, &metrics))
                 .collect::<Vec<_>>()
         })
         .inner;
-    let bottom = tabs.first().map_or(top + TAB_BAND_TOP, |t| t.rect.bottom());
+    let bottom = tabs
+        .iter()
+        .map(|t| t.rect.bottom())
+        .fold(top + TAB_BAND_TOP, f32::max);
     let band_rect = Rect::from_x_y_ranges(
         clip.x_range(),
         (top - PANEL_MARGIN).max(clip.top())..=bottom,
@@ -294,10 +333,10 @@ pub fn main_tabs(ui: &mut egui::Ui, labels: &[&str], selected: usize) -> Vec<egu
         band,
         egui::epaint::RectShape::filled(band_rect, CornerRadius::ZERO, TAB_BAND),
     );
-    // the line under the band, broken by the selected tab
+    // the line under the band, broken by the selected tab when it is on the last row
     let line = Stroke::new(1.0, BRONZE);
     let y = bottom - 0.5;
-    match tabs.get(selected) {
+    match tabs.get(selected).filter(|t| t.rect.bottom() == bottom) {
         Some(tab) => {
             ui.painter()
                 .hline(band_rect.left()..=tab.rect.left(), y, line);

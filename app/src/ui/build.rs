@@ -952,9 +952,19 @@ mod tests {
     const GOLD: egui::Color32 = egui::Color32::from_rgb(200, 160, 80);
     const BAND: egui::Color32 = egui::Color32::from_rgb(11, 9, 7);
 
-    /// Draws the main tab strip frame by frame; the last frame's tab rectangles and the
-    /// rectangles it filled with gold or the band's colour
+    /// [`strip_at`] on a 1200 pt wide screen
     fn strip(
+        tab: &mut BuildTab,
+        frames: Vec<Vec<Event>>,
+    ) -> (Vec<Rect>, Vec<(Rect, egui::Color32)>) {
+        strip_at(1200.0, tab, frames)
+    }
+
+    /// Draws the main tab strip, with the app's fonts, in a central panel `width` wide, frame
+    /// by frame; the last frame's tab rectangles and the rectangles it filled with gold or the
+    /// band's colour
+    fn strip_at(
+        width: f32,
         tab: &mut BuildTab,
         frames: Vec<Vec<Event>>,
     ) -> (Vec<Rect>, Vec<(Rect, egui::Color32)>) {
@@ -968,14 +978,14 @@ mod tests {
             }
         }
         let ctx = egui::Context::default();
-        crate::theme::install(&ctx);
+        crate::theme::apply(&ctx);
         let mut out = (Vec::new(), Vec::new());
         for events in frames {
             let input = RawInput {
                 events,
                 screen_rect: Some(Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(1200.0, 400.0),
+                    egui::vec2(width, 400.0),
                 )),
                 ..Default::default()
             };
@@ -1046,5 +1056,43 @@ mod tests {
         assert_eq!(tab, BuildTab::Calcs);
         let accent = gold.iter().find(|g| g.1 == GOLD).unwrap().0;
         assert_eq!(accent.x_range(), tabs[3].x_range());
+    }
+
+    /// In a narrow panel the strip shrinks, then wraps: every tab stays inside the panel and
+    /// under the band, and the last one still takes a click
+    #[test]
+    fn a_narrow_strip_keeps_every_tab_inside_the_panel() {
+        for width in [600.0, 450.0] {
+            let mut tab = BuildTab::Tree;
+            let (tabs, painted) = strip_at(width, &mut tab, vec![vec![], vec![]]);
+            let panel = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 400.0));
+            assert_eq!(tabs.len(), 8);
+            for t in &tabs {
+                assert!(panel.contains_rect(*t), "{width}: {t:?}");
+                assert_eq!(t.height(), crate::theme::TAB_HEIGHT);
+            }
+            let bottom = tabs.iter().map(|t| t.bottom()).fold(0.0, f32::max);
+            let band = painted.iter().find(|p| p.1 == BAND).unwrap().0;
+            assert_eq!(band.bottom(), bottom, "{width}");
+            assert!(tabs.iter().all(|t| band.contains_rect(*t)), "{width}");
+            let at = tabs[7].center();
+            let press = |pressed| Event::PointerButton {
+                pos: at,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            strip_at(
+                width,
+                &mut tab,
+                vec![
+                    vec![Event::PointerMoved(at)],
+                    vec![press(true)],
+                    vec![press(false)],
+                    vec![],
+                ],
+            );
+            assert_eq!(tab, BuildTab::Import, "{width}");
+        }
     }
 }

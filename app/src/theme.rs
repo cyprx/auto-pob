@@ -3,8 +3,8 @@
 //! already ships).
 
 use eframe::egui::{
-    self, Color32, CornerRadius, CursorIcon, FontData, FontDefinitions, FontFamily, FontId,
-    RichText, Stroke, TextStyle, Theme, ThemePreference, Vec2,
+    self, Color32, CornerRadius, CursorIcon, FontData, FontDefinitions, FontFamily, FontId, Rect,
+    RichText, Sense, Stroke, TextStyle, Theme, ThemePreference, Vec2,
 };
 use egui::theme::{DefaultStyle, StyleProvider};
 use egui::widget_style::{StyleArgs, TextEditStyle, WidgetState};
@@ -190,6 +190,126 @@ pub fn row_frame<R>(
         Color32::TRANSPARENT
     };
     egui::InnerResponse::new(inner, prepared.end(ui))
+}
+
+// The main tab strip (a user-requested look, not PoB's): tabs on a dark band with a line under
+// it; the selected tab takes the panel's fill and a gold line along its top, so it reads as
+// joined to the content below
+/// A main tab's height
+pub const TAB_HEIGHT: f32 = 30.0;
+/// Text to tab edge, each side
+const TAB_PADDING: f32 = 18.0;
+/// Between two tabs
+const TAB_GAP: f32 = 4.0;
+/// The band above the tabs
+const TAB_BAND_TOP: f32 = 5.0;
+const TAB_FONT_SIZE: f32 = 17.0;
+/// The selected tab's gold line
+pub const TAB_ACCENT: f32 = 2.0;
+/// The band, darker than the panels
+const TAB_BAND: Color32 = Color32::from_rgb(11, 9, 7);
+/// An unselected tab: muted
+const TAB: Color32 = Color32::from_rgb(34, 29, 23);
+const TAB_TEXT: Color32 = Color32::from_rgb(165, 155, 138);
+/// The central panel's margin (`Frame::central_panel`), which the band spans
+const PANEL_MARGIN: f32 = 8.0;
+
+/// The colours of a main tab: (fill, border, text)
+fn tab_colours(selected: bool, response: &egui::Response) -> (Color32, Color32, Color32) {
+    if selected {
+        (PANEL, Color32::TRANSPARENT, TEXT_HOVERED)
+    } else if response.is_pointer_button_down_on() {
+        (WIDGET_ACTIVE, BORDER_ACTIVE, TEXT_ACTIVE)
+    } else if response.hovered() {
+        (WIDGET_HOVERED, BORDER_HOVERED, TEXT_HOVERED)
+    } else {
+        (TAB, Color32::TRANSPARENT, TAB_TEXT)
+    }
+}
+
+/// One main tab
+fn main_tab(ui: &mut egui::Ui, selected: bool, text: &str) -> egui::Response {
+    // the heading font (Fontin small caps once `apply` ran), at the tab's size
+    let family = TextStyle::Heading.resolve(ui.style()).family;
+    let font = FontId::new(TAB_FONT_SIZE, family);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_owned(), font, Color32::PLACEHOLDER);
+    let size = Vec2::new(galley.size().x + 2.0 * TAB_PADDING, TAB_HEIGHT);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::Role::Tab, ui.is_enabled(), selected, text)
+    });
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    if ui.is_rect_visible(rect) {
+        let (fill, border, text_colour) = tab_colours(selected, &response);
+        let painter = ui.painter();
+        painter.rect_filled(rect, CornerRadius::ZERO, fill);
+        if border != Color32::TRANSPARENT {
+            painter.rect_stroke(
+                rect,
+                CornerRadius::ZERO,
+                Stroke::new(1.0, border),
+                egui::StrokeKind::Inside,
+            );
+        }
+        if selected {
+            let sides = Stroke::new(1.0, BRONZE);
+            painter.vline(rect.left() + 0.5, rect.y_range(), sides);
+            painter.vline(rect.right() - 0.5, rect.y_range(), sides);
+            let accent = Rect::from_min_size(rect.min, Vec2::new(rect.width(), TAB_ACCENT));
+            painter.rect_filled(accent, CornerRadius::ZERO, GOLD);
+        }
+        let at = rect.center() - galley.size() / 2.0;
+        painter.galley(at, galley, text_colour);
+    }
+    response
+}
+
+/// The main tab strip: `labels` as tabs on a dark band spanning the panel, `selected` drawn
+/// joined to the content. The tabs' responses, in order.
+pub fn main_tabs(ui: &mut egui::Ui, labels: &[&str], selected: usize) -> Vec<egui::Response> {
+    let clip = ui.clip_rect();
+    let top = ui.cursor().top();
+    let band = ui.painter().add(egui::Shape::Noop);
+    ui.add_space(TAB_BAND_TOP);
+    let tabs = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = TAB_GAP;
+            labels
+                .iter()
+                .enumerate()
+                .map(|(i, label)| main_tab(ui, i == selected, label))
+                .collect::<Vec<_>>()
+        })
+        .inner;
+    let bottom = tabs.first().map_or(top + TAB_BAND_TOP, |t| t.rect.bottom());
+    let band_rect = Rect::from_x_y_ranges(
+        clip.x_range(),
+        (top - PANEL_MARGIN).max(clip.top())..=bottom,
+    );
+    ui.painter().set(
+        band,
+        egui::epaint::RectShape::filled(band_rect, CornerRadius::ZERO, TAB_BAND),
+    );
+    // the line under the band, broken by the selected tab
+    let line = Stroke::new(1.0, BRONZE);
+    let y = bottom - 0.5;
+    match tabs.get(selected) {
+        Some(tab) => {
+            ui.painter()
+                .hline(band_rect.left()..=tab.rect.left(), y, line);
+            ui.painter()
+                .hline(tab.rect.right()..=band_rect.right(), y, line);
+        }
+        None => {
+            ui.painter().hline(band_rect.x_range(), y, line);
+        }
+    }
+    ui.add_space(4.0);
+    tabs
 }
 
 /// A gold Fontin heading.

@@ -392,6 +392,7 @@ fn load_menu_sends_each_source() {
                     path: format!("/b/{folder}{n}.xml").into(),
                 })
                 .collect(),
+            error: None,
         }))
     };
     // a saved build: the engine lists the folder's builds, the build list its folders
@@ -476,6 +477,76 @@ fn load_menu_sends_each_source() {
     assert_eq!(
         debug(&out.commands),
         ["ImportFromUrl { url: \"https://pobb.in/abc\", mode: Comparison }"]
+    );
+}
+
+/// A folder the engine can't list (a Builds folder that went) is said in the picker, which
+/// stops waiting; going elsewhere waits again for that folder's answer
+#[test]
+fn a_failed_browse_says_so_instead_of_spinning() {
+    let mut h = Harness::new(None);
+    h.click("load");
+    let out = h.click("load:saved");
+    assert_eq!(debug(&out.queries), ["BrowseBuilds { folder: \"\" }"]);
+    h.frame(vec![]);
+    assert!(!h.ui.has_rect("browse_error"));
+    let failed = |folder: &str| {
+        Snapshot::BuildBrowse(Arc::new(BuildBrowseView {
+            folder: folder.into(),
+            entries: vec![],
+            error: Some("no such folder".into()),
+        }))
+    };
+    // another folder's failure is not this one's
+    h.ui.on_snapshot(&failed("sub/"));
+    h.frame(vec![]);
+    assert!(!h.ui.has_rect("browse_error"));
+    h.ui.on_snapshot(&failed(""));
+    h.frame(vec![]);
+    assert!(h.ui.has_rect("browse_error"));
+    assert!(h.drew("Couldn't list this folder: no such folder"));
+    assert!(!h.drew("No builds here."));
+    // an answer replaces the message
+    h.ui.on_snapshot(&Snapshot::BuildBrowse(Arc::new(BuildBrowseView::default())));
+    h.frame(vec![]);
+    assert!(!h.ui.has_rect("browse_error"));
+    assert!(h.drew("No builds here."));
+}
+
+/// A folder of thousands of builds lays out only the rows in view
+#[test]
+fn the_saved_build_picker_lays_out_only_the_rows_in_view() {
+    let mut h = Harness::new(None);
+    h.click("load");
+    h.click("load:saved");
+    let entries = (0..5000)
+        .map(|i| BuildBrowseEntry {
+            name: format!("build {i:04}"),
+            path: format!("/b/build {i:04}.xml").into(),
+        })
+        .collect();
+    h.ui.on_snapshot(&Snapshot::BuildBrowse(Arc::new(BuildBrowseView {
+        folder: String::new(),
+        entries,
+        error: None,
+    })));
+    h.frame(vec![]);
+    h.frame(vec![]);
+    assert!(h.ui.has_rect("saved:0"));
+    assert!(!h.ui.has_rect("saved:4999"));
+    let laid_out = h
+        .texts
+        .iter()
+        .filter(|g| g.text().starts_with("build "))
+        .count();
+    assert!(
+        (1..100).contains(&laid_out),
+        "{laid_out} rows drawn of 5000"
+    );
+    let out = h.click("saved:3");
+    assert_eq!(
+        debug(&out.commands),
+        ["LoadCompare { source: File(\"/b/build 0003.xml\") }"]
     );
 }
 

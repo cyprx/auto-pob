@@ -1657,6 +1657,9 @@ pub struct BuildBrowseView {
     pub folder: String,
     /// The build files, `name` without ".xml"
     pub entries: Vec<BuildBrowseEntry>,
+    /// Why the folder couldn't be listed (`entries` is then empty): the picker says so
+    /// instead of waiting for an answer that won't come
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

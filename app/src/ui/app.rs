@@ -2685,6 +2685,7 @@ mod tests {
             Ok(crate::engine::views::BuildBrowseView {
                 folder: folder.to_owned(),
                 entries: vec![],
+                error: None,
             })
         }
 

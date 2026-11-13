@@ -477,13 +477,19 @@ pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send
     if flags.settings {
         emit(seq, send, backend.settings_view(), Snapshot::Settings);
     }
+    // a folder that can't be listed is still an answer, for the picker to show
     if let Some(folder) = &flags.browse {
-        emit(
+        let view = backend
+            .browse_view(folder)
+            .unwrap_or_else(|e| BuildBrowseView {
+                folder: folder.clone(),
+                entries: Vec::new(),
+                error: Some(format!("{e:#}")),
+            });
+        send(Event::Snapshot {
             seq,
-            send,
-            backend.browse_view(folder),
-            Snapshot::BuildBrowse,
-        );
+            snapshot: Snapshot::BuildBrowse(Arc::new(view)),
+        });
     }
     if flags.help {
         emit(seq, send, backend.help_view(), Snapshot::Help);
@@ -2521,6 +2527,24 @@ mod tests {
                 ["apply BrowseBuilds { folder: \"sub/\" }"]
             );
         }
+        // a folder that can't be listed is answered too, with why, not with an error the
+        // picker would never see
+        let (mut fake, _log) = Fake::new();
+        let events = run_queued(
+            &mut fake,
+            vec![Command::BrowseBuilds {
+                folder: "gone/".into(),
+            }],
+        );
+        assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })));
+        assert!(
+            events.iter().any(|e| matches!(e, Event::Snapshot {
+                snapshot: Snapshot::BuildBrowse(view), ..
+            } if view.folder == "gone/"
+                && view.entries.is_empty()
+                && view.error.as_deref() == Some("no such folder"))),
+            "{events:?}"
+        );
         let browse = Command::BrowseBuilds { folder: "".into() };
         assert_eq!(crate::engine::pob::cancels_requests(&browse), None);
         assert!(!crate::engine::pob::ends_popup_session(&browse));

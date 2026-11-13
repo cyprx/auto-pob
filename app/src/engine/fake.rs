@@ -722,12 +722,17 @@ impl Backend for Fake {
     }
 
     fn browse_view(&mut self, folder: &str) -> anyhow::Result<BuildBrowseView> {
+        // a folder that went since the build list was read
+        if folder == "gone/" {
+            anyhow::bail!("no such folder");
+        }
         Ok(BuildBrowseView {
             folder: folder.to_owned(),
             entries: vec![crate::engine::views::BuildBrowseEntry {
                 name: format!("{folder}fake"),
                 path: format!("/b/{folder}fake.xml").into(),
             }],
+            error: None,
         })
     }
 

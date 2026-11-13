@@ -615,30 +615,35 @@ impl PobBackend {
 
     /// A view from a glue function's result (see `view`)
     fn view_of<T: serde::de::DeserializeOwned>(&self, value: mlua::Value) -> Result<T> {
-        // a view that serde would take can still hold a private-use character that is one of
-        // our escapes (U+F780-U+F7FF): it must be escaped too, or an edit sends it back as a
-        // raw byte (`bytes_text`)
-        let scan: mlua::Function = self
-            .lua
-            .globals()
-            .get("AutoPobHasEscapes")
-            .map_err(|e| anyhow!("{e}"))?;
-        if scan.call::<bool>(&value).map_err(|e| anyhow!("{e}"))? {
-            let fixed = lossy_strings(&self.lua, &value, 0)
-                .map_err(|e| anyhow!("{e}"))?
-                .unwrap_or(value);
-            return self.lua.from_value(fixed).map_err(|e| anyhow!("{e}"));
-        }
-        match self.lua.from_value(value.clone()) {
-            Ok(view) => Ok(view),
-            Err(e) => {
-                // PoB's strings are bytes: a build's notes, names or item text can hold bytes
-                // that aren't UTF-8 (a file from a Windows-1252 editor), which serde refuses.
-                // Such a view shows them escaped (`bytes_text`) instead of failing.
-                match lossy_strings(&self.lua, &value, 0).map_err(|e| anyhow!("{e}"))? {
-                    Some(fixed) => self.lua.from_value(fixed).map_err(|e| anyhow!("{e}")),
-                    None => Err(anyhow!("{e}")),
-                }
+        view_of(&self.lua, value)
+    }
+}
+
+/// A view from a glue result: serde's, with every string that isn't UTF-8 or holds an
+/// escape character escaped (`bytes_text`)
+fn view_of<T: serde::de::DeserializeOwned>(lua: &mlua::Lua, value: mlua::Value) -> Result<T> {
+    // a view that serde would take can still hold a private-use character that is one of
+    // our escapes (U+F780-U+F7FF): it must be escaped too, or an edit sends it back as a
+    // raw byte (`bytes_text`)
+    let scan: mlua::Function = lua
+        .globals()
+        .get("AutoPobHasEscapes")
+        .map_err(|e| anyhow!("{e}"))?;
+    if scan.call::<bool>(&value).map_err(|e| anyhow!("{e}"))? {
+        let fixed = lossy_strings(lua, &value, 0)
+            .map_err(|e| anyhow!("{e}"))?
+            .unwrap_or(value);
+        return lua.from_value(fixed).map_err(|e| anyhow!("{e}"));
+    }
+    match lua.from_value(value.clone()) {
+        Ok(view) => Ok(view),
+        Err(e) => {
+            // PoB's strings are bytes: a build's notes, names or item text can hold bytes
+            // that aren't UTF-8 (a file from a Windows-1252 editor), which serde refuses.
+            // Such a view shows them escaped (`bytes_text`) instead of failing.
+            match lossy_strings(lua, &value, 0).map_err(|e| anyhow!("{e}"))? {
+                Some(fixed) => lua.from_value(fixed).map_err(|e| anyhow!("{e}")),
+                None => Err(anyhow!("{e}")),
             }
         }
     }
@@ -717,6 +722,29 @@ fn popup_rows(control: &mlua::Table) -> mlua::Result<Vec<super::views::PopupRow>
             })
         })
         .collect()
+}
+
+/// A popup's view from the glue's table. A list's rows come as two flat lists (`row_keys`,
+/// `row_labels`), read here directly: a table per row, through serde, made the Mod Browser's
+/// 6188 rows cost about 6 ms per change (R28). The rest goes through `view_of`, so a label,
+/// an edit's text or a choice that isn't UTF-8 shows escaped instead of failing the popup.
+fn popup_view_of(lua: &mlua::Lua, view: mlua::Table) -> Result<PopupView> {
+    let lua_err = |e: mlua::Error| anyhow!("{e}");
+    let controls: mlua::Table = view.get("controls").map_err(lua_err)?;
+    let mut rows = Vec::new();
+    for control in controls.sequence_values::<mlua::Table>() {
+        let control = control.map_err(lua_err)?;
+        rows.push(popup_rows(&control).map_err(lua_err)?);
+        control.set("row_keys", mlua::Value::Nil).map_err(lua_err)?;
+        control
+            .set("row_labels", mlua::Value::Nil)
+            .map_err(lua_err)?;
+    }
+    let mut view: PopupView = view_of(lua, mlua::Value::Table(view))?;
+    for (control, rows) in view.controls.iter_mut().zip(rows) {
+        control.rows = rows;
+    }
+    Ok(view)
 }
 
 /// A config change touches the build and the config tab, and needs a recalculation (after
@@ -2973,28 +3001,7 @@ impl Backend for PobBackend {
         let mlua::Value::Table(view) = self.call::<_, mlua::Value>("popup_view", ())? else {
             return Ok(None);
         };
-        // a list's rows come as two flat lists (`row_keys`, `row_labels`), read here directly:
-        // a table per row, through serde, made the Mod Browser's 6188 rows cost about 6 ms
-        // per change (R28)
-        let lua_err = |e: mlua::Error| anyhow!("{e}");
-        let controls: mlua::Table = view.get("controls").map_err(lua_err)?;
-        let mut rows = Vec::new();
-        for control in controls.sequence_values::<mlua::Table>() {
-            let control = control.map_err(lua_err)?;
-            rows.push(popup_rows(&control).map_err(lua_err)?);
-            control.set("row_keys", mlua::Value::Nil).map_err(lua_err)?;
-            control
-                .set("row_labels", mlua::Value::Nil)
-                .map_err(lua_err)?;
-        }
-        let mut view: PopupView = self
-            .lua
-            .from_value(mlua::Value::Table(view))
-            .map_err(lua_err)?;
-        for (control, rows) in view.controls.iter_mut().zip(rows) {
-            control.rows = rows;
-        }
-        Ok(Some(view))
+        popup_view_of(&self.lua, view).map(Some)
     }
 
     fn control_tooltip_view(
@@ -3216,6 +3223,75 @@ impl Engine {
 mod tests {
     use super::*;
     use crate::engine::BuySource;
+
+    /// A popup whose label, edit text, choices and tooltip hold bytes that aren't UTF-8, or a
+    /// real character in the escapes' range: the view shows them escaped (`bytes_text`), as
+    /// every other view does, where serde failed the whole popup
+    #[test]
+    fn a_popup_with_text_that_isnt_utf8_shows_it_escaped() {
+        use crate::engine::views::{PopupControl, PopupControlKind};
+        let lua = mlua::Lua::new();
+        super::super::native::register_compression(&lua).unwrap();
+        let control = PopupControl {
+            name: "edit".into(),
+            kind: PopupControlKind::Edit,
+            label: String::new(),
+            pos: [0.0, 0.0],
+            size: [10.0, 10.0],
+            shown: true,
+            enabled: true,
+            choices: vec!["a".into()],
+            selected: 0,
+            value: 0.0,
+            divisions: None,
+            checked: false,
+            text: String::new(),
+            ascii_only: false,
+            digits: false,
+            signed: false,
+            numeric: false,
+            limit: None,
+            tooltip_text: Some(String::new()),
+            hover_tooltip: false,
+            rows: vec![],
+            row_selected: None,
+            row_highlight: None,
+            note: None,
+            reorder: false,
+        };
+        let view = PopupView {
+            kind: PopupKind::Craft,
+            title: "t".into(),
+            controls: vec![control],
+            enter: None,
+        };
+        let mlua::Value::Table(table) = lua.to_value(&view).unwrap() else {
+            panic!("not a table");
+        };
+        let fill: mlua::Function = lua
+            .load(
+                r#"return function(view)
+                    local c = view.controls[1]
+                    c.label = "Caf\233"
+                    c.text = "X\239\158\169Y"
+                    c.choices[1] = "\252"
+                    c.tooltip_text = "\146"
+                    c.row_keys = { "k\233" }
+                    c.row_labels = { "l\233" }
+                end"#,
+            )
+            .eval()
+            .unwrap();
+        fill.call::<()>(&table).unwrap();
+        let view = popup_view_of(&lua, table).expect("the popup view");
+        let c = &view.controls[0];
+        assert_eq!(c.label, "Caf\u{F7E9}");
+        assert_eq!(c.text, "X\u{F7EF}\u{F79E}\u{F7A9}Y");
+        assert_eq!(c.choices, ["\u{F7FC}"]);
+        assert_eq!(c.tooltip_text.as_deref(), Some("\u{F792}"));
+        assert_eq!(c.rows[0].key, "k\u{F7E9}");
+        assert_eq!(c.rows[0].label, "l\u{F7E9}");
+    }
 
     #[test]
     fn queries_do_not_end_the_popup_session() {

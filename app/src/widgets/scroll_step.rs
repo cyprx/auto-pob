@@ -363,6 +363,32 @@ pub fn slider_keys(ui: &egui::Ui) {
     ctx.data_mut(|d| d.insert_temp::<SliderKeys>(slider_keys_id(), (id, pass, keys, shift, ctrl)));
 }
 
+fn list_selected_id() -> egui::Id {
+    egui::Id::NULL.with("pob_list_selected")
+}
+
+/// A tab notes, before it draws, that one of its lists that holds its selection apart from
+/// egui's focus (the item databases) is its selected control this frame
+pub fn note_list_selected(ctx: &egui::Context) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(list_selected_id(), pass));
+}
+
+/// Another control of the host `response` is in is PoB's selected control: a widget of its
+/// layer with the keyboard (a list row, a box), a dropped list, or a database list the tab
+/// noted. PoB then gives the frame's keys and wheel to that control, and none to the control
+/// pointed at (ControlHost.lua:56-73).
+fn other_selected(ctx: &egui::Context, response: &egui::Response) -> bool {
+    let focused_elsewhere = ctx
+        .memory(|m| m.focused())
+        .filter(|id| *id != response.id)
+        .and_then(|id| ctx.read_response(id))
+        .is_some_and(|r| r.layer_id == response.layer_id);
+    let list = response.layer_id.order == egui::Order::Background
+        && ctx.data(|d| d.get_temp::<u64>(list_selected_id())) == Some(ctx.cumulative_pass_nr());
+    focused_elsewhere || list || egui::Popup::is_any_open(ctx)
+}
+
 fn slider_size(shift: bool, ctrl: bool) -> f64 {
     if shift {
         0.25
@@ -407,7 +433,12 @@ pub fn slider_step(ui: &egui::Ui, response: &egui::Response, value: f64) -> Opti
             return (to != value).then_some(to);
         }
     }
-    if !response.enabled() || !response.hovered() || held(ctx) || behind_window(ctx, response) {
+    if !response.enabled()
+        || !response.hovered()
+        || held(ctx)
+        || behind_window(ctx, response)
+        || (!response.has_focus() && other_selected(ctx, response))
+    {
         return None;
     }
     // a focused slider's arrows were taken before it was drawn: the wheel is left

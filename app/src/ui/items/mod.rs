@@ -358,6 +358,11 @@ impl ItemsUi {
                 || egui::Popup::is_any_open(ctx)
                 || crate::widgets::scroll_step::control_selected_at_start(ctx);
         }
+        // a selected database list takes the keys before a slider pointed at (ControlHost.lua:
+        // 56-73); it holds its selection apart from egui's focus
+        if self.db.list_focus && !(self.has_dialog() || self.modal) {
+            crate::widgets::scroll_step::note_list_selected(ui.ctx());
+        }
         self.shortcuts(ui, &view, &mut out);
 
         self.set_bar(ui, &view, &mut out);

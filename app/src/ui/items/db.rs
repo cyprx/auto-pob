@@ -50,7 +50,7 @@ pub struct DbState {
     /// (ItemDBControl.lua:375-382, ItemTools.lua:395-399)
     pub(super) hovered_wiki: Option<String>,
     /// The rows are the selected control: the list's keys reach them (ListControl.lua:375-392)
-    list_focus: bool,
+    pub(super) list_focus: bool,
     /// The row whose copy text was asked for (Ctrl+C, ItemDBControl.lua:368-370)
     pub(super) copy_asked: Option<String>,
     /// The rows' scroll offset and view height last frame, and the row a key moved the

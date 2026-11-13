@@ -873,20 +873,24 @@ mod tests {
         assert_eq!(debug(&out.commands), ["OpenPopup(TimelessJewel)"]);
     }
 
-    /// PoB can't undo "Remove All Tattoos", so the first click only asks (Review Focus 5).
+    /// PoB's "Reset Tree/Tattoos" asks first: Reset Tree, Remove All Tattoos or Cancel
+    /// (TreeTab.lua:130-154)
     #[test]
-    fn remove_all_tattoos_asks_first() {
+    fn reset_tree_tattoos_asks_first() {
         let (l, s) = sample();
         let mut h = Harness::new(l, s);
-        let out = click_key(&mut h, "remove_tattoos");
+        let out = click_key(&mut h, "reset");
         assert!(out.commands.is_empty(), "{:?}", out.commands);
         assert!(h.tab.has_dialog());
         // Cancel sends nothing and closes the question
-        let out = click_key(&mut h, "remove_tattoos_no");
+        let out = click_key(&mut h, "reset_no");
         assert!(out.commands.is_empty(), "{:?}", out.commands);
         assert!(!h.tab.has_dialog());
-        // asking again and confirming sends the command, once
-        click_key(&mut h, "remove_tattoos");
+        click_key(&mut h, "reset");
+        let out = click_key(&mut h, "reset_yes");
+        assert_eq!(debug(&out.commands), ["ResetTree"]);
+        // asking again and removing the tattoos sends that, once
+        click_key(&mut h, "reset");
         let out = click_key(&mut h, "remove_tattoos_yes");
         assert_eq!(debug(&out.commands), ["RemoveAllTattoos"]);
         assert!(!h.tab.has_dialog());
@@ -1633,6 +1637,18 @@ mod tests {
             debug(&out.commands),
             ["SetHeatmap { stat: Some(\"Life\"), max_depth: Some(16) }"]
         );
+    }
+
+    #[test]
+    fn the_search_box_filters_and_limits_as_pobs() {
+        // TreeTab.lua:211: "%c" and 100 bytes
+        let mut h = heat_harness();
+        press(&mut h, "search");
+        h.frame(vec![Event::Text("a\u{7}b".into())]);
+        h.frame(vec![Event::Text("x".repeat(120))]);
+        let text = h.tab.toolbar.search_for_test();
+        assert!(text.starts_with("abx"), "{text:?}");
+        assert_eq!(text.len(), 100);
     }
 
     #[test]

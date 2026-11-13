@@ -32,9 +32,8 @@ enum Dialog {
         edited: bool,
     },
     DeleteSpec(usize),
+    /// PoB's "Reset Tree/Tattoos": Reset Tree or Remove All Tattoos, which can't be undone
     Reset,
-    /// PoB's "Remove All Tattoos" can't be undone
-    RemoveTattoos,
     Import {
         title: String,
         url: String,
@@ -58,6 +57,12 @@ enum Dialog {
         class: String,
     },
 }
+
+/// The search box's tooltip (TreeTab.lua:214)
+const SEARCH_TIP: &str = "Uses Lua pattern matching for complex searches.\nPrefix your search with \"oil:\" to search by anoint recipe.\nTo search for multiple terms: (increased.fire.damage|increased.area.of.effect|etc)";
+
+/// The depth dropdown's tooltip (TreeTab.lua:263)
+const DEPTH_TIP: &str = "Limit of Node distance to search (lower = faster)";
 
 /// What a dragged tree row carries: its position
 struct SpecDrag(usize);
@@ -94,6 +99,12 @@ pub(super) struct Toolbar {
 }
 
 impl Toolbar {
+    /// The search box's text, for tests
+    #[cfg(test)]
+    pub(super) fn search_for_test(&self) -> &str {
+        &self.search
+    }
+
     /// The Custom depth box's text, for tests
     #[cfg(test)]
     pub(super) fn custom_depth_for_test(&self) -> Option<&str> {
@@ -188,7 +199,9 @@ impl Toolbar {
         ui.horizontal_wrapped(|ui| {
             self.specs(ui, state, rects, commands, true);
             ui.separator();
-            let reset = ui.button("Reset").on_hover_text("Reset the passive tree");
+            // PoB's one button asks Reset Tree, Remove All Tattoos or Cancel (TreeTab.lua:
+            // 130-154)
+            let reset = ui.button("Reset Tree/Tattoos");
             rects.note(&reset, || "reset".into());
             if reset.clicked() {
                 self.dialog = Some(Dialog::Reset);
@@ -230,13 +243,6 @@ impl Toolbar {
                         label: state.versions[i].label.clone(),
                     });
                 }
-            }
-            let tattoos = ui
-                .button("Remove all tattoos")
-                .on_hover_text("Remove every tattoo from the tree");
-            rects.note(&tattoos, || "remove_tattoos".into());
-            if tattoos.clicked() {
-                self.dialog = Some(Dialog::RemoveTattoos);
             }
         });
         ui.horizontal_wrapped(|ui| {
@@ -545,11 +551,20 @@ impl Toolbar {
                 self.search = state.search.clone();
             }
         }
-        let field = ui.add(
-            egui::TextEdit::singleline(&mut self.search)
-                .hint_text("Search nodes")
-                .desired_width(160.0),
-        );
+        let before = self.search.clone();
+        let pasted = name_box::pasted(ui);
+        let field = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.search)
+                    .hint_text("Search nodes")
+                    .desired_width(160.0),
+            )
+            .on_hover_text(SEARCH_TIP);
+        // PoB's box drops control characters and takes 100 bytes (TreeTab.lua:211)
+        if field.changed() {
+            self.search =
+                name_box::spliced_by(&before, &self.search, |c| !c.is_control(), 100, pasted);
+        }
         rects.note(&field, || "search".into());
         if std::mem::take(&mut self.focus_search) {
             field.request_focus();
@@ -680,7 +695,8 @@ impl Toolbar {
                             Some(state.max_depth.map(|d| d.to_string()).unwrap_or_default());
                     }
                 });
-            rects.note(&combo.response, || "heat_depth".into());
+            let combo_response = combo.response.clone().on_hover_text(DEPTH_TIP);
+            rects.note(&combo_response, || "heat_depth".into());
             // its entries: All, then the depths, then Custom
             let n = DEPTHS.len() + 2;
             let at = if self.custom_depth.is_some() {
@@ -824,21 +840,22 @@ impl Toolbar {
         // Esc cancels it, as every PoB popup (PopupDialog.lua:72-77)
         let window = egui::Id::unique("tree_class_dialog");
         let mut close = crate::widgets::escape::escape(ctx, window);
-        egui::Window::new("Change class")
+        // PoB's question (Build.lua:263)
+        egui::Window::new("Class Change")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.label(format!(
-                    "Some of your points don't connect to {name}. Reset the tree, or keep the \
-                     points that can connect to it?"
+                    "Changing class to {name} will reset your passive tree.\nThis can be \
+                     avoided by connecting one of the {name} starting nodes to your tree."
                 ));
                 ui.horizontal(|ui| {
-                    if button(ui, rects, "class_reset", "Reset tree", true) {
+                    if button(ui, rects, "class_reset", "Continue", true) {
                         commands.push(Command::SelectClass { id, connect: false });
                         close = true;
                     }
-                    if button(ui, rects, "class_connect", "Connect path", true) {
+                    if button(ui, rects, "class_connect", "Connect Path", true) {
                         commands.push(Command::SelectClass { id, connect: true });
                         close = true;
                     }
@@ -1023,9 +1040,8 @@ impl Toolbar {
         let title = match dialog {
             Dialog::NewSpec(_) => "New tree",
             Dialog::RenameSpec { .. } => "Rename tree",
-            Dialog::DeleteSpec(_) => "Delete tree",
-            Dialog::Reset => "Reset tree",
-            Dialog::RemoveTattoos => "Remove all tattoos",
+            Dialog::DeleteSpec(_) => "Delete Tree",
+            Dialog::Reset => "Reset Tree/Tattoos",
             Dialog::Import { .. } => "Import tree link",
             Dialog::CopySpec { .. } => "Copy Tree",
             Dialog::ConvertVersion { .. } => "Convert to Version",
@@ -1087,7 +1103,8 @@ impl Toolbar {
                 }
                 Dialog::DeleteSpec(index) => {
                     let name = state.specs.get(*index).map_or("", |s| s.title.as_str());
-                    ui.label(format!("Delete the tree {name}?"));
+                    // PoB's question (PassiveSpecListControl.lua:97)
+                    ui.label(format!("Are you sure you want to delete '{name}'?"));
                     ui.horizontal(|ui| {
                         if button(ui, rects, "spec_delete_yes", "Delete", true) {
                             commands.push(Command::DeleteSpec { index: *index });
@@ -1097,25 +1114,22 @@ impl Toolbar {
                     });
                 }
                 Dialog::Reset => {
-                    ui.label("Remove every allocated passive point from this tree?");
+                    // PoB's warning and buttons (TreeTab.lua:132-153)
+                    ui.label(
+                        "Warning: resetting your passive tree or removing all tattoos cannot be \
+                         undone.",
+                    );
                     ui.horizontal(|ui| {
-                        if button(ui, rects, "reset_yes", "Reset", true) {
+                        if button(ui, rects, "reset_yes", "Reset Tree", true) {
                             commands.push(Command::ResetTree);
                             close = true;
                         }
-                        close |= ui.button("Cancel").clicked();
-                    });
-                }
-                Dialog::RemoveTattoos => {
-                    // PoB adds no undo state for this, so the question is the only safeguard
-                    ui.label("Remove every tattoo from this tree? This can't be undone.");
-                    ui.horizontal(|ui| {
-                        if button(ui, rects, "remove_tattoos_yes", "Remove", true) {
+                        if button(ui, rects, "remove_tattoos_yes", "Remove All Tattoos", true) {
                             commands.push(Command::RemoveAllTattoos);
                             close = true;
                         }
                         let cancel = ui.button("Cancel");
-                        rects.note(&cancel, || "remove_tattoos_no".into());
+                        rects.note(&cancel, || "reset_no".into());
                         close |= cancel.clicked();
                     });
                 }

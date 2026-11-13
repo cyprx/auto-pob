@@ -242,7 +242,9 @@ impl CalcsUi {
             }
             if let Some(show) = sel.show_minion {
                 let mut on = show;
-                let response = ui.checkbox(&mut on, "Show minion");
+                let response = ui
+                    .checkbox(&mut on, "Show minion")
+                    .on_hover_text("Show stats for the minion instead of the player.");
                 self.rects.note(&response, || "show_minion".into());
                 if response.changed() {
                     out.push(Command::SetShowMinion { show: on });
@@ -373,12 +375,18 @@ impl CalcsUi {
         if !ui.memory(|m| m.has_focus(id)) && !busy {
             buf.clone_from(&view.search);
         }
+        let before = buf.clone();
+        let pasted = crate::ui::name_box::pasted(ui);
         let response = ui.add(
             egui::TextEdit::singleline(buf)
                 .id(id)
                 .hint_text("Search")
                 .desired_width(160.0),
         );
+        // PoB's box drops control characters and takes 100 bytes (CalcsTab.lua:35)
+        if response.changed() {
+            *buf = crate::ui::name_box::spliced_by(&before, buf, |c| !c.is_control(), 100, pasted);
+        }
         self.rects.note(&response, || "search".into());
         if std::mem::take(&mut self.focus_search) {
             response.request_focus();
@@ -934,7 +942,8 @@ mod tests {
             ["SetCalcsCount { control: Stages, text: \"12\" }"]
         );
         h.click("search");
-        let sent = h.frame(vec![Event::Text("x".into())]);
+        // PoB's box drops control characters (CalcsTab.lua:35, "%c")
+        let sent = h.frame(vec![Event::Text("\u{7}x".into())]);
         assert_eq!(debug(&sent), ["SetCalcsSearch { text: \"x\" }"]);
         // the box is clearable: its "x" empties it (CalcsTab.lua:35)
         h.frame(vec![]);

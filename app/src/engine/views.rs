@@ -1018,6 +1018,13 @@ pub struct ItemSetEntry {
     /// The set has no title: PoB's rename box opens empty (ItemSetListControl.lua:47)
     #[serde(default)]
     pub untitled: bool,
+    /// The manager's row as PoB draws it, "  ^9(Current)" after the active set's title
+    /// (ItemSetListControl.lua:79-83)
+    #[serde(default)]
+    pub row: String,
+    /// PoB's tooltip for the set: one "Slot: Item" line per equipped slot (ItemsTab.lua:4138)
+    #[serde(default)]
+    pub lines: Vec<String>,
 }
 
 impl ItemSetEntry {
@@ -1883,6 +1890,9 @@ pub struct ItemText {
     /// A shared item's text (`CopySharedItem`)
     #[serde(default)]
     pub shared: bool,
+    /// A database row's text (`CopyDbItem`): the row's name
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_item: Option<String>,
 }
 
 /// The item on the display panel (PoB's `displayItem`) with the controls PoB shows for it.
@@ -1933,6 +1943,11 @@ pub struct DisplayItemView {
     /// unique) instead of the line dropdown
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stacked: bool,
+    /// How many times PoB rebuilt the range line dropdown, which puts it back on the first
+    /// line (UpdateDisplayItemRangeLines, ItemsTab.lua:2385-2396). A count of this engine's,
+    /// not PoB state: left out of the views compared with PoB.
+    #[serde(default, skip_serializing)]
+    pub range_resets: u32,
 }
 
 /// One line of the display item's custom-mod list

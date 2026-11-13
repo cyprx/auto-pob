@@ -84,12 +84,16 @@ pub struct ItemsUi {
     shared_selected: Option<usize>,
     /// A shared item the user asked to delete, until PoB's question is answered
     confirm_shared_delete: Option<usize>,
+    /// The tree for the jewel socket viewer (ItemSlotHelper.DrawViewer), from the Tree tab
+    socket_scene: Option<crate::ui::tree::SocketScene>,
 }
 
 impl ItemsUi {
     /// Forgets the build's state, as for another build.
     pub fn reset(&mut self) {
+        let scene = self.socket_scene.take();
         *self = Self::default();
+        self.socket_scene = scene;
     }
 
     /// The undo and redo buttons' enablement.
@@ -97,6 +101,11 @@ impl ItemsUi {
         self.view
             .as_ref()
             .map_or((false, false), |v| (v.can_undo, v.can_redo))
+    }
+
+    /// The tree the jewel slots' socket viewer shows, as the Tree tab has it
+    pub fn set_socket_scene(&mut self, scene: Option<crate::ui::tree::SocketScene>) {
+        self.socket_scene = scene;
     }
 
     pub fn set_modal(&mut self, modal: bool) {
@@ -243,7 +252,7 @@ impl ItemsUi {
                 if display.is_none() || old != new {
                     self.display.on_gone();
                 }
-                self.display.on_view();
+                self.display.on_view(display.as_deref());
                 self.display_view = display.clone();
                 self.display_id = display.as_ref().and_then(|d| d.id);
                 if self.cancelled != self.display_id {
@@ -256,6 +265,7 @@ impl ItemsUi {
                 self.check_orphan();
             }
             Snapshot::ControlTooltip(view) => {
+                self.display.on_control_tooltip(view);
                 self.display.crafting.on_snapshot(snapshot);
                 self.db.on_tooltip(view);
             }
@@ -269,12 +279,20 @@ impl ItemsUi {
                     self.tooltip = Some(t.clone());
                 }
             }
-            Snapshot::ItemText(t) if !t.shared && self.copy_asked == Some(t.id) => {
+            Snapshot::ItemText(t)
+                if !t.shared && t.db_item.is_none() && self.copy_asked == Some(t.id) =>
+            {
                 self.copy_asked = None;
                 self.clipboard = Some(t.text.clone());
             }
             Snapshot::ItemText(t) if t.shared && self.shared_copy_asked == Some(t.id as usize) => {
                 self.shared_copy_asked = None;
+                self.clipboard = Some(t.text.clone());
+            }
+            Snapshot::ItemText(t)
+                if t.db_item.is_some() && self.db.copy_asked.as_ref() == t.db_item.as_ref() =>
+            {
+                self.db.copy_asked = None;
                 self.clipboard = Some(t.text.clone());
             }
             _ => {}
@@ -331,6 +349,15 @@ impl ItemsUi {
         }
         self.hovered_now = None;
         self.hovered_slot = None;
+        // read before the tab draws: a box gives up the keyboard, and a list closes, while it
+        // draws; a box or list of Build's drawn before the tab is in the app's frame-start
+        // scope. A repeated pass keeps the first pass's answer.
+        if ui.ctx().current_pass_index() == 0 {
+            let ctx = ui.ctx();
+            self.display.control_selected = ctx.text_edit_focused()
+                || egui::Popup::is_any_open(ctx)
+                || crate::widgets::scroll_step::control_selected_at_start(ctx);
+        }
         self.shortcuts(ui, &view, &mut out);
 
         self.set_bar(ui, &view, &mut out);
@@ -360,6 +387,7 @@ impl ItemsUi {
                 .resizable(self.db.expanded)
                 .default_size(300.0)
                 .show(ui, |ui| {
+                    self.db.keys_blocked = self.has_dialog() || self.modal;
                     let o = db::show(ui, self.db_view.as_deref(), &mut self.db, now);
                     out.commands.extend(o.commands);
                     out.queries.extend(o.queries);
@@ -371,6 +399,7 @@ impl ItemsUi {
         self.dialogs(&ctx, &mut out);
         self.shared_dialog(&ctx, &view, &mut out);
         out.commands.extend(self.display.text_window(&ctx));
+        out.queries.append(&mut self.display.queries);
         self.sets_window(&ctx, &view, &mut out);
 
         // the hover timer restarts when the pointer moves to something else

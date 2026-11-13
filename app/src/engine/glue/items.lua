@@ -72,6 +72,11 @@ local function item_entry(tab, list, index, id)
 	return entry
 end
 
+-- The set list of the tab last viewed, kept: its GetRowValue reads the tab alone
+-- (ItemSetListControl.lua:72-77), so a kept list answers as a new one would. One slot, not a
+-- weak table: the list holds its tab, which LuaJIT's weak keys would never let go.
+local kept_set_list = { tab = nil, list = nil }
+
 function glue.items_view()
 	local tab = items_tab()
 	local list = tab.controls.itemList
@@ -105,9 +110,31 @@ function glue.items_view()
 	for i, slot in ipairs(tab.orderedSlots) do
 		view.slots[i] = slot_view(slot)
 	end
+	-- the manager's rows and the tooltips of the rows and of the set dropdown's entries
+	-- (ItemSetListControl.lua:79-90, ItemsTab.lua:106-111), read through a list made for the
+	-- purpose, never shown, and kept for the next view
+	if kept_set_list.tab ~= tab then
+		kept_set_list.tab = tab
+		kept_set_list.list = new("ItemSetListControl", nil, { 0, 0, 300, 200 }, tab)
+	end
+	local set_list = kept_set_list.list
 	for i, id in ipairs(tab.itemSetOrderList) do
 		local title = tab.itemSets[id].title
-		view.sets[i] = { id = id, title = title or "Default", untitled = title == nil }
+		local tooltip = new("Tooltip")
+		tab:AddItemSetTooltip(tooltip, tab.itemSets[id])
+		local lines = {}
+		for _, line in ipairs(tooltip.lines) do
+			if line.text then
+				lines[#lines + 1] = line.text
+			end
+		end
+		view.sets[i] = {
+			id = id,
+			title = title or "Default",
+			untitled = title == nil,
+			row = set_list:GetRowValue(1, i, id),
+			lines = lines,
+		}
 	end
 	return view
 end
@@ -620,8 +647,10 @@ table.insert(display_sections, function(tab, item, out)
 			break
 		end
 		local socket = item.sockets[i]
+		-- the link box after it, while PoB shows that (ItemsTab.lua:446-448)
 		local linked
-		if i < count then
+		local link = tab.controls["displayItemLink" .. i]
+		if i < count and link and link:IsShown() then
 			linked = item.sockets[i + 1].group == socket.group
 		end
 		out.sockets[i] = {
@@ -673,15 +702,30 @@ table.insert(display_sections, function(tab, item, out)
 	out.tooltip = read_tooltip(tab.displayItemTooltip, item)
 end)
 
+-- Counts the tab's rebuilds of the range line dropdown, each of which puts it back on its first
+-- line (ItemsTab.lua:2385-2396): the panel follows. Installed on the tab the first time.
+local function count_range_resets(tab)
+	if tab.glueRangeResets then
+		return
+	end
+	tab.glueRangeResets = 0
+	local rebuild = tab.UpdateDisplayItemRangeLines
+	tab.UpdateDisplayItemRangeLines = function(self, ...)
+		self.glueRangeResets = self.glueRangeResets + 1
+		return rebuild(self, ...)
+	end
+end
+
 -- The display panel, or nil when no item is displayed
 function glue.display_item_view()
 	local tab = items_tab()
+	count_range_resets(tab)
 	local item = tab.displayItem
 	if not item then
 		tooltip_key = nil
 		return nil
 	end
-	local view = {}
+	local view = { range_resets = tab.glueRangeResets }
 	for _, read in ipairs(display_sections) do
 		read(tab, item, view)
 	end
@@ -730,6 +774,49 @@ function glue.display_set_text(rarity, text)
 		end
 		save.onClick()
 	end)
+end
+
+-- The Edit / Create popup's Save button for this rarity (0 Normal ... 4 Relic) and text: its
+-- tooltip, the item's or PoB's "The item is invalid." lines, which also say that Save is
+-- disabled (ItemsTab.lua:2626-2652). Read from the popup, which is closed again.
+function glue.item_text_tooltip(rarity, text)
+	local tab = items_tab()
+	if rarity > 4 then
+		error("no such rarity", 0)
+	end
+	local tooltip = new("Tooltip")
+	glue.in_popups(function()
+		tab:EditDisplayItemText()
+		local popup = pob.main.main.popups[1]
+		popup.controls.rarity:SetSel(rarity + 1)
+		popup.controls.edit:SetText("")
+		glue.paste_into(popup.controls.edit, text)
+		popup.controls.save.tooltipFunc(tooltip)
+	end)
+	return glue.read_tooltip(tooltip)
+end
+
+-- That Save's enabled test alone: PoB's `save.enabled` only parses the text, with no
+-- calculation (ItemsTab.lua:2633-2636). An empty tooltip while it is enabled; while it is not,
+-- the tooltip's invalid-item lines, which also only parse.
+function glue.item_text_check(rarity, text)
+	local tab = items_tab()
+	if rarity > 4 then
+		error("no such rarity", 0)
+	end
+	local tooltip = new("Tooltip")
+	glue.in_popups(function()
+		tab:EditDisplayItemText()
+		local popup = pob.main.main.popups[1]
+		popup.controls.rarity:SetSel(rarity + 1)
+		popup.controls.edit:SetText("")
+		glue.paste_into(popup.controls.edit, text)
+		local save = popup.controls.save
+		if not save:IsEnabled() then
+			save.tooltipFunc(tooltip)
+		end
+	end)
+	return glue.read_tooltip(tooltip)
 end
 
 -- The panel's Save / Add to build button

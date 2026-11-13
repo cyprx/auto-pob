@@ -54,6 +54,13 @@ fn held(ctx: &egui::Context) -> bool {
     scope.typing && (scope.build_box || !scope.build_host)
 }
 
+/// A text field had the keyboard, or Build's list was dropped, as the frame began: PoB's
+/// selected control takes the frame's presses (ControlHost.lua:4-8, Build.lua:1230)
+pub fn control_selected_at_start(ctx: &egui::Context) -> bool {
+    let scope: FocusScope = ctx.data(|d| d.get_temp(scope_id())).unwrap_or_default();
+    scope.typing
+}
+
 /// A box of the top bar or the sidebar has the keyboard: Build's host takes every key before
 /// the tab sees it (Build.lua:1230)
 pub fn build_box_typing(ctx: &egui::Context) -> bool {

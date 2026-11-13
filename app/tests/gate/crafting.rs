@@ -929,6 +929,42 @@ fn craft_recipes_match_pob() {
     .unwrap();
     let after = display(&mut s);
     assert_eq!(after.affixes[0].list.selected, 1);
+    // the slider's tooltip is for the value under the pointer, through PoB's own tooltipFunc
+    // (SliderControl.lua:117-125): its ends, at the lowest and the highest tier, differ, and
+    // the slider's own value is the recorded `Affix { index: None }` one
+    if let Some(range) = after.affixes[0].range {
+        let tip = |s: &mut Session, query: ControlTooltipQuery| {
+            s.backend
+                .control_tooltip_view(&query)
+                .unwrap()
+                .expect("a slider tooltip")
+                .tooltip
+        };
+        let low = tip(&mut s, ControlTooltipQuery::AffixSlider { slot: 0, at: 0 });
+        let high = tip(
+            &mut s,
+            ControlTooltipQuery::AffixSlider { slot: 0, at: 1000 },
+        );
+        assert!(!low.lines.is_empty() && low != high, "{low:?}");
+        let at = (range * 1000.0).round();
+        if (at / 1000.0 - range).abs() < 1e-12 {
+            let own = tip(
+                &mut s,
+                ControlTooltipQuery::Affix {
+                    slot: 0,
+                    index: None,
+                },
+            );
+            let hovered = tip(
+                &mut s,
+                ControlTooltipQuery::AffixSlider {
+                    slot: 0,
+                    at: at as u16,
+                },
+            );
+            assert_eq!(own, hovered, "the hover at the slider's own value");
+        }
+    }
     // two picks queued in one batch: the second's list was rebuilt by the first
     let moved = old
         .iter()
@@ -1005,6 +1041,7 @@ fn craft_recipes_match_pob() {
             slot: 5,
             index: None,
         },
+        ControlTooltipQuery::AffixSlider { slot: 5, at: 500 },
         ControlTooltipQuery::Affix {
             slot: 1,
             index: Some(999),

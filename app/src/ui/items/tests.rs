@@ -83,11 +83,13 @@ pub(crate) fn sample() -> ItemsView {
                 id: 1,
                 title: "Default".into(),
                 untitled: false,
+                ..ItemSetEntry::default()
             },
             ItemSetEntry {
                 id: 2,
                 title: "Alt".into(),
                 untitled: false,
+                ..ItemSetEntry::default()
             },
         ],
         active_set: 1,
@@ -107,6 +109,17 @@ struct Harness {
     busy: bool,
     /// The keys held down
     modifiers: Modifiers,
+    /// The texts the last frame drew
+    drawn: Vec<String>,
+}
+
+/// The texts a shape draws
+fn drawn_texts(shape: &egui::epaint::Shape, out: &mut Vec<String>) {
+    match shape {
+        egui::epaint::Shape::Text(t) => out.push(t.galley.text().to_owned()),
+        egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| drawn_texts(s, out)),
+        _ => {}
+    }
 }
 
 fn debug(commands: &[Command]) -> Vec<String> {
@@ -126,6 +139,7 @@ impl Harness {
             field: None,
             busy: false,
             modifiers: Modifiers::NONE,
+            drawn: Vec::new(),
         };
         h.frame(vec![]);
         h
@@ -164,6 +178,10 @@ impl Harness {
                     _ => None,
                 }),
         );
+        self.drawn.clear();
+        for clipped in &output.shapes {
+            drawn_texts(&clipped.shape, &mut self.drawn);
+        }
         output.drop_without_applying_deltas();
         out
     }
@@ -446,13 +464,11 @@ fn delete_prompts_are_pobs_three_texts() {
 #[test]
 fn delete_unused_does_not_ask_and_delete_all_does() {
     let mut h = Harness::new(sample());
-    h.click("menu");
-    let o = h.click("menu_delete_unused");
+    let o = h.click("delete_unused");
     assert_eq!(debug(&o.commands), ["DeleteUnusedItems"]);
     assert!(!h.ui.has_dialog());
 
-    h.click("menu");
-    let o = h.click("menu_delete_all");
+    let o = h.click("delete_all");
     assert!(o.commands.is_empty(), "Delete all asks first");
     assert!(h.ui.has_dialog());
     let o = h.click("confirm_delete_all");
@@ -468,6 +484,7 @@ fn copy_reply_reaches_clipboard_only_when_asked() {
             id,
             text: text.into(),
             shared: false,
+            db_item: None,
         }))
     };
     h.ui.on_snapshot(&reply(1, "unasked"));
@@ -966,6 +983,74 @@ fn clicking_a_mod_line_sends_toggle_mod_line() {
     );
     let o = h.click("tip_line_1");
     assert!(o.commands.is_empty(), "{:?}", o.commands);
+}
+
+/// The press that leaves a focused box goes to the box in PoB (ControlHost.lua:4-8): the mod
+/// line under it stays as it is (ItemsTab.lua:1487, 1521-1539)
+#[test]
+fn a_press_that_leaves_the_quality_box_toggles_no_mod_line() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    h.type_into("quality", "15");
+    assert!(h.ctx.text_edit_focused());
+    let o = h.click("tip_line_0");
+    assert!(
+        !debug(&o.commands)
+            .iter()
+            .any(|c| c.starts_with("ToggleModLine")),
+        "{:?}",
+        o.commands
+    );
+    // the next press is the line's
+    let o = h.click("tip_line_0");
+    assert!(
+        debug(&o.commands)
+            .iter()
+            .any(|c| c.starts_with("ToggleModLine")),
+        "{:?}",
+        o.commands
+    );
+}
+
+/// A box of Build's (the top bar's, the sidebar's) selected as the frame began takes the press
+/// first too (Build.lua:1230), though it lets go of the keyboard before the tab draws
+#[test]
+fn a_press_that_leaves_a_build_box_toggles_no_mod_line() {
+    use crate::widgets::scroll_step::{FocusScope, set_scope};
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    let typing = FocusScope {
+        typing: true,
+        build_box: true,
+        ..FocusScope::default()
+    };
+    set_scope(&h.ctx, typing);
+    let o = h.click("tip_line_0");
+    assert!(o.commands.is_empty(), "{:?}", o.commands);
+    set_scope(&h.ctx, FocusScope::default());
+    let o = h.click("tip_line_0");
+    assert_eq!(
+        debug(&o.commands),
+        ["ToggleModLine { line: ModLineRef { list: Explicit, index: 1 } }"]
+    );
+}
+
+/// The press that closes a dropped list goes to the list in PoB, as a box's does
+#[test]
+fn a_press_that_closes_a_dropdown_toggles_no_mod_line() {
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    // a slot's list, which drops down well away from the tooltip
+    h.click("slot_combo_Ring 1");
+    assert!(egui::Popup::is_any_open(&h.ctx));
+    let o = h.click("tip_line_0");
+    assert!(o.commands.is_empty(), "{:?}", o.commands);
+    assert!(!egui::Popup::is_any_open(&h.ctx));
+    let o = h.click("tip_line_0");
+    assert_eq!(
+        debug(&o.commands),
+        ["ToggleModLine { line: ModLineRef { list: Explicit, index: 1 } }"]
+    );
 }
 
 #[test]
@@ -1577,10 +1662,8 @@ fn delete_all_and_unused_follow_the_shown_list() {
     let mut view = sample();
     view.listed.clear();
     let mut h = Harness::new(view);
-    h.click("menu");
-    assert!(h.click("menu_delete_unused").commands.is_empty());
-    h.click("menu");
-    h.click("menu_delete_all");
+    assert!(h.click("delete_unused").commands.is_empty());
+    h.click("delete_all");
     assert!(
         !h.ui.has_dialog(),
         "Delete all is disabled for an empty list"
@@ -2485,3 +2568,5 @@ fn renaming_an_untitled_item_set_starts_empty() {
     h.click("sets_rename");
     assert_eq!(h.ui.sets.naming_text(), Some("Alt"));
 }
+#[path = "audit2_tests.rs"]
+mod audit2_tests;

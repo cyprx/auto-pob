@@ -102,8 +102,17 @@ function itemsDump()
 		out.slots[i] = entry
 	end
 
+	-- the Manage Item Sets window's rows and their tooltips, through a list of its kind
+	local buildSets = new("ItemSetListControl", nil, { 0, 0, 300, 200 }, t)
 	for i, id in ipairs(t.itemSetOrderList) do
-		out.sets[i] = { id = id, title = t.itemSets[id].title or "Default", untitled = t.itemSets[id].title == nil }
+		local tt = new("Tooltip")
+		buildSets:AddValueTooltip(tt, i, id)
+		local lines = {}
+		for _, line in ipairs(tt.lines) do
+			if line.text then lines[#lines + 1] = line.text end
+		end
+		out.sets[i] = { id = id, title = t.itemSets[id].title or "Default", untitled = t.itemSets[id].title == nil,
+			row = buildSets:GetRowValue(1, i, id), lines = lines }
 	end
 	return out
 end
@@ -196,7 +205,7 @@ function displayDump()
 		local drop = c["displayItemSocket" .. i]
 		local link = c["displayItemLink" .. i]
 		local linked
-		if count > i then linked = link.state and true or false end
+		if count > i and link:IsShown() then linked = link.state and true or false end
 		out.sockets[i] = {
 			colour = drop.list[drop.selIndex].color,
 			shown = drop:IsShown() and true or false,

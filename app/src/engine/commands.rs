@@ -995,6 +995,12 @@ pub enum Command {
     CopySharedItem {
         index: usize,
     },
+    /// Ctrl+C on a database row (ItemDBControl.lua:368-370): a query, answered with the text
+    /// PoB copies
+    CopyDbItem {
+        db: ItemDb,
+        name: String,
+    },
     /// An item dragged onto the sidebar's minion dropdown while it shows an item set (Animate
     /// Guardian): PoB equips it into that set for the minion (Build.lua:534-543)
     DropOnMinion {
@@ -1261,6 +1267,26 @@ pub enum ControlTooltipQuery {
     Affix {
         slot: usize,
         index: Option<usize>,
+    },
+    /// The slider under an affix dropdown, hovered at `at` thousandths of its travel: PoB's
+    /// slider tooltip is for the value under the pointer (SliderControl.lua:118-124)
+    AffixSlider {
+        slot: usize,
+        at: u16,
+    },
+    /// The Edit / Create popup's Save for this rarity (0 Normal ... 4 Relic) and text: the
+    /// item's tooltip, or PoB's "The item is invalid." lines while Save is disabled
+    /// (ItemsTab.lua:2626-2652)
+    ItemText {
+        rarity: usize,
+        text: String,
+    },
+    /// The same Save's enabled test alone, which only parses the text (`save.enabled`,
+    /// ItemsTab.lua:2633-2636): an empty tooltip while PoB reads it as an item, else PoB's
+    /// "The item is invalid." lines (which cost no calculation)
+    ItemTextCheck {
+        rarity: usize,
+        text: String,
     },
     DbItem {
         db: ItemDb,

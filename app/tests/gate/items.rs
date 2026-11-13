@@ -8,8 +8,8 @@ use super::items_harness::{
 };
 use super::{Session, fixtures, lock, lua_value, snapshot_dir};
 use auto_pob::engine::{
-    Backend, Command, DisplayItemView, ItemTooltipLine, ItemTooltipQuery, ItemsView, ModLineList,
-    ModLineRef, SlotKind, SocketColour, Tab,
+    Backend, Command, ControlTooltipQuery, DisplayItemView, ItemTooltipLine, ItemTooltipQuery,
+    ItemsView, ModLineList, ModLineRef, SlotKind, SocketColour, Tab,
 };
 use mlua::LuaSerdeExt;
 use std::collections::BTreeMap;
@@ -1081,6 +1081,50 @@ fn set_recipe_matches_pob() {
     assert_eq!(ids(checks[4]), ids(checks[1]));
     assert_ne!(ids(checks[4]), ids(checks[2]));
 }
+/// The view reads the set rows through one ItemSetListControl kept for the tab, not a new one
+/// a view; the rows still follow the active set (ItemSetListControl.lua:72-77)
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn items_view_keeps_one_set_list() {
+    let _guard = lock();
+    let (mut s, _lua) = gear_sessions("items-set-list");
+    s.backend
+        .lua
+        .load(
+            r#"
+            set_lists_made = 0
+            local made_by = new
+            new = function(class, ...)
+                if class == "ItemSetListControl" then
+                    set_lists_made = set_lists_made + 1
+                end
+                return made_by(class, ...)
+            end
+            "#,
+        )
+        .exec()
+        .unwrap();
+    let current = |view: &ItemsView| -> Vec<u32> {
+        view.sets
+            .iter()
+            .filter(|e| e.row == format!("{}  ^9(Current)", e.title))
+            .map(|e| e.id)
+            .collect()
+    };
+    let view = s.backend.items_view().unwrap();
+    assert!(view.sets.len() >= 2, "{:?}", view.sets);
+    let (first, second) = (view.sets[0].id, view.sets[1].id);
+    let active = view.active_set;
+    assert_eq!(current(&view), [active]);
+    let other = if active == first { second } else { first };
+    s.run(Command::SelectItemSet { id: other }).unwrap();
+    let view = s.backend.items_view().unwrap();
+    assert_eq!(current(&view), [other]);
+    s.backend.items_view().unwrap();
+    let made: u32 = lua_value(&s.backend.lua, "return set_lists_made");
+    assert!(made <= 1, "{made} set lists made");
+}
+
 /// The number of entries in PoB's `itemSets` (orphans from a refused name show here)
 fn item_set_count(s: &Session) -> u32 {
     lua_value(
@@ -2140,4 +2184,161 @@ fn range_dropdown_matches_pob() {
         .unwrap();
     compare(&mut s, "slider again");
     assert_ne!(display(&mut s), before);
+}
+
+/// The Edit / Create popup's Save tooltip, which also says whether Save is enabled: ours for a
+/// rarity and a text equals PoB's own popup's (ItemsTab.lua:2626-2652), item or no item shown
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn item_text_tooltip_matches_pob() {
+    let _guard = lock();
+    let (mut s, lua) = gear_sessions("items-text-tooltip");
+    // counts the item tooltips our side builds: the check builds none
+    s.backend
+        .lua
+        .load(
+            "tooltips_built = 0; local tab = pob.build.itemsTab; local add = tab.AddItemTooltip; \
+             tab.AddItemTooltip = function(...) tooltips_built = tooltips_built + 1; \
+             return add(...) end",
+        )
+        .exec()
+        .unwrap();
+    let built = |s: &Session| -> u32 { lua_value(&s.backend.lua, "return tooltips_built") };
+    let texts = [
+        (
+            2,
+            "Doom Loop\nIron Ring\nImplicits: 0\n+30 to maximum Life".to_owned(),
+        ),
+        (0, "Iron Ring".to_owned()),
+        (3, "hello".to_owned()),
+        (2, String::new()),
+        (2, RING.to_owned()),
+    ];
+    let mut invalid = 0;
+    for shown in [false, true] {
+        if shown {
+            s.run(Command::PasteItem { text: RING.into() }).unwrap();
+            lua.load(format!(
+                "build.itemsTab:CreateDisplayItemFromRaw({RING:?}, true)"
+            ))
+            .exec()
+            .unwrap();
+        }
+        for (rarity, text) in &texts {
+            let full_before = built(&s);
+            let view = s
+                .backend
+                .control_tooltip_view(&ControlTooltipQuery::ItemText {
+                    rarity: *rarity,
+                    text: text.clone(),
+                })
+                .unwrap()
+                .expect("the Save tooltip");
+            let theirs = upstream_tooltip(
+                &lua,
+                &format!(
+                    "local t = build.itemsTab; t:EditDisplayItemText(); \
+                     local p = main.popups[1]; p.controls.rarity:SetSel({}); \
+                     p.controls.edit:SetText({text:?}); local tt = new('Tooltip'); \
+                     p.controls.save.tooltipFunc(tt); main:ClosePopup(); \
+                     return tooltipDump(tt)",
+                    rarity + 1
+                ),
+            )
+            .expect("upstream's Save tooltip");
+            assert_same(
+                &json_of(&view.tooltip),
+                &theirs,
+                &format!("Save tooltip for {text:?}, item shown {shown}"),
+            );
+            let is_invalid = matches!(
+                view.tooltip.lines.first(),
+                Some(ItemTooltipLine::Line { text, .. }) if text == "The item is invalid."
+            );
+            invalid += usize::from(is_invalid);
+            assert_eq!(
+                built(&s) > full_before,
+                !is_invalid,
+                "the count is the tooltip's"
+            );
+            // the check alone, a parse: empty while Save is enabled, else the same hint
+            let before = built(&s);
+            let check = s
+                .backend
+                .control_tooltip_view(&ControlTooltipQuery::ItemTextCheck {
+                    rarity: *rarity,
+                    text: text.clone(),
+                })
+                .unwrap()
+                .expect("the Save check");
+            assert_eq!(built(&s), before, "the check built an item tooltip");
+            let enabled: bool = lua_value(
+                &lua,
+                &format!(
+                    "local t = build.itemsTab; t:EditDisplayItemText(); \
+                     local p = main.popups[1]; p.controls.rarity:SetSel({}); \
+                     p.controls.edit:SetText({text:?}); \
+                     local on = p.controls.save:IsEnabled(); main:ClosePopup(); return on",
+                    rarity + 1
+                ),
+            );
+            assert_eq!(
+                enabled, !is_invalid,
+                "Save for {text:?}, item shown {shown}"
+            );
+            if is_invalid {
+                assert_same(
+                    &json_of(&check.tooltip),
+                    &theirs,
+                    &format!("Save check for {text:?}, item shown {shown}"),
+                );
+            } else {
+                assert!(
+                    check.tooltip.lines.is_empty(),
+                    "Save check for {text:?}: {:?}",
+                    check.tooltip
+                );
+            }
+        }
+        assert_eq!(open_popups(&s), 0, "a popup was left open");
+    }
+    assert_eq!(
+        invalid, 4,
+        "\"hello\" and the empty text are invalid, twice"
+    );
+}
+
+/// A socket's link box is there only while PoB shows it: not before an abyssal socket in the
+/// middle of the sockets (ItemsTab.lua:446-448)
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn socket_links_follow_pobs_link_boxes() {
+    let _guard = lock();
+    let (mut s, lua) = gear_sessions("display-socket-links");
+    let text = "Rarity: RARE\nGrim Grip\nIron Gauntlets\nSockets: R-A-G\nImplicits: 0\n+10 to maximum Life";
+    lua.globals().set("text", text).unwrap();
+    lua.load("act.paste(text)").exec().unwrap();
+    s.run(Command::PasteItem { text: text.into() }).unwrap();
+    let mut theirs = strip_nulls(lua_value(&lua, "return displayDump()"));
+    let ours = display(&mut s).expect("displayed");
+    let mut ours_json = json_of(&ours);
+    // a hidden socket's colour isn't drawn: the recorder reads its dropdown, which has no
+    // abyssal "A", ours the item
+    for side in [&mut ours_json, &mut theirs] {
+        for socket in side["sockets"].as_array_mut().unwrap() {
+            if socket["shown"] == false {
+                socket.as_object_mut().unwrap().remove("colour");
+            }
+        }
+    }
+    assert_same(&ours_json, &theirs, "R-A-G");
+    let hidden: bool = lua_value(
+        &s.backend.lua,
+        "local c = pob.build.itemsTab.controls return not c.displayItemLink1:IsShown()",
+    );
+    assert!(
+        hidden,
+        "PoB shows the first link box: not the case this test is for"
+    );
+    assert_eq!(ours.sockets[0].linked, None, "{:?}", ours.sockets);
 }

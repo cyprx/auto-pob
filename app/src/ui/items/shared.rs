@@ -129,7 +129,7 @@ impl ItemsUi {
         if focused
             && let Some(index) = self.shared_selected
             && !(self.has_dialog() || self.modal || ui.ctx().text_edit_focused())
-            && ui.input(|inp| inp.events.iter().any(|e| matches!(e, egui::Event::Copy)))
+            && ui.input(crate::ui::shortcuts::list_copy)
         {
             self.shared_copy_asked = Some(index);
             out.queries.push(Command::CopySharedItem { index });

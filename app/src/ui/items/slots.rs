@@ -8,6 +8,9 @@ use crate::engine::{BuySource, Command, ItemTooltipQuery, PopupKind};
 use crate::widgets::pob_text;
 use eframe::egui::{self, text::LayoutJob};
 
+/// The flask box's tooltip (ItemSlotControl.lua:41)
+const FLASK_TIP: &str = "Activate this flask.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlotSection {
     Equipment,
@@ -95,10 +98,12 @@ impl ItemsUi {
         view: &ItemsView,
         out: &mut ItemsOutput,
     ) {
+        self.slot_header(ui, view, out);
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
                 let mut section = None;
+                let mut spec_drawn = false;
                 for row in rows(view) {
                     if section != Some(row.section) {
                         match row.section {
@@ -108,6 +113,10 @@ impl ItemsUi {
                                 ui.strong("Flasks");
                             }
                             SlotSection::Jewels => {
+                                // PoB's tree dropdown sits between the flasks and the jewel
+                                // sockets (ItemsTab.lua:193-216)
+                                self.spec_select(ui, view, out);
+                                spec_drawn = true;
                                 ui.add_space(6.0);
                                 ui.strong("Jewels");
                             }
@@ -118,7 +127,9 @@ impl ItemsUi {
                 }
                 // a slot that wasn't drawn (hidden) can't take the focus now, or later
                 self.focus_slot = None;
-                self.spec_select(ui, view, out);
+                if !spec_drawn {
+                    self.spec_select(ui, view, out);
+                }
             });
     }
 
@@ -188,9 +199,10 @@ impl ItemsUi {
             ui.horizontal(|ui| {
                 let pad = if indent { 16.0 } else { 0.0 };
                 ui.add_space(pad);
+                // PoB draws "^7<label>:" (ItemSlotControl.lua:139)
                 let label = ui.add_sized(
                     [110.0 - pad, 18.0],
-                    egui::Label::new(&slot.label)
+                    egui::Label::new(format!("{}:", slot.label))
                         .truncate()
                         .sense(egui::Sense::click()),
                 );
@@ -209,6 +221,23 @@ impl ItemsUi {
                             ui.close();
                         }
                     });
+                }
+                // a flask's box sits between its label and its dropdown, with PoB's tooltip
+                // (ItemSlotControl.lua:32-43)
+                if let Some(active) = slot.flask_active {
+                    let mut on = active;
+                    let check = ui
+                        .add_enabled(slot.selected != 0, egui::Checkbox::without_text(&mut on))
+                        .on_hover_text(FLASK_TIP)
+                        .on_disabled_hover_text(FLASK_TIP);
+                    self.rects
+                        .note(&check, || format!("slot_flask_{}", slot.name));
+                    if check.changed() {
+                        out.commands.push(Command::SetFlaskActive {
+                            slot: slot.name.clone(),
+                            on,
+                        });
+                    }
                 }
                 let current = if slot.selected == 0 {
                     pob_text("None", 14.0, default)
@@ -289,6 +318,24 @@ impl ItemsUi {
                     button.request_focus();
                     egui::Popup::open_id(ui.ctx(), button.id.with("popup"));
                 }
+                // a jewel socket's slot shows where the socket is while it is dropped or
+                // pointed at (ItemSlotControl.lua:142-153)
+                if let Some(node) = slot.node {
+                    let button = &combo.inner.response;
+                    let dropped = egui::Popup::is_id_open(ui.ctx(), button.id.with("popup"));
+                    let dragging = egui::DragAndDrop::has_any_payload(ui.ctx());
+                    if dropped || (button.hovered() && (dragging || !ui.ctx().text_edit_focused()))
+                    {
+                        // a list dropped upward puts the viewer under the slot (ItemSlotControl
+                        // .lua:146-150)
+                        let up = dropped
+                            && ui
+                                .ctx()
+                                .memory(|m| m.area_rect(button.id.with("popup")))
+                                .is_some_and(|r| r.center().y < button.rect.center().y);
+                        self.socket_viewer(ui, button.rect, node, up);
+                    }
+                }
                 // PoB's E reads the slot control under the mouse: its name or its dropdown
                 if slot.selected != 0 && (label.hovered() || combo.inner.response.hovered()) {
                     self.hovered_slot = Some(slot.selected);
@@ -304,19 +351,6 @@ impl ItemsUi {
                             shared: None,
                         },
                     );
-                }
-                if let Some(active) = slot.flask_active {
-                    let mut on = active;
-                    let check =
-                        ui.add_enabled(slot.selected != 0, egui::Checkbox::without_text(&mut on));
-                    self.rects
-                        .note(&check, || format!("slot_flask_{}", slot.name));
-                    if check.changed() {
-                        out.commands.push(Command::SetFlaskActive {
-                            slot: slot.name.clone(),
-                            on,
-                        });
-                    }
                 }
             });
         };
@@ -357,6 +391,36 @@ impl ItemsUi {
                 id: Some(drag.id),
             });
         }
+    }
+}
+
+impl ItemsUi {
+    /// PoB's 308 by 280 view of the socket's place in the tree, above the slot, or under it
+    /// when its list drops upward or there is no room above (ItemSlotControl.lua:142-153,
+    /// ItemSlotHelper.DrawViewer)
+    fn socket_viewer(&mut self, ui: &egui::Ui, slot: egui::Rect, node: u32, below: bool) {
+        let Some(scene) = &self.socket_scene else {
+            return;
+        };
+        let size = egui::vec2(308.0, 280.0);
+        let screen = ui.ctx().content_rect();
+        let mut top = slot.top() - size.y - 4.0;
+        if below || top < screen.top() {
+            top = slot.bottom() + 4.0;
+        }
+        let rect = egui::Rect::from_min_size(egui::pos2(slot.left(), top), size);
+        self.rects.note_rect(rect, "socket_viewer");
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(
+            egui::Order::Tooltip,
+            ui.scope_id().with("socket_viewer"),
+        ));
+        crate::ui::tree::canvas::paint_socket_viewer(
+            &painter,
+            rect,
+            &scene.layout,
+            &scene.allocated,
+            node,
+        );
     }
 }
 

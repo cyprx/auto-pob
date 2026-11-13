@@ -172,6 +172,8 @@ pub struct Affected {
     pub item_text: Option<u32>,
     /// The text PoB copies for this shared item was requested; the latest request wins
     pub shared_text: Option<usize>,
+    /// The text PoB copies for this database row was requested; the latest request wins
+    pub db_text: Option<(crate::engine::ItemDb, String)>,
     /// The tree link was requested
     pub link: bool,
     /// A PoEURL shrink finished: `short_tree_link_view` has the short link (R20)
@@ -229,6 +231,7 @@ impl Affected {
         control_tooltip: None,
         item_text: None,
         shared_text: None,
+        db_text: None,
         link: false,
         short_link: false,
         requests: true,
@@ -297,6 +300,9 @@ impl Affected {
         }
         self.item_text = other.item_text.or(self.item_text);
         self.shared_text = other.shared_text.or(self.shared_text);
+        if other.db_text.is_some() {
+            self.db_text = other.db_text;
+        }
         self.link |= other.link;
         self.short_link |= other.short_link;
         self.requests |= other.requests;
@@ -379,6 +385,10 @@ pub trait Backend {
     /// What Ctrl+C on shared item `index` copies; `ItemText::shared` is set
     fn shared_item_text(&mut self, index: usize) -> anyhow::Result<ItemText> {
         anyhow::bail!("no shared item {index}")
+    }
+    /// What Ctrl+C on the database row `name` copies; `ItemText::db_item` is set
+    fn db_item_text(&mut self, _db: crate::engine::ItemDb, name: &str) -> anyhow::Result<ItemText> {
+        anyhow::bail!("no database item {name}")
     }
     /// The popup session's window; `None` when no session is open
     fn popup_view(&mut self) -> anyhow::Result<Option<PopupView>>;
@@ -682,6 +692,14 @@ pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send
             seq,
             send,
             backend.shared_item_text(index),
+            Snapshot::ItemText,
+        );
+    }
+    if let Some((db, name)) = &flags.db_text {
+        emit(
+            seq,
+            send,
+            backend.db_item_text(*db, name),
             Snapshot::ItemText,
         );
     }

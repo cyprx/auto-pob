@@ -1744,6 +1744,7 @@ impl AutoPobApp {
                 }
                 BuildTab::Items => {
                     let now = ui.input(|i| i.time);
+                    self.items.set_socket_scene(self.tree.socket_scene());
                     items_out = self.items.show(ui, now, behind);
                 }
                 BuildTab::Calcs => calcs_out = self.calcs.show(ui, behind),
@@ -2703,6 +2704,7 @@ mod tests {
                 id,
                 text: String::new(),
                 shared: false,
+                db_item: None,
             })
         }
 

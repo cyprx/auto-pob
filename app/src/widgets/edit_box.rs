@@ -27,6 +27,9 @@ pub struct EditBoxOptions {
     pub numeric: bool,
     /// A `^%-%d` box: its step goes below 0
     pub signed: bool,
+    /// Escape leaves the box with its text, as PoB's EditControl does (EditControl.lua:505),
+    /// instead of putting back the last text sent
+    pub keep_on_escape: bool,
 }
 
 impl Default for EditBoxOptions {
@@ -38,6 +41,7 @@ impl Default for EditBoxOptions {
             hint: None,
             numeric: false,
             signed: false,
+            keep_on_escape: false,
         }
     }
 }
@@ -52,6 +56,7 @@ impl EditBoxOptions {
             hint: None,
             numeric: true,
             signed: false,
+            keep_on_escape: false,
         }
     }
 }
@@ -188,7 +193,10 @@ impl EditBox {
             self.refused = raw != before && self.text == before;
         }
         let mut send = None;
-        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if response.lost_focus()
+            && !opts.keep_on_escape
+            && ui.input(|i| i.key_pressed(egui::Key::Escape))
+        {
             self.text.clone_from(&self.sent);
             self.pending = false;
         } else if response.lost_focus() || (self.pending && !response.has_focus()) {

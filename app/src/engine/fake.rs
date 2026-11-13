@@ -659,6 +659,7 @@ impl Backend for Fake {
             id,
             text: String::new(),
             shared: false,
+            db_item: None,
         })
     }
 

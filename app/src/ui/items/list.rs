@@ -36,6 +36,9 @@ pub fn delete_prompt(entry: &ItemEntry) -> Option<String> {
     }
 }
 
+/// The empty list's text (ItemListControl.lua:13)
+const EMPTY_TEXT: &str = "^x7F7F7FThis is the list of items that have been added to this build.\nYou can add items to this list by dragging them from\none of the other lists, or by clicking 'Add to build' when\nviewing an item.";
+
 /// What a reorderable column of rows reports.
 pub(crate) struct Reordered {
     /// One click response per row
@@ -149,30 +152,33 @@ impl ItemsUi {
             if sort.clicked() {
                 out.commands.push(Command::SortItems);
             }
-            let menu = ui.menu_button("\u{2026}", |ui| {
-                let sort = ui.button("Sort");
-                self.rects.note(&sort, || "menu_sort".into());
-                if sort.clicked() {
-                    out.commands.push(Command::SortItems);
-                    ui.close();
-                }
-                // PoB deletes the unused items without asking
-                // PoB enables both on the shown (filtered) list being non-empty
-                let any = !view.listed.is_empty();
-                let unused = ui.add_enabled(any, egui::Button::new("Delete unused"));
-                self.rects.note(&unused, || "menu_delete_unused".into());
-                if unused.clicked() {
-                    out.commands.push(Command::DeleteUnusedItems);
-                    ui.close();
-                }
-                let all = ui.add_enabled(any, egui::Button::new("Delete all"));
-                self.rects.note(&all, || "menu_delete_all".into());
-                if all.clicked() {
-                    self.confirm_delete_all = true;
-                    ui.close();
-                }
-            });
-            self.rects.note(&menu.response, || "menu".into());
+            // PoB's buttons beside Sort (ItemListControl.lua:22-68). Del Unused deletes without
+            // asking; both are enabled while the shown (filtered) list has a row
+            // PoB's questions are modal: the buttons wait while one is open
+            let free = !self.has_dialog();
+            let any = !view.listed.is_empty() && free;
+            let unused = ui.add_enabled(any, egui::Button::new("Del Unused"));
+            self.rects.note(&unused, || "delete_unused".into());
+            if unused.clicked() {
+                out.commands.push(Command::DeleteUnusedItems);
+            }
+            let all = ui.add_enabled(any, egui::Button::new("Del All"));
+            self.rects.note(&all, || "delete_all".into());
+            if all.clicked() {
+                self.confirm_delete_all = true;
+            }
+            // Delete acts on the selected row, with PoB's question for an item in use
+            let selected = self
+                .selected
+                .and_then(|id| view.items.iter().find(|e| e.id == id))
+                .filter(|e| view.listed.contains(&e.id));
+            let delete = ui.add_enabled(selected.is_some() && free, egui::Button::new("Delete"));
+            self.rects.note(&delete, || "delete".into());
+            if delete.clicked()
+                && let Some(entry) = selected
+            {
+                self.delete_entry(entry, out);
+            }
         });
 
         let rows: Vec<&ItemEntry> = view
@@ -215,6 +221,10 @@ impl ItemsUi {
                     });
             },
         );
+        if rows.is_empty() {
+            // PoB's text for the empty list (ItemListControl.lua:13)
+            ui.label(pob_text(EMPTY_TEXT, 14.0, default));
+        }
         let area = Rect::from_min_max(top, ui.max_rect().max);
         // at the row under the cursor, as PoB's list marks it; a filtered list doesn't take a
         // position (ListControl.lua:157-164), so the item is appended
@@ -310,18 +320,23 @@ impl ItemsUi {
         if self.has_dialog() || self.modal || ui.ctx().text_edit_focused() {
             return;
         }
-        if ui.input(|inp| inp.events.iter().any(|e| matches!(e, egui::Event::Copy))) {
+        if ui.input(crate::ui::shortcuts::list_copy) {
             self.copy_asked = Some(entry.id);
             out.queries.push(Command::CopyItem { id: entry.id });
         }
         if ui.input(crate::ui::shortcuts::list_delete) {
-            match delete_prompt(entry) {
-                Some(text) => self.confirm_delete = Some((entry.id, text)),
-                None => out.commands.push(Command::DeleteItem {
-                    id: entry.id,
-                    confirmed: false,
-                }),
-            }
+            self.delete_entry(entry, out);
+        }
+    }
+
+    /// PoB's OnSelDelete: the item goes at once, or after PoB's question when it is in use
+    fn delete_entry(&mut self, entry: &ItemEntry, out: &mut ItemsOutput) {
+        match delete_prompt(entry) {
+            Some(text) => self.confirm_delete = Some((entry.id, text)),
+            None => out.commands.push(Command::DeleteItem {
+                id: entry.id,
+                confirmed: false,
+            }),
         }
     }
 

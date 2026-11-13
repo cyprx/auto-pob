@@ -369,6 +369,22 @@ function glue.item_db_drop(db, name, slot_name)
 	slot:ReceiveDrag(kind, value, control)
 end
 
+-- Ctrl+C on a row: ItemDBControl:OnSelCopy (ItemDBControl.lua:368-370). The global `Copy` is
+-- swapped for a capture during the call and always put back.
+function glue.item_db_copy(db, name)
+	local control, item, index = find_item(db, name)
+	local saved, text = Copy, nil
+	Copy = function(copied)
+		text = copied
+	end
+	local ok, err = pcall(control.OnSelCopy, control, index, item)
+	Copy = saved
+	if not ok then
+		error(err, 0)
+	end
+	return text or ""
+end
+
 -- What hovering a row shows; nil for a vanished item or a database still loading
 function glue.item_db_tooltip(db, name, shift)
 	if shift then

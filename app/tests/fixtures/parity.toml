@@ -1264,10 +1264,10 @@ ported = "app/src/ui/import.rs import by account name"
 ported = "app/src/ui/import.rs X next to the recent accounts (RemoveAccountHistory, NF-8)"
 
 [controls."items.#ItemSlotControl"]
-ported = "app/src/ui/items/slots.rs slots; Ring 3 and Graft 1/2 shown, equipped and round-tripped as PoB's slot.shown decides (R30, app/tests/gate/parity_gaps_items.rs ring3_graft)"
+ported = "app/src/ui/items/slots.rs slots in PoB's order (the tree dropdown between the flasks and the jewel sockets), labels with PoB's colon; a jewel socket's slot shows PoB's socket viewer while dropped or pointed at (ui/tree/canvas.rs paint_socket_viewer, plain shapes at zoom 17 of a tree size taken from the node bounds, crosshair, under the slot when its list drops upward; audit2_tests a_jewel_slot_shows_the_socket_viewer); Ring 3 and Graft 1/2 shown, equipped and round-tripped as PoB's slot.shown decides (R30, app/tests/gate/parity_gaps_items.rs ring3_graft)"
 
 [controls."items.#ItemSlotControl.activate"]
-ported = "app/src/ui/items/slots.rs flask active box"
+ported = "app/src/ui/items/slots.rs flask active box between the slot's label and its dropdown, with PoB's tooltip 'Activate this flask.' also while disabled (app/src/ui/items/audit2_tests.rs flask_box_tooltip_and_slot_label_colon)"
 
 [controls."items.#ItemSlotControl.scrollBar"]
 ported = "app/src/ui/items/slots.rs slot dropdown lists (part of items.#ItemSlotControl)"
@@ -1290,10 +1290,10 @@ note = "part of items.craftingSorting"
 ported = "app/src/ui/items/crafting.rs Modifier sorting"
 
 [controls."items.displayItemAddCrucible"]
-ported = "app/src/ui/items/crafting.rs Add Crucible mod button (PoB popup session)"
+ported = "app/src/ui/items/crafting.rs Add Crucible mod button in the custom section (PoB popup session)"
 
 [controls."items.displayItemAddCustom"]
-ported = "app/src/ui/items/crafting.rs Add modifier button (PoB popup session)"
+ported = "app/src/ui/items/crafting.rs Add modifier button in the custom section (PoB popup session)"
 
 [controls."items.displayItemAddImplicit"]
 ported = "app/src/ui/items/crafting.rs Add Implicit button (PoB popup session)"
@@ -1302,63 +1302,63 @@ ported = "app/src/ui/items/crafting.rs Add Implicit button (PoB popup session)"
 ported = "app/src/ui/items/display.rs sockets +"
 
 [controls."items.displayItemAffix1"]
-ported = "app/src/ui/items/crafting.rs affix combo"
+ported = "app/src/ui/items/crafting.rs affix combo; the closed combo shows its selected entry's tooltip (DropDownControl mode BODY; app/src/ui/items/audit2_tests.rs an_affix_body_and_its_slider_ask_their_own_tooltips)"
 
 [controls."items.displayItemAffix1.scrollBar"]
 ported = "app/src/ui/items/crafting.rs affix combo"
 note = "part of items.displayItemAffix1"
 
 [controls."items.displayItemAffix2"]
-ported = "app/src/ui/items/crafting.rs affix combo"
+ported = "app/src/ui/items/crafting.rs affix combo; the closed combo shows its selected entry's tooltip (DropDownControl mode BODY; app/src/ui/items/audit2_tests.rs an_affix_body_and_its_slider_ask_their_own_tooltips)"
 
 [controls."items.displayItemAffix2.scrollBar"]
 ported = "app/src/ui/items/crafting.rs affix combo"
 note = "part of items.displayItemAffix2"
 
 [controls."items.displayItemAffix3"]
-ported = "app/src/ui/items/crafting.rs affix combo"
+ported = "app/src/ui/items/crafting.rs affix combo; the closed combo shows its selected entry's tooltip (DropDownControl mode BODY; app/src/ui/items/audit2_tests.rs an_affix_body_and_its_slider_ask_their_own_tooltips)"
 
 [controls."items.displayItemAffix3.scrollBar"]
 ported = "app/src/ui/items/crafting.rs affix combo"
 note = "part of items.displayItemAffix3"
 
 [controls."items.displayItemAffix4"]
-ported = "app/src/ui/items/crafting.rs affix combo"
+ported = "app/src/ui/items/crafting.rs affix combo; the closed combo shows its selected entry's tooltip (DropDownControl mode BODY; app/src/ui/items/audit2_tests.rs an_affix_body_and_its_slider_ask_their_own_tooltips)"
 
 [controls."items.displayItemAffix4.scrollBar"]
 ported = "app/src/ui/items/crafting.rs affix combo"
 note = "part of items.displayItemAffix4"
 
 [controls."items.displayItemAffix5"]
-ported = "app/src/ui/items/crafting.rs affix combo"
+ported = "app/src/ui/items/crafting.rs affix combo; the closed combo shows its selected entry's tooltip (DropDownControl mode BODY; app/src/ui/items/audit2_tests.rs an_affix_body_and_its_slider_ask_their_own_tooltips)"
 
 [controls."items.displayItemAffix5.scrollBar"]
 ported = "app/src/ui/items/crafting.rs affix combo"
 note = "part of items.displayItemAffix5"
 
 [controls."items.displayItemAffix6"]
-ported = "app/src/ui/items/crafting.rs affix combo"
+ported = "app/src/ui/items/crafting.rs affix combo; the closed combo shows its selected entry's tooltip (DropDownControl mode BODY; app/src/ui/items/audit2_tests.rs an_affix_body_and_its_slider_ask_their_own_tooltips)"
 
 [controls."items.displayItemAffix6.scrollBar"]
 ported = "app/src/ui/items/crafting.rs affix combo"
 note = "part of items.displayItemAffix6"
 
 [controls."items.displayItemAffix7"]
-ported = "app/src/ui/items/crafting.rs affix combo"
+ported = "app/src/ui/items/crafting.rs affix combo; the closed combo shows its selected entry's tooltip (DropDownControl mode BODY; app/src/ui/items/audit2_tests.rs an_affix_body_and_its_slider_ask_their_own_tooltips)"
 
 [controls."items.displayItemAffix7.scrollBar"]
 ported = "app/src/ui/items/crafting.rs affix combo"
 note = "part of items.displayItemAffix7"
 
 [controls."items.displayItemAffix8"]
-ported = "app/src/ui/items/crafting.rs affix combo"
+ported = "app/src/ui/items/crafting.rs affix combo; the closed combo shows its selected entry's tooltip (DropDownControl mode BODY; app/src/ui/items/audit2_tests.rs an_affix_body_and_its_slider_ask_their_own_tooltips)"
 
 [controls."items.displayItemAffix8.scrollBar"]
 ported = "app/src/ui/items/crafting.rs affix combo"
 note = "part of items.displayItemAffix8"
 
 [controls."items.displayItemAffix9"]
-ported = "app/src/ui/items/crafting.rs affix combo"
+ported = "app/src/ui/items/crafting.rs affix combo; the closed combo shows its selected entry's tooltip (DropDownControl mode BODY; app/src/ui/items/audit2_tests.rs an_affix_body_and_its_slider_ask_their_own_tooltips)"
 
 [controls."items.displayItemAffix9.scrollBar"]
 ported = "app/src/ui/items/crafting.rs affix combo"
@@ -1392,58 +1392,58 @@ ported = "app/src/ui/items/crafting.rs affix rows"
 ported = "app/src/ui/items/crafting.rs affix rows"
 
 [controls."items.displayItemAffixRange1"]
-ported = "app/src/ui/items/crafting.rs tier slider"
+ported = "app/src/ui/items/crafting.rs tier slider; its tooltip is PoB's slider tooltipFunc for the value under the pointer (ControlTooltipQuery::AffixSlider; gate crafting craft_recipes_match_pob)"
 
 [controls."items.displayItemAffixRange2"]
-ported = "app/src/ui/items/crafting.rs tier slider"
+ported = "app/src/ui/items/crafting.rs tier slider; its tooltip is PoB's slider tooltipFunc for the value under the pointer (ControlTooltipQuery::AffixSlider; gate crafting craft_recipes_match_pob)"
 
 [controls."items.displayItemAffixRange3"]
-ported = "app/src/ui/items/crafting.rs tier slider"
+ported = "app/src/ui/items/crafting.rs tier slider; its tooltip is PoB's slider tooltipFunc for the value under the pointer (ControlTooltipQuery::AffixSlider; gate crafting craft_recipes_match_pob)"
 
 [controls."items.displayItemAffixRange4"]
-ported = "app/src/ui/items/crafting.rs tier slider"
+ported = "app/src/ui/items/crafting.rs tier slider; its tooltip is PoB's slider tooltipFunc for the value under the pointer (ControlTooltipQuery::AffixSlider; gate crafting craft_recipes_match_pob)"
 
 [controls."items.displayItemAffixRange5"]
-ported = "app/src/ui/items/crafting.rs tier slider"
+ported = "app/src/ui/items/crafting.rs tier slider; its tooltip is PoB's slider tooltipFunc for the value under the pointer (ControlTooltipQuery::AffixSlider; gate crafting craft_recipes_match_pob)"
 
 [controls."items.displayItemAffixRange6"]
-ported = "app/src/ui/items/crafting.rs tier slider"
+ported = "app/src/ui/items/crafting.rs tier slider; its tooltip is PoB's slider tooltipFunc for the value under the pointer (ControlTooltipQuery::AffixSlider; gate crafting craft_recipes_match_pob)"
 
 [controls."items.displayItemAffixRange7"]
-ported = "app/src/ui/items/crafting.rs tier slider"
+ported = "app/src/ui/items/crafting.rs tier slider; its tooltip is PoB's slider tooltipFunc for the value under the pointer (ControlTooltipQuery::AffixSlider; gate crafting craft_recipes_match_pob)"
 
 [controls."items.displayItemAffixRange8"]
-ported = "app/src/ui/items/crafting.rs tier slider"
+ported = "app/src/ui/items/crafting.rs tier slider; its tooltip is PoB's slider tooltipFunc for the value under the pointer (ControlTooltipQuery::AffixSlider; gate crafting craft_recipes_match_pob)"
 
 [controls."items.displayItemAffixRange9"]
-ported = "app/src/ui/items/crafting.rs tier slider"
+ported = "app/src/ui/items/crafting.rs tier slider; its tooltip is PoB's slider tooltipFunc for the value under the pointer (ControlTooltipQuery::AffixSlider; gate crafting craft_recipes_match_pob)"
 
 [controls."items.displayItemAffixRangeLabel1"]
-ported = "app/src/ui/items/crafting.rs tier slider"
+ported = "app/src/ui/items/crafting.rs 'Roll:' before the tier slider, grey while the dropdown is on None (ItemsTab.lua:969-971)"
 
 [controls."items.displayItemAffixRangeLabel2"]
-ported = "app/src/ui/items/crafting.rs tier slider"
+ported = "app/src/ui/items/crafting.rs 'Roll:' before the tier slider, grey while the dropdown is on None (ItemsTab.lua:969-971)"
 
 [controls."items.displayItemAffixRangeLabel3"]
-ported = "app/src/ui/items/crafting.rs tier slider"
+ported = "app/src/ui/items/crafting.rs 'Roll:' before the tier slider, grey while the dropdown is on None (ItemsTab.lua:969-971)"
 
 [controls."items.displayItemAffixRangeLabel4"]
-ported = "app/src/ui/items/crafting.rs tier slider"
+ported = "app/src/ui/items/crafting.rs 'Roll:' before the tier slider, grey while the dropdown is on None (ItemsTab.lua:969-971)"
 
 [controls."items.displayItemAffixRangeLabel5"]
-ported = "app/src/ui/items/crafting.rs tier slider"
+ported = "app/src/ui/items/crafting.rs 'Roll:' before the tier slider, grey while the dropdown is on None (ItemsTab.lua:969-971)"
 
 [controls."items.displayItemAffixRangeLabel6"]
-ported = "app/src/ui/items/crafting.rs tier slider"
+ported = "app/src/ui/items/crafting.rs 'Roll:' before the tier slider, grey while the dropdown is on None (ItemsTab.lua:969-971)"
 
 [controls."items.displayItemAffixRangeLabel7"]
-ported = "app/src/ui/items/crafting.rs tier slider"
+ported = "app/src/ui/items/crafting.rs 'Roll:' before the tier slider, grey while the dropdown is on None (ItemsTab.lua:969-971)"
 
 [controls."items.displayItemAffixRangeLabel8"]
-ported = "app/src/ui/items/crafting.rs tier slider"
+ported = "app/src/ui/items/crafting.rs 'Roll:' before the tier slider, grey while the dropdown is on None (ItemsTab.lua:969-971)"
 
 [controls."items.displayItemAffixRangeLabel9"]
-ported = "app/src/ui/items/crafting.rs tier slider"
+ported = "app/src/ui/items/crafting.rs 'Roll:' before the tier slider, grey while the dropdown is on None (ItemsTab.lua:969-971)"
 
 [controls."items.displayItemAltVariant"]
 ported = "app/src/ui/items/display.rs variants"
@@ -1523,7 +1523,7 @@ ported = "app/src/ui/items/display.rs catalyst quality"
 note = "part of items.displayItemCatalystQualityEdit"
 
 [controls."items.displayItemClusterJewelNodeCount"]
-ported = "app/src/ui/items/crafting.rs node count"
+ported = "app/src/ui/items/crafting.rs node count; the wheel's notches add up as PoB's unrounded slider value (app/src/ui/items/audit2_tests.rs wheel_notches_add_up_on_the_cluster_count_slider)"
 
 [controls."items.displayItemClusterJewelNodeCountLabel"]
 ported = "app/src/ui/items/crafting.rs node count"
@@ -1545,14 +1545,14 @@ ported = "app/src/ui/items/crafting.rs Change Enchantment button (PoB popup sess
 ported = "app/src/ui/items/crafting.rs Change Enchantment 2 button (PoB popup session)"
 
 [controls."items.displayItemInfluence"]
-ported = "app/src/ui/items/display.rs influences"
+ported = "app/src/ui/items/display.rs influences, with PoB's tooltip (ItemsTab.lua:603-617)"
 
 [controls."items.displayItemInfluence.scrollBar"]
 ported = "app/src/ui/items/display.rs influences"
 note = "part of items.displayItemInfluence"
 
 [controls."items.displayItemInfluence2"]
-ported = "app/src/ui/items/display.rs influences"
+ported = "app/src/ui/items/display.rs influences, with PoB's tooltip (ItemsTab.lua:603-617)"
 
 [controls."items.displayItemInfluence2.scrollBar"]
 ported = "app/src/ui/items/display.rs influences"
@@ -1574,7 +1574,7 @@ ported = "app/src/ui/items/display.rs socket links"
 ported = "app/src/ui/items/display.rs socket links"
 
 [controls."items.displayItemMutatedCheckbox"]
-ported = "app/src/ui/items/display.rs Foulborn"
+ported = "app/src/ui/items/display.rs Foulborn, before the range slider"
 
 [controls."items.displayItemQuality"]
 ported = "app/src/ui/items/display.rs quality"
@@ -1599,7 +1599,7 @@ ported = "app/src/ui/items/display.rs quality"
 note = "part of items.displayItemQualityEdit"
 
 [controls."items.displayItemRangeLine"]
-ported = "app/src/ui/items/display.rs range line combo"
+ported = "app/src/ui/items/display.rs range line combo; back on the first line whenever PoB rebuilds its list (DisplayItemView.range_resets; app/src/ui/items/audit2_tests.rs the_range_row_is_pobs_and_resets_with_pob)"
 
 [controls."items.displayItemRangeLine.scrollBar"]
 ported = "app/src/ui/items/display.rs range line combo"
@@ -1615,13 +1615,13 @@ ported = "app/src/ui/items/crafting.rs prefix/suffix rows"
 ported = "app/src/ui/items/display.rs catalyst"
 
 [controls."items.displayItemSectionClusterJewel"]
-ported = "app/src/ui/items/crafting.rs cluster jewel"
+ported = "app/src/ui/items/crafting.rs cluster jewel, before the modifier sorting"
 
 [controls."items.displayItemSectionCustom"]
-ported = "app/src/ui/items/crafting.rs custom mod list"
+ported = "app/src/ui/items/crafting.rs custom section after the affixes: Add modifier... / Add Crucible mod..., then the Remove rows with PoB's white labels"
 
 [controls."items.displayItemSectionEnchant"]
-ported = "app/src/ui/items/display.rs enchant/anoint/corrupt buttons"
+ported = "app/src/ui/items/display.rs enchant/anoint/corrupt/implicit buttons, right after the sockets (crafting::enchant_buttons)"
 
 [controls."items.displayItemSectionInfluence"]
 ported = "app/src/ui/items/display.rs influences"
@@ -1630,7 +1630,7 @@ ported = "app/src/ui/items/display.rs influences"
 ported = "app/src/ui/items/display.rs quality"
 
 [controls."items.displayItemSectionRange"]
-ported = "app/src/ui/items/display.rs range lines"
+ported = "app/src/ui/items/display.rs range lines, after the custom section"
 
 [controls."items.displayItemSectionSockets"]
 ported = "app/src/ui/items/display.rs sockets"
@@ -1639,42 +1639,42 @@ ported = "app/src/ui/items/display.rs sockets"
 ported = "app/src/ui/items/display.rs variants"
 
 [controls."items.displayItemSocket1"]
-ported = "app/src/ui/items/display.rs socket colours"
+ported = "app/src/ui/items/display.rs socket colours in PoB's colours (app/src/ui/items/audit2_tests.rs socket_entries_have_pobs_colours)"
 
 [controls."items.displayItemSocket1.scrollBar"]
 ported = "app/src/ui/items/display.rs socket colours"
 note = "part of items.displayItemSocket1"
 
 [controls."items.displayItemSocket2"]
-ported = "app/src/ui/items/display.rs socket colours"
+ported = "app/src/ui/items/display.rs socket colours in PoB's colours (app/src/ui/items/audit2_tests.rs socket_entries_have_pobs_colours)"
 
 [controls."items.displayItemSocket2.scrollBar"]
 ported = "app/src/ui/items/display.rs socket colours"
 note = "part of items.displayItemSocket2"
 
 [controls."items.displayItemSocket3"]
-ported = "app/src/ui/items/display.rs socket colours"
+ported = "app/src/ui/items/display.rs socket colours in PoB's colours (app/src/ui/items/audit2_tests.rs socket_entries_have_pobs_colours)"
 
 [controls."items.displayItemSocket3.scrollBar"]
 ported = "app/src/ui/items/display.rs socket colours"
 note = "part of items.displayItemSocket3"
 
 [controls."items.displayItemSocket4"]
-ported = "app/src/ui/items/display.rs socket colours"
+ported = "app/src/ui/items/display.rs socket colours in PoB's colours (app/src/ui/items/audit2_tests.rs socket_entries_have_pobs_colours)"
 
 [controls."items.displayItemSocket4.scrollBar"]
 ported = "app/src/ui/items/display.rs socket colours"
 note = "part of items.displayItemSocket4"
 
 [controls."items.displayItemSocket5"]
-ported = "app/src/ui/items/display.rs socket colours"
+ported = "app/src/ui/items/display.rs socket colours in PoB's colours (app/src/ui/items/audit2_tests.rs socket_entries_have_pobs_colours)"
 
 [controls."items.displayItemSocket5.scrollBar"]
 ported = "app/src/ui/items/display.rs socket colours"
 note = "part of items.displayItemSocket5"
 
 [controls."items.displayItemSocket6"]
-ported = "app/src/ui/items/display.rs socket colours"
+ported = "app/src/ui/items/display.rs socket colours in PoB's colours (app/src/ui/items/audit2_tests.rs socket_entries_have_pobs_colours)"
 
 [controls."items.displayItemSocket6.scrollBar"]
 ported = "app/src/ui/items/display.rs socket colours"
@@ -1801,70 +1801,70 @@ ported = "app/src/ui/items/display.rs stacked range row 8: its line text (Displa
 ported = "app/src/ui/items/display.rs stacked range row 9: its line text (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
 
 [controls."items.displayItemStackedRangeSlider1"]
-ported = "app/src/ui/items/display.rs stacked range row 1: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 1: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemStackedRangeSlider10"]
-ported = "app/src/ui/items/display.rs stacked range row 10: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 10: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemStackedRangeSlider11"]
-ported = "app/src/ui/items/display.rs stacked range row 11: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 11: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemStackedRangeSlider12"]
-ported = "app/src/ui/items/display.rs stacked range row 12: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 12: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemStackedRangeSlider13"]
-ported = "app/src/ui/items/display.rs stacked range row 13: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 13: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemStackedRangeSlider14"]
-ported = "app/src/ui/items/display.rs stacked range row 14: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 14: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemStackedRangeSlider15"]
-ported = "app/src/ui/items/display.rs stacked range row 15: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 15: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemStackedRangeSlider16"]
-ported = "app/src/ui/items/display.rs stacked range row 16: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 16: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemStackedRangeSlider17"]
-ported = "app/src/ui/items/display.rs stacked range row 17: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 17: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemStackedRangeSlider18"]
-ported = "app/src/ui/items/display.rs stacked range row 18: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 18: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemStackedRangeSlider19"]
-ported = "app/src/ui/items/display.rs stacked range row 19: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 19: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemStackedRangeSlider2"]
-ported = "app/src/ui/items/display.rs stacked range row 2: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 2: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemStackedRangeSlider20"]
-ported = "app/src/ui/items/display.rs stacked range row 20: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 20: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemStackedRangeSlider3"]
-ported = "app/src/ui/items/display.rs stacked range row 3: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 3: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemStackedRangeSlider4"]
-ported = "app/src/ui/items/display.rs stacked range row 4: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 4: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemStackedRangeSlider5"]
-ported = "app/src/ui/items/display.rs stacked range row 5: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 5: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemStackedRangeSlider6"]
-ported = "app/src/ui/items/display.rs stacked range row 6: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 6: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemStackedRangeSlider7"]
-ported = "app/src/ui/items/display.rs stacked range row 7: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 7: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemStackedRangeSlider8"]
-ported = "app/src/ui/items/display.rs stacked range row 8: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 8: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemStackedRangeSlider9"]
-ported = "app/src/ui/items/display.rs stacked range row 9: its slider (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB)"
+ported = "app/src/ui/items/display.rs stacked range row 9: its slider, which the wheel and the arrows step (DisplayItemView.stacked, showAllItemAffixes on a unique, one slider and box per line as PoB; app/src/ui/items/audit2_tests.rs the_wheel_steps_a_stacked_range_slider)"
 
 [controls."items.displayItemTip"]
-ported = "app/src/ui/items/display.rs empty-panel hint"
+ported = "app/src/ui/items/display.rs PoB's hint under Craft item... and Create custom..."
 
 [controls."items.displayItemTooltipAnchor"]
-ported = "app/src/ui/items/display.rs tooltip"
+ported = "app/src/ui/items/display.rs tooltip; a mod line lights up under the pointer and toggles on any mouse button at the press (widgets/item_tooltip.rs, ItemsTab.lua:1521-1539)"
 
 [controls."items.displayItemVariant"]
 ported = "app/src/ui/items/display.rs variants"
@@ -1881,19 +1881,19 @@ ported = "app/src/ui/items/display.rs version"
 note = "part of items.displayItemVersion"
 
 [controls."items.editDisplayItem"]
-ported = "app/src/ui/items/display.rs Edit (text_window.rs)"
+ported = "app/src/ui/items/display.rs Edit (text_window.rs): PoB's title, rarity colours, Save enabled while PoB reads the text as an item, with its tooltip (ControlTooltipQuery::ItemText; gate items item_text_tooltip_matches_pob)"
 
 [controls."items.itemList"]
-ported = "app/src/ui/items/list.rs list, sort, drag, Delete, Ctrl+C; Ctrl+click equips into the item's slot and Ctrl+Shift+click into the second (QuickEquipItem, NF-16); shared items and database rows dropped on it land at the row under the cursor (DropSharedItem, DropDbItemOnList); its rows drag onto the sidebar's minion dropdown (DropOnMinion)"
+ported = "app/src/ui/items/list.rs list, sort, drag, Delete, Ctrl+C; Ctrl+click equips into the item's slot and Ctrl+Shift+click into the second (QuickEquipItem, NF-16); shared items and database rows dropped on it land at the row under the cursor (DropSharedItem, DropDbItemOnList); its rows drag onto the sidebar's minion dropdown (DropOnMinion); PoB's text for the empty list"
 
 [controls."items.itemList.delete"]
-ported = "app/src/ui/items/list.rs Delete"
+ported = "app/src/ui/items/list.rs Delete button, enabled with a selected row, and the Delete key (app/src/ui/items/audit2_tests.rs the_list_has_pobs_delete_button_and_empty_text)"
 
 [controls."items.itemList.deleteAll"]
-ported = "app/src/ui/items/list.rs Delete all"
+ported = "app/src/ui/items/list.rs Del All button, with PoB's question"
 
 [controls."items.itemList.deleteUnused"]
-ported = "app/src/ui/items/list.rs Delete unused"
+ported = "app/src/ui/items/list.rs Del Unused button, without a question"
 
 [controls."items.itemList.loadoutFilter"]
 ported = "app/src/ui/items/list.rs set filter combo"
@@ -1908,14 +1908,14 @@ ported = "app/src/ui/items/list.rs scroll area (part of items.itemList)"
 ported = "app/src/ui/items/list.rs Sort"
 
 [controls."items.newDisplayItem"]
-ported = "app/src/ui/items/display.rs Create custom (text_window.rs)"
+ported = "app/src/ui/items/display.rs Create custom (text_window.rs), after Craft item...: PoB's title and a Create button enabled while PoB reads the text as an item (app/src/ui/items/audit2_tests.rs the_text_window_asks_pob_whether_save_is_enabled)"
 
 [controls."items.priceDisplayItem"]
 ruled_out = "D-005"
 note = "trade price queries out"
 
 [controls."items.rareDB"]
-ported = "app/src/ui/items/db.rs as uniqueDB: Ctrl+Shift+click adds into the second slot, a row dragged onto a slot is DropDbItem (R23), onto the item list DropDbItemOnList, onto the shared list AddSharedItem, onto the sidebar's minion dropdown DropOnMinion; Shift on a hovered row shows the child tooltips"
+ported = "app/src/ui/items/db.rs as uniqueDB: Ctrl+Shift+click adds into the second slot, a row dragged onto a slot is DropDbItem (R23), onto the item list DropDbItemOnList, onto the shared list AddSharedItem, onto the sidebar's minion dropdown DropOnMinion; Shift on a hovered row shows the child tooltips; Up/Down/Home/End move the selection and Ctrl+C copies the row (CopyDbItem, ItemDBControl:OnSelCopy; gate item_db item_db_matches_pob)"
 
 [controls."items.rareDB.scrollBarH"]
 ported = "app/src/ui/items/db.rs rows scroll area (part of items.rareDB)"
@@ -1924,7 +1924,7 @@ ported = "app/src/ui/items/db.rs rows scroll area (part of items.rareDB)"
 ported = "app/src/ui/items/db.rs rows scroll area (part of items.rareDB)"
 
 [controls."items.rareDB.search"]
-ported = "app/src/ui/items/db.rs search"
+ported = "app/src/ui/items/db.rs search: PoB's filter %c, 100 bytes and the clear x; Esc keeps the text (escape_keeps_the_db_search, app/src/ui/items/audit2_tests.rs the_db_search_box_clears_on_its_x_and_holds_100_bytes)"
 
 [controls."items.rareDB.searchMode"]
 ported = "app/src/ui/items/db.rs search mode"
@@ -1947,7 +1947,7 @@ ported = "app/src/ui/items/slots.rs, list.rs and display.rs scroll areas"
 note = "the tab's own scroll bar"
 
 [controls."items.selectDB"]
-ported = "app/src/ui/items/db.rs Uniques / Rares"
+ported = "app/src/ui/items/db.rs Uniques / Rare Templates"
 
 [controls."items.selectDB.scrollBar"]
 ported = "app/src/ui/items/db.rs Uniques / Rares"
@@ -1957,14 +1957,14 @@ note = "part of items.selectDB"
 ported = "app/src/ui/items/db.rs"
 
 [controls."items.setLabel"]
-ported = "app/src/ui/items/sets.rs"
+ported = "app/src/ui/items/sets.rs 'Item set:'"
 
 [controls."items.setManage"]
-ported = "app/src/ui/items/sets.rs Manage"
+ported = "app/src/ui/items/sets.rs Manage... opens 'Manage Item Sets' with Done, PoB's rows ('(Current)') and set tooltips (app/src/ui/items/audit2_tests.rs item_sets_show_pobs_tooltip_and_current_marker); Enter saves a name (enter_saves_a_set_name)"
 note = "PoB's popup also holds the shared item sets: see NF-2"
 
 [controls."items.setSelect"]
-ported = "app/src/ui/items/sets.rs set combo"
+ported = "app/src/ui/items/sets.rs set combo; its entries show PoB's set tooltip (AddItemSetTooltip, ItemSetEntry.lines)"
 
 [controls."items.setSelect.scrollBar"]
 ported = "app/src/ui/items/sets.rs set combo"
@@ -1984,7 +1984,7 @@ ported = "app/src/ui/items/shared.rs rows (part of items.sharedItemList)"
 ported = "app/src/ui/items/shared.rs rows (part of items.sharedItemList)"
 
 [controls."items.slotHeader"]
-ported = "app/src/ui/items/slots.rs"
+ported = "app/src/ui/items/sets.rs 'Equipped items:' over the slot column (slot_header)"
 
 [controls."items.specButton"]
 ported = "app/src/ui/tree/mod.rs Manage... opens the Tree tab's Manage Passive Trees window and its questions over the Items tab (opened from app/src/ui/items/slots.rs)"
@@ -1994,13 +1994,13 @@ note = "the window's own parity is the Manage Passive Trees popup row (NF-3); on
 ported = "app/src/ui/items/slots.rs Passive tree: label"
 
 [controls."items.specSelect"]
-ported = "app/src/ui/items/slots.rs Passive tree dropdown under the slots (ItemsView.specs, PoB's GetSpecList labels; SelectSpec)"
+ported = "app/src/ui/items/slots.rs Passive tree dropdown between the flasks and the jewel sockets, as PoB (ItemsView.specs, PoB's GetSpecList labels; SelectSpec)"
 
 [controls."items.specSelect.scrollBar"]
 ported = "app/src/ui/items/slots.rs Passive tree dropdown list (part of items.specSelect)"
 
 [controls."items.uniqueDB"]
-ported = "app/src/ui/items/db.rs list, hover, double-click, Ctrl+click; Ctrl+Shift+click adds into the second slot, a row dragged onto a slot is DropDbItem (R23), onto the item list DropDbItemOnList, onto the shared list AddSharedItem, onto the sidebar's minion dropdown DropOnMinion; Shift on a hovered row shows the child tooltips"
+ported = "app/src/ui/items/db.rs list, hover, double-click, Ctrl+click; Ctrl+Shift+click adds into the second slot, a row dragged onto a slot is DropDbItem (R23), onto the item list DropDbItemOnList, onto the shared list AddSharedItem, onto the sidebar's minion dropdown DropOnMinion; Shift on a hovered row shows the child tooltips; Up/Down/Home/End move the selection and Ctrl+C copies the row (CopyDbItem, ItemDBControl:OnSelCopy; gate item_db item_db_matches_pob)"
 
 [controls."items.uniqueDB.league"]
 ported = "app/src/ui/items/db.rs filters"
@@ -2018,7 +2018,7 @@ ported = "app/src/ui/items/db.rs rows scroll area (part of items.uniqueDB)"
 ported = "app/src/ui/items/db.rs rows scroll area (part of items.uniqueDB)"
 
 [controls."items.uniqueDB.search"]
-ported = "app/src/ui/items/db.rs search"
+ported = "app/src/ui/items/db.rs search: PoB's filter %c, 100 bytes and the clear x; Esc keeps the text (escape_keeps_the_db_search, app/src/ui/items/audit2_tests.rs the_db_search_box_clears_on_its_x_and_holds_100_bytes)"
 
 [controls."items.uniqueDB.searchMode"]
 ported = "app/src/ui/items/db.rs search mode"
@@ -2033,13 +2033,13 @@ ported = "app/src/ui/items/db.rs stat sort"
 ported = "app/src/ui/items/db.rs filters"
 
 [controls."items.weaponSwap1"]
-ported = "app/src/ui/items/sets.rs weapon set I/II"
+ported = "app/src/ui/items/sets.rs weapon set I/II at the slot column's header"
 
 [controls."items.weaponSwap2"]
-ported = "app/src/ui/items/sets.rs weapon set I/II"
+ported = "app/src/ui/items/sets.rs weapon set I/II at the slot column's header"
 
 [controls."items.weaponSwapLabel"]
-ported = "app/src/ui/items/sets.rs weapon set I/II"
+ported = "app/src/ui/items/sets.rs 'Weapon Set:' with I and II at the slot column's header"
 
 [controls."list.buildList"]
 ported = "app/src/ui/build_list.rs table: PoB order, row menu, drag to folders, Ctrl+X/Ctrl+V, F2, Enter, Delete key; Ctrl+C then Ctrl+V into another folder"

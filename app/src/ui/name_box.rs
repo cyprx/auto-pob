@@ -325,7 +325,9 @@ pub fn spliced_with(
             .collect();
         let inserted = swapped.as_str();
         let kept: String = inserted.chars().filter(|c| keeps(*c)).collect();
-        if kept.is_empty() || (replacing && kept != inserted) {
+        // `ReplaceSel` refuses a text with a character the filter drops, and puts in any
+        // other, an empty one included (a lone "\r"); `Insert` refuses only nothing
+        if (replacing && kept != inserted) || (!replacing && kept.is_empty()) {
             return before.to_owned();
         }
         out = kept;
@@ -394,6 +396,26 @@ pub fn edit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A paste of only "\r" over a selection is PoB's `ReplaceSel("")` once the "\r" is
+    /// dropped (EditControl.lua:140-146): it deletes the selection. At the caret it is an
+    /// `Insert` of nothing, which changes nothing.
+    #[test]
+    fn a_paste_of_only_a_return_over_a_selection_deletes_it() {
+        let sel = Some(egui::text::CCursorRange::two(
+            egui::text::CCursor::new(1),
+            egui::text::CCursor::new(2),
+        ));
+        assert_eq!(
+            spliced_at("abc", "a\rc", sel, |_| true, NAME_LIMIT, true),
+            "ac"
+        );
+        let caret = Some(egui::text::CCursorRange::one(egui::text::CCursor::new(1)));
+        assert_eq!(
+            spliced_at("abc", "a\rbc", caret, |_| true, NAME_LIMIT, true),
+            "abc"
+        );
+    }
 
     /// A name box that comes up again (its popup opened once more) is a new box in PoB, with
     /// no undo: Ctrl+Z doesn't bring back what was typed the last time it was up

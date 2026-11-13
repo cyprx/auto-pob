@@ -501,8 +501,11 @@ impl AutoPobApp {
             command,
             Command::SelectLoadout { .. } | Command::NewLoadout { .. }
         ) {
+            // only a box that held an edit for the sets before lets go: the dropped list's
+            // own search keeps the keyboard, as PoB's list stays the selected control
+            // (DropDownControl.lua:422-436)
+            self.release_focus = self.edits_pending();
             self.flush_edits();
-            self.release_focus = true;
         }
         if let Command::OpenPopup(kind) = &command {
             // a late edit would end the new session (R4), so every pending one goes first
@@ -589,6 +592,16 @@ impl AutoPobApp {
     /// True while the engine hasn't caught up with what we sent.
     fn behind(&self) -> bool {
         self.last_sent > self.last_snapshot
+    }
+
+    /// An edit is still being typed in one of the build's boxes
+    fn edits_pending(&self) -> bool {
+        self.notes.has_pending()
+            || self.skills.has_pending()
+            || self.sidebar.has_pending()
+            || self.top_bar.has_pending()
+            || self.calcs.has_pending()
+            || self.config_ui.has_pending()
     }
 
     fn current_unsaved(&self) -> bool {
@@ -5142,6 +5155,47 @@ mod tests {
             !sent.iter().any(|c| c.starts_with("SetGroupLabel")),
             "{sent:?}"
         );
+    }
+
+    /// A loadout picked with the arrows in the dropped, searched list: the list stays the
+    /// selected control and its search keeps the keyboard (DropDownControl.lua:422-436)
+    #[test]
+    fn a_loadout_stepped_in_the_dropped_list_keeps_its_search() {
+        let (mut app, ctx) = notes_app();
+        let mut build = (**app.build.as_ref().unwrap()).clone();
+        build.loadouts = [
+            "^7^7Loadouts:",
+            "Leveling",
+            "Mapping",
+            "Mapping 2",
+            "^7^7-----",
+            "^7^7New Loadout",
+        ]
+        .map(String::from)
+        .to_vec();
+        build.loadout_selected = Some(1);
+        app.build = Some(Arc::new(build));
+        frame(&mut app, &ctx, vec![]);
+        let pos = top_rect(&ctx, "loadouts").center();
+        click_at(&mut app, &ctx, pos);
+        frame(&mut app, &ctx, vec![]);
+        assert!(ctx.text_edit_focused(), "the search has no keyboard");
+        frame(&mut app, &ctx, vec![egui::Event::Text("ma".into())]);
+        let before = app.sent_full.len();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::ArrowDown, egui::Modifiers::NONE),
+        );
+        for _ in 0..2 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        let sent = sent_since(&app, before);
+        assert!(
+            sent.iter().any(|c| c.starts_with("SelectLoadout")),
+            "{sent:?}"
+        );
+        assert!(ctx.text_edit_focused(), "the search lost the keyboard");
     }
 
     #[test]

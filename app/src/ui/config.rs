@@ -340,6 +340,9 @@ pub struct ConfigUi {
     /// sends it. PoB's custom modifier boxes change the build at each key (ConfigTab.lua:
     /// 35-40, 70-75), so a save, a tab switch or a close sends it first.
     pending: HashMap<String, Command>,
+    /// Each text field's view text when last drawn unfocused: other text from the view
+    /// (another config set) starts the box's undo over, as PoB's `SetText` does
+    shown: HashMap<String, String>,
 }
 
 impl ConfigUi {
@@ -1080,6 +1083,12 @@ impl ConfigUi {
             self.field_focus = Some(key.clone());
         } else if self.field_focus.as_deref() == Some(key.as_str()) {
             self.field_focus = None;
+        }
+        if !response.has_focus()
+            && self.shown.get(&key).map(String::as_str) != Some(current)
+            && self.shown.insert(key.clone(), current.to_owned()).is_some()
+        {
+            crate::widgets::edit_box::forget_undo(ui.ctx(), response.id);
         }
         crate::widgets::url_click::open_on_ctrl_click(ui, &response, &text);
         if matches!(style, FieldStyle::Single { .. }) {

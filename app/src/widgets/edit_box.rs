@@ -95,6 +95,16 @@ pub fn stepped(text: &str, up: bool, signed: bool) -> String {
     }
 }
 
+/// Starts the undo of text box `id` over: the view put other text in (another set, a loadout),
+/// as PoB's `SetText` resets its box's undo (EditControl.lua:103). Ctrl+Z would otherwise
+/// bring back the text the box showed before, and an edit would send it.
+pub fn forget_undo(ctx: &egui::Context, id: egui::Id) {
+    if let Some(mut state) = egui::TextEdit::load_state(ctx, id) {
+        state.clear_undoer();
+        state.store(ctx, id);
+    }
+}
+
 #[derive(Default)]
 pub struct EditBox {
     pub(crate) text: String,
@@ -164,6 +174,9 @@ impl EditBox {
         let focused = ui.memory(|m| m.has_focus(id));
         // a box that lost focus this frame still holds its edit: the view must not replace it
         if !focused && (!busy || !self.seeded) && !self.pending {
+            if self.seeded && self.text != current {
+                forget_undo(ui.ctx(), id);
+            }
             self.text.clear();
             self.text.push_str(current);
             self.sent.clear();
@@ -553,6 +566,33 @@ mod tests {
         fn type_text(&mut self, text: &str) -> Vec<String> {
             self.frame(vec![Event::Text(text.to_owned())])
         }
+    }
+
+    /// Text the view puts in (another set, a loadout) starts the box's undo over, as PoB's
+    /// `SetText` does (EditControl.lua:103): Ctrl+Z doesn't bring back the other set's text
+    #[test]
+    fn undo_stops_at_text_the_view_put_in() {
+        let mut h = Harness::new("old set");
+        h.focus();
+        h.type_text("x");
+        h.time += 2.0;
+        h.frame(vec![]);
+        assert_eq!(h.click_away(), ["oldx set"]);
+        h.current = "new set".into();
+        h.frame(vec![]);
+        h.focus();
+        for _ in 0..3 {
+            h.time += 2.0;
+            h.frame(vec![Event::Key {
+                key: Key::Z,
+                physical_key: Some(Key::Z),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            }]);
+        }
+        assert_eq!(h.a.text, "new set");
+        assert!(h.click_away().is_empty());
     }
 
     #[test]

@@ -5507,6 +5507,35 @@ mod tests {
         );
     }
 
+    /// Other text from the view (another config set) starts a box's undo over: Ctrl+Z
+    /// doesn't bring back the other set's text, as PoB's `SetText` resets it
+    #[test]
+    fn a_box_forgets_its_undo_when_the_view_changes_its_text() {
+        let mut first = sample_config();
+        first.custom_mods[1].text = "old line".into();
+        let (mut app, ctx) = config_app(first);
+        click(&mut app, &ctx, "mod_text:1");
+        type_text(&mut app, &ctx, "+5 life");
+        click(&mut app, &ctx, "mod_title:1");
+        // the other set's view
+        let mut view = sample_config();
+        view.custom_mods[1].text = "+9 mana".into();
+        app.config = Some(Arc::new(view));
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "mod_text:1");
+        for _ in 0..3 {
+            frame(&mut app, &ctx, ctrl(egui::Key::Z));
+        }
+        click(&mut app, &ctx, "mod_title:1");
+        let sent = sent_since(&app, before);
+        assert!(
+            !sent.iter().any(|c| c.starts_with("SetCustomModText")),
+            "the other set's text came back: {sent:?}"
+        );
+    }
+
     /// A box with the keyboard and no edit at a loadout switch lets go too: it would keep the
     /// sets before's text, and the next key would write it into the new sets
     #[test]

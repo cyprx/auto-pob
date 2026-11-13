@@ -3731,3 +3731,47 @@ fn a_build_with_bytes_that_are_not_utf8_shows_in_every_view() {
         "the group is still there"
     );
 }
+
+/// A build code PoB can't load raises in Build:Init (here a gem level that isn't a number:
+/// CalcTools.lua:46). PoB reuses one build object, and its next Init ran SyncLoadouts against
+/// the half-loaded tabs (Build.lua:601-604, 859), so every later open, import or new build
+/// failed until a restart. Now the error is PoB's own reason and the next build loads.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_build_that_raises_while_loading_leaves_the_engine_working() {
+    let _guard = lock();
+    let mut s = Session::start("raises-loading");
+    s.open_fixture("attack", &fixture_xml("attack"));
+    let good = fs::read_to_string(fixture_xml("attack")).unwrap();
+    let bad = good.replace("quality=\"0\" level=\"", "quality=\"0\" level=\"x");
+    let code = |s: &Session, xml: &str| -> String {
+        s.backend
+            .lua
+            .load(format!(
+                "return (common.base64.encode(Deflate({xml:?})):gsub('+','-'):gsub('/','_'))"
+            ))
+            .eval::<String>()
+            .unwrap()
+    };
+    let c = code(&s, &bad);
+    let error = s
+        .run(Command::ImportShareCode { code: c })
+        .expect_err("PoB can't load that build")
+        .to_string();
+    assert!(error.contains("CalcTools.lua:46"), "{error}");
+    s.backend.items_view().expect("items view");
+    s.backend.skills_view().expect("skills view");
+    let c = code(&s, &good);
+    s.run(Command::ImportShareCode { code: c })
+        .expect("a good code imports");
+    assert!(!s.backend.skills_view().unwrap().groups.is_empty());
+    // a file that raises the same way, then another build
+    let path = s.builds_dir().join("raises.xml");
+    fs::write(&path, &bad).unwrap();
+    s.run(Command::OpenBuild { path })
+        .expect_err("PoB can't load that build");
+    let path = s.builds_dir().join("attack.xml");
+    s.run(Command::OpenBuild { path }).expect("open");
+    assert!(!s.backend.skills_view().unwrap().groups.is_empty());
+    s.run(Command::NewBuild).expect("new");
+}

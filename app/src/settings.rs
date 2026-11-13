@@ -275,12 +275,39 @@ const NEW_FILE_HEADER: &str = "# auto-pob settings. PoB's own options stay in Se
 /// the folder, and replaces the file by rename. Returns the backup's path when the file there
 /// could not be parsed and was moved aside first.
 pub fn save_noting(path: &Path, s: &AppSettings) -> Result<Option<PathBuf>> {
-    // a linked file (a dotfile manager's) is written where it points, so the link stays
-    let resolved = std::fs::symlink_metadata(path)
-        .is_ok_and(|m| m.file_type().is_symlink())
-        .then(|| std::fs::canonicalize(path).ok())
-        .flatten();
-    let path = resolved.as_deref().unwrap_or(path);
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    save_noting_in(path, s, home.as_deref())
+}
+
+/// Where a save writes: a linked file (a dotfile manager's) is written where it points, so the
+/// link stays, but only when that is a regular file under `home`. Any other link (one leading
+/// outside `home`, to a folder, or dangling, which has no canonical path) is replaced in the
+/// config folder as a plain file, and nothing is written, made or moved where it points.
+fn write_target(path: &Path, home: Option<&Path>) -> PathBuf {
+    let linked = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
+    if !linked {
+        return path.to_path_buf();
+    }
+    let Some(home) = home.and_then(|h| std::fs::canonicalize(h).ok()) else {
+        return path.to_path_buf();
+    };
+    match std::fs::canonicalize(path) {
+        Ok(target)
+            if target.starts_with(&home)
+                && std::fs::metadata(&target).is_ok_and(|m| m.is_file()) =>
+        {
+            target
+        }
+        _ => path.to_path_buf(),
+    }
+}
+
+/// `save_noting` with the home folder a link may lead into given
+fn save_noting_in(path: &Path, s: &AppSettings, home: Option<&Path>) -> Result<Option<PathBuf>> {
+    let target = write_target(path, home);
+    let path = target.as_path();
+    // the file keeps the mode it had (a user's `chmod 600`), read before a backup moves it
+    let mode = std::fs::metadata(path).ok().map(|m| m.permissions());
     let mut backup = None;
     let existing = match std::fs::read_to_string(path) {
         Ok(text) => Some(text),
@@ -314,12 +341,18 @@ pub fn save_noting(path: &Path, s: &AppSettings) -> Result<Option<PathBuf>> {
         name.to_string_lossy(),
         std::process::id()
     ));
-    // the file keeps the mode it had (a user's `chmod 600`)
-    let mode = std::fs::metadata(path).ok().map(|m| m.permissions());
     let write = || -> Result<()> {
         use std::io::Write as _;
-        let mut file = std::fs::File::create(&temp)?;
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+        // a new file, never one (or a link) already at the temp name, with the mode from the
+        // start so the text never sits in a file more open than the old one
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(mode.as_ref().map_or(0o666, |m| m.mode() & 0o7777))
+            .open(&temp)?;
         file.write_all(text.as_bytes())?;
+        // the umask may have narrowed it
         if let Some(mode) = &mode {
             file.set_permissions(mode.clone())?;
         }
@@ -530,7 +563,7 @@ mod tests {
             update_check: true,
             ..AppSettings::default()
         };
-        save(&link, &s).unwrap();
+        save_noting_in(&link, &s, Some(&dir)).unwrap();
         assert!(
             std::fs::symlink_metadata(&link)
                 .unwrap()
@@ -554,6 +587,94 @@ mod tests {
         };
         assert_eq!(names(&dir), ["auto-pob.toml", "dotfiles"]);
         assert_eq!(names(real.parent().unwrap()), ["auto-pob.toml"]);
+    }
+
+    #[test]
+    fn a_corrupt_files_mode_carries_to_the_new_one() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = temp("badmode");
+        let path = dir.join("auto-pob.toml");
+        std::fs::write(&path, "not = = toml").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let backup = save_noting(&path, &AppSettings::default()).unwrap();
+        assert!(backup.is_some());
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn a_link_leading_outside_home_is_replaced_not_followed() {
+        let dir = temp("outside");
+        let home = dir.join("home");
+        let config = home.join(".config/auto-pob");
+        let outside = dir.join("elsewhere");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let names = |d: &Path| -> Vec<String> {
+            let mut v: Vec<_> = std::fs::read_dir(d)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            v.sort();
+            v
+        };
+        let s = AppSettings {
+            update_check: true,
+            ..AppSettings::default()
+        };
+        // a good file and a corrupt one outside: neither is written, moved or given a neighbour
+        for (i, before) in ["# theirs\nupdate_check = false\n", "not = = toml"]
+            .into_iter()
+            .enumerate()
+        {
+            let real = outside.join(format!("target{i}.toml"));
+            std::fs::write(&real, before).unwrap();
+            let link = config.join("auto-pob.toml");
+            let _ = std::fs::remove_file(&link);
+            let _ = std::fs::remove_file(config.join("auto-pob.toml.bad"));
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            save_noting_in(&link, &s, Some(&home)).unwrap();
+            assert_eq!(std::fs::read_to_string(&real).unwrap(), before);
+            assert!(
+                !std::fs::symlink_metadata(&link)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink(),
+                "the link outside was kept"
+            );
+            assert_eq!(load(&link).unwrap().unwrap(), s);
+            let all: Vec<String> = (0..=i).map(|n| format!("target{n}.toml")).collect();
+            assert_eq!(names(&outside), all);
+        }
+        // the corrupt one's backup is the link, beside the file in the config folder
+        assert_eq!(names(&config), ["auto-pob.toml", "auto-pob.toml.bad"]);
+        // a link into the home folder is still followed
+        let kept = home.join("dotfiles/auto-pob.toml");
+        std::fs::create_dir_all(kept.parent().unwrap()).unwrap();
+        std::fs::write(&kept, "# mine\nupdate_check = false\n").unwrap();
+        let link = config.join("auto-pob.toml");
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&kept, &link).unwrap();
+        save_noting_in(&link, &s, Some(&home)).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(
+            std::fs::read_to_string(&kept)
+                .unwrap()
+                .starts_with("# mine\n")
+        );
+        // so is it with no home known: replaced
+        save_noting_in(&link, &s, None).unwrap();
+        assert!(
+            !std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]

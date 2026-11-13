@@ -527,6 +527,11 @@ fn the_saved_build_picker_lays_out_only_the_rows_in_view() {
     h.frame(vec![]);
     assert!(h.ui.has_rect("saved:0"));
     assert!(!h.ui.has_rect("saved:4999"));
+    // the rows are as tall as the list was told, so a scroll lands where it should
+    let style = h.ctx.global_style();
+    let step = style.spacing.interact_size.y + style.spacing.item_spacing.y;
+    let gap = h.ui.rect("saved:1").min.y - h.ui.rect("saved:0").min.y;
+    assert!((gap - step).abs() < 0.5, "{gap} vs {step}");
     let laid_out = h
         .texts
         .iter()

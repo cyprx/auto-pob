@@ -444,7 +444,8 @@ impl PobBackend {
         // again whether text coming back holds them (`bytes_text`). An Options window that
         // stays may show escaped text (a Builds path that isn't UTF-8) its edits send back,
         // and the UI keeps its view, so the flag stays while it is open.
-        if !self.call::<_, bool>("popup_live", ())? {
+        // a failed check keeps the flag (the safe side) and the rest of the clean-up goes on
+        if !self.call::<_, bool>("popup_live", ()).unwrap_or(true) {
             super::bytes_text::reset();
         }
         if self.item_db.take().is_some() {

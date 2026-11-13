@@ -4546,3 +4546,21 @@ fn a_build_file_named_with_bytes_that_arent_utf8_opens() {
         "another file was written"
     );
 }
+
+/// A failing `popup_live` doesn't stop the rest of leaving a build: the escapes flag is
+/// kept (the safe side) and the open goes on (review M4)
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_failing_popup_check_leaves_the_build_change_working() {
+    let _guard = lock();
+    let mut s = attack_session("popup-live-fails");
+    s.backend
+        .lua
+        .load("glue.popup_live = function() error('boom') end")
+        .exec()
+        .unwrap();
+    let path = s.builds_dir().join("attack.xml");
+    s.run(Command::OpenBuild { path })
+        .expect("the open goes on");
+    assert_eq!(s.backend.build_view().unwrap().name, "attack");
+}

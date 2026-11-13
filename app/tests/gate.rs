@@ -4496,3 +4496,53 @@ fn a_build_saved_with_a_search_pob_cant_read_opens() {
     assert_eq!(state.search, "");
     assert!(!s.backend.build_view().unwrap().unsaved);
 }
+
+/// A build file whose name isn't UTF-8 (a Windows-1252 "é"): PoB on Linux lists it and opens
+/// it. The list shows its name escaped, and its path opens and saves that same file.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_build_file_named_with_bytes_that_arent_utf8_opens() {
+    use std::os::unix::ffi::OsStrExt;
+    let _guard = lock();
+    let mut s = Session::start("latin-name");
+    let builds = s.builds_dir();
+    fs::create_dir_all(&builds).unwrap();
+    let named = builds.join(std::ffi::OsStr::from_bytes(b"caf\xE9.xml"));
+    fs::copy(fixture_xml("attack"), &named).unwrap();
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .expect("list");
+    let list = s.backend.build_list_view().expect("the list view");
+    let entry = list
+        .entries
+        .iter()
+        .find(|e| e.name == "caf\u{F7E9}")
+        .unwrap_or_else(|| {
+            panic!(
+                "{:?}",
+                list.entries.iter().map(|e| &e.name).collect::<Vec<_>>()
+            )
+        });
+    assert_eq!(entry.path, named);
+    s.run(Command::OpenBuild {
+        path: entry.path.clone(),
+    })
+    .expect("open");
+    assert_eq!(s.backend.build_view().unwrap().name, "caf\u{F7E9}");
+    s.run(Command::SetNotes {
+        text: "saved here".into(),
+    })
+    .expect("notes");
+    s.run(Command::Save).expect("save");
+    let saved = fs::read(&named).unwrap();
+    assert!(
+        saved.windows(10).any(|w| w == b"saved here"),
+        "saved elsewhere"
+    );
+    assert_eq!(
+        fs::read_dir(&builds).unwrap().count(),
+        1,
+        "another file was written"
+    );
+}

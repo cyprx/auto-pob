@@ -312,7 +312,9 @@ fn glob_match(pattern: &[char], name: &[char]) -> bool {
 }
 
 struct Entry {
-    name: String,
+    /// The file name's own bytes: a name that isn't UTF-8 reaches PoB as it is, as on PoB's
+    /// own Linux build, so its path opens
+    name: Vec<u8>,
     path: PathBuf,
 }
 
@@ -337,7 +339,9 @@ impl UserData for SearchHandle {
                 Ok(false)
             }
         });
-        methods.add_method("GetFileName", |_, this, ()| Ok(this.current().name.clone()));
+        methods.add_method("GetFileName", |lua, this, ()| {
+            lua.create_string(&this.current().name)
+        });
         methods.add_method("GetFileSize", |_, this, ()| {
             Ok(fs::metadata(&this.current().path).map_or(0, |m| m.len()))
         });
@@ -354,25 +358,28 @@ impl UserData for SearchHandle {
 /// `NewFileSearch(pattern, dirsOnly)`: globs the last path component only.
 fn new_file_search(
     _: &Lua,
-    (pattern, dirs_only): (String, Option<bool>),
+    (pattern, dirs_only): (LuaString, Option<bool>),
 ) -> mlua::Result<Option<SearchHandle>> {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
     let dirs_only = dirs_only.unwrap_or(false);
-    let (dir, file_pattern) = match pattern.rfind('/') {
-        Some(0) => ("/", &pattern[1..]),
+    // PoB's strings are bytes: a folder whose name isn't UTF-8 is searched as it is
+    let pattern = pattern.as_bytes().to_vec();
+    let (dir, file_pattern): (&[u8], &[u8]) = match pattern.iter().rposition(|&b| b == b'/') {
+        Some(0) => (b"/", &pattern[1..]),
         Some(i) => (&pattern[..i], &pattern[i + 1..]),
-        None => (".", pattern.as_str()),
+        None => (b".", &pattern[..]),
     };
-    let file_pattern: Vec<char> = file_pattern.chars().collect();
-    let Ok(read) = fs::read_dir(dir) else {
+    let file_pattern: Vec<char> = String::from_utf8_lossy(file_pattern).chars().collect();
+    let Ok(read) = fs::read_dir(std::ffi::OsStr::from_bytes(dir)) else {
         return Ok(None);
     };
     let mut entries: Vec<Entry> = read
         .filter_map(Result::ok)
         .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().into_owned();
+            let name = e.file_name().into_vec();
             // follows symlinks, like the classic app's `is_dir`
             let is_dir = e.path().is_dir();
-            let chars: Vec<char> = name.chars().collect();
+            let chars: Vec<char> = String::from_utf8_lossy(&name).chars().collect();
             (is_dir == dirs_only && glob_match(&file_pattern, &chars)).then(|| Entry {
                 name,
                 path: e.path(),

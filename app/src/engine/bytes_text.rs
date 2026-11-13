@@ -154,6 +154,23 @@ pub fn encode(text: &str) -> Cow<'_, [u8]> {
     Cow::Owned(out)
 }
 
+/// A path the views showed escaped, as its own bytes: a file name that isn't UTF-8 (the
+/// build list) opens as itself. Whether escapes were seen doesn't matter: only a view that
+/// was escaped is turned back.
+pub fn path_from_escaped(text: &str) -> std::path::PathBuf {
+    use std::os::unix::ffi::OsStringExt;
+    let mut out = Vec::with_capacity(text.len());
+    for c in text.chars() {
+        if is_escape(c) {
+            out.push((c as u32 - FIRST + 0x80) as u8);
+        } else {
+            let mut buf = [0u8; 4];
+            out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        }
+    }
+    std::path::PathBuf::from(std::ffi::OsString::from_vec(out))
+}
+
 /// `encode` applied to every string of `value`, nested tables included (a command's
 /// arguments), in place; tables are walked to a small depth
 pub fn encode_value(

@@ -1347,7 +1347,14 @@ impl PobBackend {
             Command::OpenBuild { path } => {
                 self.on_list = false;
                 self.reset_heatmap();
-                self.call_path::<_, ()>("open_build", path.to_string_lossy().into_owned())?;
+                // the path's own bytes: a file name that isn't UTF-8 opens as itself
+                let path = {
+                    use std::os::unix::ffi::OsStrExt;
+                    self.lua
+                        .create_string(path.as_os_str().as_bytes())
+                        .map_err(|e| anyhow!("{e}"))?
+                };
+                self.call_path::<_, ()>("open_build", path)?;
                 self.all_views()
             }
             Command::ImportShareCode { code } => {
@@ -2673,7 +2680,23 @@ impl Backend for PobBackend {
         // the entries are file names (valid UTF-8, buildpaths): they come and go as they are,
         // never escaped, as the paths of the commands about them do (`call_path`)
         let value: mlua::Value = self.call_path("list_builds", self.folder.clone())?;
-        let mut view: BuildListView = self.lua.from_value(value).map_err(|e| anyhow!("{e}"))?;
+        let mut view: BuildListView = match self.lua.from_value(value.clone()) {
+            Ok(view) => view,
+            // a file name that isn't UTF-8, which PoB on Linux lists and opens: the list
+            // shows it escaped (`bytes_text`), and its path is its own bytes again
+            Err(e) => {
+                let fixed = lossy_strings(&self.lua, &value, 0)
+                    .map_err(|e| anyhow!("{e}"))?
+                    .ok_or_else(|| anyhow!("{e}"))?;
+                let mut view: BuildListView =
+                    self.lua.from_value(fixed).map_err(|e| anyhow!("{e}"))?;
+                for entry in &mut view.entries {
+                    let shown = entry.path.to_string_lossy().into_owned();
+                    entry.path = super::bytes_text::path_from_escaped(&shown);
+                }
+                view
+            }
+        };
         // a missing Builds folder was already refused by the listing
         let root = self.build_root()?;
         view.tree = buildpaths::folder_tree(&root);

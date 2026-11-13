@@ -1220,6 +1220,14 @@ mod tests {
                 ("not a mod".to_owned(), unsupported)
             ]
         );
+        // an empty box, as every new build has, draws through the colours too
+        h.view.custom_mods[0].text = String::new();
+        h.view.custom_mods[0].line_colours = vec!["^xF05050".into()];
+        h.frame(vec![]);
+        h.frame(vec![]);
+        h.view.custom_mods[0].text = text.into();
+        h.view.custom_mods[0].line_colours = vec!["^x8888FF".into(), "^xF05050".into()];
+        h.frame(vec![]);
         h.click("mod_text:0");
         let runs = h.text_colours(text);
         assert!(!runs.is_empty(), "the box wasn't drawn");

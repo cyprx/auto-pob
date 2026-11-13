@@ -175,6 +175,9 @@ pub struct CompareUi {
     /// The engine hasn't caught up: buttons that act on a view wait for the next one
     busy: bool,
     tip: ItemTip,
+    /// The Equip buttons' stat comparison, asked for while one is hovered
+    /// (CompareTab.lua:3966-4009)
+    equip_tip: crate::ui::hover::HoverTip,
     /// PoB switched to its Compare tab and the app hasn't followed yet
     switched: bool,
     pub(crate) rects: Rects,
@@ -243,6 +246,7 @@ impl CompareUi {
                 if self.view.as_deref() != Some(&**view) {
                     // what the engine says about an item may have changed
                     self.tip = ItemTip::default();
+                    self.equip_tip.forget();
                 }
                 self.view = Some(view.clone());
             }
@@ -272,6 +276,7 @@ impl CompareUi {
             Snapshot::ItemTooltip(view) => {
                 self.tip.on_reply(view);
             }
+            Snapshot::HoverTooltip(view) => self.equip_tip.on_view(view),
             _ => {}
         }
     }

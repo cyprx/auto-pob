@@ -2807,6 +2807,7 @@ impl Backend for PobBackend {
                 self.view("skills_hover", (group + 1, slot + 1, "count"))?
             }
             HoverTarget::ConfigOption { var } => self.view("config_hover", var.clone())?,
+            HoverTarget::CompareEquip { slot } => self.view("compare_equip_hover", slot.clone())?,
             HoverTarget::CustomModEnabled { group } => self.view("custom_mod_hover", group + 1)?,
         };
         Ok(lines.map(|lines| HoverTooltipView {

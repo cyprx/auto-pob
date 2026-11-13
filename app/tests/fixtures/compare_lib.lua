@@ -248,6 +248,54 @@ function itemsFrame()
 	return { rows = rows, drawn = strings, warning = colorCodes.WARNING .. "  (tree missing allocated node)" }
 end
 
+-- The stat comparison a whole ITEMS frame draws with the pointer on the `k`-th Equip button
+-- (CompareTab.lua:3966-4009), as { size, text } and { separator } lines. A first frame finds
+-- where PoB draws the buttons' labels; the second rests the pointer there.
+function equipHover(k)
+	local tab = build.compareTab
+	local spots, vx, vy = {}, 0, 0
+	local setViewport = SetViewport
+	compareFrame("ITEMS", function(on)
+		if on then
+			SetViewport = function(x, y, ...)
+				vx, vy = x or 0, y or 0
+				return setViewport(x, y, ...)
+			end
+			local inner = DrawString
+			DrawString = function(x, y, align, height, font, text)
+				if text == "^7Equip" then
+					spots[#spots + 1] = { x = vx + x, y = vy + y }
+				end
+				return inner(x, y, align, height, font, text)
+			end
+		else
+			SetViewport = setViewport
+		end
+	end)
+	local spot = assert(spots[k], "no Equip button " .. k)
+	local lines
+	local getCursorPos = GetCursorPos
+	compareFrame("ITEMS", function(on)
+		if on then
+			GetCursorPos = function() return spot.x, spot.y + 4 end
+			tab.itemTooltip.Draw = function(self)
+				lines = {}
+				for i, line in ipairs(self.lines) do
+					if line.text then
+						lines[i] = { size = line.size, text = line.text }
+					else
+						lines[i] = { separator = line.size }
+					end
+				end
+			end
+		else
+			GetCursorPos = getCursorPos
+			tab.itemTooltip.Draw = nil
+		end
+	end)
+	return assert(lines, "no tooltip drawn")
+end
+
 -- PoB's "Expanded mode" box
 function setItemsExpanded(on)
 	local check = build.compareTab.controls.itemsExpandedCheck

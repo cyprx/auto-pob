@@ -663,6 +663,61 @@ function glue.compare_item_tooltip(slot)
 	return nil
 end
 
+-- What hovering an Items row's Equip button shows: PoB's stat comparison of equipping the
+-- comparison's item in this build's slot (CompareTab.lua:3966-4009, drawn inline there, so
+-- followed line by line). Nil where the row has no Equip button.
+function glue.compare_equip_hover(slot)
+	if not slot or not glue.build_loaded() then
+		return nil
+	end
+	local tab = pob.build.compareTab
+	local entry = sync(tab)
+	if not entry then
+		return nil
+	end
+	local found
+	for _, row in ipairs(item_slots(tab, entry)) do
+		if row.slot == slot and row.cItem and not row.missing then
+			found = row
+		end
+	end
+	if not found then
+		return nil
+	end
+	local tooltip = new("Tooltip")
+	local calcFunc, calcBase = tab.calcs.getMiscCalculator(tab.primaryBuild)
+	if calcFunc then
+		local newItem = new("Item", found.cItem.raw)
+		newItem:NormaliseQuality()
+		local pSlot = tab.primaryBuild.itemsTab.slots[slot]
+		local selItem = pSlot and tab.primaryBuild.itemsTab.items[pSlot.selItemId]
+		local override = { repSlotName = slot, repItem = newItem }
+		if pSlot and pSlot.nodeId then
+			local pSpec = tab.primaryBuild.spec
+			if pSpec and pSpec.allocNodes and not pSpec.allocNodes[pSlot.nodeId] then
+				local node = pSpec.nodes[pSlot.nodeId]
+				if node then
+					override.addNodes = { [node] = true }
+				end
+			end
+		end
+		local output = calcFunc(override)
+		local slotLabel = pSlot and pSlot.label or slot
+		local header
+		if selItem then
+			header = string.format("^7Equipping this item in %s will give you:\n(replacing %s%s^7)", slotLabel, colorCodes[selItem.rarity] or "^7", selItem.name)
+		else
+			header = string.format("^7Equipping this item in %s will give you:", slotLabel)
+		end
+		local count = tab.primaryBuild:AddStatComparesToTooltip(tooltip, calcBase, output, header)
+		if count == 0 then
+			tooltip:AddLine(14, header)
+			tooltip:AddLine(14, "^7No changes.")
+		end
+	end
+	return glue.tooltip_lines(tooltip)
+end
+
 -- PoB's Copy and Equip buttons on an Items row (CompareTab.lua:3936-3941)
 function glue.compare_copy_item(slot, andUse)
 	local tab = compare_tab()

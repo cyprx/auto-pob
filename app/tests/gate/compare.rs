@@ -1216,6 +1216,40 @@ fn compare_views_and_copies_match_pob() {
         assert!(none.is_none(), "{slot}");
     }
 
+    // ---- Hovering Equip: PoB's stat comparison of equipping their item here ----
+    let equips: Vec<String> = view(&mut s)
+        .items
+        .iter()
+        .filter(|r| r.can_equip)
+        .map(|r| r.slot.clone())
+        .collect();
+    assert!(equips.len() >= 2, "{equips:?}");
+    for (k, slot) in equips.iter().enumerate().take(2) {
+        let target = auto_pob::engine::HoverTarget::CompareEquip { slot: slot.clone() };
+        let ours = s
+            .backend
+            .hover_tooltip_view(&target)
+            .unwrap()
+            .unwrap_or_else(|| panic!("no answer for {slot}"));
+        let theirs: Vec<auto_pob::engine::views::TooltipLine> = {
+            let f: mlua::Function = up.lua.globals().get("equipHover").unwrap();
+            up.lua.from_value(f.call(k + 1).unwrap()).unwrap()
+        };
+        assert_eq!(ours.lines, theirs, "{slot}");
+        assert!(
+            format!("{:?}", ours.lines).contains("Equipping this item in"),
+            "{slot}: {:?}",
+            ours.lines
+        );
+    }
+    let none = s
+        .backend
+        .hover_tooltip_view(&auto_pob::engine::HoverTarget::CompareEquip {
+            slot: "Nowhere".into(),
+        })
+        .unwrap();
+    assert!(none.is_none());
+
     // ---- Copy and equip their body armour, then their jewel; Items undo takes each back ----
     let start = copy_both(&mut s, &up, "Body Armour", true);
     let row = view(&mut s)

@@ -6,7 +6,7 @@
 use super::{CompareOutput, CompareUi};
 use crate::engine::ItemTooltipQuery;
 use crate::engine::views::{CardLine, CompareItemRow, CompareView};
-use crate::engine::{BuySource, Command, PopupKind};
+use crate::engine::{BuySource, Command, HoverTarget, PopupKind};
 use crate::widgets::pob_text;
 use eframe::egui;
 
@@ -256,6 +256,12 @@ fn buttons(
         if row.can_equip {
             let equip = ui.add_enabled(!busy, egui::Button::new("Equip"));
             tab.rects.note(&equip, || format!("equip:{}", row.slot));
+            // PoB's stat comparison of equipping it (CompareTab.lua:3966-4009)
+            let now = ui.input(|i| i.time);
+            let target = HoverTarget::CompareEquip {
+                slot: row.slot.clone(),
+            };
+            tab.equip_tip.track(&equip, target, now, &mut out.queries);
             if equip.clicked() {
                 out.commands.push(Command::CopyCompareItem {
                     slot: row.slot.clone(),

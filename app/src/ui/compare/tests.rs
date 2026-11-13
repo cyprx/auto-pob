@@ -1260,3 +1260,38 @@ fn the_config_rows_are_pobs_boxes_for_both_builds() {
         ["SetCompareControl { name: \"cfg_p_enemyIsBoss\", value: Text(\"25\") }"]
     );
 }
+
+/// Hovering an Equip button asks for PoB's stat comparison of equipping the item, once, and
+/// shows the answer (CompareTab.lua:3966-4009)
+#[test]
+fn hovering_equip_shows_pobs_stat_comparison() {
+    let mut h = Harness::new(Some(sample()));
+    h.click("sub:items");
+    let slot = sample()
+        .items
+        .iter()
+        .find(|r| r.can_equip)
+        .expect("a row with Equip")
+        .slot
+        .clone();
+    let out = h.hover(&format!("equip:{slot}"));
+    let target = crate::engine::HoverTarget::CompareEquip { slot: slot.clone() };
+    assert_eq!(
+        debug(&out.queries),
+        debug(&[Command::HoverTooltip(target.clone())])
+    );
+    h.ui.on_snapshot(&Snapshot::HoverTooltip(Arc::new(
+        crate::engine::views::HoverTooltipView {
+            target,
+            lines: vec![crate::engine::views::TooltipLine::Line {
+                size: 14,
+                text: "^7Equipping this item in Helmet will give you:".into(),
+            }],
+        },
+    )));
+    for _ in 0..5 {
+        let out = h.frame(vec![]);
+        assert!(out.queries.is_empty(), "asked once");
+    }
+    assert!(h.drew("Equipping this item in Helmet will give you:"));
+}

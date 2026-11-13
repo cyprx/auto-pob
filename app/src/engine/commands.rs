@@ -1027,6 +1027,8 @@ pub enum HoverTarget {
     ConfigOption { var: String },
     /// A custom modifier group's enable box (0-based): "Disabling/Enabling this group..."
     CustomModEnabled { group: usize },
+    /// A Compare Items row's Equip button: "Equipping this item in <slot> will give you:"
+    CompareEquip { slot: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]

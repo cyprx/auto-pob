@@ -615,7 +615,8 @@ impl AutoPobApp {
 
     /// Off the Compare tab, an edit's recalculation doesn't rebuild its view, so the engine is
     /// told when the tab shows: hiding needs no answer, showing is answered with a fresh view,
-    /// which the tab waits for (`compare_wait`).
+    /// which the tab waits for (`compare_wait`). Neither counts as sent (`behind`): a view that
+    /// fails is answered by its error alone, and the tab's controls come back with it.
     fn sync_compare_shown(&mut self) {
         let shown = self.screen == Screen::Build && self.tab == BuildTab::Compare;
         if shown == self.compare_shown {
@@ -623,7 +624,7 @@ impl AutoPobApp {
         }
         self.compare_shown = shown;
         if shown {
-            self.compare_wait = Some(self.send(Command::SetCompareShown { on: true }));
+            self.compare_wait = Some(self.engine.send(Command::SetCompareShown { on: true }));
         } else {
             self.engine.send(Command::SetCompareShown { on: false });
         }
@@ -926,7 +927,7 @@ impl AutoPobApp {
         }
         self.tree.on_command_error();
         // the view the Compare tab waits for may have failed: what it holds is all there is,
-        // so it is no longer dimmed (`behind` keeps its controls off until a snapshot comes)
+        // so it is no longer dimmed and its controls work again
         if self.compare_wait.is_some_and(|s| seq >= s) {
             self.compare_wait = None;
         }

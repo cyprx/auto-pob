@@ -24,7 +24,7 @@ fn settle(app: &mut AutoPobApp, ctx: &egui::Context) {
     let start = Instant::now();
     loop {
         frame(app, ctx, vec![]);
-        if app.ready && !app.behind() && app.entering.is_none() {
+        if app.ready && !app.behind() && !app.compare_waiting() && app.entering.is_none() {
             break;
         }
         assert!(start.elapsed() < Duration::from_secs(10), "engine behind");
@@ -481,4 +481,64 @@ fn entering_the_tab_after_a_hidden_edit_waits_for_its_view() {
         app.sent_full[before..],
         ["RemoveCompare { index: 0 }".to_owned()]
     );
+}
+
+/// Entering the tab asks for a fresh view. When that view fails, the tab keeps the one it
+/// holds and its controls work again: nothing else is coming for that seq.
+#[test]
+fn a_failed_view_on_entering_the_tab_leaves_its_controls_on() {
+    let fails: Arc<std::sync::atomic::AtomicBool> = Arc::default();
+    let flag = fails.clone();
+    let mut app = AutoPobApp::new(Box::new(move || {
+        let flag = flag.clone();
+        Engine::spawn_with(
+            move |_| {
+                let mut fake = Fake::new().0;
+                fake.compare = Some(sample());
+                fake.compare_fails = flag;
+                Ok(Box::new(fake) as Box<dyn Backend>)
+            },
+            || {},
+        )
+    }));
+    let ctx = egui::Context::default();
+    settle(&mut app, &ctx);
+    app.enter_build(Command::NewBuild);
+    settle(&mut app, &ctx);
+    show_compare(&mut app, &ctx);
+    app.tab = BuildTab::Config;
+    settle(&mut app, &ctx);
+    // the next view fails
+    fails.store(true, std::sync::atomic::Ordering::SeqCst);
+    let errors = app.notices.len();
+    app.tab = BuildTab::Compare;
+    let start = Instant::now();
+    while app.notices.len() == errors {
+        assert!(start.elapsed() < Duration::from_secs(10), "no error came");
+        frame(&mut app, &ctx, vec![]);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!app.compare_waiting());
+    let before = app.sent_full.len();
+    click(&mut app, &ctx, "remove");
+    assert_eq!(
+        app.sent_full[before..],
+        ["RemoveCompare { index: 0 }".to_owned()],
+        "the tab's controls stayed off"
+    );
+}
+
+/// A snapshot of the seq the tab waits for, or a later one, ends the wait: the engine has
+/// answered the showing, whatever came of its view
+#[test]
+fn a_later_snapshot_ends_the_wait() {
+    let (mut app, _ctx) = open_build();
+    let seq = app.last_sent.max(app.last_snapshot) + 1;
+    app.compare_wait = Some(seq);
+    assert!(app.compare_waiting());
+    app.on_event(Event_::Snapshot {
+        seq,
+        snapshot: Snapshot::Compare(Some(Arc::new(sample()))),
+    });
+    assert!(!app.compare_waiting());
 }

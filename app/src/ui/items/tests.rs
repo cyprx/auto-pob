@@ -561,6 +561,34 @@ fn hovering_a_dropdown_entry_asks_with_the_slot() {
     );
 }
 
+/// A closed slot's tooltip blanks while another control of the tab is selected, a list
+/// excepted (ItemSlotControl.lua:47-52)
+#[test]
+fn a_slot_tooltip_blanks_while_a_box_has_the_keyboard() {
+    let asked = |h: &mut Harness| {
+        let pos = h.ui.rect("slot_combo_Body Armour").center();
+        h.frame(vec![Event::PointerMoved(pos)]);
+        let mut queries = h.frame(vec![]).queries;
+        queries.extend(h.frame(vec![]).queries);
+        debug(&queries)
+            .iter()
+            .any(|q| q.contains("slot: Some(\"Body Armour\")"))
+    };
+    let mut h = Harness::new(sample());
+    h.field = Some(String::new());
+    h.frame(vec![]);
+    h.frame(vec![]);
+    assert!(h.ctx.text_edit_focused());
+    assert!(
+        !asked(&mut h),
+        "the tooltip showed while a box had the keyboard"
+    );
+    // a selected list doesn't blank it
+    let mut h = Harness::new(sample());
+    h.click("row_1");
+    assert!(asked(&mut h), "a selected list blanked the tooltip");
+}
+
 #[test]
 fn stale_item_tooltip_reply_ignored() {
     let mut h = Harness::new(sample());

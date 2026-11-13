@@ -340,7 +340,14 @@ impl ItemsUi {
                 if slot.selected != 0 && (label.hovered() || combo.inner.response.hovered()) {
                     self.hovered_slot = Some(slot.selected);
                 }
-                if slot.selected != 0 {
+                // PoB blanks a closed slot's tooltip while another control of the tab is
+                // selected, a list excepted (ItemSlotControl.lua:47-52): a box with the
+                // keyboard or another dropped list
+                let own_dropped =
+                    egui::Popup::is_id_open(ui.ctx(), combo.inner.response.id.with("popup"));
+                let blank =
+                    !own_dropped && (self.tab_box_selected || egui::Popup::is_any_open(ui.ctx()));
+                if slot.selected != 0 && !blank {
                     self.note_hover(
                         &combo.inner.response,
                         ItemTooltipQuery {

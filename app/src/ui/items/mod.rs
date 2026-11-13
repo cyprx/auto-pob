@@ -46,6 +46,8 @@ pub struct ItemsUi {
     /// A row of the item list had the keyboard as the list was last drawn: the list is PoB's
     /// selected control
     list_row_focused: bool,
+    /// One of the tab's boxes had the keyboard as the frame began: a slot's tooltip blanks
+    tab_box_selected: bool,
     /// An item in use the user asked to delete, with PoB's question
     confirm_delete: Option<(u32, String)>,
     confirm_delete_all: bool,
@@ -365,6 +367,8 @@ impl ItemsUi {
                 || crate::widgets::scroll_step::control_selected_at_start(ctx)
                 || self.list_row_focused
                 || self.db.list_focus;
+            self.tab_box_selected =
+                ctx.text_edit_focused() && !crate::widgets::scroll_step::build_box_typing(ctx);
         }
         // a selected database list takes the keys before a slider pointed at (ControlHost.lua:
         // 56-73); it holds its selection apart from egui's focus

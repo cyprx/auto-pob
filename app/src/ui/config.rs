@@ -113,6 +113,18 @@ enum SetEdit {
 /// What a dragged config set row carries: its position
 struct ConfigSetDrag(usize);
 
+/// How an integer box steps (EditControl.lua:680-700)
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Step {
+    /// `%D`: down only from a number above 0
+    Unsigned,
+    /// `^%-%d`: down below 0
+    Signed,
+    /// countAllowZero's `^%-%d` box, whose value can't be negative here (parse_number_input):
+    /// it steps as PoB's but never below 0, placeholder or not (controller ruling, review I4)
+    Floor0,
+}
+
 /// What a field's PoB box takes: its filter and byte limit, and for an integer box whether
 /// it goes below 0 (ConfigTab.lua:273: `^%-%d` for integer and countAllowZero, `%D` for count,
 /// `^%d.` for float, at most 10 characters)
@@ -120,18 +132,20 @@ struct ConfigSetDrag(usize);
 struct Accept {
     keeps: fn(char) -> bool,
     limit: usize,
-    /// An integer box, which steps on + and -, Up, Down and the wheel; true when signed
-    number: Option<bool>,
+    /// An integer box, which steps on + and -, Up, Down and the wheel
+    number: Option<Step>,
 }
 
 impl Accept {
     fn for_option(kind: ConfigKind, allow_zero: bool) -> Option<Self> {
         let (keeps, number): (fn(char) -> bool, _) = match kind {
-            ConfigKind::Integer => (|c| c.is_ascii_digit() || c == '-', Some(true)),
+            ConfigKind::Integer => (|c| c.is_ascii_digit() || c == '-', Some(Step::Signed)),
             // PoB's countAllowZero box takes "-" and steps below 0, but a negative count is no
             // value here (parse_number_input), so its step stops at 0
-            ConfigKind::Count if allow_zero => (|c| c.is_ascii_digit() || c == '-', Some(false)),
-            ConfigKind::Count => (|c| c.is_ascii_digit(), Some(false)),
+            ConfigKind::Count if allow_zero => {
+                (|c| c.is_ascii_digit() || c == '-', Some(Step::Floor0))
+            }
+            ConfigKind::Count => (|c| c.is_ascii_digit(), Some(Step::Unsigned)),
             ConfigKind::Float => (|c| c.is_ascii_digit() || c == '.', None),
             // "^%C\t\n" (ConfigTab.lua:289)
             ConfigKind::Text => {
@@ -154,16 +168,22 @@ impl Accept {
 /// PoB's step of an integer box with `placeholder` (EditControl.lua:680-700): up adds one to
 /// its number, else to the placeholder's, else makes it 1; down takes one from its number
 /// (above 0 in a `%D` box), else from the placeholder's, else makes it 0
-fn step_number(text: &str, placeholder: &str, up: bool, signed: bool) -> String {
+fn step_number(text: &str, placeholder: &str, up: bool, step: Step) -> String {
     let number = |t: &str| t.trim().parse::<i64>().ok();
     let delta = if up { 1 } else { -1 };
-    match number(text) {
-        Some(n) if up || signed || n > 0 => (n + delta).to_string(),
+    let stepped = match number(text) {
+        Some(n) if up || step != Step::Unsigned || n > 0 => n + delta,
         _ => match number(placeholder) {
-            Some(p) => (p + delta).to_string(),
-            None => if up { "1" } else { "0" }.to_owned(),
+            Some(p) => p + delta,
+            None => i64::from(up),
         },
-    }
+    };
+    let stepped = if step == Step::Floor0 {
+        stepped.max(0)
+    } else {
+        stepped
+    };
+    stepped.to_string()
 }
 
 /// How a text field sends its edits.
@@ -848,7 +868,7 @@ impl ConfigUi {
             // typing over the text with itself is an edit; one the box drops is none
             changed = text != before || raw == before;
         }
-        if let Some(signed) = accept.and_then(|a| a.number) {
+        if let Some(kind) = accept.and_then(|a| a.number) {
             let mut step = crate::widgets::scroll_step::number_step(ui, &response);
             let (plus, minus) = ui
                 .add_enabled_ui(response.enabled(), |ui| {
@@ -858,9 +878,11 @@ impl ConfigUi {
                 .inner;
             #[cfg(test)]
             self.rects.insert(format!("plus:{key}"), plus.rect);
+            #[cfg(test)]
+            self.rects.insert(format!("minus:{key}"), minus.rect);
             step += i32::from(plus.clicked()) - i32::from(minus.clicked());
             for _ in 0..step.unsigned_abs() {
-                text = step_number(&text, hint, step > 0, signed);
+                text = step_number(&text, hint, step > 0, kind);
             }
             if step != 0 {
                 // SetText(..., true): sent at once (EditControl.lua:96-103)
@@ -1217,6 +1239,20 @@ mod tests {
         commands.iter().map(|c| format!("{c:?}")).collect()
     }
 
+    /// A countAllowZero box at 0 steps down to 0, not to its placeholder less one
+    /// (controller ruling, review I4)
+    #[test]
+    fn a_count_allow_zero_box_steps_down_no_lower_than_0() {
+        let mut h = with_number(ConfigKind::Count, Some(0.0), Some(15.0));
+        let n = h.view.sections[0].options.len() - 1;
+        h.view.sections[0].options[n].allow_zero = true;
+        h.frame(vec![]);
+        assert_eq!(
+            debug(&h.click("minus:n")),
+            ["SetConfig { var: \"n\", value: Number(0.0) }"]
+        );
+    }
+
     fn with_number(kind: ConfigKind, value: Option<f64>, placeholder: Option<f64>) -> Harness {
         let mut h = Harness::new();
         let mut number = option("Enemy count");
@@ -1250,13 +1286,19 @@ mod tests {
 
     #[test]
     fn a_number_steps_from_its_value_then_its_placeholder() {
-        assert_eq!(step_number("5", "", true, false), "6");
-        assert_eq!(step_number("", "3", true, false), "4");
-        assert_eq!(step_number("", "", true, false), "1");
+        use Step::*;
+        assert_eq!(step_number("5", "", true, Unsigned), "6");
+        assert_eq!(step_number("", "3", true, Unsigned), "4");
+        assert_eq!(step_number("", "", true, Unsigned), "1");
         // a `%D` box at 0 falls back to the placeholder, a signed one goes below
-        assert_eq!(step_number("0", "", false, false), "0");
-        assert_eq!(step_number("0", "7", false, false), "6");
-        assert_eq!(step_number("0", "", false, true), "-1");
+        assert_eq!(step_number("0", "", false, Unsigned), "0");
+        assert_eq!(step_number("0", "7", false, Unsigned), "6");
+        assert_eq!(step_number("0", "", false, Signed), "-1");
+        // countAllowZero stops at 0, with a placeholder too (review I4)
+        assert_eq!(step_number("0", "15", false, Floor0), "0");
+        assert_eq!(step_number("0", "0", false, Floor0), "0");
+        assert_eq!(step_number("", "15", false, Floor0), "14");
+        assert_eq!(step_number("3", "15", false, Floor0), "2");
     }
 
     #[test]

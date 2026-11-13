@@ -3736,11 +3736,9 @@ mod tests {
             ["SetCustomModText { group: 1, text: \"+5 life\" }"]
         );
 
-        // removing asks first
+        // PoB's X removes the group at once (ConfigTab.lua:23-33)
         let before = app.sent_full.len();
         click(&mut app, &ctx, "mod_remove:0");
-        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
-        click(&mut app, &ctx, "mod_remove_yes:0");
         assert_eq!(
             sent_since(&app, before),
             ["RemoveCustomModGroup { group: 0 }"]

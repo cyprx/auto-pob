@@ -462,6 +462,55 @@ fn mod_browser_matches_pob() {
 
 // ---- The Items tab's tree dropdown (specSelect) ----
 
+/// The Items view reads the shared set rows through one kept `SharedItemSetListControl`, as it
+/// keeps the build's set list, instead of building a new one on every view; a new build's tab
+/// gets its own
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn items_views_keep_one_shared_set_list() {
+    let _guard = lock();
+    let xml = fixtures_dir().join("attack.xml");
+    let mut s = Session::start("items-shared-set-list");
+    s.open_fixture("attack", &xml);
+    let count = |s: &Session| -> u32 {
+        s.backend
+            .lua
+            .load("return __shared_set_lists or 0")
+            .eval()
+            .unwrap()
+    };
+    s.backend
+        .lua
+        .load(
+            r#"
+            local made = new
+            __shared_set_lists = 0
+            new = function(class, ...)
+                if class == "SharedItemSetListControl" then
+                    __shared_set_lists = __shared_set_lists + 1
+                end
+                return made(class, ...)
+            end
+            "#,
+        )
+        .exec()
+        .unwrap();
+    let first = s.backend.items_view().unwrap();
+    for _ in 0..3 {
+        assert_eq!(s.backend.items_view().unwrap(), first);
+    }
+    assert!(count(&s) <= 1, "{} set lists for four views", count(&s));
+    let before = count(&s);
+    s.run(Command::NewBuild).unwrap();
+    s.backend.items_view().unwrap();
+    s.backend.items_view().unwrap();
+    assert_eq!(
+        count(&s),
+        before + 1,
+        "a new build's tab didn't get its own list"
+    );
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn items_tree_dropdown_matches_pob() {

@@ -472,6 +472,11 @@ end
 
 -- ---- Views ----
 
+-- The shared set list of the tab last viewed, kept: its GetRowValue and AddValueTooltip read
+-- their set and the tab alone (SharedItemSetListControl.lua:46-62), so a kept list answers as a
+-- new one would. One slot, as items.lua keeps the build's set list.
+local kept_set_list = { tab = nil, list = nil }
+
 -- The shared lists as the Items view shows them, and whether PoB shows the shared list
 function glue.shared_view_lists(tab)
 	local list = tab.controls.sharedItemList
@@ -480,9 +485,13 @@ function glue.shared_view_lists(tab)
 		items[i] = { name = item.name, rarity = item.rarity, label = list:GetRowValue(1, i, item) }
 	end
 	-- PoB's set list is a control of the Manage Item Sets window; its rows and tooltips are
-	-- read through one made for the purpose, never shown
+	-- read through one made for the purpose, never shown, and kept for the next view
 	local sets = {}
-	local set_list = new("SharedItemSetListControl", nil, { 0, 0, 300, 200 }, tab)
+	if kept_set_list.tab ~= tab then
+		kept_set_list.tab = tab
+		kept_set_list.list = new("SharedItemSetListControl", nil, { 0, 0, 300, 200 }, tab)
+	end
+	local set_list = kept_set_list.list
 	for i, set in ipairs(main().sharedItemSetList) do
 		local tooltip = new("Tooltip")
 		set_list:AddValueTooltip(tooltip, i, set)

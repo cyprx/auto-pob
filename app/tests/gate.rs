@@ -4564,3 +4564,26 @@ fn a_failing_popup_check_leaves_the_build_change_working() {
         .expect("the open goes on");
     assert_eq!(s.backend.build_view().unwrap().name, "attack");
 }
+
+/// The bad-search guard loads PoB's viewer class only when PoB hasn't, and installs once:
+/// the class and its Load stay the ones every viewer has (review M5)
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn the_bad_search_guard_keeps_pobs_viewer_class() {
+    let _guard = lock();
+    let s = attack_session("guard-class");
+    let same: bool = s
+        .backend
+        .lua
+        .load(
+            "local class = common.classes.PassiveTreeView
+            local load = class.Load
+            AutoPobGuardTreeSearch()
+            return common.classes.PassiveTreeView == class
+                and class.Load == load
+                and getmetatable(pob.build.treeTab.viewer).__index == class",
+        )
+        .eval()
+        .unwrap();
+    assert!(same, "the class or its Load was replaced");
+}

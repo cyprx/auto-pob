@@ -117,6 +117,16 @@ pub fn needs_decode(bytes: &[u8]) -> bool {
 
 /// PoB's bytes as text: valid UTF-8 as it is, every other byte as its escape character
 pub fn decode(bytes: &[u8]) -> Cow<'_, str> {
+    let text = escape_name(bytes);
+    if matches!(text, Cow::Owned(_)) {
+        SEEN.store(true, Ordering::Relaxed);
+    }
+    text
+}
+
+/// A file or folder name's bytes as text, escaped as `decode` does, without marking text as
+/// seen: names go back as their own bytes (`path_from_escaped`), never through `encode`
+pub fn escape_name(bytes: &[u8]) -> Cow<'_, str> {
     if !needs_decode(bytes) {
         // checked above
         return Cow::Borrowed(std::str::from_utf8(bytes).unwrap_or_default());
@@ -133,7 +143,6 @@ pub fn decode(bytes: &[u8]) -> Cow<'_, str> {
         }
         out.extend(chunk.invalid().iter().copied().map(escape));
     }
-    SEEN.store(true, Ordering::Relaxed);
     Cow::Owned(out)
 }
 

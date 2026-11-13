@@ -20,6 +20,32 @@ fn root_dir(root: &str) -> String {
     }
 }
 
+/// A folder below the Builds folder as the views spell it, as the path of its own bytes. While
+/// the Builds tree holds a name that isn't UTF-8 (`escaped`), the views spell every name
+/// escaped (`bytes_text`), and the escapes are turned back here; otherwise names are their
+/// own UTF-8.
+fn os_folder(folder: &str, escaped: bool) -> PathBuf {
+    if escaped {
+        super::bytes_text::path_from_escaped(folder)
+    } else {
+        PathBuf::from(folder)
+    }
+}
+
+/// A name or path below the Builds folder as the views spell it: escaped while `escaped`, else
+/// its own UTF-8 (a name that isn't UTF-8 is escaped anyway, and makes the tree `escaped`)
+pub(crate) fn spell(bytes: &[u8], escaped: bool) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) if !escaped => text.to_owned(),
+        _ => super::bytes_text::escape_name(bytes).into_owned(),
+    }
+}
+
+fn spelled(rel: &Path, escaped: bool) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    spell(rel.as_os_str().as_bytes(), escaped)
+}
+
 fn real_root(root: &str) -> Result<PathBuf> {
     fs::canonicalize(root).map_err(|_| anyhow!("no such build"))
 }
@@ -56,7 +82,10 @@ fn path_has_links(base: &Path, rel: &Path) -> bool {
 /// it is refused. `path` must be a build file or a folder that exists below `root`; a link is
 /// accepted only when its target is below `root` too. `walks` is true for Copy and Move, which
 /// follow links: they refuse a link anywhere in the path or the tree.
-pub(crate) fn entry(root: &str, path: &Path, walks: bool) -> Result<String> {
+///
+/// The path is bytes, as PoB's are: PoB on Linux lists a file whose name isn't UTF-8, and
+/// renames, copies, moves and deletes it as itself.
+pub(crate) fn entry(root: &str, path: &Path, walks: bool) -> Result<PathBuf> {
     let root = root_dir(root);
     let root_real = real_root(&root)?;
     if !path.is_absolute()
@@ -94,23 +123,38 @@ pub(crate) fn entry(root: &str, path: &Path, walks: bool) -> Result<String> {
     if walks && full.is_dir() && tree_has_links(&full) {
         return Err(outside());
     }
-    // PoB lists such a file and opens it (8103395); these commands need a UTF-8 path
-    let not_utf8 = || anyhow!("that build's file name isn't UTF-8");
-    let parent_rel = parent_rel.to_str().ok_or_else(not_utf8)?;
-    let name = name.to_str().ok_or_else(not_utf8)?;
-    let folder = if parent_rel.is_empty() {
-        String::new()
-    } else {
-        format!("{parent_rel}/")
-    };
-    Ok(format!("{root}{folder}{name}"))
+    let mut spelled = std::ffi::OsString::from(&root);
+    if !parent_rel.as_os_str().is_empty() {
+        spelled.push(parent_rel.as_os_str());
+        spelled.push("/");
+    }
+    spelled.push(name);
+    Ok(PathBuf::from(spelled))
+}
+
+/// `bytes` lowercased as a name: its UTF-8 parts by Unicode, any other byte as it is (two
+/// different such bytes never compare equal)
+fn lower_name(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    for chunk in bytes.utf8_chunks() {
+        out.extend_from_slice(chunk.valid().to_lowercase().as_bytes());
+        out.extend_from_slice(chunk.invalid());
+    }
+    out
 }
 
 /// The Builds sub-path `folder` names, with a closing slash ("" for the root), or the reason it
-/// is refused. A folder that doesn't exist is an error when `must_exist`, and passes (unless it
-/// is spelled to escape) otherwise.
+/// is refused. Both are spelled as the views spell folders: escaped (`bytes_text`). A folder
+/// that doesn't exist is an error when `must_exist`, and passes (unless it is spelled to
+/// escape) otherwise.
 /// `strict` refuses a link anywhere in the path.
-pub(crate) fn folder(root: &str, folder: &str, must_exist: bool, strict: bool) -> Result<String> {
+pub(crate) fn folder(
+    root: &str,
+    folder: &str,
+    must_exist: bool,
+    strict: bool,
+    escaped: bool,
+) -> Result<String> {
     if folder.starts_with('/')
         || folder.starts_with('\\')
         || folder
@@ -130,10 +174,11 @@ pub(crate) fn folder(root: &str, folder: &str, must_exist: bool, strict: bool) -
         Err(_) if !must_exist => return Ok(lexical()),
         Err(e) => return Err(e),
     };
-    if strict && path_has_links(&root_real, Path::new(folder)) {
+    let os = os_folder(folder, escaped);
+    if strict && path_has_links(&root_real, &os) {
         return Err(outside());
     }
-    let joined = root_real.join(folder);
+    let joined = root_real.join(&os);
     let real = match fs::canonicalize(&joined) {
         Ok(real) => real,
         Err(_) if !must_exist => return Ok(lexical()),
@@ -143,7 +188,7 @@ pub(crate) fn folder(root: &str, folder: &str, must_exist: bool, strict: bool) -
     if !real.is_dir() {
         return Err(anyhow!("no such folder"));
     }
-    let rel = rel.to_str().ok_or_else(|| anyhow!("no such folder"))?;
+    let rel = spelled(rel, escaped);
     Ok(if rel.is_empty() {
         String::new()
     } else {
@@ -153,10 +198,13 @@ pub(crate) fn folder(root: &str, folder: &str, must_exist: bool, strict: bool) -
 
 /// Refuses Save As onto `name.xml` in `folder` (checked by [`folder`]) when that is a link,
 /// a dangling one included: the save would write through it.
-pub(crate) fn save_target(root: &str, folder: &str, name: &str) -> Result<()> {
+/// `name` is bytes, as PoB's are.
+pub(crate) fn save_target(root: &str, folder: &str, name: &[u8], escaped: bool) -> Result<()> {
+    use std::os::unix::ffi::OsStringExt;
+    let file = std::ffi::OsString::from_vec([name, b".xml"].concat());
     let target = Path::new(&root_dir(root))
-        .join(folder)
-        .join(format!("{name}.xml"));
+        .join(os_folder(folder, escaped))
+        .join(file);
     if fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(outside());
     }
@@ -166,30 +214,29 @@ pub(crate) fn save_target(root: &str, folder: &str, name: &str) -> Result<()> {
 /// Refuses a new name that is taken in the entry's folder, exactly or as a case variant, a
 /// link (also a dangling one) included: a rename or copy would replace or write through it.
 /// `entry` is the approved source; `rename` lets the entry's own name through when only its
-/// case changes.
-pub(crate) fn name_free(entry: &str, new_name: &str, rename: bool) -> Result<()> {
+/// case changes. Names are bytes, as PoB's are.
+pub(crate) fn name_free(entry: &Path, new_name: &[u8], rename: bool) -> Result<()> {
+    use std::os::unix::ffi::OsStrExt;
     let taken = || anyhow!("a build with that name already exists");
-    let source = Path::new(entry);
-    let (Some(dir), Some(own)) = (source.parent(), source.file_name().and_then(|n| n.to_str()))
-    else {
+    let (Some(dir), Some(own)) = (entry.parent(), entry.file_name().map(OsStrExt::as_bytes)) else {
         return Err(anyhow!("no such build"));
     };
     // a link to a folder is a folder, as PoB treats it (it renames it to the bare name)
-    let is_folder = fs::metadata(source).is_ok_and(|m| m.is_dir());
-    let target = if is_folder {
-        new_name.to_string()
-    } else {
-        format!("{new_name}.xml")
-    };
+    let is_folder = fs::metadata(entry).is_ok_and(|m| m.is_dir());
+    let mut target = new_name.to_vec();
+    if !is_folder {
+        target.extend_from_slice(b".xml");
+    }
     if rename && target == own {
         return Err(taken());
     }
-    let lower = target.to_lowercase();
+    let lower = lower_name(&target);
     for found in fs::read_dir(dir).map_err(|_| anyhow!("no such build"))? {
         let found = found.map_err(|_| taken())?;
-        let name = found.file_name().to_string_lossy().into_owned();
+        let name = found.file_name();
+        let name = name.as_bytes();
         // a case variant counts as taken: stricter than PoB on Linux, by ruling (N2)
-        if name.to_lowercase() == lower && !(rename && name == own) {
+        if lower_name(name) == lower && !(rename && name == own) {
             return Err(taken());
         }
     }
@@ -206,9 +253,18 @@ thread_local! {
     static WALK_COUNTS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
+/// How many folders the tree walk has read, for the gate's cost checks
+static TREE_READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many folders the tree walk has read since the process started
+pub fn tree_reads() -> usize {
+    TREE_READS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn walk_read(dir: &Path) -> std::io::Result<fs::ReadDir> {
     #[cfg(test)]
     WALK_COUNTS.with(|c| c.set((c.get().0 + 1, c.get().1)));
+    TREE_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     fs::read_dir(dir)
 }
 
@@ -221,11 +277,51 @@ fn walk_stat(path: &Path) -> std::io::Result<fs::Metadata> {
 /// Every folder below `root`, links not followed (a link could lead out, or loop), shallowest
 /// first, each in name order. Each folder is read once, and only folders are looked at: a
 /// file's type comes from the listing, so a Builds folder of many builds costs no stat per build.
-pub(crate) fn folder_tree(root: &str) -> Vec<crate::engine::views::FolderNode> {
+/// The tree for a list view whose own names are plain (`list_plain`: all UTF-8), and whether
+/// the views are spelled escaped: when the list isn't plain or a folder's name isn't UTF-8.
+#[cfg(test)]
+pub(crate) fn folder_tree(
+    root: &str,
+    list_plain: bool,
+) -> (Vec<crate::engine::views::FolderNode>, bool) {
+    let tree = folder_tree_raw(root);
+    let escaped = !list_plain || tree.invalid;
+    (tree.spelled(escaped), escaped)
+}
+
+/// The folder tree walked, its paths as bytes: spelled once the views' spelling is known
+pub(crate) struct RawTree {
+    nodes: Vec<(Vec<u8>, crate::engine::views::FolderNode)>,
+    /// A folder's name isn't UTF-8: the views must be spelled escaped
+    pub(crate) invalid: bool,
+}
+
+impl RawTree {
+    /// The nodes with their paths spelled (`spell`)
+    pub(crate) fn spelled(self, escaped: bool) -> Vec<crate::engine::views::FolderNode> {
+        self.nodes
+            .into_iter()
+            .map(|(path, mut node)| {
+                node.path = spell(&path, escaped);
+                node
+            })
+            .collect()
+    }
+}
+
+/// Every folder below `root` (see the walk's rules above), read once
+pub(crate) fn folder_tree_raw(root: &str) -> RawTree {
+    use std::os::unix::ffi::OsStrExt;
+    let mut invalid = false;
     use crate::engine::views::FolderNode;
-    let mut out: Vec<FolderNode> = Vec::new();
+    // the nodes with their paths as bytes, spelled once the whole tree is known
+    let mut out: Vec<(Vec<u8>, FolderNode)> = Vec::new();
     // a folder to read, its path below the root, and where it is in `out` (none for the root)
-    let mut level = vec![(PathBuf::from(root_dir(root)), String::new(), None)];
+    let mut level = vec![(
+        PathBuf::from(root_dir(root)),
+        Vec::<u8>::new(),
+        None::<usize>,
+    )];
     for depth in 0..=TREE_DEPTH {
         let mut next = Vec::new();
         for (dir, rel, at) in level {
@@ -249,7 +345,7 @@ pub(crate) fn folder_tree(root: &str) -> Vec<crate::engine::views::FolderNode> {
                 }
             }
             if let Some(at) = at {
-                let node: &mut FolderNode = &mut out[at];
+                let node: &mut FolderNode = &mut out[at].1;
                 node.empty = !any;
             }
             folders.sort_by_key(|e| e.file_name());
@@ -257,9 +353,9 @@ pub(crate) fn folder_tree(root: &str) -> Vec<crate::engine::views::FolderNode> {
                 if out.len() >= TREE_FOLDERS {
                     break;
                 }
-                let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-                    continue;
-                };
+                // a name that isn't UTF-8 is a folder too, spelled escaped as the list is
+                let raw = entry.file_name();
+                invalid |= std::str::from_utf8(raw.as_bytes()).is_err();
                 // looked at again, not followed: it may have changed since the listing
                 let Ok(meta) = walk_stat(&entry.path()) else {
                     continue;
@@ -267,55 +363,68 @@ pub(crate) fn folder_tree(root: &str) -> Vec<crate::engine::views::FolderNode> {
                 if !meta.is_dir() {
                     continue;
                 }
-                let path = format!("{rel}{name}/");
-                out.push(FolderNode {
-                    path: path.clone(),
-                    modified: meta
-                        .modified()
-                        .ok()
-                        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map_or(0, |d| d.as_secs()),
-                    empty: false,
-                });
+                let path = [&rel[..], raw.as_bytes(), b"/"].concat();
+                out.push((
+                    path.clone(),
+                    FolderNode {
+                        path: String::new(),
+                        modified: meta
+                            .modified()
+                            .ok()
+                            .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map_or(0, |d| d.as_secs()),
+                        empty: false,
+                    },
+                ));
                 next.push((entry.path(), path, Some(out.len() - 1)));
             }
         }
         level = next;
     }
-    out
+    RawTree {
+        nodes: out,
+        invalid,
+    }
 }
 
 /// The build files directly in `folder` below `root`, for the Compare tab's picker: regular
 /// `.xml` files only (a link is never followed, nor a folder spelled through one), in name
 /// order, each in PoB's spelling. Reads the disk and nothing else.
-pub(crate) fn browse(root: &str, folder: &str) -> Result<crate::engine::views::BuildBrowseView> {
+pub(crate) fn browse(
+    root: &str,
+    folder: &str,
+    escaped: bool,
+) -> Result<crate::engine::views::BuildBrowseView> {
     use crate::engine::views::{BuildBrowseEntry, BuildBrowseView};
     // a Builds folder that went is a missing folder to the picker, not a missing build
     let real = real_root(&root_dir(root)).map_err(|_| anyhow!("no such folder"))?;
-    let rel = self::folder(root, folder, true, true)?;
-    let dir = real.join(&rel);
+    let rel = self::folder(root, folder, true, true, escaped)?;
+    let dir = real.join(os_folder(&rel, escaped));
     let mut entries = Vec::new();
     for entry in fs::read_dir(&dir).map_err(|_| anyhow!("no such folder"))? {
         let Ok(entry) = entry else {
             continue;
         };
         // the name first: a folder of other files costs no stat per entry
-        let Some(file) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
-        let Some(name) = file.strip_suffix(".xml") else {
+        let file = entry.file_name();
+        let Some(stem) =
+            std::os::unix::ffi::OsStrExt::as_bytes(file.as_os_str()).strip_suffix(b".xml")
+        else {
             continue;
         };
         // the entry's own type, a link's included: never followed
         let Ok(kind) = entry.file_type() else {
             continue;
         };
-        if !kind.is_file() || name.is_empty() {
+        if !kind.is_file() || stem.is_empty() {
             continue;
         }
+        // a name that isn't UTF-8 is escaped, and its path is its own bytes
         entries.push(BuildBrowseEntry {
-            name: name.to_owned(),
-            path: PathBuf::from(format!("{}{rel}{file}", root_dir(root))),
+            name: spell(stem, escaped),
+            path: Path::new(&root_dir(root))
+                .join(os_folder(&rel, escaped))
+                .join(&file),
         });
     }
     entries.sort_by(|a, b| {
@@ -335,23 +444,29 @@ pub(crate) fn browse(root: &str, folder: &str) -> Result<crate::engine::views::B
 /// `name[2]`, `name[3]` and so on while `io.open` succeeds (a readable file or a folder) and
 /// takes the first it can't open; `os.rename` then replaces whatever is there, a link or an
 /// unreadable file included.
-pub(crate) fn move_target_free(entry: &str, root: &str, dest_folder: &str) -> Result<()> {
-    let Some(file) = Path::new(entry).file_name().and_then(|n| n.to_str()) else {
+pub(crate) fn move_target_free(
+    entry: &Path,
+    root: &str,
+    dest_folder: &str,
+    escaped: bool,
+) -> Result<()> {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let Some(file) = entry.file_name().map(OsStrExt::as_bytes) else {
         return Err(anyhow!("no such build"));
     };
-    let dir = Path::new(&root_dir(root)).join(dest_folder);
-    let base = file.strip_suffix(".xml").unwrap_or(file);
-    let mut candidate = file.to_string();
+    let dir = Path::new(&root_dir(root)).join(os_folder(dest_folder, escaped));
+    let base = file.strip_suffix(b".xml").unwrap_or(file);
+    let mut candidate = file.to_vec();
     let mut i = 2;
     loop {
-        let target = dir.join(&candidate);
+        let target = dir.join(std::ffi::OsString::from_vec(candidate));
         if fs::File::open(&target).is_err() {
             return match fs::symlink_metadata(&target) {
                 Ok(_) => Err(anyhow!("a build with that name already exists")),
                 Err(_) => Ok(()),
             };
         }
-        candidate = format!("{base}[{i}].xml");
+        candidate = [base, format!("[{i}].xml").as_bytes()].concat();
         i += 1;
     }
 }
@@ -384,7 +499,7 @@ mod tests {
         }
     }
 
-    fn refusal(result: Result<String>) -> String {
+    fn refusal<T: std::fmt::Debug>(result: Result<T>) -> String {
         result.expect_err("should be refused").to_string()
     }
 
@@ -393,29 +508,44 @@ mod tests {
         let tree = Tree::new("in");
         let root = tree.root();
         let a = tree.0.join("Builds/a.xml");
-        assert_eq!(entry(&root, &a, false).unwrap(), format!("{root}a.xml"));
+        let spelled = |rel: &str| PathBuf::from(format!("{root}{rel}"));
+        assert_eq!(entry(&root, &a, false).unwrap(), spelled("a.xml"));
         let b = tree.0.join("Builds/sub/b.xml");
-        assert_eq!(entry(&root, &b, true).unwrap(), format!("{root}sub/b.xml"));
+        assert_eq!(entry(&root, &b, true).unwrap(), spelled("sub/b.xml"));
         let sub = tree.0.join("Builds/sub");
-        assert_eq!(entry(&root, &sub, true).unwrap(), format!("{root}sub"));
+        assert_eq!(entry(&root, &sub, true).unwrap(), spelled("sub"));
     }
 
-    /// A file whose name isn't UTF-8 is listed and opens, but the list's other commands
-    /// refuse it: they say why, not that it doesn't exist (review M6)
+    /// A file whose name isn't UTF-8 is an entry as itself, as PoB on Linux lists, renames,
+    /// copies, moves and deletes it; its name is told apart from other such names
     #[test]
-    fn a_name_that_isnt_utf8_is_refused_with_its_reason() {
+    fn a_name_that_isnt_utf8_is_an_entry_as_its_own_bytes() {
         use std::os::unix::ffi::OsStrExt;
         let tree = Tree::new("latin");
         let root = tree.root();
-        let path = tree
-            .0
-            .join("Builds")
-            .join(std::ffi::OsStr::from_bytes(b"caf\xE9.xml"));
+        let os = |b: &[u8]| std::ffi::OsStr::from_bytes(b).to_owned();
+        let path = tree.0.join("Builds").join(os(b"caf\xE9.xml"));
         fs::write(&path, "x").unwrap();
+        let spelled = entry(&root, &path, true).unwrap();
         assert_eq!(
-            refusal(entry(&root, &path, false)),
-            "that build's file name isn't UTF-8"
+            spelled.as_os_str().as_bytes(),
+            [root.as_bytes(), b"caf\xE9.xml"].concat()
         );
+        // its own name, or the same in another case, is taken; another byte is not
+        assert!(name_free(&spelled, b"caf\xE9", false).is_err());
+        assert!(name_free(&spelled, b"CAF\xE9", false).is_err());
+        assert!(name_free(&spelled, b"caf\xE8", false).is_ok());
+        assert!(name_free(&spelled, b"caf\xE9 2", false).is_ok());
+        fs::write(tree.0.join("Builds").join(os(b"caf\xE8.xml")), "y").unwrap();
+        assert!(name_free(&spelled, b"caf\xE8", true).is_err());
+        // a move to sub/ is free until sub/ holds a dangling link of its name
+        assert!(move_target_free(&spelled, &root, "sub/", false).is_ok());
+        symlink(
+            tree.0.join("outside/gone.xml"),
+            tree.0.join("Builds/sub").join(os(b"caf\xE9.xml")),
+        )
+        .unwrap();
+        assert!(move_target_free(&spelled, &root, "sub/", false).is_err());
     }
 
     #[test]
@@ -460,7 +590,7 @@ mod tests {
         // a link that stays inside is fine, and is spelled by where it leads
         assert_eq!(
             entry(&root, &tree.0.join("Builds/inner/b.xml"), false).unwrap(),
-            format!("{root}sub/b.xml")
+            PathBuf::from(format!("{root}sub/b.xml"))
         );
         assert!(entry(&root, &tree.0.join("Builds/inner"), false).is_ok());
     }
@@ -490,8 +620,8 @@ mod tests {
             refusal(entry(&root, &tree.0.join("Builds/inner"), true)),
             OUTSIDE
         );
-        assert_eq!(refusal(folder(&root, "inner", true, true)), OUTSIDE);
-        assert!(folder(&root, "inner", true, false).is_ok());
+        assert_eq!(refusal(folder(&root, "inner", true, true, false)), OUTSIDE);
+        assert!(folder(&root, "inner", true, false, false).is_ok());
         // a loop
         symlink(tree.0.join("Builds/loop"), tree.0.join("Builds/loop2")).unwrap();
         fs::create_dir_all(tree.0.join("Builds/loop")).unwrap();
@@ -505,7 +635,7 @@ mod tests {
     #[test]
     fn names_are_free_only_when_nothing_has_them_in_any_case() {
         let tree = Tree::new("names");
-        let a = format!("{}a.xml", tree.root());
+        let a = PathBuf::from(format!("{}a.xml", tree.root()));
         let err = |r: Result<()>| r.expect_err("taken").to_string();
         let taken = "a build with that name already exists";
         fs::write(tree.0.join("Builds/Other.xml"), "o").unwrap();
@@ -514,26 +644,26 @@ mod tests {
             tree.0.join("Builds/dangling.xml"),
         )
         .unwrap();
-        assert!(name_free(&a, "fresh", false).is_ok());
-        assert_eq!(err(name_free(&a, "a", false)), taken);
-        assert_eq!(err(name_free(&a, "a", true)), taken);
-        assert_eq!(err(name_free(&a, "other", true)), taken, "a case variant");
-        assert_eq!(err(name_free(&a, "OTHER", false)), taken);
+        assert!(name_free(&a, b"fresh", false).is_ok());
+        assert_eq!(err(name_free(&a, b"a", false)), taken);
+        assert_eq!(err(name_free(&a, b"a", true)), taken);
+        assert_eq!(err(name_free(&a, b"other", true)), taken, "a case variant");
+        assert_eq!(err(name_free(&a, b"OTHER", false)), taken);
         assert_eq!(
-            err(name_free(&a, "dangling", false)),
+            err(name_free(&a, b"dangling", false)),
             taken,
             "a dangling link"
         );
         // only the case of its own name changes
-        assert!(name_free(&a, "A", true).is_ok());
+        assert!(name_free(&a, b"A", true).is_ok());
         // both a.xml and A.xml exist: a -> A would replace A.xml
         fs::write(tree.0.join("Builds/A.xml"), "A").unwrap();
-        assert_eq!(err(name_free(&a, "A", true)), taken);
+        assert_eq!(err(name_free(&a, b"A", true)), taken);
         // a link to a folder is a folder: its new name is the bare name, not name.xml
         fs::write(tree.0.join("Builds/plain"), "p").unwrap();
         let link = tree.0.join("Builds/lnk");
         symlink(tree.0.join("Builds/sub"), &link).unwrap();
-        assert_eq!(err(name_free(link.to_str().unwrap(), "plain", true)), taken);
+        assert_eq!(err(name_free(&link, b"plain", true)), taken);
     }
 
     #[test]
@@ -543,7 +673,7 @@ mod tests {
         fs::create_dir_all(tree.0.join("Builds/.dot")).unwrap();
         symlink(tree.0.join("outside"), tree.0.join("Builds/escape")).unwrap();
         symlink(tree.0.join("Builds/sub"), tree.0.join("Builds/sub/loop")).unwrap();
-        let folders = folder_tree(&tree.root());
+        let folders = folder_tree(&tree.root(), true).0;
         let listed: Vec<(&str, bool)> =
             folders.iter().map(|f| (f.path.as_str(), f.empty)).collect();
         // shallowest first; the links are not folders here; `sub` holds b.xml and `deep`
@@ -563,7 +693,7 @@ mod tests {
             fs::write(tree.0.join(format!("Builds/sub/s{i}.xml")), "s").unwrap();
         }
         WALK_COUNTS.with(|c| c.set((0, 0)));
-        let folders = folder_tree(&tree.root());
+        let folders = folder_tree(&tree.root(), true).0;
         assert_eq!(folders.len(), 2);
         // the root and each folder read once; a stat per folder, none per build
         assert_eq!(WALK_COUNTS.with(|c| c.get()), (3, 2));
@@ -577,7 +707,7 @@ mod tests {
             deep.push(format!("d{i}"));
         }
         fs::create_dir_all(&deep).unwrap();
-        let folders = folder_tree(&tree.root());
+        let folders = folder_tree(&tree.root(), true).0;
         assert_eq!(folders.len(), TREE_DEPTH);
         let last = folders.last().unwrap();
         assert_eq!(last.path.matches('/').count(), TREE_DEPTH);
@@ -590,12 +720,12 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let tree = Tree::new("movetarget");
         let root = tree.root();
-        let a = format!("{root}a.xml");
+        let a = PathBuf::from(format!("{root}a.xml"));
         // sub/ holds b.xml (readable: PoB names the move b[2]) so move a.xml there
-        assert!(move_target_free(&a, &root, "sub/").is_ok());
-        let b = format!("{root}b.xml");
+        assert!(move_target_free(&a, &root, "sub/", false).is_ok());
+        let b = PathBuf::from(format!("{root}b.xml"));
         assert!(
-            move_target_free(&b, &root, "sub/").is_ok(),
+            move_target_free(&b, &root, "sub/", false).is_ok(),
             "a readable file is PoB's [2]"
         );
         symlink(
@@ -604,7 +734,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            move_target_free(&a, &root, "sub/").is_err(),
+            move_target_free(&a, &root, "sub/", false).is_err(),
             "a dangling link"
         );
         fs::remove_file(tree.0.join("Builds/sub/a.xml")).unwrap();
@@ -613,37 +743,40 @@ mod tests {
         fs::set_permissions(&hidden, fs::Permissions::from_mode(0o000)).unwrap();
         let readable = fs::File::open(&hidden).is_ok();
         assert!(
-            readable || move_target_free(&a, &root, "sub/").is_err(),
+            readable || move_target_free(&a, &root, "sub/", false).is_err(),
             "an unreadable file"
         );
         fs::set_permissions(&hidden, fs::Permissions::from_mode(0o644)).unwrap();
         fs::remove_file(&hidden).unwrap();
         fs::create_dir_all(&hidden).unwrap();
         assert!(
-            move_target_free(&a, &root, "sub/").is_ok(),
+            move_target_free(&a, &root, "sub/", false).is_ok(),
             "a folder: PoB's probe sees it"
         );
         fs::remove_dir_all(&hidden).unwrap();
         // PoB's name[2], name[3]: the first it can't open is replaced, so it must be free
         fs::write(&hidden, "readable").unwrap();
-        assert!(move_target_free(&a, &root, "sub/").is_ok(), "a[2] is free");
+        assert!(
+            move_target_free(&a, &root, "sub/", false).is_ok(),
+            "a[2] is free"
+        );
         let second = tree.0.join("Builds/sub/a[2].xml");
         fs::write(&second, "h2").unwrap();
         assert!(
-            move_target_free(&a, &root, "sub/").is_ok(),
+            move_target_free(&a, &root, "sub/", false).is_ok(),
             "a[2] readable, a[3] free"
         );
         fs::set_permissions(&second, fs::Permissions::from_mode(0o000)).unwrap();
         let can_read = fs::File::open(&second).is_ok();
         assert!(
-            can_read || move_target_free(&a, &root, "sub/").is_err(),
+            can_read || move_target_free(&a, &root, "sub/", false).is_err(),
             "unreadable a[2]"
         );
         fs::set_permissions(&second, fs::Permissions::from_mode(0o644)).unwrap();
         fs::remove_file(&second).unwrap();
         symlink(tree.0.join("outside/gone.xml"), &second).unwrap();
         assert!(
-            move_target_free(&a, &root, "sub/").is_err(),
+            move_target_free(&a, &root, "sub/", false).is_err(),
             "a dangling link at a[2]"
         );
         assert!(tree.0.join("outside/gone.xml").symlink_metadata().is_err());
@@ -673,30 +806,32 @@ mod tests {
         )
         .unwrap();
         symlink(tree.0.join("outside"), tree.0.join("Builds/escape")).unwrap();
-        let top = browse(&root, "").unwrap();
+        let top = browse(&root, "", false).unwrap();
         assert_eq!(top.folder, "");
         let names: Vec<_> = top.entries.iter().map(|e| e.name.as_str()).collect();
         // no folder, link or other file; name order ignoring case
         assert_eq!(names, ["a", "B second"]);
         assert_eq!(top.entries[0].path, PathBuf::from(format!("{root}a.xml")));
-        let sub = browse(&root, "sub").unwrap();
+        let sub = browse(&root, "sub", false).unwrap();
         assert_eq!(sub.folder, "sub/");
         assert_eq!(
             sub.entries[0].path,
             PathBuf::from(format!("{root}sub/b.xml"))
         );
         for bad in ["..", "../outside", "/tmp", "escape", "escape/"] {
-            let e = browse(&root, bad).expect_err(bad).to_string();
+            let e = browse(&root, bad, false).expect_err(bad).to_string();
             assert_eq!(e, OUTSIDE, "{bad}");
         }
         assert_eq!(
-            browse(&root, "none").expect_err("missing").to_string(),
+            browse(&root, "none", false)
+                .expect_err("missing")
+                .to_string(),
             "no such folder"
         );
         // a Builds folder that went is a missing folder too, not a missing build
         let gone = format!("{}/gone/", tree.0.display());
         assert_eq!(
-            browse(&gone, "").expect_err("no root").to_string(),
+            browse(&gone, "", false).expect_err("no root").to_string(),
             "no such folder"
         );
         // nothing was written or moved
@@ -708,9 +843,9 @@ mod tests {
         let tree = Tree::new("folder");
         let root = tree.root();
         symlink(tree.0.join("outside"), tree.0.join("Builds/escape")).unwrap();
-        assert_eq!(folder(&root, "", true, false).unwrap(), "");
-        assert_eq!(folder(&root, "sub", true, false).unwrap(), "sub/");
-        assert_eq!(folder(&root, "sub/", true, false).unwrap(), "sub/");
+        assert_eq!(folder(&root, "", true, false, false).unwrap(), "");
+        assert_eq!(folder(&root, "sub", true, false, false).unwrap(), "sub/");
+        assert_eq!(folder(&root, "sub/", true, false, false).unwrap(), "sub/");
         for bad in [
             "..",
             "../outside",
@@ -720,18 +855,25 @@ mod tests {
             "escape",
             "escape/",
         ] {
-            assert_eq!(refusal(folder(&root, bad, true, false)), OUTSIDE, "{bad}");
+            assert_eq!(
+                refusal(folder(&root, bad, true, false, false)),
+                OUTSIDE,
+                "{bad}"
+            );
         }
         assert_eq!(
-            refusal(folder(&root, "none", true, false)),
+            refusal(folder(&root, "none", true, false, false)),
             "no such folder"
         );
         assert_eq!(
-            refusal(folder(&root, "a.xml", true, false)),
+            refusal(folder(&root, "a.xml", true, false, false)),
             "no such folder"
         );
         // listing a folder that isn't there yet is allowed
-        assert_eq!(folder(&root, "none", false, false).unwrap(), "none/");
-        assert_eq!(refusal(folder(&root, "escape", false, false)), OUTSIDE);
+        assert_eq!(folder(&root, "none", false, false, false).unwrap(), "none/");
+        assert_eq!(
+            refusal(folder(&root, "escape", false, false, false)),
+            OUTSIDE
+        );
     }
 }

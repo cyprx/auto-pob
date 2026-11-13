@@ -4691,3 +4691,58 @@ fn the_bad_search_guard_keeps_pobs_viewer_class() {
         .unwrap();
     assert!(same, "the class or its Load was replaced");
 }
+
+/// Save As of a build whose file name isn't UTF-8 keeps the bytes the view showed: its name
+/// box opens with the name escaped, a name typed on to it is those bytes, and a folder the
+/// list showed escaped is that folder (PoB's box holds the bytes, Build.lua:1399-1400)
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn save_as_keeps_the_bytes_of_a_name_that_isnt_utf8() {
+    use std::os::unix::ffi::OsStrExt;
+    let _guard = lock();
+    let mut s = Session::start("latin-save-as");
+    let builds = s.builds_dir();
+    let file = |rel: &[u8]| builds.join(std::ffi::OsStr::from_bytes(rel));
+    fs::create_dir_all(file(b"d\xE9p")).unwrap();
+    fs::copy(fixture_xml("attack"), file(b"caf\xE9.xml")).unwrap();
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .expect("list");
+    // the list the UI holds, whose spelling the folder below comes in
+    let list = s.backend.build_list_view().expect("the list view");
+    assert!(list.tree.iter().any(|f| f.path == "d\u{F7E9}p/"));
+    s.run(Command::OpenBuild {
+        path: file(b"caf\xE9.xml"),
+    })
+    .expect("open");
+    let view = s.backend.build_view().unwrap();
+    assert_eq!(view.save_as_name, "caf\u{F7E9}");
+    s.run(Command::SaveAs {
+        folder: String::new(),
+        name: "caf\u{F7E9} 2".into(),
+        overwrite: false,
+    })
+    .expect("save as");
+    assert!(file(b"caf\xE9 2.xml").is_file(), "not saved as its bytes");
+    let view = s.backend.build_view().unwrap();
+    s.run(Command::SaveAs {
+        folder: "d\u{F7E9}p/".into(),
+        name: format!("{} 3", view.save_as_name),
+        overwrite: false,
+    })
+    .expect("save as into the folder");
+    assert!(
+        file(b"d\xE9p/caf\xE9 2 3.xml").is_file(),
+        "not saved in its folder"
+    );
+    let names: Vec<_> = fs::read_dir(&builds)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        names.len(),
+        3,
+        "another file or folder was written: {names:?}"
+    );
+}

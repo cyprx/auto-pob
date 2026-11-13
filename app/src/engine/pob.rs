@@ -21,6 +21,7 @@ use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
 use mlua::{FromLuaMulti, IntoLuaMulti, Lua, LuaSerdeExt};
 use pob_runtime::net::{NetConfig, Waker};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 pub struct PobBackend {
@@ -31,6 +32,13 @@ pub struct PobBackend {
     pob_dir: PathBuf,
     /// The Builds sub-folder the list view shows; "" is the root.
     folder: String,
+    /// The last list view spelled its names and folders escaped: a name in the Builds tree
+    /// isn't UTF-8 (`bytes_text`). Every name and folder from the views then has its escapes
+    /// turned back into the bytes (`buildpaths::spell`); otherwise they are their own UTF-8.
+    list_escaped: bool,
+    /// The build view's Save As name kept escapes (the file's name isn't UTF-8): the name
+    /// Save As sends has them turned back into those bytes
+    save_as_escaped: bool,
     /// The key of the last tree layout sent, so an unchanged layout isn't sent again.
     last_layout_key: Option<String>,
     /// Whether the heat map is on, as the last `SetHeatmap` left it.
@@ -231,6 +239,8 @@ impl PobBackend {
             game,
             pob_dir: pob_dir.to_owned(),
             folder: String::new(),
+            list_escaped: false,
+            save_as_escaped: false,
             last_layout_key: None,
             heatmap_on: false,
             power_failed: false,
@@ -269,8 +279,60 @@ impl PobBackend {
     }
 
     /// `path` as PoB spells an entry of the Builds folder, or why it is refused (R16).
-    fn build_entry(&self, path: &Path, walks: bool) -> Result<String> {
+    fn build_entry(&self, path: &Path, walks: bool) -> Result<PathBuf> {
         buildpaths::entry(&self.build_root()?, path, walks)
+    }
+
+    /// A path or name as a Lua string of its own bytes (a file name needn't be UTF-8)
+    fn bytes_arg(&self, bytes: &[u8]) -> Result<mlua::LuaString> {
+        self.lua.create_string(bytes).map_err(|e| anyhow!("{e}"))
+    }
+
+    /// A folder below the Builds folder as the views spell it (escaped), as a Lua string of
+    /// its own bytes
+    fn folder_arg(&self, folder: &str) -> Result<mlua::LuaString> {
+        self.bytes_arg(&Self::name_bytes(folder, self.list_escaped))
+    }
+
+    /// A folder the UI sent, in the spelling of the views now. It was spelled in the views'
+    /// spelling when the UI read it, which a newer view may have changed (a name that isn't
+    /// UTF-8 came or went in the Builds tree). The two spellings differ only for a folder
+    /// whose name holds escape characters: when the folder isn't there as read now but is as
+    /// read the other way, the other way is what the UI showed (review M2).
+    fn ui_folder(&self, root: &str, folder: &str) -> String {
+        if !folder.chars().any(super::bytes_text::is_escape) {
+            return folder.to_owned();
+        }
+        let here = |escaped: bool| {
+            let bytes = Self::name_bytes(folder, escaped);
+            Path::new(root)
+                .join(std::ffi::OsStr::from_bytes(&bytes))
+                .is_dir()
+        };
+        let now = self.list_escaped;
+        if !here(now) && here(!now) {
+            buildpaths::spell(&Self::name_bytes(folder, !now), now)
+        } else {
+            folder.to_owned()
+        }
+    }
+
+    /// A new name for an entry (Rename, Copy), as PoB's bytes: over an escaped list its
+    /// escapes are the bytes the list showed (`bytes_text`), else it is its own UTF-8
+    fn entry_name(&self, name: &str) -> Vec<u8> {
+        Self::name_bytes(name, self.list_escaped)
+    }
+
+    /// `name` as PoB's bytes: its escapes turned back when the view it came from was escaped
+    fn name_bytes(name: &str, escaped: bool) -> Vec<u8> {
+        use std::os::unix::ffi::OsStringExt;
+        if escaped {
+            super::bytes_text::path_from_escaped(name)
+                .into_os_string()
+                .into_vec()
+        } else {
+            name.as_bytes().to_vec()
+        }
     }
 
     /// Calls `glue.<name>(args)`, keeping only the error message.
@@ -641,7 +703,7 @@ fn view_of<T: serde::de::DeserializeOwned>(lua: &mlua::Lua, value: mlua::Value) 
         .get("AutoPobHasEscapes")
         .map_err(|e| anyhow!("{e}"))?;
     if scan.call::<bool>(&value).map_err(|e| anyhow!("{e}"))? {
-        let fixed = lossy_strings(lua, &value, 0)
+        let fixed = lossy_strings(lua, &value, 0, true)
             .map_err(|e| anyhow!("{e}"))?
             .unwrap_or(value);
         return lua.from_value(fixed).map_err(|e| anyhow!("{e}"));
@@ -652,7 +714,7 @@ fn view_of<T: serde::de::DeserializeOwned>(lua: &mlua::Lua, value: mlua::Value) 
             // PoB's strings are bytes: a build's notes, names or item text can hold bytes
             // that aren't UTF-8 (a file from a Windows-1252 editor), which serde refuses.
             // Such a view shows them escaped (`bytes_text`) instead of failing.
-            match lossy_strings(lua, &value, 0).map_err(|e| anyhow!("{e}"))? {
+            match lossy_strings(lua, &value, 0, true).map_err(|e| anyhow!("{e}"))? {
                 Some(fixed) => lua.from_value(fixed).map_err(|e| anyhow!("{e}")),
                 None => Err(anyhow!("{e}")),
             }
@@ -662,15 +724,23 @@ fn view_of<T: serde::de::DeserializeOwned>(lua: &mlua::Lua, value: mlua::Value) 
 
 /// `value` with every string that isn't UTF-8 (or holds an escape character) replaced by its
 /// escaped form (`bytes_text`), keys
-/// included; `None` when every string already was
+/// included; `None` when every string already was. `text`: the strings are a build's text,
+/// which comes back through `encode`, so they mark escapes as seen; file names (the build
+/// list) come back through `path_from_escaped` and don't (`escape_name`).
 fn lossy_strings(
     lua: &mlua::Lua,
     value: &mlua::Value,
     depth: usize,
+    text: bool,
 ) -> mlua::Result<Option<mlua::Value>> {
     match value {
-        mlua::Value::String(text) if super::bytes_text::needs_decode(&text.as_bytes()) => {
-            let fixed = super::bytes_text::decode(&text.as_bytes()).into_owned();
+        mlua::Value::String(string) if super::bytes_text::needs_decode(&string.as_bytes()) => {
+            let bytes = string.as_bytes();
+            let fixed = if text {
+                super::bytes_text::decode(&bytes).into_owned()
+            } else {
+                super::bytes_text::escape_name(&bytes).into_owned()
+            };
             Ok(Some(mlua::Value::String(lua.create_string(fixed)?)))
         }
         // a view is a tree of plain tables; the depth guards against a cycle
@@ -679,14 +749,14 @@ fn lossy_strings(
             let copy = lua.create_table()?;
             for pair in table.pairs::<mlua::Value, mlua::Value>() {
                 let (key, item) = pair?;
-                let key = match lossy_strings(lua, &key, depth + 1)? {
+                let key = match lossy_strings(lua, &key, depth + 1, text)? {
                     Some(fixed) => {
                         changed = true;
                         fixed
                     }
                     None => key,
                 };
-                let item = match lossy_strings(lua, &item, depth + 1)? {
+                let item = match lossy_strings(lua, &item, depth + 1, text)? {
                     Some(fixed) => {
                         changed = true;
                         fixed
@@ -1261,7 +1331,9 @@ impl PobBackend {
                 if !folder_allowed(&folder) {
                     anyhow::bail!("that isn't a valid folder");
                 }
-                self.folder = buildpaths::folder(&self.build_root()?, &folder, false, false)?;
+                let root = self.build_root()?;
+                let folder = self.ui_folder(&root, &folder);
+                self.folder = buildpaths::folder(&root, &folder, false, false, self.list_escaped)?;
                 self.on_list = true;
                 Ok(Affected {
                     list: true,
@@ -1270,14 +1342,24 @@ impl PobBackend {
             }
             Command::RenameBuild { path, name } => {
                 let path = self.build_entry(&path, false)?;
+                let name = self.entry_name(&name);
                 buildpaths::name_free(&path, &name, true)?;
-                self.call_path::<_, ()>("rename_build", (path, name))?;
+                let args = (
+                    self.bytes_arg(path.as_os_str().as_bytes())?,
+                    self.bytes_arg(&name)?,
+                );
+                self.call_path::<_, ()>("rename_build", args)?;
                 Ok(list_changed())
             }
             Command::CopyBuild { path, name } => {
                 let path = self.build_entry(&path, true)?;
+                let name = self.entry_name(&name);
                 buildpaths::name_free(&path, &name, false)?;
-                self.call_path::<_, ()>("copy_build", (path, name))?;
+                let args = (
+                    self.bytes_arg(path.as_os_str().as_bytes())?,
+                    self.bytes_arg(&name)?,
+                );
+                self.call_path::<_, ()>("copy_build", args)?;
                 Ok(list_changed())
             }
             Command::DeleteBuild { path, kind } => {
@@ -1302,7 +1384,8 @@ impl PobBackend {
                 if !as_asked {
                     anyhow::bail!("the folder changed; look again");
                 }
-                self.call_path::<_, ()>("delete_build", (path.clone(), kind_name))?;
+                let lua_path = self.bytes_arg(path.as_os_str().as_bytes())?;
+                self.call_path::<_, ()>("delete_build", (lua_path, kind_name))?;
                 // PoB ignores what its delete answers: look at the file system
                 if std::fs::symlink_metadata(&path).is_ok() {
                     anyhow::bail!("couldn't delete that build");
@@ -1312,26 +1395,42 @@ impl PobBackend {
             Command::MoveBuild { path, folder } => {
                 let root = self.build_root()?;
                 let path = self.build_entry(&path, true)?;
-                let folder = buildpaths::folder(&root, &folder, true, true)?;
-                buildpaths::move_target_free(&path, &root, &folder)?;
+                let folder = self.ui_folder(&root, &folder);
+                let folder = buildpaths::folder(&root, &folder, true, true, self.list_escaped)?;
+                buildpaths::move_target_free(&path, &root, &folder, self.list_escaped)?;
+                let path = self.bytes_arg(path.as_os_str().as_bytes())?;
+                let folder = self.folder_arg(&folder)?;
                 self.call_path::<_, ()>("move_build", (path, folder))?;
                 Ok(list_changed())
             }
             Command::CopyBuildTo { path, folder } => {
                 let root = self.build_root()?;
                 let path = self.build_entry(&path, true)?;
-                let folder = buildpaths::folder(&root, &folder, true, true)?;
-                buildpaths::move_target_free(&path, &root, &folder)?;
+                let folder = self.ui_folder(&root, &folder);
+                let folder = buildpaths::folder(&root, &folder, true, true, self.list_escaped)?;
+                buildpaths::move_target_free(&path, &root, &folder, self.list_escaped)?;
+                let path = self.bytes_arg(path.as_os_str().as_bytes())?;
+                let folder = self.folder_arg(&folder)?;
                 self.call_path::<_, ()>("copy_build_to", (path, folder))?;
                 Ok(list_changed())
             }
             Command::NewFolder { name } => {
-                let folder = buildpaths::folder(&self.build_root()?, &self.folder, true, true)?;
+                let folder = buildpaths::folder(
+                    &self.build_root()?,
+                    &self.folder,
+                    true,
+                    true,
+                    self.list_escaped,
+                )?;
+                let folder = self.folder_arg(&folder)?;
                 self.call_path::<_, ()>("new_folder", (folder, name))?;
                 Ok(list_changed())
             }
             Command::NewFolderIn { folder, name } => {
-                let folder = buildpaths::folder(&self.build_root()?, &folder, true, true)?;
+                let root = self.build_root()?;
+                let folder = self.ui_folder(&root, &folder);
+                let folder = buildpaths::folder(&root, &folder, true, true, self.list_escaped)?;
+                let folder = self.folder_arg(&folder)?;
                 self.call_path::<_, ()>("new_folder", (folder, name))?;
                 Ok(list_changed())
             }
@@ -1357,12 +1456,7 @@ impl PobBackend {
                 self.on_list = false;
                 self.reset_heatmap();
                 // the path's own bytes: a file name that isn't UTF-8 opens as itself
-                let path = {
-                    use std::os::unix::ffi::OsStrExt;
-                    self.lua
-                        .create_string(path.as_os_str().as_bytes())
-                        .map_err(|e| anyhow!("{e}"))?
-                };
+                let path = self.bytes_arg(path.as_os_str().as_bytes())?;
                 self.call_path::<_, ()>("open_build", path)?;
                 self.all_views()
             }
@@ -1485,9 +1579,13 @@ impl PobBackend {
                     anyhow::bail!("that isn't a valid folder");
                 }
                 let root: String = self.call("build_root", ())?;
-                let folder = buildpaths::folder(&root, &folder, false, true)?;
-                buildpaths::save_target(&root, &folder, &name)?;
-                self.call_path::<_, ()>("save_as", (folder, name, overwrite))?;
+                let folder = self.ui_folder(&root, &folder);
+                let folder = buildpaths::folder(&root, &folder, false, true, self.list_escaped)?;
+                // the name the build view showed escaped goes back as its file's bytes
+                let name = Self::name_bytes(&name, self.save_as_escaped);
+                buildpaths::save_target(&root, &folder, &name, self.list_escaped)?;
+                let args = (self.folder_arg(&folder)?, self.bytes_arg(&name)?, overwrite);
+                self.call_path::<_, ()>("save_as", args)?;
                 // PoB's save rewrites the notes' `^_` escapes; the Summary's header names the
                 // build (R4)
                 Ok(Affected {
@@ -2664,8 +2762,11 @@ impl Backend for PobBackend {
     /// another program wrote the file since we last read or wrote it, or PoB couldn't read it
     /// (I-1). The build mode's own Shutdown only saves a build in PoB's dev mode, so it isn't run.
     fn shutdown(&mut self) {
-        let list = self.on_list.then(|| self.folder.clone());
-        match self.call::<_, Option<String>>("settings_exit_save", list) {
+        let list = match self.on_list {
+            true => self.folder_arg(&self.folder).ok(),
+            false => None,
+        };
+        match self.call_path::<_, Option<String>>("settings_exit_save", list) {
             Ok(None) => {}
             Ok(Some(reason)) => log::warn!("Settings.xml not saved at exit: {reason}"),
             Err(e) => log::warn!("Settings.xml not saved at exit: {e:#}"),
@@ -2682,6 +2783,10 @@ impl Backend for PobBackend {
             }
         };
         unescape(&mut view.name);
+        // escapes that stay stand for bytes that aren't UTF-8; a name whose escapes were
+        // undone holds real characters of that range, which go as they are
+        self.save_as_escaped = view.save_as_name.chars().any(super::bytes_text::is_escape)
+            && super::bytes_text::unescape_utf8(&view.save_as_name).is_none();
         unescape(&mut view.save_as_name);
         if let Some(tooltip) = &mut view.name_tooltip {
             unescape(tooltip);
@@ -2695,17 +2800,27 @@ impl Backend for PobBackend {
     }
 
     fn build_list_view(&mut self) -> Result<BuildListView> {
-        // the entries are file names (valid UTF-8, buildpaths): they come and go as they are,
-        // never escaped, as the paths of the commands about them do (`call_path`)
-        let value: mlua::Value = self.call_path("list_builds", self.folder.clone())?;
-        let mut view: BuildListView = match self.lua.from_value(value.clone()) {
-            Ok(view) => view,
-            // a file name that isn't UTF-8, which PoB on Linux lists and opens: the list
-            // shows it escaped (`bytes_text`), and its path is its own bytes again
-            Err(e) => {
-                let fixed = lossy_strings(&self.lua, &value, 0)
+        // the entries and folders are file names. PoB on Linux lists one that isn't UTF-8 and
+        // opens it: while the Builds tree holds such a name, the view spells every name and
+        // folder escaped (`bytes_text`; a real character of the escapes' range too), and they
+        // come back through `path_from_escaped` as themselves. Otherwise they are as they are.
+        let folder = self.folder_arg(&self.folder)?;
+        let value: mlua::Value = self.call_path("list_builds", folder)?;
+        let root = self.build_root()?;
+        // the tree is walked once; the list is read plain unless a folder's name already
+        // calls for the escaped spelling, or it can't be
+        let raw_tree = buildpaths::folder_tree_raw(&root);
+        let plain = match raw_tree.invalid {
+            true => None,
+            false => self.lua.from_value::<BuildListView>(value.clone()).ok(),
+        };
+        let escaped = plain.is_none();
+        let mut view = match plain {
+            Some(view) => view,
+            None => {
+                let fixed = lossy_strings(&self.lua, &value, 0, false)
                     .map_err(|e| anyhow!("{e}"))?
-                    .ok_or_else(|| anyhow!("{e}"))?;
+                    .unwrap_or(value);
                 let mut view: BuildListView =
                     self.lua.from_value(fixed).map_err(|e| anyhow!("{e}"))?;
                 for entry in &mut view.entries {
@@ -2715,9 +2830,14 @@ impl Backend for PobBackend {
                 view
             }
         };
-        // a missing Builds folder was already refused by the listing
-        let root = self.build_root()?;
-        view.tree = buildpaths::folder_tree(&root);
+        let tree = raw_tree.spelled(escaped);
+        // the list's own folder is held in the spelling of the views; it follows a change
+        if escaped != self.list_escaped {
+            let bytes = Self::name_bytes(&self.folder, self.list_escaped);
+            self.folder = buildpaths::spell(&bytes, escaped);
+        }
+        self.list_escaped = escaped;
+        view.tree = tree;
         view.root = PathBuf::from(root);
         view.build_open = !self.on_list;
         Ok(view)
@@ -3198,7 +3318,8 @@ impl Backend for PobBackend {
     fn browse_view(&mut self, folder: &str) -> Result<BuildBrowseView> {
         // PoB's `main.buildPath`, read only: unlike `build_root` nothing is set up
         let root: String = self.call("build_root", ())?;
-        buildpaths::browse(&root, folder)
+        let folder = self.ui_folder(&root, folder);
+        buildpaths::browse(&root, &folder, self.list_escaped)
     }
 
     fn set_waker(&mut self, wake: Waker) {

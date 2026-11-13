@@ -615,7 +615,8 @@ impl AutoPobApp {
 
     /// Off the Compare tab, an edit's recalculation doesn't rebuild its view, so the engine is
     /// told when the tab shows: hiding needs no answer, showing is answered with a fresh view,
-    /// which the tab waits for (`compare_wait`).
+    /// which the tab waits for (`compare_wait`). Neither counts as sent (`behind`): a view that
+    /// fails is answered by its error alone, and the tab's controls come back with it.
     fn sync_compare_shown(&mut self) {
         let shown = self.screen == Screen::Build && self.tab == BuildTab::Compare;
         if shown == self.compare_shown {
@@ -623,7 +624,7 @@ impl AutoPobApp {
         }
         self.compare_shown = shown;
         if shown {
-            self.compare_wait = Some(self.send(Command::SetCompareShown { on: true }));
+            self.compare_wait = Some(self.engine.send(Command::SetCompareShown { on: true }));
         } else {
             self.engine.send(Command::SetCompareShown { on: false });
         }
@@ -926,7 +927,7 @@ impl AutoPobApp {
         }
         self.tree.on_command_error();
         // the view the Compare tab waits for may have failed: what it holds is all there is,
-        // so it is no longer dimmed (`behind` keeps its controls off until a snapshot comes)
+        // so it is no longer dimmed and its controls work again
         if self.compare_wait.is_some_and(|s| seq >= s) {
             self.compare_wait = None;
         }
@@ -1045,6 +1046,10 @@ impl AutoPobApp {
             self.send(command);
         }
         if let Some(command) = self.options.window.flush() {
+            self.send(command);
+        }
+        // a count typed into a Compare selector box
+        if let Some(command) = self.compare.flush() {
             self.send(command);
         }
     }
@@ -1192,7 +1197,10 @@ impl AutoPobApp {
         self.process_events();
         // Ctrl+Z in the next build's box must not bring the last build's text back
         if std::mem::take(&mut self.forget_text_states) {
-            ctx.data_mut(|d| d.remove_by_type::<egui::text_edit::TextEditState>());
+            // PoB's Options popup and its list mode outlive the build, boxes and all
+            let mut keep = crate::ui::options::box_ids().to_vec();
+            keep.push(self.list_ui.search_id());
+            crate::widgets::edit_box::forget_text_states_except(&ctx, &keep);
         }
         crate::widgets::scroll_step::set_options(&ctx, self.scroll_options);
         self.right_click_paste(&ctx);

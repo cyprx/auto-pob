@@ -403,7 +403,7 @@ impl CalcsUi {
             response.request_focus();
         }
         // its "x" empties it (CalcsTab.lua:35, clearable)
-        let cleared = crate::widgets::edit_box::clear_button(ui, buf);
+        let cleared = crate::widgets::edit_box::clear_button(ui, id, buf);
         if let Some(x) = &cleared {
             self.rects.note(x, || "search_clear".into());
         }
@@ -960,6 +960,35 @@ mod tests {
         h.frame(vec![]);
         let sent = h.click("search_clear");
         assert_eq!(debug(&sent), ["SetCalcsSearch { text: \"\" }"]);
+    }
+
+    /// The search's "x" is PoB's `SetText("", true)`, which starts the box's undo over
+    /// (EditControl.lua:73-77, 103): Ctrl+Z in the box afterwards doesn't bring the search back
+    #[test]
+    fn the_search_clear_starts_its_undo_over() {
+        let mut h = Harness::new(sample(None));
+        h.click("search");
+        h.time += 2.0;
+        h.frame(vec![Event::Text("life".into())]);
+        h.time += 2.0;
+        h.frame(vec![]);
+        assert_eq!(
+            debug(&h.click("search_clear")),
+            ["SetCalcsSearch { text: \"\" }"]
+        );
+        h.click("search");
+        let mut sent = vec![];
+        for _ in 0..3 {
+            h.time += 2.0;
+            sent.extend(h.frame(vec![Event::Key {
+                key: egui::Key::Z,
+                physical_key: Some(egui::Key::Z),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            }]));
+        }
+        assert!(sent.is_empty(), "{:?}", debug(&sent));
     }
 
     #[test]

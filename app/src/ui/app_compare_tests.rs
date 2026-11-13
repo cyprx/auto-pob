@@ -24,7 +24,7 @@ fn settle(app: &mut AutoPobApp, ctx: &egui::Context) {
     let start = Instant::now();
     loop {
         frame(app, ctx, vec![]);
-        if app.ready && !app.behind() && app.entering.is_none() {
+        if app.ready && !app.behind() && !app.compare_waiting() && app.entering.is_none() {
             break;
         }
         assert!(start.elapsed() < Duration::from_secs(10), "engine behind");
@@ -480,5 +480,110 @@ fn entering_the_tab_after_a_hidden_edit_waits_for_its_view() {
     assert_eq!(
         app.sent_full[before..],
         ["RemoveCompare { index: 0 }".to_owned()]
+    );
+}
+
+/// Entering the tab asks for a fresh view. When that view fails, the tab keeps the one it
+/// holds and its controls work again: nothing else is coming for that seq.
+#[test]
+fn a_failed_view_on_entering_the_tab_leaves_its_controls_on() {
+    let fails: Arc<std::sync::atomic::AtomicBool> = Arc::default();
+    let flag = fails.clone();
+    let mut app = AutoPobApp::new(Box::new(move || {
+        let flag = flag.clone();
+        Engine::spawn_with(
+            move |_| {
+                let mut fake = Fake::new().0;
+                fake.compare = Some(sample());
+                fake.compare_fails = flag;
+                Ok(Box::new(fake) as Box<dyn Backend>)
+            },
+            || {},
+        )
+    }));
+    let ctx = egui::Context::default();
+    settle(&mut app, &ctx);
+    app.enter_build(Command::NewBuild);
+    settle(&mut app, &ctx);
+    show_compare(&mut app, &ctx);
+    app.tab = BuildTab::Config;
+    settle(&mut app, &ctx);
+    // the next view fails
+    fails.store(true, std::sync::atomic::Ordering::SeqCst);
+    let errors = app.notices.len();
+    app.tab = BuildTab::Compare;
+    let start = Instant::now();
+    while app.notices.len() == errors {
+        assert!(start.elapsed() < Duration::from_secs(10), "no error came");
+        frame(&mut app, &ctx, vec![]);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!app.compare_waiting());
+    let before = app.sent_full.len();
+    click(&mut app, &ctx, "remove");
+    assert_eq!(
+        app.sent_full[before..],
+        ["RemoveCompare { index: 0 }".to_owned()],
+        "the tab's controls stayed off"
+    );
+    // a command of the tab whose Compare view fails too: its tree view answers the batch
+    // (`compare_changed`), so the controls come back as well
+    // (the same error counts on the notice already up)
+    let start = Instant::now();
+    while app.behind() {
+        assert!(start.elapsed() < Duration::from_secs(10), "no answer came");
+        frame(&mut app, &ctx, vec![]);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let before = app.sent_full.len();
+    click(&mut app, &ctx, "remove");
+    assert_eq!(
+        app.sent_full[before..],
+        ["RemoveCompare { index: 0 }".to_owned()],
+        "the controls stayed off after a failed view of the tab's own command"
+    );
+}
+
+/// A snapshot of the seq the tab waits for, or a later one, ends the wait: the engine has
+/// answered the showing, whatever came of its view
+#[test]
+fn a_later_snapshot_ends_the_wait() {
+    let (mut app, _ctx) = open_build();
+    let seq = app.last_sent.max(app.last_snapshot) + 1;
+    app.compare_wait = Some(seq);
+    assert!(app.compare_waiting());
+    app.on_event(Event_::Snapshot {
+        seq,
+        snapshot: Snapshot::Compare(Some(Arc::new(sample()))),
+    });
+    assert!(!app.compare_waiting());
+}
+
+/// A count typed into a Compare selector box goes out before Save, as every other box's
+/// edit does (`flush_edits`): PoB's box applied it key by key, so a Save after it has it
+#[test]
+fn a_typed_count_goes_out_before_save() {
+    let (mut app, ctx) = open_build();
+    show_compare(&mut app, &ctx);
+    click(&mut app, &ctx, "edit_cmpStageCount");
+    frame(&mut app, &ctx, vec![Event::Text("4".into())]);
+    assert!(app.compare.has_pending());
+    let before = app.sent_full.len();
+    frame(
+        &mut app,
+        &ctx,
+        vec![Event::Key {
+            key: Key::S,
+            physical_key: Some(Key::S),
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        }],
+    );
+    assert_eq!(
+        app.sent_full[before..].first().map(String::as_str),
+        Some("SetCompareControl { name: \"cmpStageCount\", value: Text(\"4\") }"),
+        "{:?}",
+        &app.sent_full[before..]
     );
 }

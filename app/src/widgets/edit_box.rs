@@ -70,15 +70,17 @@ pub fn as_step(command: crate::engine::Command, stepped: bool) -> crate::engine:
     }
 }
 
-/// A clearable box's "x" (EditControl.lua:73-77): shown while the box holds text; a click
-/// empties it. True when it was clicked.
-pub fn clear_button(ui: &mut egui::Ui, text: &mut String) -> Option<egui::Response> {
+/// A clearable box's "x" (EditControl.lua:73-77): shown while the box `id` holds text; a
+/// click empties it with `SetText("", true)`, which starts the box's undo over
+/// (EditControl.lua:103). The button's response, when shown.
+pub fn clear_button(ui: &mut egui::Ui, id: egui::Id, text: &mut String) -> Option<egui::Response> {
     if text.is_empty() {
         return None;
     }
     let x = ui.small_button("x");
     if x.clicked() {
         text.clear();
+        forget_undo(ui.ctx(), id);
     }
     Some(x)
 }
@@ -102,6 +104,36 @@ pub fn forget_undo(ctx: &egui::Context, id: egui::Id) {
     if let Some(mut state) = egui::TextEdit::load_state(ctx, id) {
         state.clear_undoer();
         state.store(ctx, id);
+    }
+}
+
+/// Forgets every text box's state (its undo, caret and selection) but the `keep` boxes': the
+/// boxes of a build are new with the next build in PoB, while those of a window that outlives
+/// it (Options) or of the build list keep theirs
+pub fn forget_text_states_except(ctx: &egui::Context, keep: &[egui::Id]) {
+    let kept: Vec<(egui::Id, egui::text_edit::TextEditState)> = keep
+        .iter()
+        .filter_map(|id| egui::TextEdit::load_state(ctx, *id).map(|state| (*id, state)))
+        .collect();
+    ctx.data_mut(|d| d.remove_by_type::<egui::text_edit::TextEditState>());
+    for (id, state) in kept {
+        state.store(ctx, id);
+    }
+}
+
+/// Starts the undo of text box `id` over when the box wasn't drawn the pass before: a box
+/// that comes up again (a popup's name box opened once more) is a new `EditControl` in PoB,
+/// with no undo of its own. Call it each pass the box is drawn.
+pub fn forget_undo_if_new(ctx: &egui::Context, id: egui::Id) {
+    let pass = ctx.cumulative_pass_nr();
+    let key = id.with("pob_box_drawn_pass");
+    let last: Option<u64> = ctx.data_mut(|d| {
+        let last = d.get_temp(key);
+        d.insert_temp(key, pass);
+        last
+    });
+    if last.is_none_or(|last| last + 1 < pass) {
+        forget_undo(ctx, id);
     }
 }
 
@@ -216,8 +248,11 @@ impl EditBox {
                     self.text = stepped(&self.text, step > 0, opts.signed);
                 }
                 self.sent.clone_from(&self.text);
+                self.watch.sent(&self.text);
                 self.pending = false;
                 self.stepped = true;
+                // SetText resets the box's undo (EditControl.lua:103)
+                forget_undo(ui.ctx(), id);
                 send = Some(self.text.clone());
             }
             (response, send)
@@ -747,6 +782,26 @@ mod tests {
         h.focus();
         undo_keys(&mut h);
         assert_eq!(h.a.text, "");
+    }
+
+    /// A step of a focused `%D` box is PoB's `SetText(..., true)`, which starts its undo over
+    /// (EditControl.lua:96-103, 680-700): Ctrl+Z after it doesn't take the box back to the
+    /// number it held before, nor to what was typed
+    #[test]
+    fn a_step_starts_the_undo_over() {
+        let mut h = Harness::new("5");
+        h.opts = EditBoxOptions::number(50.0, Some(3));
+        h.frame(vec![]);
+        h.focus();
+        h.type_text("2");
+        h.time += 2.0;
+        h.frame(vec![]);
+        assert_eq!(h.key(Key::ArrowUp), ["53"]);
+        h.time += 2.0;
+        h.frame(vec![]);
+        undo_keys(&mut h);
+        assert_eq!(h.a.text, "53");
+        assert!(h.click_away().is_empty());
     }
 
     #[test]

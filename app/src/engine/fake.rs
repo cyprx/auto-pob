@@ -120,6 +120,8 @@ pub struct Fake {
     pub compare: Option<CompareView>,
     /// How long `compare_view` takes
     pub compare_delay: std::time::Duration,
+    /// While set, `compare_view` fails
+    pub compare_fails: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Fake {
@@ -156,6 +158,7 @@ impl Fake {
                 compare_hidden: false,
                 compare: None,
                 compare_delay: std::time::Duration::ZERO,
+                compare_fails: Arc::default(),
             },
             log,
         )
@@ -750,6 +753,9 @@ impl Backend for Fake {
     fn compare_view(&mut self) -> anyhow::Result<Option<CompareView>> {
         self.log.lock().unwrap().compare_views += 1;
         std::thread::sleep(self.compare_delay);
+        if self.compare_fails.load(std::sync::atomic::Ordering::SeqCst) {
+            anyhow::bail!("the comparison view failed");
+        }
         Ok(self.compare.clone())
     }
 

@@ -214,9 +214,21 @@ fn sort_label(sort: BuildSort) -> &'static str {
 /// Whether PoB's Save is on for a build named `text` in the folder of `path`, whose name is
 /// `original`: a different name needs no build of that name on disk, the same name in another
 /// case needs only the case to differ (BuildListControl.lua:99-109)
+/// The name is the list's spelling: in a list spelled escaped (a name in the Builds tree isn't
+/// UTF-8), escapes stand for bytes; the entry's own name tells, as it differs from its file's.
 fn build_name_is_free(path: &std::path::Path, original: &str, text: &str) -> bool {
     if !text.eq_ignore_ascii_case(original) {
-        let file = path.with_file_name(format!("{text}.xml"));
+        let stem = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|f| f.strip_suffix(".xml").unwrap_or(f));
+        let typed = format!("{text}.xml");
+        let name = if stem == Some(original) {
+            std::path::PathBuf::from(typed)
+        } else {
+            crate::engine::bytes_text::path_from_escaped(&typed)
+        };
+        let file = path.with_file_name(name);
         !file.exists()
     } else {
         text != original
@@ -525,6 +537,11 @@ impl BuildListUi {
         self.filter_edit = None;
         (self.filter_text != view.filter)
             .then(|| ListScreenAction::SetFilter(self.filter_text.clone()))
+    }
+
+    /// The search box's id
+    pub(crate) fn search_id(&self) -> egui::Id {
+        self.search_id
     }
 
     /// The path Ctrl+X or Ctrl+C marked
@@ -1034,6 +1051,8 @@ fn name_edit(
     );
     mark(ui, "name_edit", &edit);
     crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &edit, text);
+    // a new box, as each of PoB's popups makes: no undo from the last one
+    crate::widgets::edit_box::forget_undo_if_new(ui.ctx(), id);
     if *focus {
         edit.request_focus();
         *focus = false;
@@ -1397,6 +1416,57 @@ mod tests {
             panic!("no name box");
         };
         assert_eq!(text, "axb");
+    }
+
+    /// The Save of a Rename or Copy box looks for a build of the typed name as the list
+    /// spells it: escapes are the bytes of a name that isn't UTF-8, so such a build is seen
+    #[test]
+    fn a_taken_name_that_isnt_utf8_is_seen() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = crate::test_dir::TestDir::new("bl-latin-free");
+        let file = |b: &[u8]| dir.join(std::ffi::OsStr::from_bytes(b));
+        std::fs::write(file(b"caf\xE9.xml"), "a").unwrap();
+        std::fs::write(file(b"caf\xE9 2.xml"), "b").unwrap();
+        let path = file(b"caf\xE9.xml");
+        assert!(!build_name_is_free(&path, "caf\u{F7E9}", "caf\u{F7E9} 2"));
+        assert!(build_name_is_free(&path, "caf\u{F7E9}", "caf\u{F7E9} 3"));
+        // in a list of UTF-8 names a real character of the escapes' range is itself
+        std::fs::write(dir.join("x\u{F7E9}.xml"), "c").unwrap();
+        std::fs::write(dir.join("y\u{F7E9}.xml"), "d").unwrap();
+        let real = dir.join("x\u{F7E9}.xml");
+        assert!(!build_name_is_free(&real, "x\u{F7E9}", "y\u{F7E9}"));
+    }
+
+    /// Each Rename box is a new `EditControl` in PoB, with no undo of its own: Ctrl+Z in the
+    /// next box doesn't bring back what was typed into the last one (a Save would then
+    /// rename this build to it)
+    #[test]
+    fn a_name_box_has_no_undo_from_the_last_one() {
+        let mut h = H::new(view(""));
+        h.select(1);
+        h.key(Key::F2, Modifiers::NONE);
+        h.focus = false;
+        h.frame(vec![]);
+        h.click("name_edit");
+        h.time += 2.0;
+        h.text("-typed");
+        h.time += 2.0;
+        h.frame(vec![]);
+        h.click("name_cancel");
+        assert_eq!(h.ui.dialog, None);
+        h.select(2);
+        h.key(Key::F2, Modifiers::NONE);
+        h.focus = false;
+        h.frame(vec![]);
+        h.click("name_edit");
+        for _ in 0..3 {
+            h.time += 2.0;
+            h.key(Key::Z, Modifiers::COMMAND);
+        }
+        let Some(Dialog::Name { text, .. }) = &h.ui.dialog else {
+            panic!("no name box");
+        };
+        assert_eq!(text, "two");
     }
 
     #[test]

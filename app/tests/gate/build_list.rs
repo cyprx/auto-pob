@@ -1689,3 +1689,420 @@ fn odd_names_work_as_in_pob() {
         );
     }
 }
+
+/// A build file whose name isn't UTF-8 (a Windows-1252 "é"): PoB on Linux renames, copies,
+/// moves, copies into a folder and deletes it as itself. The list shows the name escaped
+/// (`bytes_text`), and a name typed over that escaped text is the same bytes in PoB.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_build_named_with_bytes_that_arent_utf8_works_as_in_pob() {
+    use std::os::unix::ffi::OsStrExt;
+    let _guard = lock();
+    let mut t = start_pair("latin_name", LIST_MODE);
+    let file = |builds: &Path, rel: &[u8]| builds.join(std::ffi::OsStr::from_bytes(rel));
+    let attack = fs::read(fixtures_dir().join("attack.xml")).unwrap();
+    for builds in [t.builds.clone(), t.up.builds()] {
+        fs::write(file(&builds, b"caf\xE9.xml"), &attack).unwrap();
+    }
+    let up_path = |t: &Pair, rel: &[u8]| {
+        let path = file(&t.up.builds(), rel);
+        t.up.lua.create_string(path.as_os_str().as_bytes()).unwrap()
+    };
+    let up_name = |t: &Pair, name: &[u8]| t.up.lua.create_string(name).unwrap();
+    // the trees hold the same files, byte for byte in name and contents
+    let same_files = |t: &Pair, what: &str| {
+        assert_eq!(
+            contents(&tree(&t.builds)),
+            contents(&tree(&t.up.builds())),
+            "{what}: the trees differ"
+        );
+        assert_eq!(t.s.open_popups(), 0, "{what}: a popup is open");
+    };
+    same_files(&t, "start");
+    // the list shows it escaped, at its own path
+    let listed = t.list("");
+    let entry = listed
+        .entries
+        .iter()
+        .find(|e| e.name == "caf\u{F7E9}")
+        .expect("listed escaped");
+    assert_eq!(entry.path, file(&t.builds, b"caf\xE9.xml"));
+
+    // copy, with the escaped name typed on
+    let result = t.s.run(Command::CopyBuild {
+        path: file(&t.builds, b"caf\xE9.xml"),
+        name: "caf\u{F7E9} 2".into(),
+    });
+    let up: Option<String> = t.up.call(
+        "listRename",
+        (up_path(&t, b"caf\xE9.xml"), up_name(&t, b"caf\xE9 2"), true),
+    );
+    t.outcome(up, &result);
+    result.expect("copy");
+    same_files(&t, "copy");
+    assert!(file(&t.builds, b"caf\xE9 2.xml").is_file());
+
+    // rename
+    t.list("");
+    let result = t.s.run(Command::RenameBuild {
+        path: file(&t.builds, b"caf\xE9.xml"),
+        name: "caf\u{F7E9}-r".into(),
+    });
+    let up: Option<String> = t.up.call(
+        "listRename",
+        (
+            up_path(&t, b"caf\xE9.xml"),
+            up_name(&t, b"caf\xE9-r"),
+            false,
+        ),
+    );
+    t.outcome(up, &result);
+    result.expect("rename");
+    same_files(&t, "rename");
+    assert!(file(&t.builds, b"caf\xE9-r.xml").is_file());
+
+    // a name that is taken, in another case, is refused before PoB is asked
+    t.list("");
+    let taken =
+        t.s.run(Command::RenameBuild {
+            path: file(&t.builds, b"caf\xE9-r.xml"),
+            name: "CAF\u{F7E9} 2".into(),
+        })
+        .expect_err("a case variant");
+    assert_eq!(taken.to_string(), TAKEN);
+
+    // move into sub/
+    let result = t.s.run(Command::MoveBuild {
+        path: file(&t.builds, b"caf\xE9-r.xml"),
+        folder: "sub/".into(),
+    });
+    let up: Option<String> =
+        t.up.call("listMove", (up_path(&t, b"caf\xE9-r.xml"), "sub/"));
+    t.outcome(up, &result);
+    result.expect("move");
+    same_files(&t, "move");
+    assert!(file(&t.builds, b"sub/caf\xE9-r.xml").is_file());
+
+    // copy into sub/
+    let result = t.s.run(Command::CopyBuildTo {
+        path: file(&t.builds, b"caf\xE9 2.xml"),
+        folder: "sub/".into(),
+    });
+    let up: Option<String> =
+        t.up.call("listCopyTo", (up_path(&t, b"caf\xE9 2.xml"), "sub/"));
+    t.outcome(up, &result);
+    result.expect("copy into");
+    same_files(&t, "copy into");
+    assert!(file(&t.builds, b"sub/caf\xE9 2.xml").is_file());
+
+    // delete, with PoB's confirm text
+    for rel in [&b"sub/caf\xE9-r.xml"[..], b"caf\xE9 2.xml"] {
+        let folder = if rel.starts_with(b"sub/") { "sub/" } else { "" };
+        let view = t.list(folder);
+        let path = file(&t.builds, rel);
+        let entry = view
+            .entries
+            .iter()
+            .find(|e| e.path == path)
+            .unwrap_or_else(|| panic!("{path:?} is not listed"));
+        let (kind, prompt) = (entry.delete_kind(), entry.delete_prompt.clone());
+        let (text, message): (mlua::LuaString, Option<String>) =
+            t.up.call("listDelete", (up_path(&t, rel), true));
+        assert_eq!(message, None);
+        assert_eq!(
+            auto_pob::engine::bytes_text::decode(&text.as_bytes()),
+            prompt,
+            "PoB's confirm text"
+        );
+        let result = t.s.run(Command::DeleteBuild { path, kind });
+        t.outcome(None, &result);
+        same_files(&t, "delete");
+    }
+    assert!(!file(&t.builds, b"caf\xE9 2.xml").exists());
+}
+
+/// A folder whose name isn't UTF-8 (a Windows-1252 "é"): PoB on Linux lists it, enters it,
+/// moves and copies builds into it, makes folders in it, renames and deletes it. The list
+/// and the folder tree show its name escaped, and that spelling reaches it as itself.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_folder_named_with_bytes_that_arent_utf8_works_as_in_pob() {
+    use std::os::unix::ffi::OsStrExt;
+    let _guard = lock();
+    let mut t = start_pair("latin_folder", LIST_MODE);
+    let file = |builds: &Path, rel: &[u8]| builds.join(std::ffi::OsStr::from_bytes(rel));
+    let attack = fs::read(fixtures_dir().join("attack.xml")).unwrap();
+    for builds in [t.builds.clone(), t.up.builds()] {
+        fs::create_dir_all(file(&builds, b"d\xE9p")).unwrap();
+        fs::write(file(&builds, b"d\xE9p/inner.xml"), &attack).unwrap();
+    }
+    let up_path = |t: &Pair, rel: &[u8]| {
+        let path = file(&t.up.builds(), rel);
+        t.up.lua.create_string(path.as_os_str().as_bytes()).unwrap()
+    };
+    let up_str = |t: &Pair, text: &[u8]| t.up.lua.create_string(text).unwrap();
+    let same_files = |t: &Pair, what: &str| {
+        assert_eq!(
+            contents(&tree(&t.builds)),
+            contents(&tree(&t.up.builds())),
+            "{what}: the trees differ"
+        );
+        assert_eq!(t.s.open_popups(), 0, "{what}: a popup is open");
+    };
+    let folder = "d\u{F7E9}p/";
+    // listed, in the list and in the tree, at its own path
+    let root = t.list("");
+    let entry = root
+        .entries
+        .iter()
+        .find(|e| e.name == "d\u{F7E9}p")
+        .expect("the folder is listed escaped");
+    assert!(entry.is_folder);
+    assert_eq!(entry.path, file(&t.builds, b"d\xE9p"));
+    assert!(
+        root.tree.iter().any(|f| f.path == folder),
+        "{:?}",
+        root.tree
+    );
+    // entered
+    let inside = t.list(folder);
+    assert_eq!(inside.folder, folder);
+    let inner = inside
+        .entries
+        .iter()
+        .find(|e| e.name == "inner")
+        .expect("its build is listed");
+    assert_eq!(inner.path, file(&t.builds, b"d\xE9p/inner.xml"));
+    assert_eq!(inner.folder, folder);
+
+    // move into it
+    let result = t.s.run(Command::MoveBuild {
+        path: t.path("a.xml"),
+        folder: folder.into(),
+    });
+    let up: Option<String> =
+        t.up.call("listMove", (t.up.path("a.xml"), up_str(&t, b"d\xE9p/")));
+    t.outcome(up, &result);
+    result.expect("move");
+    same_files(&t, "move");
+    assert!(file(&t.builds, b"d\xE9p/a.xml").is_file());
+
+    // copy into it
+    let result = t.s.run(Command::CopyBuildTo {
+        path: t.path("dot.xml"),
+        folder: folder.into(),
+    });
+    let up: Option<String> =
+        t.up.call("listCopyTo", (t.up.path("dot.xml"), up_str(&t, b"d\xE9p/")));
+    t.outcome(up, &result);
+    result.expect("copy into");
+    same_files(&t, "copy into");
+
+    // a folder made in it
+    t.list(folder);
+    let result = t.s.run(Command::NewFolder {
+        name: "made".into(),
+    });
+    let up: Option<String> = t.up.call("listNewFolder", (up_str(&t, b"d\xE9p/"), "made"));
+    t.outcome(up, &result);
+    result.expect("new folder");
+    same_files(&t, "new folder");
+    let result = t.s.run(Command::NewFolderIn {
+        folder: folder.into(),
+        name: "made2".into(),
+    });
+    let up: Option<String> =
+        t.up.call("listNewFolder", (up_str(&t, b"d\xE9p/"), "made2"));
+    t.outcome(up, &result);
+    result.expect("new folder in");
+    same_files(&t, "new folder in");
+
+    // renamed, with the escaped name typed on
+    t.list("");
+    let result = t.s.run(Command::RenameBuild {
+        path: file(&t.builds, b"d\xE9p"),
+        name: "d\u{F7E9}p-r".into(),
+    });
+    let up: Option<String> = t.up.call(
+        "listRename",
+        (up_path(&t, b"d\xE9p"), up_str(&t, b"d\xE9p-r"), false),
+    );
+    t.outcome(up, &result);
+    result.expect("rename folder");
+    same_files(&t, "rename folder");
+    assert!(file(&t.builds, b"d\xE9p-r").is_dir());
+
+    // deleted with what is in it
+    let view = t.list("");
+    let path = file(&t.builds, b"d\xE9p-r");
+    let entry = view
+        .entries
+        .iter()
+        .find(|e| e.path == path)
+        .expect("listed");
+    let (kind, prompt) = (entry.delete_kind(), entry.delete_prompt.clone());
+    let (text, message): (mlua::LuaString, Option<String>) =
+        t.up.call("listDelete", (up_path(&t, b"d\xE9p-r"), true));
+    assert_eq!(message, None);
+    assert_eq!(
+        auto_pob::engine::bytes_text::decode(&text.as_bytes()),
+        prompt,
+        "PoB's confirm text"
+    );
+    let result = t.s.run(Command::DeleteBuild { path, kind });
+    t.outcome(None, &result);
+    same_files(&t, "delete folder");
+}
+
+/// The list's own folder keeps its spelling when the escaped spelling turns on or off
+/// (review I1): a folder named with a real private-use character, entered from a plain list,
+/// holds a name that isn't UTF-8, so its listing is escaped. Every later listing, and a New
+/// Folder in it, still reach that folder.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn the_list_folder_keeps_its_spelling_when_the_escapes_turn_on() {
+    use std::os::unix::ffi::OsStrExt;
+    let _guard = lock();
+    let mut s = super::Session::start("list-folder-respell");
+    let builds = s.builds_dir();
+    let inner = builds.join("x\u{F780}");
+    fs::create_dir_all(&inner).unwrap();
+    fs::copy(
+        super::fixture_xml("attack"),
+        inner.join(std::ffi::OsStr::from_bytes(b"caf\xE9.xml")),
+    )
+    .unwrap();
+    let list = |s: &mut super::Session, folder: &str| {
+        s.run(Command::ListBuilds {
+            folder: folder.into(),
+        })
+        .expect("list");
+        s.backend.build_list_view().expect("the list view")
+    };
+    let root = list(&mut s, "");
+    let entry = root
+        .entries
+        .iter()
+        .find(|e| e.is_folder)
+        .expect("the folder");
+    assert_eq!(entry.name, "x\u{F780}", "a plain list");
+    let folder = format!("{}{}/", entry.folder, entry.name);
+    let names = |view: &BuildListView| {
+        view.entries
+            .iter()
+            .map(|e| e.name.clone())
+            .collect::<Vec<_>>()
+    };
+    let first = list(&mut s, &folder);
+    assert_eq!(names(&first), ["caf\u{F7E9}"]);
+    // the next view of the same folder, as after any edit to the list
+    let second = s.backend.build_list_view().expect("the list view");
+    assert_eq!(names(&second), ["caf\u{F7E9}"], "the folder was lost");
+    s.run(Command::NewFolder {
+        name: "made".into(),
+    })
+    .expect("a new folder in it");
+    assert!(inner.join("made").is_dir());
+}
+
+/// A list view whose Builds tree holds a folder name that isn't UTF-8 walks the tree once
+/// (review M1): the walk tells the spelling and is spelled after
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn an_escaped_list_view_walks_the_tree_once() {
+    use std::os::unix::ffi::OsStrExt;
+    let _guard = lock();
+    let mut s = super::Session::start("escaped-tree-once");
+    let builds = s.builds_dir();
+    fs::create_dir_all(builds.join("a/b")).unwrap();
+    fs::create_dir_all(builds.join(std::ffi::OsStr::from_bytes(b"d\xE9p"))).unwrap();
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .expect("list");
+    let before = auto_pob::engine::tree_reads();
+    let view = s.backend.build_list_view().expect("the list view");
+    assert!(view.tree.iter().any(|f| f.path == "d\u{F7E9}p/"));
+    // the root, a/, a/b/ and d\xE9p/, each once
+    assert_eq!(auto_pob::engine::tree_reads() - before, 4);
+}
+
+/// A list view spelled escaped doesn't mark a build's text as escaped (review M3): its names
+/// come back as their own bytes, never through the text encoding
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn an_escaped_list_view_leaves_text_unescaped() {
+    use std::os::unix::ffi::OsStrExt;
+    let _guard = lock();
+    let mut s = super::Session::start("escaped-list-text");
+    let builds = s.builds_dir();
+    fs::create_dir_all(&builds).unwrap();
+    fs::copy(
+        super::fixture_xml("attack"),
+        builds.join(std::ffi::OsStr::from_bytes(b"caf\xE9.xml")),
+    )
+    .unwrap();
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .expect("list");
+    auto_pob::engine::bytes_text::reset();
+    let view = s.backend.build_list_view().expect("the list view");
+    assert!(view.entries.iter().any(|e| e.name == "caf\u{F7E9}"));
+    assert!(
+        !auto_pob::engine::bytes_text::seen(),
+        "the list marked text as escaped"
+    );
+}
+
+/// A folder the UI read in one spelling still reaches its folder after a newer view changed
+/// the spelling (review M2): the list was plain when the UI took "x\u{F780}/" from it, then a
+/// folder whose name isn't UTF-8 appeared and the engine's next view was escaped. A move,
+/// a copy into and a listing with the old spelling all go to "x\u{F780}".
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_folder_read_before_the_spelling_changed_is_still_found() {
+    use std::os::unix::ffi::OsStrExt;
+    let _guard = lock();
+    let mut s = super::Session::start("folder-old-spelling");
+    let builds = s.builds_dir();
+    let inner = builds.join("x\u{F780}");
+    fs::create_dir_all(&inner).unwrap();
+    fs::copy(super::fixture_xml("attack"), builds.join("a.xml")).unwrap();
+    fs::copy(super::fixture_xml("attack"), builds.join("b.xml")).unwrap();
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .expect("list");
+    let plain = s.backend.build_list_view().expect("the list view");
+    let folder = plain
+        .tree
+        .iter()
+        .map(|f| f.path.clone())
+        .find(|p| p.starts_with('x'))
+        .expect("the folder");
+    assert_eq!(folder, "x\u{F780}/", "a plain tree");
+    // outside the app, then the engine's next view
+    fs::create_dir_all(builds.join(std::ffi::OsStr::from_bytes(b"d\xE9p"))).unwrap();
+    let escaped = s.backend.build_list_view().expect("the list view");
+    assert!(escaped.tree.iter().any(|f| f.path == "d\u{F7E9}p/"));
+    // the UI's command, spelled from the plain view
+    s.run(Command::MoveBuild {
+        path: builds.join("a.xml"),
+        folder: folder.clone(),
+    })
+    .expect("move with the old spelling");
+    assert!(inner.join("a.xml").is_file());
+    s.run(Command::CopyBuildTo {
+        path: builds.join("b.xml"),
+        folder: folder.clone(),
+    })
+    .expect("copy into with the old spelling");
+    assert!(inner.join("b.xml").is_file());
+    s.run(Command::ListBuilds {
+        folder: folder.clone(),
+    })
+    .expect("list with the old spelling");
+    let view = s.backend.build_list_view().expect("the list view");
+    assert_eq!(view.entries.len(), 2, "{:?}", view.entries);
+}

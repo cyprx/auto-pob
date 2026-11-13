@@ -46,7 +46,7 @@ fn settle(app: &mut AutoPobApp, ctx: &egui::Context) -> (Vec<String>, Vec<String
     };
     loop {
         take(frame(app, ctx, vec![]));
-        if app.ready && !app.behind() && app.entering.is_none() {
+        if app.ready && !app.behind() && !app.compare_waiting() && app.entering.is_none() {
             break;
         }
         assert!(

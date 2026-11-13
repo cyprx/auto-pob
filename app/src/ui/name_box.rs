@@ -325,7 +325,9 @@ pub fn spliced_with(
             .collect();
         let inserted = swapped.as_str();
         let kept: String = inserted.chars().filter(|c| keeps(*c)).collect();
-        if kept.is_empty() || (replacing && kept != inserted) {
+        // `ReplaceSel` refuses a text with a character the filter drops, and puts in any
+        // other, an empty one included (a lone "\r"); `Insert` refuses only nothing
+        if (replacing && kept != inserted) || (!replacing && kept.is_empty()) {
             return before.to_owned();
         }
         out = kept;
@@ -374,6 +376,8 @@ pub fn edit(
     // the box takes the next auto id unless `build` gives it one
     let next = next_selection(ui);
     let response = ui.add(build(egui::TextEdit::singleline(text)));
+    // each of PoB's name popups makes a new box: no undo from the last time it was up
+    crate::widgets::edit_box::forget_undo_if_new(ui.ctx(), response.id);
     let sel = own(next, response.id);
     crate::widgets::url_click::open_on_ctrl_click(ui, &response, text);
     crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &response, text);
@@ -392,6 +396,70 @@ pub fn edit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A paste of only "\r" over a selection is PoB's `ReplaceSel("")` once the "\r" is
+    /// dropped (EditControl.lua:140-146): it deletes the selection. At the caret it is an
+    /// `Insert` of nothing, which changes nothing.
+    #[test]
+    fn a_paste_of_only_a_return_over_a_selection_deletes_it() {
+        let sel = Some(egui::text::CCursorRange::two(
+            egui::text::CCursor::new(1),
+            egui::text::CCursor::new(2),
+        ));
+        assert_eq!(
+            spliced_at("abc", "a\rc", sel, |_| true, NAME_LIMIT, true),
+            "ac"
+        );
+        let caret = Some(egui::text::CCursorRange::one(egui::text::CCursor::new(1)));
+        assert_eq!(
+            spliced_at("abc", "a\rbc", caret, |_| true, NAME_LIMIT, true),
+            "abc"
+        );
+    }
+
+    /// A name box that comes up again (its popup opened once more) is a new box in PoB, with
+    /// no undo: Ctrl+Z doesn't bring back what was typed the last time it was up
+    #[test]
+    fn a_box_that_comes_up_again_has_no_undo() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::unique("name_box_again");
+        let mut time = 1.0;
+        let mut frame = |text: &mut String, shown: bool, events: Vec<egui::Event>| {
+            time += 2.0;
+            let input = egui::RawInput {
+                time: Some(time),
+                events,
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| {
+                if shown {
+                    let (r, _) = edit(ui, text, Filter::Plain, NAME_LIMIT, |t| t.id(id));
+                    r.request_focus();
+                }
+            })
+            .drop_without_applying_deltas();
+        };
+        let mut first = "one".to_owned();
+        frame(&mut first, true, vec![]);
+        frame(&mut first, true, vec![egui::Event::Text("x".into())]);
+        frame(&mut first, true, vec![]);
+        assert_eq!(first, "onex");
+        // closed, then opened for another name
+        frame(&mut first, false, vec![]);
+        let mut second = "two".to_owned();
+        frame(&mut second, true, vec![]);
+        let undo = egui::Event::Key {
+            key: egui::Key::Z,
+            physical_key: Some(egui::Key::Z),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        for _ in 0..3 {
+            frame(&mut second, true, vec![undo.clone()]);
+        }
+        assert_eq!(second, "two");
+    }
 
     /// PoB's caret goes right after what an edit put in, or stays where it was when the box
     /// refused the edit (EditControl.lua:140-172)

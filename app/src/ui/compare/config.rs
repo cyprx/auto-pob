@@ -157,7 +157,13 @@ pub(super) fn show(
                 SEARCH_LIMIT,
                 pasted,
             );
-            crate::ui::name_box::place_caret(ui.ctx(), search.id, &raw, &tab.config_filter);
+            crate::ui::name_box::place_caret(
+                ui.ctx(),
+                search.id,
+                &before,
+                &raw,
+                &tab.config_filter,
+            );
         }
         crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &search, &tab.config_filter);
         tab.rects.note(&search, || "config_search".into());

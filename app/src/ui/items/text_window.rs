@@ -158,7 +158,7 @@ pub fn show(
                 pasted,
                 Some(crate::ui::name_box::sanitise_text),
             );
-            crate::ui::name_box::place_caret(ctx, edit.id, &raw, &window.text);
+            crate::ui::name_box::place_caret(ctx, edit.id, &before, &raw, &window.text);
         }
         ui.horizontal(|ui| {
             // "Create" when there is no item yet; enabled while PoB reads the text as an item,

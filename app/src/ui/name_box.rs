@@ -153,22 +153,45 @@ pub fn shifted_caret(caret: usize, raw: &str, result: &str) -> usize {
     (caret + result).saturating_sub(raw).min(result)
 }
 
+/// The selection PoB keeps, in characters, when the box refused an edit that replaced one:
+/// `ReplaceSel` changes nothing when the filter drops a character or the limit is passed
+/// (EditControl.lua:140-152). None for any other edit.
+pub fn kept_selection(before: &str, raw: &str, result: &str) -> Option<(usize, usize)> {
+    if result != before || raw == before {
+        return None;
+    }
+    let (head, tail) = edit_span(before, raw);
+    if head + tail >= before.len() {
+        return None;
+    }
+    let start = before[..head].chars().count();
+    let end = before[..before.len() - tail].chars().count();
+    Some((start, end))
+}
+
 /// Puts the caret of the text box `id` where PoB's would be after `spliced` turned egui's
-/// edit, `raw`, into `result`. egui leaves it after the raw edit, which a filter that drops or
-/// widens characters, or a refused edit, moved.
-pub fn place_caret(ctx: &egui::Context, id: egui::Id, raw: &str, result: &str) {
+/// edit of `before`, `raw`, into `result`. egui leaves it after the raw edit, which a filter
+/// that drops or widens characters, or a refused edit, moved; a refused edit over a selection
+/// keeps the selection.
+pub fn place_caret(ctx: &egui::Context, id: egui::Id, before: &str, raw: &str, result: &str) {
     if raw == result {
         return;
     }
     if let Some(mut state) = egui::TextEdit::load_state(ctx, id)
         && let Some(range) = state.cursor.char_range()
     {
-        let at = shifted_caret(range.primary.index.0, raw, result);
-        state
-            .cursor
-            .set_char_range(Some(egui::text::CCursorRange::one(
-                egui::text::CCursor::new(at),
-            )));
+        let range = match kept_selection(before, raw, result) {
+            Some((start, end)) => egui::text::CCursorRange::two(
+                egui::text::CCursor::new(start),
+                egui::text::CCursor::new(end),
+            ),
+            None => egui::text::CCursorRange::one(egui::text::CCursor::new(shifted_caret(
+                range.primary.index.0,
+                raw,
+                result,
+            ))),
+        };
+        state.cursor.set_char_range(Some(range));
         state.store(ctx, id);
     }
 }
@@ -277,7 +300,7 @@ pub fn edit(
         let same = *text == before;
         let raw = std::mem::take(text);
         *text = spliced(&before, &raw, filter, limit, pasted);
-        place_caret(ui.ctx(), response.id, &raw, text);
+        place_caret(ui.ctx(), response.id, &before, &raw, text);
         // typing over the text with itself is an edit; a character the box drops is none
         changed = same || *text != before;
     }
@@ -312,6 +335,57 @@ mod tests {
         let result = spliced("ab", raw, Filter::Path, NAME_LIMIT, false);
         assert_eq!(result, "ab");
         assert_eq!(shifted_caret(2, raw, &result), 1);
+    }
+
+    /// PoB's ReplaceSel refuses a character its filter drops and keeps the selection
+    /// (EditControl.lua:140-152)
+    #[test]
+    fn a_refused_edit_over_a_selection_keeps_it() {
+        // "bc" of "abcd" selected, "/" typed into a build name box
+        let raw = "a/d";
+        let result = spliced("abcd", raw, Filter::Path, NAME_LIMIT, false);
+        assert_eq!(result, "abcd");
+        assert_eq!(kept_selection("abcd", raw, &result), Some((1, 3)));
+        // with no selection, or a taken edit, nothing is kept
+        assert_eq!(kept_selection("ab", "a/b", "ab"), None);
+        assert_eq!(kept_selection("abcd", "axd", "axd"), None);
+    }
+
+    /// Typed into a build name box: "/" over a selection is refused and the selection stays,
+    /// so the next key replaces it (EditControl.lua:140-152)
+    #[test]
+    fn a_refused_key_keeps_the_selection_in_the_box() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::NULL.with("name_box_test");
+        let mut text = String::from("abcd");
+        let run = |events: Vec<egui::Event>, text: &mut String| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(300.0, 100.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let out = ctx.run_ui(input, |ui| {
+                edit(ui, text, Filter::Path, NAME_LIMIT, |e| e.id(id));
+            });
+            out.drop_without_applying_deltas();
+        };
+        ctx.memory_mut(|m| m.request_focus(id));
+        run(vec![], &mut text);
+        let mut state = egui::TextEdit::load_state(&ctx, id).unwrap_or_default();
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(1),
+                egui::text::CCursor::new(3),
+            )));
+        state.store(&ctx, id);
+        run(vec![egui::Event::Text("/".into())], &mut text);
+        assert_eq!(text, "abcd");
+        run(vec![egui::Event::Text("x".into())], &mut text);
+        assert_eq!(text, "axd");
     }
 
     #[test]

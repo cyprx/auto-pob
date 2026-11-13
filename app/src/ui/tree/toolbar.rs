@@ -625,7 +625,7 @@ impl Toolbar {
         if field.changed() {
             let raw = std::mem::take(&mut self.search);
             self.search = name_box::spliced_by(&before, &raw, |c| !c.is_control(), 100, pasted);
-            name_box::place_caret(ui.ctx(), field.id, &raw, &self.search);
+            name_box::place_caret(ui.ctx(), field.id, &before, &raw, &self.search);
         }
         crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &field, &self.search);
         rects.note(&field, || "search".into());

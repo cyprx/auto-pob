@@ -14,6 +14,14 @@ use crate::engine::views::{PopupControl, PopupControlKind, PopupView, SettingEff
 use crate::engine::{Command, SettingsView};
 use crate::settings::{AppSettings, REALMS};
 use crate::widgets::{EditBox, EditBoxOptions};
+
+/// The window's own text boxes: the Builds folder and the trade league
+pub fn box_ids() -> [egui::Id; 2] {
+    [
+        egui::Id::unique("options_user_dir"),
+        egui::Id::unique("options_league"),
+    ]
+}
 use eframe::egui;
 
 /// What the window asks of the engine in one frame.
@@ -302,13 +310,9 @@ impl Extras<'_> {
                         hint: Some("the default folder"),
                         ..EditBoxOptions::default()
                     };
-                    let (response, sent) = self.folder.show(
-                        ui,
-                        egui::Id::unique("options_user_dir"),
-                        &current,
-                        self.busy,
-                        &opts,
-                    );
+                    let (response, sent) =
+                        self.folder
+                            .show(ui, box_ids()[0], &current, self.busy, &opts);
                     super::import::mark(ui, "options_user_dir", &response);
                     if let Some(text) = sent {
                         set_folder(self.draft, &text);
@@ -374,13 +378,9 @@ impl Extras<'_> {
                     ..EditBoxOptions::default()
                 };
                 let current = self.draft.trade_league.clone();
-                let (response, sent) = self.league.show(
-                    ui,
-                    egui::Id::unique("options_league"),
-                    &current,
-                    self.busy,
-                    &opts,
-                );
+                let (response, sent) =
+                    self.league
+                        .show(ui, box_ids()[1], &current, self.busy, &opts);
                 super::import::mark(ui, "options_league", &response);
                 if let Some(text) = sent {
                     self.draft.trade_league = text.trim().to_owned();

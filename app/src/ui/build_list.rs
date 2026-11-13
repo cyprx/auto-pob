@@ -527,6 +527,11 @@ impl BuildListUi {
             .then(|| ListScreenAction::SetFilter(self.filter_text.clone()))
     }
 
+    /// The search box's id
+    pub(crate) fn search_id(&self) -> egui::Id {
+        self.search_id
+    }
+
     /// The path Ctrl+X or Ctrl+C marked
     #[cfg(test)]
     pub(crate) fn marked_path(&self) -> Option<&std::path::Path> {

@@ -107,6 +107,20 @@ pub fn forget_undo(ctx: &egui::Context, id: egui::Id) {
     }
 }
 
+/// Forgets every text box's state (its undo, caret and selection) but the `keep` boxes': the
+/// boxes of a build are new with the next build in PoB, while those of a window that outlives
+/// it (Options) or of the build list keep theirs
+pub fn forget_text_states_except(ctx: &egui::Context, keep: &[egui::Id]) {
+    let kept: Vec<(egui::Id, egui::text_edit::TextEditState)> = keep
+        .iter()
+        .filter_map(|id| egui::TextEdit::load_state(ctx, *id).map(|state| (*id, state)))
+        .collect();
+    ctx.data_mut(|d| d.remove_by_type::<egui::text_edit::TextEditState>());
+    for (id, state) in kept {
+        state.store(ctx, id);
+    }
+}
+
 /// Starts the undo of text box `id` over when the box wasn't drawn the pass before: a box
 /// that comes up again (a popup's name box opened once more) is a new `EditControl` in PoB,
 /// with no undo of its own. Call it each pass the box is drawn.

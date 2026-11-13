@@ -1193,7 +1193,10 @@ impl AutoPobApp {
         self.process_events();
         // Ctrl+Z in the next build's box must not bring the last build's text back
         if std::mem::take(&mut self.forget_text_states) {
-            ctx.data_mut(|d| d.remove_by_type::<egui::text_edit::TextEditState>());
+            // PoB's Options popup and its list mode outlive the build, boxes and all
+            let mut keep = crate::ui::options::box_ids().to_vec();
+            keep.push(self.list_ui.search_id());
+            crate::widgets::edit_box::forget_text_states_except(&ctx, &keep);
         }
         crate::widgets::scroll_step::set_options(&ctx, self.scroll_options);
         self.right_click_paste(&ctx);

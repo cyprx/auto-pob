@@ -415,3 +415,71 @@ fn a_locked_settings_file_is_never_written() {
     assert!(app.write_settings(&AppSettings::default()).is_err());
     assert!(!config.exists());
 }
+
+/// One frame at `time`, so egui's undo sees the edits apart
+fn frame_at(app: &mut AutoPobApp, ctx: &egui::Context, time: f64, events: Vec<Event>) {
+    clear_marks();
+    let input = RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 900.0))),
+        time: Some(time),
+        events,
+        ..Default::default()
+    };
+    ctx.run_ui(input, |ui| app.show(ui))
+        .drop_without_applying_deltas();
+}
+
+/// PoB's Options popup outlives a build change, and its boxes keep their undo: Ctrl+Z in the
+/// league box after the build changed still takes back what was typed
+#[test]
+fn the_options_boxes_keep_their_undo_across_a_build_change() {
+    let config = temp_config("undo");
+    let (mut app, ctx) = app(AppSettings::default(), &config);
+    until_ready(&mut app, &ctx);
+    open_options(&mut app, &ctx);
+    let mut time = 10.0;
+    let mut step = |app: &mut AutoPobApp, events: Vec<Event>| {
+        time += 2.0;
+        frame_at(app, &ctx, time, events);
+    };
+    step(&mut app, vec![]);
+    let pos = marked("options_league").expect("the league box").center();
+    let button = |pressed| Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    step(&mut app, vec![Event::PointerMoved(pos)]);
+    step(&mut app, vec![button(true)]);
+    step(&mut app, vec![button(false)]);
+    step(&mut app, vec![Event::Text("-x".into())]);
+    step(&mut app, vec![]);
+    // another build's first view lands while the window is open
+    app.forget_text_states = true;
+    step(&mut app, vec![]);
+    for _ in 0..3 {
+        step(
+            &mut app,
+            vec![Event::Key {
+                key: egui::Key::Z,
+                physical_key: Some(egui::Key::Z),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            }],
+        );
+    }
+    step(
+        &mut app,
+        vec![Event::Key {
+            key: egui::Key::Enter,
+            physical_key: Some(egui::Key::Enter),
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }],
+    );
+    step(&mut app, vec![]);
+    assert_eq!(app.options.draft_mut().trade_league, "Standard");
+}

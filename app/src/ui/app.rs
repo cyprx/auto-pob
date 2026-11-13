@@ -926,7 +926,11 @@ impl AutoPobApp {
                 }
             }
         }
-        self.notices.push(message);
+        // the same reason again while its notice is up (a search PoB can't read, refused at
+        // each send while it stays in the box) is one notice
+        if !self.notices.contains(&message) {
+            self.notices.push(message);
+        }
     }
 
     fn save_succeeded(&mut self) {
@@ -4193,6 +4197,32 @@ mod tests {
         frame(&mut app, &ctx, vec![]);
         app.show_node(42, 1.0);
         assert_eq!(app.tab, BuildTab::Tree);
+    }
+
+    #[test]
+    fn a_refused_search_shows_one_notice_while_it_stays() {
+        let (mut app, _ctx) = tree_app();
+        let notices = app.notices.len();
+        // each debounced send of a search PoB can't read is refused with the same reason
+        for seq in [80, 81, 82] {
+            app.on_event(Event::Error {
+                seq,
+                message: "malformed pattern (missing ']')".into(),
+            });
+        }
+        assert_eq!(app.notices.len(), notices + 1, "{:?}", app.notices);
+        // another reason is another notice; one dismissed comes back at the next refusal
+        app.on_event(Event::Error {
+            seq: 83,
+            message: "other".into(),
+        });
+        assert_eq!(app.notices.len(), notices + 2);
+        app.notices.retain(|n| !n.starts_with("malformed"));
+        app.on_event(Event::Error {
+            seq: 84,
+            message: "malformed pattern (missing ']')".into(),
+        });
+        assert_eq!(app.notices.len(), notices + 2);
     }
 
     #[test]

@@ -119,6 +119,10 @@ pub struct EditBox {
     pub(crate) refused: bool,
     /// What `show` returned last came from a step, to be sent as `Command::Step`
     pub(crate) stepped: bool,
+    /// The view's text when the box last followed it, and the box's last edit: other text
+    /// from the view starts the box's undo over (`forget_undo`), these don't
+    view: String,
+    typed: String,
 }
 
 impl EditBox {
@@ -174,8 +178,14 @@ impl EditBox {
         let focused = ui.memory(|m| m.has_focus(id));
         // a box that lost focus this frame still holds its edit: the view must not replace it
         if !focused && (!busy || !self.seeded) && !self.pending {
-            if self.seeded && self.text != current {
+            // only other text from the view starts the undo over: not the view the box showed
+            // before its edit, nor that edit's echo
+            if self.seeded && current != self.view && current != self.typed {
                 forget_undo(ui.ctx(), id);
+            }
+            if self.view != current {
+                self.view.clear();
+                self.view.push_str(current);
             }
             self.text.clear();
             self.text.push_str(current);
@@ -218,6 +228,7 @@ impl EditBox {
         } else if response.lost_focus() || (self.pending && !response.has_focus()) {
             if self.text != self.sent {
                 self.sent.clone_from(&self.text);
+                self.typed.clone_from(&self.text);
                 send = Some(self.text.clone());
             }
             self.pending = false;
@@ -233,6 +244,7 @@ impl EditBox {
             return None;
         }
         self.sent.clone_from(&self.text);
+        self.typed.clone_from(&self.text);
         Some(self.text.clone())
     }
 
@@ -595,8 +607,9 @@ mod tests {
         assert!(h.click_away().is_empty());
     }
 
-    /// The echo of the box's own edit keeps its undo: Ctrl+Z after the view caught up still
-    /// takes the edit back
+    /// The echo of the box's own edit keeps its undo, and so does the unchanged view the box
+    /// shows until the echo comes (the engine not marked busy): Ctrl+Z after the view caught
+    /// up still takes the edit back
     #[test]
     fn undo_survives_the_echo_of_the_boxs_own_edit() {
         let mut h = Harness::new("old set");
@@ -604,11 +617,10 @@ mod tests {
         h.type_text("x");
         h.time += 2.0;
         h.frame(vec![]);
-        // the edit goes out; the engine is busy until its view comes back
-        h.busy = true;
         assert_eq!(h.click_away(), ["oldx set"]);
+        // a frame of the view from before the edit, then its echo
+        h.frame(vec![]);
         h.current = "oldx set".into();
-        h.busy = false;
         h.frame(vec![]);
         h.focus();
         for _ in 0..3 {

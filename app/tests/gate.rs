@@ -3263,6 +3263,24 @@ fn tree_paths_are_kept_but_never_stale() {
     // another build
     s.open_fixture("minion", &fixtures_dir().join("minion.xml"));
     check(&mut s, "another build");
+    // leaving a build lets its lists go: the same build opened again gets them built afresh
+    let token: i64 = s
+        .backend
+        .lua
+        .load("local _, token = glue.tree_state(false, nil) return token")
+        .eval()
+        .unwrap();
+    s.open_fixture("minion", &fixtures_dir().join("minion.xml"));
+    let sent: bool = s
+        .backend
+        .lua
+        .load(format!(
+            "local _, _, sent = glue.tree_state(false, {token}) return sent"
+        ))
+        .eval()
+        .unwrap();
+    assert!(sent, "the left build's lists were kept");
+    check(&mut s, "the same build again");
 }
 
 /// Pastes, saves and socket a jewel into the nearest socket `pick` chooses; returns the number

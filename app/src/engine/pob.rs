@@ -362,6 +362,9 @@ impl PobBackend {
     fn left_build(&mut self) -> Result<Affected> {
         let mut affected = Affected::default();
         self.reset_heatmap();
+        // the old tree's paths are no use to the next one: let both copies go
+        self.tree_paths = None;
+        self.call::<_, ()>("tree_paths_forget", ())?;
         // the session's timeless search ends with it (R17)
         self.timeless_job = false;
         // an Options window survives a build change (R19)

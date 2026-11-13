@@ -305,6 +305,12 @@ end
 -- whenever they differ from the last ones
 local paths_cache = { token = 0 }
 
+-- The build was left: the old lists go, so the next tree state builds afresh. The token
+-- keeps counting, so no list the engine still holds can match a new one.
+function glue.tree_paths_forget()
+	paths_cache = { token = paths_cache.token }
+end
+
 local function current_paths(spec)
 	local c = paths_cache
 	if c.paths

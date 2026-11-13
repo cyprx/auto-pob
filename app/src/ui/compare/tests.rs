@@ -1106,3 +1106,16 @@ fn a_load_window_leaves_its_box_on_esc_first_then_closes() {
     h.frame(vec![]);
     assert!(!h.ui.has_dialog(), "the second Esc left it open");
 }
+
+/// The Config view's search box is clearable: its "x" empties it (CompareTab.lua:936)
+#[test]
+fn the_config_search_clears_on_its_x() {
+    let mut h = Harness::new(Some(sample()));
+    h.click("sub:config");
+    h.click("config_search");
+    h.type_text("boss");
+    h.frame(vec![]);
+    assert_eq!(h.ui.config_filter, "boss");
+    h.click("config_search_clear");
+    assert!(h.ui.config_filter.is_empty());
+}

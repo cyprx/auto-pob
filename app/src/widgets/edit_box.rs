@@ -542,6 +542,53 @@ mod tests {
         assert_eq!(h.a.text, "78");
     }
 
+    /// The shared box opens the first http(s) link of its text on a Ctrl+click (url_click)
+    #[test]
+    fn a_ctrl_click_on_the_box_opens_its_link() {
+        let ctx = egui::Context::default();
+        let mut b = EditBox::default();
+        let id = egui::Id::unique("url_box");
+        let mut rect = Rect::NOTHING;
+        let mut opened = Vec::new();
+        for step in 0..2 {
+            let events = if step == 0 {
+                vec![]
+            } else {
+                vec![
+                    Event::ModifiersChanged(Modifiers::COMMAND),
+                    Event::PointerMoved(rect.center()),
+                    Event::PointerButton {
+                        pos: rect.center(),
+                        button: PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Modifiers::COMMAND,
+                    },
+                ]
+            };
+            let out = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let opts = EditBoxOptions {
+                        width: 300.0,
+                        ..EditBoxOptions::default()
+                    };
+                    rect = b.show(ui, id, "see https://pobb.in/x", false, &opts).0.rect;
+                },
+            );
+            for command in &out.platform_output.commands {
+                if let egui::OutputCommand::OpenUrl(url) = command {
+                    opened.push(url.url.clone());
+                }
+            }
+            out.drop_without_applying_deltas();
+        }
+        assert_eq!(opened, ["https://pobb.in/x"]);
+    }
+
     #[test]
     fn a_number_steps_as_pobs() {
         assert_eq!(stepped("41", true, false), "42");

@@ -1538,6 +1538,27 @@ mod tests {
         );
     }
 
+    /// The Custom depth box is a %D box: its + steps the depth and sends it at once
+    /// (EditControl.lua:64-75, 680-700)
+    #[test]
+    fn the_custom_depth_box_steps_on_its_plus_button() {
+        let mut h = heat_harness();
+        let mut state = (*h.tab.state.clone().unwrap()).clone();
+        state.max_depth = Some(15);
+        h.tab.on_snapshot(&Snapshot::Tree(Arc::new(state)));
+        h.frame(vec![]);
+        let depth = h.tab.rects.map["heat_depth"].center();
+        h.frame(vec![Event::PointerMoved(depth)]);
+        h.frame(vec![wheel(-1.0)]);
+        h.frame(vec![]);
+        assert_eq!(h.tab.toolbar.custom_depth_for_test(), Some("15"));
+        let out = press(&mut h, "depth_custom_plus");
+        assert_eq!(
+            debug(&out.commands),
+            ["SetHeatmap { stat: Some(\"Life\"), max_depth: Some(16) }"]
+        );
+    }
+
     #[test]
     fn version_pick_asks_and_converts() {
         let mut h = heat_harness();

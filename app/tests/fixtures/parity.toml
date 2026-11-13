@@ -28,7 +28,7 @@ ported = "app/src/ui/build.rs top_bar loadouts combo"
 note = "part of build.buildLoadouts"
 
 [controls."build.buildName"]
-ported = "app/src/ui/build.rs top_bar name with unsaved marker"
+ported = "app/src/ui/build.rs top_bar name with unsaved marker; audit 2: its folder and name on hover (BuildView.name_tooltip, Build.lua:166-171)"
 
 [controls."build.characterLevel"]
 ported = "app/src/ui/build.rs top_bar level box (EditBox: Enter or blur sends, Esc reverts; %D filter, 3 characters; a keystroke in Auto is Manual) with PoB's Experience multiplier tooltip; a %D box (widgets/edit_box.rs EditBoxOptions::number): + and - buttons, Up/Down and the wheel step it (EditControl.lua:64-75, 680-700)"
@@ -94,7 +94,7 @@ ported = "app/src/ui/sidebar.rs main-skill selector"
 note = "label"
 
 [controls."build.mainSkillMinion"]
-ported = "app/src/ui/sidebar.rs main-skill selector"
+ported = "app/src/ui/sidebar.rs main-skill selector; audit 2: its tooltipFunc on the dropdown and its entries (HoverTarget::Dropdown)"
 note = "drag target (Build.lua:534-543): items from the item list, the databases and the shared list dropped on it go to the minion's item set (DropOnMinion, sidebar.rs minion_drop)"
 
 [controls."build.mainSkillMinion.scrollBar"]
@@ -142,7 +142,7 @@ ported = "app/src/ui/sidebar.rs main-skill selector"
 note = "label"
 
 [controls."build.mainSocketGroup"]
-ported = "app/src/ui/sidebar.rs main-skill selector"
+ported = "app/src/ui/sidebar.rs main-skill selector; audit 2: the socket group tooltip on the dropdown and its entries (sidebar.rs GroupHover, GroupTooltip query)"
 
 [controls."build.mainSocketGroup.scrollBar"]
 ported = "app/src/ui/sidebar.rs main-skill selector"
@@ -181,10 +181,10 @@ ported = "app/src/ui/build.rs tab_strip"
 ported = "app/src/ui/build.rs top_bar points (tree/toolbar.rs points) with PoB's progress tooltip, on every tab"
 
 [controls."build.save"]
-ported = "app/src/ui/build.rs top_bar Save"
+ported = "app/src/ui/build.rs top_bar Save; audit 2: enabled for a build with no file or with changes (Build.lua:126-131)"
 
 [controls."build.saveAs"]
-ported = "app/src/ui/build.rs top_bar Save as"
+ported = "app/src/ui/build.rs top_bar Save as; audit 2: enabled for a build with a file (Build.lua:133-135)"
 
 [controls."build.secondaryAscendDrop"]
 ported = "app/src/ui/build.rs top_bar bloodline combo (R21)"
@@ -232,7 +232,7 @@ ported = "app/src/ui/calcs/mod.rs selector row"
 ported = "app/src/ui/calcs/mod.rs selector row"
 
 [controls."calcs.#CalcSectionControl.mainSocketGroup"]
-ported = "app/src/ui/calcs/mod.rs selector row"
+ported = "app/src/ui/calcs/mod.rs selector row; audit 2: the socket group tooltip (GroupHover, CalcsTab.lua:46-51)"
 
 [controls."calcs.#CalcSectionControl.mode"]
 ported = "app/src/ui/calcs/mod.rs selector row"
@@ -241,7 +241,7 @@ ported = "app/src/ui/calcs/mod.rs selector row"
 ported = "app/src/ui/calcs/mod.rs ^ button: the section pops out into a floating window over every tab (R24)"
 
 [controls."calcs.#CalcSectionControl.showMinion"]
-ported = "app/src/ui/calcs/mod.rs selector row"
+ported = "app/src/ui/calcs/mod.rs selector row; audit 2: PoB's tooltip"
 
 [controls."calcs.#CalcSectionControl.toggle1"]
 ported = "app/src/ui/calcs/grid.rs collapse"
@@ -292,7 +292,7 @@ ported = "app/src/ui/calcs/mod.rs scroll area"
 note = "the tab's own scroll bar"
 
 [controls."calcs.search"]
-ported = "app/src/ui/calcs/mod.rs search"
+ported = "app/src/ui/calcs/mod.rs search; audit 2: %c filter and 100-byte limit (CalcsTab.lua:35)"
 
 [controls."calcs.search.buttonClear"]
 ported = "app/src/ui/calcs/mod.rs search: its x empties it (widgets/edit_box.rs clear_button)"
@@ -937,7 +937,7 @@ ported = "app/src/ui/config.rs custom mod groups (D-038)"
 ported = "app/src/ui/config.rs Add Mod opens PoB's Mod Browser for the group (PopupKind::ModBrowser, R28)"
 
 [controls."config.#CustomModBlockControl.deleteBtn"]
-ported = "app/src/ui/config.rs remove custom mod group"
+ported = "app/src/ui/config.rs remove custom mod group; audit 2: a red X that removes the group at once (ConfigTab.lua:23-33)"
 
 [controls."config.#CustomModBlockControl.enableCheck"]
 ported = "app/src/ui/config.rs custom group enable box with PoB's what-if hover (HoverTooltip CustomModEnabled, NF-10)"
@@ -990,7 +990,7 @@ ported = "app/src/ui/config.rs scroll area"
 note = "the tab's own scroll bar"
 
 [controls."config.search"]
-ported = "app/src/ui/config.rs Search options"
+ported = "app/src/ui/config.rs Search options; audit 2: %c, 100 bytes and matchOrPattern matching (config.rs matches_search, ConfigTab.lua:165-183)"
 
 [controls."config.search.buttonClear"]
 ported = "app/src/ui/config.rs Search options"
@@ -1015,7 +1015,7 @@ ported = "app/src/ui/config.rs set combo"
 ported = "app/src/ui/config.rs set buttons: New, Rename, Delete, Copy (CopyConfigSet) and the Manage Config Sets window (MoveConfigSet, NF-4)"
 
 [controls."config.setSelect"]
-ported = "app/src/ui/config.rs set combo"
+ported = "app/src/ui/config.rs set combo; audit 2: enabled with more than one set (ConfigTab.lua:157-159)"
 
 [controls."config.setSelect.scrollBar"]
 ported = "app/src/ui/config.rs set combo"
@@ -2044,7 +2044,7 @@ ported = "app/src/ui/items/sets.rs weapon set I/II"
 ported = "app/src/ui/build_list.rs table: PoB order, row menu, drag to folders, Ctrl+X/Ctrl+V, F2, Enter, Delete key; Ctrl+C then Ctrl+V into another folder"
 
 [controls."list.buildList.path"]
-ported = "app/src/ui/build_list.rs top_rows clickable path segments, Mouse4/5 history"
+ported = "app/src/ui/build_list.rs top_rows clickable path segments, Mouse4/5 history; audit 2: segments take a dragged build or folder (BuildListControl.lua:27-50)"
 
 [controls."list.buildList.scrollBarH"]
 ported = "app/src/ui/build_list.rs table (the list's own scroll area)"
@@ -2371,7 +2371,7 @@ ruled_out = "D-003"
 note = "Party tab dropped"
 
 [controls."skills.defaultLevel"]
-ported = "app/src/ui/skills/groups.rs gem options"
+ported = "app/src/ui/skills/groups.rs gem options; audit 2: each entry's description as its tooltip (SkillsTab.lua:132-137)"
 
 [controls."skills.defaultLevel.scrollBar"]
 ported = "app/src/ui/skills/groups.rs gem options"
@@ -2437,7 +2437,7 @@ ported = "app/src/ui/skills/group.rs Count box"
 note = "part of skills.gemSlot#Count"
 
 [controls."skills.gemSlot#Delete"]
-ported = "app/src/ui/skills/group.rs gem table"
+ported = "app/src/ui/skills/group.rs gem table; audit 2: first in the row, with PoB's tooltip"
 
 [controls."skills.gemSlot#Enable"]
 ported = "app/src/ui/skills/group.rs enable box with PoB's what-if hover tooltip (HoverTooltip, R22)"
@@ -2449,7 +2449,7 @@ ported = "app/src/ui/skills/group.rs Vaal toggles"
 ported = "app/src/ui/skills/group.rs Vaal toggles"
 
 [controls."skills.gemSlot#ErrMsg"]
-ported = "app/src/ui/skills/group.rs unknown gems in red"
+ported = "app/src/ui/skills/group.rs unknown gems in red; audit 2: a red label after the row (SkillsTab.lua:1004-1009)"
 
 [controls."skills.gemSlot#Level"]
 ported = "app/src/ui/skills/group.rs gem table; a %D box (widgets/edit_box.rs EditBoxOptions::number): + and - buttons, Up/Down and the wheel step it (EditControl.lua:64-75, 680-700)"
@@ -2544,10 +2544,10 @@ note = "part of skills.groupLabel"
 ported = "app/src/ui/skills/groups.rs list, drag reorder, menu, Ctrl+C/V, Delete or Backspace, Up/Down/Home/End, Ctrl+click enable and Ctrl+right-click Full DPS"
 
 [controls."skills.groupList.delete"]
-ported = "app/src/ui/skills/groups.rs Delete"
+ported = "app/src/ui/skills/groups.rs Delete; audit 2: a Delete button on the selected group; Delete on an item group shows PoB's message (SkillListControl.lua:33-38, 165-166)"
 
 [controls."skills.groupList.deleteAll"]
-ported = "app/src/ui/skills/groups.rs Delete All"
+ported = "app/src/ui/skills/groups.rs Delete All; audit 2: PoB's question text"
 
 [controls."skills.groupList.new"]
 ported = "app/src/ui/skills/groups.rs New"
@@ -2561,7 +2561,7 @@ ported = "app/src/ui/skills/groups.rs list"
 note = "part of skills.groupList"
 
 [controls."skills.groupSlot"]
-ported = "app/src/ui/skills/group.rs slot"
+ported = "app/src/ui/skills/group.rs slot; audit 2: its tooltipFunc on the dropdown and its entries (HoverTarget::Dropdown); disabled, not hidden, for an item's group"
 
 [controls."skills.groupSlot.scrollBar"]
 ported = "app/src/ui/skills/group.rs slot"
@@ -2589,7 +2589,7 @@ ported = "app/src/ui/skills/group.rs imbued support"
 note = "part of skills.imbuedSupport"
 
 [controls."skills.imbuedSupportClear"]
-ported = "app/src/ui/skills/group.rs imbued support"
+ported = "app/src/ui/skills/group.rs imbued support; audit 2: always beside the picker, enabled as it, with PoB's tooltip"
 
 [controls."skills.imbuedSupportLabel"]
 ported = "app/src/ui/skills/group.rs imbued support"
@@ -2598,7 +2598,7 @@ ported = "app/src/ui/skills/group.rs imbued support"
 ported = "app/src/ui/skills/group.rs Full DPS"
 
 [controls."skills.optimiseSockets"]
-ported = "app/src/ui/skills/group.rs Optimise"
+ported = "app/src/ui/skills/group.rs Optimise; audit 2: labelled Optimise Sockets with PoB's tooltip"
 
 [controls."skills.optionSection"]
 ported = "app/src/ui/skills/groups.rs gem options"
@@ -2614,7 +2614,7 @@ ported = "app/src/ui/skills/sets.rs"
 ported = "app/src/ui/skills/sets.rs manager"
 
 [controls."skills.setSelect"]
-ported = "app/src/ui/skills/sets.rs set combo"
+ported = "app/src/ui/skills/sets.rs set combo; audit 2: enabled with more than one set (SkillsTab.lua:99-101)"
 
 [controls."skills.setSelect.scrollBar"]
 ported = "app/src/ui/skills/sets.rs set combo"
@@ -2684,7 +2684,7 @@ ported = "app/src/ui/tree/toolbar.rs heat map depth Custom box"
 note = "part of tree.nodePowerMaxDepthCustom"
 
 [controls."tree.nodePowerMaxDepthSelect"]
-ported = "app/src/ui/tree/toolbar.rs depth combo"
+ported = "app/src/ui/tree/toolbar.rs depth combo; audit 2: PoB's tooltip; usable with the map off"
 note = "All, 5, 10, 15; PoB's Custom entry is nodePowerMaxDepthCustom"
 
 [controls."tree.nodePowerMaxDepthSelect.scrollBar"]
@@ -2712,7 +2712,7 @@ ported = "app/src/ui/tree/power_report.rs"
 note = "part of tree.powerReportList"
 
 [controls."tree.reset"]
-ported = "app/src/ui/tree/toolbar.rs Reset and Remove all tattoos"
+ported = "app/src/ui/tree/toolbar.rs Reset and Remove all tattoos; audit 2: one Reset Tree/Tattoos button and PoB's popup (TreeTab.lua:130-154)"
 
 [controls."tree.specConvert"]
 ported = "app/src/ui/tree/toolbar.rs Link menu Convert this tree"
@@ -2725,14 +2725,14 @@ ported = "app/src/ui/tree/toolbar.rs Link menu"
 note = "the convert entries appear only for an older tree"
 
 [controls."tree.specSelect"]
-ported = "app/src/ui/tree/toolbar.rs spec combo"
+ported = "app/src/ui/tree/toolbar.rs spec combo; audit 2: its tooltipFunc on the selector and its entries (HoverTarget::Dropdown, TreeTab.lua:51-104)"
 
 [controls."tree.specSelect.scrollBar"]
 ported = "app/src/ui/tree/toolbar.rs spec combo"
 note = "part of tree.specSelect"
 
 [controls."tree.treeHeatMap"]
-ported = "app/src/ui/tree/toolbar.rs Heat map combo"
+ported = "app/src/ui/tree/toolbar.rs Heat map combo; audit 2: PoB's tooltip; the map's colours follow the Node Power colours option"
 note = "Off stands for the unchecked box"
 
 [controls."tree.treeHeatMapStatSelect"]
@@ -2743,7 +2743,7 @@ ported = "app/src/ui/tree/toolbar.rs Heat map combo"
 note = "part of tree.treeHeatMapStatSelect"
 
 [controls."tree.treeSearch"]
-ported = "app/src/ui/tree/toolbar.rs Search nodes"
+ported = "app/src/ui/tree/toolbar.rs Search nodes; audit 2: %c, 100 bytes and PoB's tooltip (TreeTab.lua:180-185)"
 
 [controls."tree.treeSearch.buttonClear"]
 ported = "app/src/ui/tree/toolbar.rs Search nodes"
@@ -2838,7 +2838,7 @@ ported = "app/src/ui/import.rs confirm"
 note = "PoB's text"
 
 [popups."Class Change"]
-ported = "app/src/ui/tree/toolbar.rs class question for the class dropdown, and PoB's Class Change for a canvas click on another class's ascendancy node (AllocNodeChangingClass: Continue / Connect Path)"
+ported = "app/src/ui/tree/toolbar.rs class question for the class dropdown, and PoB's Class Change for a canvas click on another class's ascendancy node (AllocNodeChangingClass: Continue / Connect Path); audit 2: the top bar's question has PoB's text and buttons (Build.lua:263)"
 
 [popups."CompareBuySimilar:531"]
 ported = "app/src/engine/glue/popups.lua Buy Similar session (openPopup, R10)"
@@ -2875,19 +2875,19 @@ ported = "app/src/ui/items/list.rs and skills/groups.rs confirms"
 note = "two sites: items and socket groups"
 
 [popups."Delete Config Set"]
-ported = "app/src/ui/config.rs confirm"
+ported = "app/src/ui/config.rs confirm; audit 2: PoB's text"
 
 [popups."Delete Item"]
 ported = "app/src/ui/items/list.rs item list sites with PoB's texts; app/src/ui/items/shared.rs the shared item site"
 
 [popups."Delete Item Set"]
-ported = "app/src/ui/items/sets.rs item set and shared item set sites, app/src/ui/skills/sets.rs skill sets"
+ported = "app/src/ui/items/sets.rs item set and shared item set sites, app/src/ui/skills/sets.rs skill sets; audit 2: the skill set site has PoB's text too"
 
 [popups."Delete Socket Group"]
 ported = "app/src/ui/skills/groups.rs confirm"
 
 [popups."Delete Tree"]
-ported = "app/src/ui/tree/toolbar.rs confirm"
+ported = "app/src/ui/tree/toolbar.rs confirm; audit 2: PoB's text"
 
 [popups."Edit Item Text"]
 ported = "app/src/ui/items/text_window.rs"
@@ -2896,7 +2896,7 @@ ported = "app/src/ui/items/text_window.rs"
 ported = "app/src/ui/popup.rs session (SP5b)"
 
 [popups."Export Tree"]
-ported = "app/src/ui/tree/toolbar.rs Link menu Copy link"
+ported = "app/src/ui/tree/toolbar.rs Link menu Copy link; audit 2: PoB's Export Tree popup from the Link menu: link, Shrink with PoEURL (ShrinkTreeLink), Copy, Done"
 
 [popups."Find a Timeless Jewel"]
 ported = "app/src/engine/glue/timeless.lua search job over the FindTimelessJewel session (R17); result list double click, Shift range and row tooltips via popups.lua"
@@ -2913,7 +2913,7 @@ ported = "app/src/engine/glue/net.lua Build:Init wrapper adopts PoB's window as 
 note = "never the previous build's tabs under the new name; an import's Convert makes an empty build, as upstream's"
 
 [popups."Import Comparison Build"]
-ported = "app/src/ui/compare/mod.rs 'Load build…' menu: from a saved build, a code or a link (R5)"
+ported = "app/src/ui/compare/mod.rs 'Load build…' menu: from a saved build (R5's Import from Folder) or 'From a code or link…'; audit 2: PoB's popup: code or link, optional Name, Enter imports; a link downloads with or without a file (CompareSource::Import, glue compare_import)"
 note = "R5"
 
 [popups."Import from Folder"]
@@ -2921,7 +2921,7 @@ ruled_out = "R5"
 note = "our list picker does it"
 
 [popups."Import Tree"]
-ported = "app/src/ui/tree/toolbar.rs Import link"
+ported = "app/src/ui/tree/toolbar.rs Import link; audit 2: PoB's title and labels"
 
 [popups."ImportTab:548"]
 ported = "app/src/ui/import.rs share error"
@@ -2999,7 +2999,7 @@ ported = "app/src/ui/build_list.rs New Folder name dialog"
 note = "R16"
 
 [popups."Options"]
-ported = "app/src/ui/options.rs OptionsUi draws PoB's Options popup through PopupWindow, with auto-pob-only boxes"
+ported = "app/src/ui/options.rs OptionsUi draws PoB's Options popup through PopupWindow, with auto-pob-only boxes; audit 2: the tree follows Node Power colours and edge search circles (options.rs ui_effects)"
 
 [popups."PassiveSpecListControl:69"]
 ported = "app/src/ui/tree/toolbar.rs New, Rename and Copy Tree name dialogs (NF-3)"
@@ -3019,16 +3019,16 @@ ported = "app/src/ui/items/sets.rs item set and shared item set sites; config an
 ported = "app/src/ui/popup.rs session (tattoos, SP5b)"
 
 [popups."Reset Tree/Tattoos"]
-ported = "app/src/ui/tree/toolbar.rs Reset tree and Remove all tattoos confirms"
+ported = "app/src/ui/tree/toolbar.rs Reset tree and Remove all tattoos confirms; audit 2: PoB's one popup with its warning"
 
 [popups."Save"]
-ported = "app/src/ui/app.rs save_as_dialog with the folder list (app/src/ui/folder_picker.rs): path, New Folder, sort, delete"
+ported = "app/src/ui/app.rs save_as_dialog with the folder list (app/src/ui/folder_picker.rs): path, New Folder, sort, delete; audit 2: titled Save for a build never saved (Build.lua:1449)"
 
 [popups."Save As"]
-ported = "app/src/ui/app.rs save_as_dialog with the folder list (app/src/ui/folder_picker.rs): path, New Folder, sort, delete"
+ported = "app/src/ui/app.rs save_as_dialog with the folder list (app/src/ui/folder_picker.rs): path, New Folder, sort, delete; audit 2: titled Save As, with 'Enter new build name:'"
 
 [popups."Save Changes"]
-ported = "app/src/ui/unsaved.rs prompt"
+ported = "app/src/ui/unsaved.rs prompt; audit 2: PoB's title, text and Don't Save (Build.lua:1352-1379)"
 
 [popups."Set Name"]
 ported = "app/src/ui/build.rs New Loadout name window (R21; opens on New Loadout, Esc cancels); set-manager sites in items/sets.rs, skills/sets.rs, tree/toolbar.rs, config.rs"
@@ -3039,8 +3039,8 @@ ruled_out = "R3"
 note = "Archives and Similar Builds out (SP6)"
 
 [popups."SkillListControl:166"]
-ported = "app/src/ui/skills/groups.rs"
-note = "Delete is disabled for item-granted groups, so the message can't arise"
+ported = "app/src/ui/skills/groups.rs; audit 2: the Delete key on an item group shows PoB's message"
+note = "the Delete button is disabled for item-granted groups; the Delete key reaches PoB's message"
 
 [popups."Spectre Library"]
 ported = "app/src/engine/glue/popups.lua Spectre Library session (R18), opened from the sidebar and the Calcs selector; add, double-click add, remove, search and drag-reorder of Spectres in Build (ui/popup.rs list drag, PopupInput::RowMove)"
@@ -3069,7 +3069,7 @@ ported = "app/src/ui/tree/toolbar.rs Link menu Convert this tree"
 ported = "app/src/ui/tree/toolbar.rs Link menu Convert all trees"
 
 [popups."TreeTab:824"]
-ported = "app/src/ui/tree/toolbar.rs"
+ported = "app/src/ui/tree/toolbar.rs; audit 2: reached from the Export Tree popup's shrink"
 note = "PoEURL shrink failure shows PoB's text (SP6)"
 
 [popups."Update Available"]
@@ -3252,11 +3252,11 @@ ported = "app/src/ui egui TextEdit editing; app/src/widgets/url_click.rs: Ctrl+c
 note = "egui TextEdit editing; Enter and Esc as in our shared EditBox. Deliberate safety deviation (review I3): PoB opens the whole text for any scheme; ours opens only the first http(s) URL in it, alone, and webbrowser is built hardened (http(s) only)"
 
 [keys."EditControl.PAGEDOWN"]
-ported = "app/src/ui"
+ported = "app/src/ui; audit 2: widgets/edit_box.rs page_keys in the notes and Config multi-line boxes (EditControl.lua:598-606)"
 note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
 
 [keys."EditControl.PAGEUP"]
-ported = "app/src/ui"
+ported = "app/src/ui; audit 2: widgets/edit_box.rs page_keys in the notes and Config multi-line boxes (EditControl.lua:598-606)"
 note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
 
 [keys."EditControl.RETURN"]

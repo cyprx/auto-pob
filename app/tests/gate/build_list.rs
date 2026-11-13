@@ -1619,8 +1619,9 @@ fn a_class_that_isnt_utf8_leaves_the_build_list_working() {
 
 /// Odd names through every list command, each checked against PoB's own list mode: Lua
 /// pattern characters, PoB's own clash suffix, a leading dot, spaces at either end, `&`,
-/// non-ASCII, a long name, and a folder with dots in its name (only `.` and
-/// `..` are refused), which lists, takes a move and a Save As like any other
+/// non-ASCII, a long name (each also as a folder, renamed and deleted), and a folder with
+/// dots in its name (only `.` and `..` are refused), which lists, takes a move and a Save As
+/// like any other
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn odd_names_work_as_in_pob() {
@@ -1656,6 +1657,14 @@ fn odd_names_work_as_in_pob() {
         t.same(&format!("copy into {name:?}"));
         t.delete(&format!("{name}/{renamed}.xml"));
         t.same(&format!("delete in {name:?}"));
+        // the folder renamed, then deleted with what is in it (v1..2 stays for Save As)
+        if name != "v1..2" {
+            let folder = format!("{name}f");
+            t.rename(name, &folder).expect(name);
+            t.same(&format!("rename folder {name:?}"));
+            t.delete(&folder);
+            t.same(&format!("delete folder {name:?}"));
+        }
     }
     // Save As into a folder with dots in its name
     t.s.run(Command::OpenBuild {

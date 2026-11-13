@@ -4,7 +4,7 @@
 
 use super::items_harness::open_popups;
 use super::{Session, fixture_xml, lock};
-use auto_pob::engine::{Backend, Command};
+use auto_pob::engine::{Backend, Command, PopupInput, PopupKind};
 
 const JAPANESE: &str = "\u{65e5}\u{672c}";
 
@@ -139,6 +139,24 @@ fn set_and_tree_names_pass_through_pobs_edit_filter() {
     assert_eq!(skills(&mut s)[0], "\u{dc}n\u{ef}x");
     assert_eq!(open_popups(&s), 0);
 
+    // a config set rename is an edit of the title the box opens on: its non-ASCII text stays
+    // (ConfigSetListControl.lua:45), where the rest of what is typed is still filtered
+    let cid = s.config().sets[0].id;
+    s.backend
+        .lua
+        .load(format!(
+            "pob.build.configTab.configSets[{cid}].title = 'Caf\\195\\169'"
+        ))
+        .exec()
+        .unwrap();
+    s.run(Command::RenameConfigSet {
+        id: cid,
+        title: format!("Caf\u{e9} 2{JAPANESE}"),
+    })
+    .unwrap();
+    assert_eq!(configs(&mut s)[0], "Caf\u{e9} 2");
+    assert_eq!(open_popups(&s), 0);
+
     // a set made with a title shows it; the views say which sets have none
     assert!(
         s.backend
@@ -229,4 +247,35 @@ fn save_as_opens_on_pobs_name() {
         .exec()
         .unwrap();
     assert_eq!(s.backend.build_view().unwrap().save_as_name, "a-b-c-d");
+}
+
+/// A popup Edit takes what the user typed key by key (OnChar, EditControl.lua:723-735): the
+/// text already in the box is not turned into "?" and no pasteFilter runs over it
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn popup_edit_commits_keep_the_text_the_box_holds() {
+    let _guard = lock();
+    let mut s = Session::start("names-popup");
+    s.open_fixture("attack", &fixture_xml("attack"));
+    s.run(Command::AddCustomModGroup).unwrap();
+    s.run(Command::OpenPopup(PopupKind::ModBrowser { group: 0 }))
+        .unwrap();
+    // the Mod Browser's search box keeps every character but control ones
+    let text = |s: &mut Session| -> String {
+        let view = s.backend.popup_view().unwrap().expect("open");
+        view.controls
+            .iter()
+            .find(|c| c.name == "search")
+            .expect("the search box")
+            .text
+            .clone()
+    };
+    for typed in ["Caf\u{e9}", "Caf\u{e9} x"] {
+        s.run(Command::SetPopupControl {
+            name: "search".into(),
+            value: PopupInput::Text(typed.into()),
+        })
+        .unwrap();
+        assert_eq!(text(&mut s), typed);
+    }
 }

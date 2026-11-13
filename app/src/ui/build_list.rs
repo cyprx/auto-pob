@@ -210,7 +210,7 @@ fn sort_label(sort: BuildSort) -> &'static str {
 /// `original`: a different name needs no build of that name on disk, the same name in another
 /// case needs only the case to differ (BuildListControl.lua:99-109)
 fn build_name_is_free(path: &std::path::Path, original: &str, text: &str) -> bool {
-    if text.to_lowercase() != original.to_lowercase() {
+    if !text.eq_ignore_ascii_case(original) {
         let file = path.with_file_name(format!("{text}.xml"));
         !file.exists()
     } else {

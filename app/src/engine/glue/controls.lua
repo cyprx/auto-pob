@@ -99,11 +99,15 @@ end
 -- Pastes into an edit control as PoB's EditControl does on Ctrl+V (EditControl.lua:530): the
 -- text goes through the control's `pasteFilter`, then is typed as any other text.
 function glue.paste_into(control, text, typed)
+	-- text the user typed goes in key by key (OnChar, EditControl.lua:723-735): neither step
+	if typed then
+		return glue.type_into(control, text, false)
+	end
 	if control.pasteFilter then
 		text = control.pasteFilter(text)
 	end
 	text = text:gsub("[\128-\255]", "?")
-	return glue.type_into(control, text, not typed)
+	return glue.type_into(control, text, true)
 end
 
 -- ---- Item and skill sets: the manage popup and its name popup ----

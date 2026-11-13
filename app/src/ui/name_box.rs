@@ -86,6 +86,16 @@ pub fn spliced(before: &str, raw: &str, filter: Filter, limit: usize, pasted: bo
     let mut replacing = head + tail < before.len();
     let mut out = String::new();
     if pasted {
+        // Ctrl+V turns every byte from 128 up into "?" before the filter sees it
+        // (EditControl.lua:533)
+        let swapped: String = inserted
+            .chars()
+            .flat_map(|c| {
+                let n = if c.is_ascii() { 1 } else { c.len_utf8() };
+                std::iter::repeat_n(if c.is_ascii() { c } else { '?' }, n)
+            })
+            .collect();
+        let inserted = swapped.as_str();
         let kept: String = inserted.chars().filter(|c| filter.keeps(*c)).collect();
         if kept.is_empty() || (replacing && kept != inserted) {
             return before.to_owned();
@@ -172,11 +182,11 @@ mod tests {
                 "\u{dc}n\u{ef}x"
             );
             assert_eq!(
-                plain("\u{dc}n\u{ef}", "\u{dc}n\u{ef}\u{e9}", pasted),
+                plain("\u{dc}n\u{ef}", "\u{dc}n\u{ef}\u{7}", pasted),
                 "\u{dc}n\u{ef}"
             );
-            assert_eq!(plain("ab", "a\u{e9}b", pasted), "ab");
-            assert_eq!(plain("ab", "a\u{e9}cb", pasted), "acb");
+            assert_eq!(plain("ab", "a\u{7}b", pasted), "ab");
+            assert_eq!(plain("ab", "a\u{7}cb", pasted), "acb");
             // deleting never trips the limit
             let long = "x".repeat(120);
             assert_eq!(
@@ -216,9 +226,9 @@ mod tests {
         );
         assert_eq!(spliced("", &"x".repeat(130), Filter::Plain, 100, true), "");
         // over a selection, one rejected character refuses the whole text; an insertion drops it
-        assert_eq!(spliced("abc", "x\u{e9}", Filter::Plain, 100, true), "abc");
+        assert_eq!(spliced("abc", "x\u{7}", Filter::Plain, 100, true), "abc");
         assert_eq!(spliced("abc", "xy", Filter::Plain, 100, true), "xy");
-        assert_eq!(spliced("", "x\u{e9}y", Filter::Plain, 100, true), "xy");
+        assert_eq!(spliced("", "x\u{7}y", Filter::Plain, 100, true), "xy");
     }
 
     #[test]
@@ -226,8 +236,19 @@ mod tests {
         let full = "\u{65e5}".repeat(33);
         assert_eq!(full.len(), 99);
         let more = format!("{full}\u{65e5}");
-        assert_eq!(spliced("", &full, Filter::Path, NAME_LIMIT, true), full);
+        // typed, a Path box keeps non-ASCII text up to 100 bytes
+        assert_eq!(spliced("", &full, Filter::Path, NAME_LIMIT, false), full);
         assert_eq!(spliced(&full, &more, Filter::Path, NAME_LIMIT, false), full);
-        assert_eq!(spliced(&full, &more, Filter::Path, NAME_LIMIT, true), full);
+    }
+
+    #[test]
+    fn a_paste_turns_non_ascii_bytes_into_question_marks() {
+        // Plain keeps "?": three bytes of a character make three marks
+        assert_eq!(spliced("", "Caf\u{e9}", Filter::Plain, 100, true), "Caf??");
+        // Path drops "?": the mark vanishes at the caret and refuses a paste over a selection
+        assert_eq!(spliced("", "x\u{65e5}y", Filter::Path, 100, true), "xy");
+        assert_eq!(spliced("abc", "x\u{65e5}y", Filter::Path, 100, true), "abc");
+        let full = "\u{65e5}".repeat(33);
+        assert_eq!(spliced("", &full, Filter::Path, NAME_LIMIT, true), "");
     }
 }

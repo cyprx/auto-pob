@@ -253,16 +253,6 @@ function glue.new_config_set(title)
 	tab:AddUndoState()
 end
 
-function glue.rename_config_set(id, title)
-	title = valid_title(title)
-	local tab = config_tab()
-	config_set_index(tab, id)
-	tab.configSets[id].title = title
-	tab.modFlag = true
-	tab:AddUndoState()
-	tab.build:SyncLoadouts()
-end
-
 function glue.delete_config_set(id)
 	local tab = config_tab()
 	local index = config_set_index(tab, id)
@@ -402,6 +392,19 @@ function glue.copy_config_set(id, title)
 	with_config_set_list(function(list)
 		list.selIndex, list.selValue = index, id
 		list.controls.copy.onClick()
+		glue.save_name("config set", title)
+	end)
+end
+
+-- The manager's Rename button and its name popup (ConfigSetListControl.lua:32-34, 44-69): the
+-- box opens on the set's title and takes the new text as an edit of it
+function glue.rename_config_set(id, title)
+	local tab = config_tab()
+	local index = config_set_index(tab, id)
+	glue.check_title("config set", title)
+	with_config_set_list(function(list)
+		list.selIndex, list.selValue = index, id
+		list.controls.rename.onClick()
 		glue.save_name("config set", title)
 	end)
 end

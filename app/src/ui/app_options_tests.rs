@@ -227,6 +227,8 @@ fn a_window_lost_to_a_token_save_says_so() {
     );
     let notices = app.notices.len();
     let seq = app.last_sent;
+    // a Save in flight that the cancel beat: the window's edits are not written either
+    app.options.save_sent(seq);
     app.on_popup_snapshot(&Snapshot::Popup(None), seq);
     app.on_settings(
         &SettingsView {

@@ -5536,6 +5536,30 @@ mod tests {
         );
     }
 
+    /// The echo of the box's own edit keeps its undo: Ctrl+Z after the view caught up still
+    /// takes the edit back
+    #[test]
+    fn a_box_keeps_its_undo_through_its_own_echo() {
+        let (mut app, ctx) = config_app(sample_config());
+        click(&mut app, &ctx, "mod_text:1");
+        type_text(&mut app, &ctx, "+5 life");
+        click(&mut app, &ctx, "mod_title:1");
+        // the engine's view after the edit
+        let mut view = sample_config();
+        view.custom_mods[1].text = "+5 life".into();
+        app.config = Some(Arc::new(view));
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "mod_text:1");
+        frame(&mut app, &ctx, ctrl(egui::Key::Z));
+        click(&mut app, &ctx, "mod_title:1");
+        assert_eq!(
+            sent_since(&app, before),
+            ["SetCustomModText { group: 1, text: \"\" }"]
+        );
+    }
+
     /// A box with the keyboard and no edit at a loadout switch lets go too: it would keep the
     /// sets before's text, and the next key would write it into the new sets
     #[test]

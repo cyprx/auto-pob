@@ -595,6 +595,35 @@ mod tests {
         assert!(h.click_away().is_empty());
     }
 
+    /// The echo of the box's own edit keeps its undo: Ctrl+Z after the view caught up still
+    /// takes the edit back
+    #[test]
+    fn undo_survives_the_echo_of_the_boxs_own_edit() {
+        let mut h = Harness::new("old set");
+        h.focus();
+        h.type_text("x");
+        h.time += 2.0;
+        h.frame(vec![]);
+        // the edit goes out; the engine is busy until its view comes back
+        h.busy = true;
+        assert_eq!(h.click_away(), ["oldx set"]);
+        h.current = "oldx set".into();
+        h.busy = false;
+        h.frame(vec![]);
+        h.focus();
+        for _ in 0..3 {
+            h.time += 2.0;
+            h.frame(vec![Event::Key {
+                key: Key::Z,
+                physical_key: Some(Key::Z),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            }]);
+        }
+        assert_eq!(h.a.text, "old set");
+    }
+
     #[test]
     fn enter_sends_once_and_blur_after_enter_sends_nothing() {
         let mut h = Harness::new("1");

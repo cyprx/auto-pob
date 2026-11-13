@@ -1,6 +1,6 @@
 use super::*;
 use crate::engine::views::{
-    BuildBrowseEntry, BuildBrowseView, BuildView, CompareConfigRow, CompareItemRow, CompareRow,
+    BuildBrowseEntry, BuildBrowseView, CompareConfigRow, CompareItemRow, CompareRow,
     CompareSkillRow, ConfigSet, PopupControlKind,
 };
 use crate::theme;
@@ -452,43 +452,78 @@ fn load_menu_sends_each_source() {
         ["LoadCompare { source: File(\"/b/dot.xml\") }"]
     );
 
-    // a code
+    // PoB's Import popup: a code, a name
     h.click("load");
     h.click("load:code");
     h.click("dialog_text");
     h.type_text("eNrtWk1z");
+    h.click("dialog_name");
+    h.type_text("Mine");
     let out = h.click("dialog_load");
     assert_eq!(
         debug(&out.commands),
-        ["LoadCompare { source: Code(\"eNrtWk1z\") }"]
+        ["LoadCompare { source: Import { text: \"eNrtWk1z\", name: Some(\"Mine\") } }"]
     );
-
-    // a link is PoB's Import tab mode 3, which PoB offers only for a build with a file
-    h.click("load");
-    h.click("load:link");
-    assert!(!h.ui.has_dialog(), "a link without a file");
-    h.ui.on_snapshot(&Snapshot::Build(Arc::new(BuildView {
-        name: "b".into(),
-        path: Some("/b/b.xml".into()),
-        class: "Witch".into(),
-        ascendancy: None,
-        level: 1,
-        unsaved: false,
-        can_undo: false,
-        can_redo: false,
-        ..BuildView::default()
-    })));
+    // the popup waits for the answer: an error shows in it, in red, and it stays
+    assert!(h.ui.has_dialog());
+    h.ui.import_sent(7);
+    assert!(h.ui.import_failed(7, "Invalid build code"));
+    assert!(!h.ui.import_failed(7, "again"), "answered once");
     h.frame(vec![]);
+    assert!(h.ui.has_dialog());
+    assert!(h.ui.rects.map.contains_key("dialog_error"));
+    // pressed again, and answered with no error: it closes
+    h.click("dialog_load");
+    h.ui.import_sent(8);
+    h.ui.import_settled(7);
+    assert!(h.ui.has_dialog(), "an older answer");
+    h.ui.import_settled(8);
+    assert!(!h.ui.has_dialog());
+
+    // a link, with no build file (PoB downloads it in its popup, CompareTab.lua:1488-1503);
+    // Enter in the box imports (CompareTab.lua:1469-1473)
     h.click("load");
-    h.click("load:link");
+    h.click("load:code");
     assert!(h.ui.has_dialog());
     h.click("dialog_text");
     h.type_text("https://pobb.in/abc");
+    let out = h.key(Key::Enter);
+    assert_eq!(
+        debug(&out.commands),
+        ["LoadCompare { source: Import { text: \"https://pobb.in/abc\", name: None } }"]
+    );
+    // the press is answered with the download out: PoB's "Downloading..." until it ends
+    h.ui.import_sent(9);
+    h.ui.import_settled(9);
+    h.frame(vec![]);
+    assert!(h.ui.has_dialog());
+    assert!(h.ui.rects.map.contains_key("dialog_downloading"));
+    assert!(
+        !h.ui
+            .import_request_ended("Fetching build from pobb.in", None),
+        "not its own"
+    );
+    // a failure shows in red in it, the link kept, and Import can be pressed again
+    assert!(h.ui.import_request_ended("Fetching comparison build", Some("Response code: 500")));
+    h.frame(vec![]);
+    assert!(h.ui.has_dialog());
+    assert!(h.ui.rects.map.contains_key("dialog_error"));
     let out = h.click("dialog_load");
     assert_eq!(
         debug(&out.commands),
-        ["ImportFromUrl { url: \"https://pobb.in/abc\", mode: Comparison }"]
+        ["LoadCompare { source: Import { text: \"https://pobb.in/abc\", name: None } }"]
     );
+    // the comparison landed: it closes
+    h.ui.import_sent(10);
+    h.ui.import_settled(10);
+    assert!(h.ui.has_dialog());
+    assert!(h.ui.import_request_ended("Fetching comparison build", None));
+    assert!(!h.ui.has_dialog());
+    // an empty box imports nothing
+    h.click("load");
+    h.click("load:code");
+    let out = h.click("dialog_load");
+    assert!(out.commands.is_empty());
 }
 
 /// A folder the engine can't list (a Builds folder that went) is said in the picker, which

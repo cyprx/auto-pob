@@ -65,18 +65,76 @@ pub fn parse_number_input(text: &str, kind: ConfigKind, allow_zero: bool) -> Num
     NumberInput::Valid(if negative { -value } else { value })
 }
 
-/// Whether the option's label contains `query`, ignoring case and colour codes. An empty
-/// query matches everything.
+/// Whether the option's label matches `query` as PoB's search does (ConfigTab.lua:172-183):
+/// the label without colour codes and the query both lowercased, an all-space query matches
+/// everything, and the query is `string.matchOrPattern`'s (Common.lua:976-1016) with every
+/// other Lua magic character escaped: `|` separates alternatives, `(a|b)` expands into them,
+/// and each alternative is found as plain text.
 pub fn matches_search(option: &ConfigOption, query: &str) -> bool {
-    let query = query.trim().to_lowercase();
-    if query.is_empty() {
+    let query = query.to_ascii_lowercase();
+    if query
+        .chars()
+        .all(|c| c == ' ' || ('\t'..='\r').contains(&c))
+    {
         return true;
     }
     let default = eframe::egui::Color32::WHITE;
-    pob_text(&option.label, 14.0, default)
+    let label = pob_text(&option.label, 14.0, default)
         .text
-        .to_lowercase()
-        .contains(&query)
+        .to_ascii_lowercase();
+    // a parenthesis left over is an unbalanced capture: Lua raises, which fails the whole
+    // matchOrPattern (PCall), whatever the other alternatives say
+    let patterns = or_patterns(&query);
+    if patterns.iter().any(|p| p.contains(['(', ')'])) {
+        return false;
+    }
+    patterns.iter().any(|p| label.contains(p.as_str()))
+}
+
+/// `matchOrPattern`'s alternatives of `pattern` (its `generateOrPatterns`)
+fn or_patterns(pattern: &str) -> Vec<String> {
+    // the balanced groups `%b()` finds, scanning left to right
+    let bytes = pattern.as_bytes();
+    let mut groups = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'(' {
+            let mut depth = 0;
+            let close = (i..bytes.len()).find(|&j| {
+                match bytes[j] {
+                    b'(' => depth += 1,
+                    b')' => depth -= 1,
+                    _ => {}
+                }
+                depth == 0
+            });
+            if let Some(close) = close {
+                groups.push((i, close));
+                i = close + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    let mut generated = vec![pattern[..groups.first().map_or(pattern.len(), |g| g.0)].to_owned()];
+    for (n, &(open, close)) in groups.iter().enumerate() {
+        let next = groups.get(n + 1).map_or(pattern.len(), |g| g.0);
+        let regular = &pattern[close + 1..next];
+        let inner = or_patterns(&pattern[open + 1..close]);
+        generated = generated
+            .iter()
+            .flat_map(|g| inner.iter().map(move |sub| format!("{g}{sub}{regular}")))
+            .collect();
+    }
+    let mut out: Vec<String> = Vec::new();
+    for g in &generated {
+        for piece in g.split('|').filter(|p| !p.is_empty()) {
+            if !out.iter().any(|o| o == piece) {
+                out.push(piece.to_owned());
+            }
+        }
+    }
+    out
 }
 
 /// A JSON option value as the text of a number or text field.
@@ -216,7 +274,6 @@ pub struct ConfigUi {
     set_edit: Option<SetEdit>,
     /// The set the user asked to delete, until the question is answered
     confirm_delete: Option<u32>,
-    confirm_remove: Option<usize>,
     /// Ctrl+F: the search box takes the keyboard when next drawn (ConfigTab.lua:987-988)
     pub focus_search: bool,
     /// The custom-modifier boxes' heights, as their grips left them
@@ -323,18 +380,23 @@ impl ConfigUi {
     fn top_row(&mut self, ui: &mut egui::Ui, view: &ConfigView, commands: &mut Vec<Command>) {
         let active = view.sets.iter().find(|s| s.id == view.active_set);
         ui.horizontal_wrapped(|ui| {
-            let combo = crate::widgets::dropdown::Dropdown::from_id_salt("config_set")
-                .selected_text(active.map_or("", |s| s.title.as_str()))
-                .show_ui(ui, |ui| {
-                    for set in &view.sets {
-                        let selected = set.id == view.active_set;
-                        let item = crate::widgets::dropdown::item(ui, selected, &set.title);
-                        self.note(format!("set:{}", set.id), &item);
-                        if item.clicked() && !selected {
-                            commands.push(Command::SelectConfigSet { id: set.id });
-                        }
-                    }
-                });
+            // PoB's selector takes a pick only with more than one set (ConfigTab.lua:157-159)
+            let combo = ui
+                .add_enabled_ui(view.sets.len() > 1, |ui| {
+                    crate::widgets::dropdown::Dropdown::from_id_salt("config_set")
+                        .selected_text(active.map_or("", |s| s.title.as_str()))
+                        .show_ui(ui, |ui| {
+                            for set in &view.sets {
+                                let selected = set.id == view.active_set;
+                                let item = crate::widgets::dropdown::item(ui, selected, &set.title);
+                                self.note(format!("set:{}", set.id), &item);
+                                if item.clicked() && !selected {
+                                    commands.push(Command::SelectConfigSet { id: set.id });
+                                }
+                            }
+                        })
+                })
+                .inner;
             self.note("set_combo".into(), &combo.response);
             // the wheel and the arrows step it (DropDownControl.lua:476-516)
             let at = view
@@ -351,11 +413,19 @@ impl ConfigUi {
             }
             self.set_buttons(ui, view, active.map(ConfigSet::name_box_text), commands);
             ui.separator();
+            let before = self.search.clone();
+            let pasted = name_box::pasted(ui);
             let search = ui.add(
                 egui::TextEdit::singleline(&mut self.search)
                     .hint_text("Search options")
                     .desired_width(160.0),
             );
+            self.note("search".into(), &search);
+            // PoB's box drops control characters and takes 100 bytes (ConfigTab.lua:165)
+            if search.changed() {
+                self.search =
+                    name_box::spliced_by(&before, &self.search, |c| !c.is_control(), 100, pasted);
+            }
             if std::mem::take(&mut self.focus_search) {
                 search.request_focus();
             }
@@ -382,7 +452,11 @@ impl ConfigUi {
                 .map(|s| s.title.as_str());
             ui.colored_label(
                 ui.visuals().warn_fg_color,
-                format!("Delete {}?", title.unwrap_or("this set")),
+                // PoB's question (ConfigSetListControl.lua:92)
+                format!(
+                    "Are you sure you want to delete '{}'?",
+                    title.unwrap_or("Default")
+                ),
             );
             let yes = ui.add(theme::primary_button("Delete"));
             self.note("set_delete_yes".into(), &yes);
@@ -860,6 +934,9 @@ impl ConfigUi {
         };
         let response = ui.add(edit.hint_text(hint));
         crate::widgets::url_click::open_on_ctrl_click(ui, &response, &text);
+        if matches!(style, FieldStyle::Multi { .. }) {
+            crate::widgets::edit_box::page_keys(ui, &response, &text);
+        }
         let mut changed = response.changed();
         if changed && let Some(accept) = accept {
             // the box's own filter and limit, for what an edit inserts
@@ -999,23 +1076,11 @@ impl ConfigUi {
             if add_mod.clicked() {
                 commands.push(Command::OpenPopup(PopupKind::ModBrowser { group: i }));
             }
-            if self.confirm_remove == Some(i) {
-                ui.colored_label(ui.visuals().warn_fg_color, "Remove this group?");
-                let yes = ui.add(theme::primary_button("Remove"));
-                self.note(format!("mod_remove_yes:{i}"), &yes);
-                if yes.clicked() {
-                    commands.push(Command::RemoveCustomModGroup { group: i });
-                    self.confirm_remove = None;
-                }
-                if ui.button("Cancel").clicked() {
-                    self.confirm_remove = None;
-                }
-            } else {
-                let remove = ui.button("Remove");
-                self.note(format!("mod_remove:{i}"), &remove);
-                if remove.clicked() {
-                    self.confirm_remove = Some(i);
-                }
+            // PoB's red X removes the group at once; Undo brings it back (ConfigTab.lua:23-33)
+            let remove = ui.button(egui::RichText::new("X").color(theme::NEGATIVE));
+            self.note(format!("mod_remove:{i}"), &remove);
+            if remove.clicked() {
+                commands.push(Command::RemoveCustomModGroup { group: i });
             }
         });
         let (response, text) = self.draft_field(
@@ -1113,6 +1178,21 @@ mod tests {
         assert!(matches_search(&o, "BOSS"));
         assert!(!matches_search(&o, "curse"));
         assert!(!matches_search(&o, "xFF0000"));
+    }
+
+    #[test]
+    fn search_takes_pobs_alternatives() {
+        // string.matchOrPattern (Common.lua:976-1016): `|` and `(a|b)` groups
+        let o = option("Is the enemy Shocked?");
+        assert!(matches_search(&o, "chilled|shocked"));
+        assert!(matches_search(&o, "enemy (chilled|shocked)"));
+        assert!(!matches_search(&o, "enemy (chilled|frozen)"));
+        // every other character is plain text, spaces too
+        assert!(!matches_search(&o, "shocked "));
+        assert!(!matches_search(&o, "s.ocked"));
+        // a parenthesis left open is an error to Lua: nothing matches
+        assert!(!matches_search(&o, "enemy (shocked"));
+        assert!(!matches_search(&o, "shocked|(x"), "the whole match fails");
     }
 
     #[test]
@@ -1351,6 +1431,17 @@ mod tests {
                 group: 0
             })])
         );
+    }
+
+    #[test]
+    fn the_search_box_filters_and_limits_as_pobs() {
+        // ConfigTab.lua:165: "%c" and 100 bytes
+        let mut h = Harness::new();
+        h.click("search");
+        h.frame(vec![Event::Text("a\u{7}b".into())]);
+        assert_eq!(h.ui.search, "ab");
+        h.frame(vec![Event::Text("x".repeat(120))]);
+        assert_eq!(h.ui.search.len(), 100);
     }
 
     #[test]

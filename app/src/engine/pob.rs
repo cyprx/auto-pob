@@ -1453,6 +1453,15 @@ impl PobBackend {
                     CompareSource::File(path) => self
                         .call::<_, ()>("compare_load_file", path.to_string_lossy().into_owned())?,
                     CompareSource::Code(code) => self.call::<_, ()>("compare_load_code", code)?,
+                    CompareSource::Import { text, name } => {
+                        // a link is a request, which lands the comparison when it ends
+                        let request: Option<u64> = self.call("compare_import", (text, name))?;
+                        if request.is_some() {
+                            let mut affected = self.network_affected()?;
+                            affected.merge(compare_changed());
+                            return Ok(affected);
+                        }
+                    }
                 }
                 Ok(compare_changed())
             }
@@ -1660,8 +1669,8 @@ impl PobBackend {
                 self.call::<_, ()>("skills_add_group", ())?;
                 Ok(skills_changed())
             }
-            Command::DeleteSocketGroup { group } => {
-                self.call::<_, ()>("skills_delete_group", group + 1)?;
+            Command::DeleteSocketGroup { group, name } => {
+                self.call::<_, ()>("skills_delete_group", (group + 1, name))?;
                 Ok(skills_changed())
             }
             Command::DeleteAllSocketGroups => {
@@ -2809,6 +2818,20 @@ impl Backend for PobBackend {
             HoverTarget::ConfigOption { var } => self.view("config_hover", var.clone())?,
             HoverTarget::CompareEquip { slot } => self.view("compare_equip_hover", slot.clone())?,
             HoverTarget::CustomModEnabled { group } => self.view("custom_mod_hover", group + 1)?,
+            HoverTarget::Dropdown {
+                owner,
+                name,
+                index,
+                entry,
+            } => {
+                let owner = match owner {
+                    crate::engine::DropdownOwner::Build => "build",
+                    crate::engine::DropdownOwner::Tree => "tree",
+                    crate::engine::DropdownOwner::Skills => "skills",
+                };
+                let mode = if *entry { "HOVER" } else { "BODY" };
+                self.view("dropdown_hover", (owner, name.clone(), index + 1, mode))?
+            }
         };
         Ok(lines.map(|lines| HoverTooltipView {
             target: target.clone(),

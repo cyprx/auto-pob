@@ -40,6 +40,8 @@ const DROP: Color32 = Color32::from_rgb(230, 80, 70);
 const MIN_ICON_SIZE: f32 = 8.0;
 /// PoB draws sprites at their pixel size times this, in tree units (`PassiveTreeView:DrawAsset`)
 const SPRITE_SCALE: f32 = 1.33 * 2.0;
+/// A search ring snapped to the view's edge is this much smaller (PoB's `scaled_down_ratio`)
+const EDGE_RING_SCALE: f32 = 0.6667;
 /// Nodes of ascendancies other than the build's are drawn this faint, as PoB does
 /// (`PassiveTreeView:Draw`, `renderGroup`: `SetDrawColor(1, 1, 1, 0.50)`)
 const OTHER_ASCENDANCY: f32 = 0.5;
@@ -152,7 +154,7 @@ pub fn show(
             })
             .and_then(|p| {
                 let entry = &p.nodes[*tab.power_index.get(&node.id)?];
-                overlays::heat_color(p, entry)
+                overlays::heat_color(p, entry, tab.power_theme)
             });
         if let Some(colour) = glow {
             painter.circle_filled(pos, radius * 1.4, colour);
@@ -188,8 +190,31 @@ pub fn show(
         if on_path {
             painter.circle_stroke(pos, radius + 1.5, Stroke::new(1.5, highlight_colour));
         }
-        if tab.derived.matches.contains(&node.id) {
+        // with the edge option on, a match outside the view is drawn snapped, below
+        if tab.derived.matches.contains(&node.id) && (tab.edge_search_off || rect.contains(pos)) {
             overlays::draw_search_ring(&painter, pos, radius);
+        }
+    }
+    // PoB's "Show search circles at viewport edge": a match outside the view shows as a
+    // smaller ring at the edge nearest to it (PassiveTreeView.lua:1017-1031)
+    if !tab.edge_search_off {
+        for &id in &tab.derived.matches {
+            let Some(&i) = tab.index.get(&id) else {
+                continue;
+            };
+            let node = &layout.nodes[i];
+            let pos = to_screen(node.pos);
+            if rect.contains(pos) {
+                continue;
+            }
+            let radius = (node_radius(&node.kind) * zoom).max(1.5) * EDGE_RING_SCALE;
+            // PoB lets the ring overhang the edge a little (its `peekaboo_ratio` 1.15)
+            let inset = radius * 0.13;
+            let at = egui::pos2(
+                pos.x.clamp(rect.left() + inset, rect.right() - inset),
+                pos.y.clamp(rect.top() + inset, rect.bottom() - inset),
+            );
+            overlays::draw_search_ring(&painter, at, radius);
         }
     }
 

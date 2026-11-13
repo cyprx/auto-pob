@@ -19,6 +19,10 @@ pub struct BuildView {
     pub save_as_name: String,
     #[serde(default)]
     pub path: Option<PathBuf>,
+    /// The build name's tooltip: its folder and name, for a build in a folder of Builds
+    /// (Build.lua:166-171)
+    #[serde(default)]
+    pub name_tooltip: Option<String>,
     pub class: String,
     #[serde(default)]
     pub ascendancy: Option<String>,
@@ -771,6 +775,9 @@ impl SkillSetEntry {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SocketGroupView {
     pub label: String,
+    /// PoB's `displayLabel`: the label, or the gems' names for a group with none
+    #[serde(default)]
+    pub name: String,
     /// The group list's row text, with PoB's colour codes
     pub display_label: String,
     #[serde(default)]

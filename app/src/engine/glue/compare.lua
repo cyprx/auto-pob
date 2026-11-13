@@ -187,6 +187,70 @@ function glue.compare_load_code(code)
 	end)
 end
 
+-- PoB's "Import Comparison Build" popup (CompareTab.lua:1462-1525), pressed as the user does:
+-- `text` in its box, `name` (or nothing) in its Name box, then Import. A build site's link is
+-- downloaded in a request the popup belongs to (R11), with or without a build file; returns
+-- its id. A code imports at once (nil). Failures are the popup's own text, or PoB's.
+function glue.compare_import(text, name)
+	local tab = compare_tab()
+	local entries = #tab.compareEntries
+	local function landed()
+		return #tab.compareEntries > entries
+	end
+	tab:OpenImportPopup()
+	local popups = pob.main.main.popups
+	local popup = popups[1]
+	local controls = popup.controls
+	glue.type_into(controls.input, text)
+	glue.type_into(controls.name, name or "")
+	local function state()
+		local label = controls.state:GetProperty("label") or ""
+		return StripEscapes(label)
+	end
+	local link = false
+	for _, site in ipairs(buildSites.websiteList) do
+		if controls.input.buf:match(site.matchURL) then
+			link = true
+		end
+	end
+	if not link then
+		-- a code: PoB imports it and closes the popup, or says why in it
+		glue.in_popups(function()
+			controls.go.onClick()
+		end)
+		if popups[1] == popup then
+			pob.main.main:ClosePopup()
+		end
+		if landed() then
+			glue.compare_landed(true)
+			return nil
+		end
+		local why = state()
+		error(why:match("%S") and why or FAILED, 0)
+	end
+	local id, message = glue.net_begin("Fetching comparison build", {
+		popup = popup,
+		-- the popup still open: its state line says why
+		done = function(req)
+			local why = state()
+			if not landed() and why:match("%S") and why ~= "Downloading..." then
+				req.error = why
+			end
+		end,
+		after = function(req)
+			if landed() then
+				glue.compare_landed()
+			elseif not req.error and not req.last_error then
+				req.error = FAILED
+			end
+		end,
+	}, controls.go.onClick)
+	if not id then
+		error(message or FAILED, 0)
+	end
+	return id
+end
+
 -- ---- Entries ----
 
 local function require_index(tab, index)

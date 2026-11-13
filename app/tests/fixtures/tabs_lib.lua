@@ -125,6 +125,17 @@ function upGemHover(group, slot, which)
 	return lines(control.tooltip)
 end
 
+-- A dropdown of Build, the Tree tab or the Skills tab drawn hovered: the closed dropdown
+-- ("BODY") or an entry of its dropped list ("HOVER"), as DropDownControl.lua:291-361 draws them
+function upDropdownHover(owner, name, index, mode)
+	local controls = (owner == "build" and build.controls)
+		or (owner == "tree" and build.treeTab.controls)
+		or (owner == "skills" and build.skillsTab.controls)
+	local control = controls[name]
+	control:DrawTooltip(0, 0, 10, 10, main.viewPort, mode, index + 1, control.list[index + 1])
+	return lines(control.tooltip)
+end
+
 -- ---- Config (R22, NF-4) ----
 
 -- An option's control drawn hovered, with what its own Draw passes (CheckBoxControl.lua:80,

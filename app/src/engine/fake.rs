@@ -298,6 +298,10 @@ impl Fake {
             Command::LoadCompare {
                 source: crate::engine::CompareSource::Code(code),
             } if code == "bad" => anyhow::bail!("Failed to import build for comparison."),
+            // PoB's popup text for a code it can't decode (CompareTab.lua:1513)
+            Command::LoadCompare {
+                source: crate::engine::CompareSource::Import { text, .. },
+            } if text == "bad" => anyhow::bail!("Invalid build code"),
             Command::LoadCompare { .. }
             | Command::SelectCompare { .. }
             | Command::RemoveCompare { .. }

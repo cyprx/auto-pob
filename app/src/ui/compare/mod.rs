@@ -50,11 +50,20 @@ pub struct CompareOutput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Dialog {
     /// A build file, from this folder below the Builds folder
-    Saved {
-        folder: String,
+    Saved { folder: String },
+    /// PoB's "Import Comparison Build" popup (CompareTab.lua:1462-1525): a code or a link,
+    /// and an optional name
+    Import {
+        text: String,
+        name: String,
+        /// Import was pressed: `Some(None)` until the app says which command carries it,
+        /// then its number, until it is answered
+        sent: Option<Option<u64>>,
+        /// PoB's red text in the popup's state line (CompareTab.lua:1476-1479)
+        error: Option<String>,
+        /// A link's download is out: PoB's "Downloading..." line, until it ends
+        downloading: bool,
     },
-    Code(String),
-    Link(String),
     /// PoB's "Convert to Version" popup, opened by a pick in a Tree view version dropdown
     Convert {
         theirs: bool,
@@ -62,6 +71,9 @@ enum Dialog {
         label: String,
     },
 }
+
+/// The label of the Import popup's download, as the engine lists it (glue `compare_import`)
+const IMPORT_REQUEST: &str = "Fetching comparison build";
 
 /// PoB's top-bar selectors, with their captions (`compare*Label`, `cmpSkillLabel` and so on),
 /// in two rows as PoB draws them.
@@ -166,8 +178,6 @@ pub struct CompareUi {
     config: Option<Arc<ConfigView>>,
     /// The Config view's search text (PoB's `configSearchEdit`)
     config_filter: String,
-    /// The open build has a file: PoB offers a link comparison only then
-    has_file: bool,
     /// The builds of the folder the saved-build picker shows
     browse: Option<Arc<BuildBrowseView>>,
     /// Our tree sets' titles and the active one (PoB's `primaryTreeSetSelect` on Items)
@@ -188,10 +198,9 @@ pub struct CompareUi {
 impl CompareUi {
     /// Forgets the build's comparisons, as for another build.
     pub fn reset(&mut self) {
-        let (list, has_file) = (self.list.take(), self.has_file);
+        let list = self.list.take();
         *self = Self::default();
         self.list = list;
-        self.has_file = has_file;
     }
 
     pub fn sub_tab(&self) -> SubTab {
@@ -216,6 +225,77 @@ impl CompareUi {
 
     pub fn close_dialog(&mut self) {
         self.dialog = None;
+    }
+
+    /// The Import popup's command went out as `seq`
+    pub fn import_sent(&mut self, seq: u64) {
+        if let Some(Dialog::Import { sent, .. }) = &mut self.dialog
+            && *sent == Some(None)
+        {
+            *sent = Some(Some(seq));
+        }
+    }
+
+    /// An error for command `seq`: the Import popup's own shows in it, in red, and the popup
+    /// stays for another try, as PoB's does (CompareTab.lua:1507-1514). Returns whether it was.
+    pub fn import_failed(&mut self, seq: u64, message: &str) -> bool {
+        match &mut self.dialog {
+            Some(Dialog::Import { sent, error, .. }) if *sent == Some(Some(seq)) => {
+                *sent = None;
+                *error = Some(message.to_owned());
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Every snapshot up to `seq` is here: an Import with no error has done its work. A code
+    /// added the comparison and the popup closes; a link's download is out, and the popup
+    /// shows PoB's "Downloading..." until it ends (CompareTab.lua:1488-1503). A build code
+    /// has no "." (base64), a build site's link always has one.
+    pub fn import_settled(&mut self, seq: u64) {
+        if let Some(Dialog::Import {
+            text,
+            sent: Some(Some(at)),
+            downloading,
+            ..
+        }) = &mut self.dialog
+            && *at <= seq
+        {
+            if text.contains('.') {
+                *downloading = true;
+            } else {
+                self.dialog = None;
+            }
+        }
+    }
+
+    /// A request ended. The Import popup's download: it closes when the comparison landed,
+    /// else PoB's text shows in it in red, the link and the name kept. Returns whether it was
+    /// the popup's, so the app posts no notice for it.
+    pub fn import_request_ended(&mut self, label: &str, error: Option<&str>) -> bool {
+        if label != IMPORT_REQUEST {
+            return false;
+        }
+        match &mut self.dialog {
+            Some(Dialog::Import {
+                sent,
+                error: shown,
+                downloading,
+                ..
+            }) if *downloading => {
+                match error {
+                    None => self.dialog = None,
+                    Some(e) => {
+                        *downloading = false;
+                        *sent = None;
+                        *shown = Some(e.to_owned());
+                    }
+                }
+                true
+            }
+            _ => false,
+        }
     }
 
     /// PoB switched to its Compare tab (an Import-tab comparison landed), once.
@@ -258,7 +338,6 @@ impl CompareUi {
                 self.renderer.reset();
                 self.config_filter.clear();
             }
-            Snapshot::Build(view) => self.has_file = view.path.is_some(),
             Snapshot::BuildList(view) => self.list = Some(view.clone()),
             Snapshot::Config(view) => self.config = Some(view.clone()),
             Snapshot::BuildBrowse(view) => self.browse = Some(view.clone()),
@@ -360,7 +439,6 @@ impl CompareUi {
                     out.commands.push(Command::SelectCompare { index });
                 }
             });
-            let has_file = self.has_file;
             let rects = &mut self.rects;
             let mut open = None;
             let menu = ui.menu_button("Load build…", |ui| {
@@ -371,19 +449,17 @@ impl CompareUi {
                         folder: String::new(),
                     });
                 }
-                let code = ui.button("From a code…");
+                // PoB's "Import..." popup takes a code or a link, with or without a file
+                let code = ui.button("From a code or link…");
                 rects.note(&code, || "load:code".into());
                 if code.clicked() {
-                    open = Some(Dialog::Code(String::new()));
-                }
-                let link = ui
-                    .add_enabled(has_file, egui::Button::new("From a link…"))
-                    .on_disabled_hover_text(
-                        "PoB imports a comparison from a link only into a build saved to a file",
-                    );
-                rects.note(&link, || "load:link".into());
-                if link.clicked() {
-                    open = Some(Dialog::Link(String::new()));
+                    open = Some(Dialog::Import {
+                        text: String::new(),
+                        name: String::new(),
+                        sent: None,
+                        error: None,
+                        downloading: false,
+                    });
                 }
             });
             self.rects.note(&menu.response, || "load".into());

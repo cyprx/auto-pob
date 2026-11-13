@@ -5,7 +5,7 @@
 
 use super::{Session, fixture_xml, lock, pob_dir};
 use auto_pob::engine::upstream::{golden_of, load_xml, upstream_lua};
-use auto_pob::engine::{Backend, Command, HoverTarget, StatsView, TooltipLine};
+use auto_pob::engine::{Backend, Command, DropdownOwner, HoverTarget, StatsView, TooltipLine};
 use auto_pob::game::Game;
 use mlua::LuaSerdeExt;
 use std::collections::BTreeMap;
@@ -335,6 +335,29 @@ fn tab_gaps_skills_match_pob() {
         "{quality:?}"
     );
     assert!(quality.len() > 4, "no stat comparison: {quality:?}");
+    // the slot dropdown's tooltip (SkillsTab.lua:188-203): what it does on its "None" entry,
+    // the slot's item (or that there is none) on another
+    for (index, entry, header) in [
+        (0, true, "Select the item in which this skill is socketed."),
+        (1, true, ""),
+        (0, false, "Select the item in which this skill is socketed."),
+    ] {
+        let lines = ours.hover(HoverTarget::Dropdown {
+            owner: DropdownOwner::Skills,
+            name: "groupSlot".into(),
+            index,
+            entry,
+        });
+        let mode = if entry { "HOVER" } else { "BODY" };
+        let want: Vec<TooltipLine> =
+            up.get("upDropdownHover", ("skills", "groupSlot", index, mode));
+        assert_eq!(lines, want, "groupSlot {index} {mode}");
+        assert!(!lines.is_empty(), "groupSlot {index} {mode} is empty");
+        assert!(
+            texts(&lines).iter().any(|t| t.contains(header)),
+            "groupSlot {index} {mode}: {lines:?}"
+        );
+    }
     // a hover changes nothing: the flags, undo and the calculation are upstream's after a click
     same(&ours, &up, "after the hovers");
     same_stats(&mut ours, &up, "after the hovers");
@@ -551,6 +574,35 @@ fn tab_gaps_tree_match_pob() {
             .collect::<Vec<_>>(),
         ["Main", "Bare"]
     );
+
+    // ---- The tree selector's tooltip (TreeTab.lua:51-104) ----
+    // another tree: its class, points and what switching to it gives (nothing here, the
+    // trees calculate alike)
+    let lines = ours.hover(HoverTarget::Dropdown {
+        owner: DropdownOwner::Tree,
+        name: "specSelect".into(),
+        index: 1,
+        entry: true,
+    });
+    let want: Vec<TooltipLine> = up.get("upDropdownHover", ("tree", "specSelect", 1, "HOVER"));
+    assert_eq!(lines, want, "specSelect entry 1");
+    for header in ["Class: ", "Points used: ", "Game Version: "] {
+        assert!(
+            texts(&lines).iter().any(|t| t.contains(header)),
+            "no {header:?}: {lines:?}"
+        );
+    }
+    // the closed selector: the active tree, which has no comparison
+    let lines = ours.hover(HoverTarget::Dropdown {
+        owner: DropdownOwner::Tree,
+        name: "specSelect".into(),
+        index: 0,
+        entry: false,
+    });
+    let want: Vec<TooltipLine> = up.get("upDropdownHover", ("tree", "specSelect", 0, "BODY"));
+    assert_eq!(lines, want, "specSelect body");
+    assert!(texts(&lines).iter().any(|t| t.starts_with("Class: ")));
+    same(&ours, &up, "after the tree hovers");
 
     // ---- Tree Copy and reorder (NF-3) ----
     ours.run(Command::CopySpec {

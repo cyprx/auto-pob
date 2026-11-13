@@ -47,6 +47,10 @@ pub struct OptionsUi {
 pub struct UiEffects {
     pub zoom: f32,
     pub show_title: bool,
+    /// "Node Power colours" (`nodePowerTheme`)
+    pub power_theme: crate::ui::tree::overlays::PowerTheme,
+    /// "Show search circles at viewport edge" (`edgeSearchHighlight`, on in PoB by default)
+    pub edge_search: bool,
 }
 
 impl Default for UiEffects {
@@ -54,6 +58,8 @@ impl Default for UiEffects {
         Self {
             zoom: 1.0,
             show_title: false,
+            power_theme: Default::default(),
+            edge_search: true,
         }
     }
 }
@@ -62,7 +68,7 @@ impl Default for UiEffects {
 /// (0; Main.lua:928-937)
 const DPI_OVERRIDES: [u32; 7] = [100, 125, 150, 175, 200, 225, 250];
 
-/// The zoom factor and window-title switch the settings ask for. Only a percentage PoB's
+/// The zoom factor, window-title switch and tree view settings the settings ask for. Only a percentage PoB's
 /// dropdown offers zooms; anything else (0, "Use system default", a stray 1, garbage) is no
 /// override.
 pub fn ui_effects(rows: &[SettingRow]) -> UiEffects {
@@ -74,6 +80,10 @@ pub fn ui_effects(rows: &[SettingRow]) -> UiEffects {
     UiEffects {
         zoom: percent / 100.0,
         show_title: value("showTitlebarName") == Some("true"),
+        power_theme: crate::ui::tree::overlays::PowerTheme::parse(
+            value("nodePowerTheme").unwrap_or_default(),
+        ),
+        edge_search: value("edgeSearchHighlight") != Some("false"),
     }
 }
 
@@ -838,5 +848,31 @@ mod tests {
         assert_eq!(window_title(true, Some("Witch")), "auto-pob - Witch");
         assert_eq!(window_title(false, Some("Witch")), "auto-pob");
         assert_eq!(window_title(true, None), "auto-pob");
+    }
+
+    #[test]
+    fn ui_rows_set_the_heat_map_colours_and_edge_circles() {
+        // Main.lua:957-964, 1011-1013: PoB's "Node Power colours" and edge search circles,
+        // which the tree view follows
+        use crate::ui::tree::overlays::PowerTheme;
+        let fx = ui_effects(&[
+            row(
+                "nodePowerTheme",
+                "nodePowerTheme",
+                "RED/GREEN",
+                SettingEffect::Ui,
+            ),
+            row(
+                "edgeSearchHighlight",
+                "edgeSearchHighlight",
+                "false",
+                SettingEffect::Ui,
+            ),
+        ]);
+        assert_eq!(fx.power_theme, PowerTheme::RedGreen);
+        assert!(!fx.edge_search);
+        // PoB's defaults
+        assert_eq!(ui_effects(&[]).power_theme, PowerTheme::RedBlue);
+        assert!(ui_effects(&[]).edge_search);
     }
 }

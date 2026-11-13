@@ -66,6 +66,7 @@ local function group_view(tab, index, group)
 	local c = tab.controls
 	local view = {
 		label = group.label or "",
+		name = group.displayLabel or "",
 		display_label = c.groupList:GetRowValue(1, index, group),
 		slot = group.slot,
 		enabled = group.enabled and true or false,
@@ -180,8 +181,12 @@ function glue.skills_add_group()
 end
 
 -- OnSelDelete and its confirmation (SkillListControl.lua:150-186)
-function glue.skills_delete_group(index)
+function glue.skills_delete_group(index, expected)
 	local group = group_at(index)
+	-- the UI's view was stale: that place holds another group now
+	if expected ~= nil and (group.displayLabel or "") ~= expected then
+		error("the socket group list changed; nothing was deleted", 0)
+	end
 	if group.source then
 		error("this socket group is created by an equipped item and can't be deleted", 0)
 	end
@@ -591,6 +596,30 @@ function glue.tooltip_lines(tooltip)
 		end
 	end
 	return lines
+end
+
+-- What hovering a dropdown of Build, the Tree tab or the Skills tab shows: its own
+-- `tooltipFunc`, run into a fresh PoB `Tooltip` with PoB's mode, "BODY" for the closed dropdown
+-- and "HOVER" for an entry of the dropped list (DropDownControl.lua:291-361). `index` is 1-based.
+-- Nil when there is no such dropdown or entry, or no tooltip.
+function glue.dropdown_hover(owner, name, index, mode)
+	local build = pob.build
+	local controls = (owner == "build" and build.controls)
+		or (owner == "tree" and build.treeTab.controls)
+		or (owner == "skills" and build.skillsTab.controls)
+	local control = controls and controls[name]
+	if not (control and control.tooltipFunc) or index < 1 then
+		return nil
+	end
+	-- a list PoB fills only when it draws (the tree selector's) may be empty here: the tree
+	-- selector's tooltip reads the index alone
+	local value = control.list and control.list[index]
+	local tooltip = new("Tooltip")
+	local ok = pcall(control.tooltipFunc, tooltip, mode, index, value)
+	if not ok then
+		return nil
+	end
+	return glue.tooltip_lines(tooltip)
 end
 
 -- What hovering a gem's Quality box, enable box or Count box shows (SkillsTab.lua:861-1000):

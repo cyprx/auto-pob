@@ -226,12 +226,15 @@ fn a_fresh_folder_matches_pob() {
     }
     assert!(view.saved_overrides.is_empty());
 
-    // ---- what the UI does with them: no zoom, PoB's own title switch ----
+    // ---- what the UI does with them: no zoom, PoB's own title switch, PoB's default heat
+    // map colours and edge search circles ----
     assert_eq!(
         ui_effects(&view.rows),
         UiEffects {
             zoom: 1.0,
             show_title: true,
+            power_theme: auto_pob::ui::tree::overlays::PowerTheme::RedBlue,
+            edge_search: true,
         }
     );
 

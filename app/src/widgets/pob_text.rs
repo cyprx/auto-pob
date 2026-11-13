@@ -77,9 +77,61 @@ pub fn pob_colour(code: &str, default: Color32) -> Color32 {
     job.sections.first().map_or(default, |s| s.format.color)
 }
 
+/// PoB's `fitItemName` (TradeHelpers.lua:436-452): `colour .. name` when it `fits`, else the
+/// longest start of `name` that fits with "..." after it. The cut never splits a character or
+/// a colour code inside `name`.
+pub fn fit_with_dots(colour: &str, name: &str, fits: impl Fn(&str) -> bool) -> String {
+    let full = format!("{colour}{name}");
+    if fits(&full) {
+        return full;
+    }
+    // where a cut may fall: a character boundary outside a colour code
+    let bytes = name.as_bytes();
+    let mut cuts = vec![0];
+    let mut i = 0;
+    while i < bytes.len() {
+        let step = match parse_code(&bytes[i..]) {
+            Some((_, len)) if bytes[i] == b'^' => len,
+            _ => name[i..].chars().next().map_or(1, char::len_utf8),
+        };
+        i += step;
+        cuts.push(i);
+    }
+    let cut = |n: usize| format!("{colour}{}...", &name[..cuts[n]]);
+    // the longest start that fits, as PoB's binary search finds it
+    let (mut lo, mut hi) = (0, cuts.len() - 1);
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if fits(&cut(mid)) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    cut(lo)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fitting_cuts_with_dots_and_never_inside_a_code() {
+        let short = |n: usize| move |t: &str| t.chars().count() <= n;
+        assert_eq!(fit_with_dots("^7", "Ring", short(6)), "^7Ring");
+        assert_eq!(
+            fit_with_dots("^xAF6025", "Kaom's Heart", short(15)),
+            "^xAF6025Kaom..."
+        );
+        // a code is kept whole or left out
+        let name = "Jewel^xFF9922  (tree missing allocated node)";
+        assert_eq!(fit_with_dots("^7", name, short(12)), "^7Jewel...");
+        assert_eq!(fit_with_dots("^7", name, short(20)), "^7Jewel^xFF9922  ...");
+        // nothing fits: the dots alone, as PoB
+        assert_eq!(fit_with_dots("^7", "Ring", short(1)), "^7...");
+        // characters stay whole
+        assert_eq!(fit_with_dots("", "Ünïque name", short(5)), "Ün...");
+    }
 
     const DEFAULT: Color32 = Color32::from_rgb(1, 2, 3);
 

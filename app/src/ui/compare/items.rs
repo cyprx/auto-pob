@@ -13,6 +13,9 @@ use std::sync::Arc;
 
 /// PoB's warning after a jewel whose socket the tree doesn't allocate
 const UNALLOCATED: &str = "^xFF9922  (tree missing allocated node)";
+/// The room PoB gives a name in a row: its 310 px box less 8 px of padding, for 16 px text
+/// (TradeHelpers.lua:465-509), scaled to the 14 px the names are drawn at here
+const NAME_ROOM: f32 = (310.0 - 8.0) * 14.0 / 16.0;
 /// An inline tooltip not answered in this long (an item that vanished) is given up on
 const EXPANDED_TIMEOUT: f64 = 2.0;
 
@@ -157,21 +160,31 @@ pub(super) fn show(
         });
 }
 
-/// This build's item name as PoB draws it: from the row, else from the Items view, else its id
-fn ours_name(tab: &CompareUi, row: &CompareItemRow, id: u32) -> String {
+/// This build's item name as PoB draws it, colour code apart: from the row, else from the
+/// Items view, else its id
+fn ours_name(tab: &CompareUi, row: &CompareItemRow, id: u32) -> (String, String) {
     let colour = if row.ours_colour.is_empty() {
         "^7"
     } else {
         &row.ours_colour
     };
     match &row.ours_name {
-        Some(name) => format!("{colour}{name}"),
-        None => tab
-            .item_names
-            .get(&id)
-            .cloned()
-            .unwrap_or_else(|| format!("^7Item {id}")),
+        Some(name) => (colour.to_owned(), name.clone()),
+        // the Items view's names carry their colour already
+        None => match tab.item_names.get(&id) {
+            Some(name) => (String::new(), name.clone()),
+            None => ("^7".to_owned(), format!("Item {id}")),
+        },
     }
+}
+
+/// A name as PoB fits it into its box: cut with "..." when too wide (`fitItemName`), the
+/// warning included, as PoB fits `name .. warning`
+fn fitted(ui: &egui::Ui, colour: &str, name: &str, default: egui::Color32) -> String {
+    let painter = ui.painter();
+    crate::widgets::fit_with_dots(colour, name, |text| {
+        painter.layout_job(pob_text(text, 14.0, default)).size().x <= NAME_ROOM
+    })
 }
 
 /// One row: label, both names (hover tooltips unless the tooltips are inline), PoB's marker and
@@ -189,10 +202,15 @@ fn show_row(
     ui.label(pob_text(&row.label, 14.0, default));
     let ours = match row.ours {
         Some(id) => {
-            let mut name = ours_name(tab, row, id);
+            let (colour, mut name) = ours_name(tab, row, id);
             if row.ours_unallocated {
                 name.push_str(UNALLOCATED);
             }
+            let name = if hover {
+                fitted(ui, &colour, &name, default)
+            } else {
+                format!("{colour}{name}")
+            };
             let r = ui.label(pob_text(&name, 14.0, default));
             if hover && let Some(query) = our_query {
                 tab.tip.note(&r, query);
@@ -209,10 +227,15 @@ fn show_row(
             } else {
                 &row.theirs_colour
             };
-            let mut name = format!("{colour}{name}");
+            let mut name = name.clone();
             if row.theirs_unallocated {
                 name.push_str(UNALLOCATED);
             }
+            let name = if hover {
+                fitted(ui, colour, &name, default)
+            } else {
+                format!("{colour}{name}")
+            };
             let r = ui.label(pob_text(&name, 14.0, default));
             if hover && let Some(query) = their_query {
                 tab.tip.note(&r, query);

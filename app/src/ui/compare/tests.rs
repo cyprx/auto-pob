@@ -307,13 +307,6 @@ impl Harness {
         })
     }
 
-    /// The colour of the last section of the drawn text `text`
-    fn last_colour_of(&self, text: &str) -> Option<egui::Color32> {
-        self.texts.iter().find_map(|g| {
-            (g.job.text == text).then(|| g.job.sections.last().map(|s| s.format.color))?
-        })
-    }
-
     fn drew(&self, text: &str) -> bool {
         self.texts.iter().any(|g| g.job.text == text)
     }
@@ -550,6 +543,59 @@ fn the_saved_build_picker_lays_out_only_the_rows_in_view() {
     );
 }
 
+/// A name wider than PoB's 310 px box is cut with "..." (`fitItemName`), the warning
+/// included; a short one is drawn whole, and in expanded mode nothing is cut
+#[test]
+fn long_item_names_are_cut_with_dots_as_pob() {
+    let long = "Beast Grip Exceptionally Long Unique Name Of The Ancient Vaal Empire";
+    let mut view = sample();
+    view.items = vec![
+        CompareItemRow {
+            ours_name: Some(long.into()),
+            ..item_row(
+                "Body Armour",
+                Some(2),
+                Some(long),
+                "^xFF9922(different)",
+                true,
+            )
+        },
+        CompareItemRow {
+            theirs_unallocated: true,
+            ..item_row(
+                "Jewel 100",
+                None,
+                Some("Cobalt Jewel"),
+                "^xDD0022(missing)",
+                true,
+            )
+        },
+    ];
+    let mut h = Harness::new(Some(view));
+    h.click("sub:items");
+    let cut: Vec<String> = h
+        .texts
+        .iter()
+        .map(|g| g.job.text.clone())
+        .filter(|t| t.ends_with("...") && long.starts_with(t.trim_end_matches("...")))
+        .collect();
+    assert_eq!(cut.len(), 2, "both sides cut: {cut:?}");
+    assert!(cut[0].len() > 10 && cut[0].len() < long.len(), "{cut:?}");
+    assert!(!h.drew(long), "the whole name was drawn");
+    // the warning counts toward the width, as PoB fits `name .. warning`
+    assert!(
+        h.texts
+            .iter()
+            .any(|g| g.job.text.starts_with("Cobalt Jewel  (tree missing")
+                && g.job.text.ends_with("...")),
+        "{:?}",
+        h.texts
+            .iter()
+            .map(|g| g.job.text.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn selector_row_sends_set_compare_control() {
     let mut h = Harness::new(Some(sample()));
@@ -650,14 +696,15 @@ fn copy_item_sends_slot_and_use() {
     assert!(h.drew("Kaom's Heart"));
     assert_eq!(h.colour_of("Tabula Rasa"), Some(colour("^xAF6025")));
     assert_eq!(h.colour_of("Ming's Heart"), Some(colour("^7")));
-    assert_eq!(
-        h.colour_of("Cobalt Jewel  (tree missing allocated node)"),
-        Some(colour("^x8888FF"))
-    );
-    assert_eq!(
-        h.last_colour_of("Cobalt Jewel  (tree missing allocated node)"),
-        Some(colour("^xFF9922"))
-    );
+    // the name and its warning, cut to PoB's box: name colour first, the warning's last
+    let warned = h
+        .texts
+        .iter()
+        .find(|g| g.job.text.starts_with("Cobalt Jewel  (tree"))
+        .expect("the warned jewel");
+    let sections = &warned.job.sections;
+    assert_eq!(sections.first().unwrap().format.color, colour("^x8888FF"));
+    assert_eq!(sections.last().unwrap().format.color, colour("^xFF9922"));
     assert_eq!(h.colour_of("Prismatic Jewel"), Some(colour("^xFFFF77")));
     assert_eq!(h.colour_of("Missing slot"), Some(colour("^xBBBBBB")));
     let out = h.click("copy:Body Armour");

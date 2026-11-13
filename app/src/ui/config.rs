@@ -336,11 +336,65 @@ pub struct ConfigUi {
     order_focused: bool,
     /// Hover questions made this frame; `show` hands them out with the commands
     hover_queries: Vec<Command>,
+    /// A box that sends on blur and holds an edit not sent yet, by key: the command that
+    /// sends it. PoB's custom modifier boxes change the build at each key (ConfigTab.lua:
+    /// 35-40, 70-75), so a save, a tab switch or a close sends it first.
+    pending: HashMap<String, Command>,
 }
 
 impl ConfigUi {
     /// Forgets the build's state, as for another build: PoB makes a new ConfigTab for each.
     /// The custom-modifier boxes keep the heights their grips left them.
+    /// An edit typed into a box is waiting to be sent, so the build has unsaved changes the
+    /// engine doesn't know about yet.
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// Sends the edits still being typed; the box's blur later sends nothing more.
+    pub fn flush(&mut self) -> Vec<Command> {
+        let mut commands = Vec::new();
+        for (key, command) in std::mem::take(&mut self.pending) {
+            if let Some(text) = self.drafts.get(&key) {
+                self.sent.insert(key, text.clone());
+            }
+            commands.push(command);
+        }
+        commands
+    }
+
+    /// Drops the edits still being typed (the user chose not to save).
+    pub fn discard(&mut self) {
+        for key in std::mem::take(&mut self.pending).into_keys() {
+            if let Some(text) = self.drafts.get(&key) {
+                self.sent.insert(key, text.clone());
+            }
+        }
+    }
+
+    /// Notes whether the blur-sent box `key`, showing `current` from the view, holds an edit
+    /// not sent yet; `make` is the command that sends it.
+    fn note_pending(
+        &mut self,
+        key: &str,
+        response: &egui::Response,
+        current: &str,
+        make: impl FnOnce(String) -> Command,
+    ) {
+        let waiting = self.drafts.get(key).filter(|text| {
+            response.has_focus() && text.as_str() != current && self.sent.get(key) != Some(*text)
+        });
+        match waiting {
+            Some(text) => {
+                let command = make(text.clone());
+                self.pending.insert(key.to_owned(), command);
+            }
+            None => {
+                self.pending.remove(key);
+            }
+        }
+    }
+
     pub fn reset(&mut self) {
         let heights = std::mem::take(&mut self.heights);
         *self = Self {
@@ -1117,6 +1171,13 @@ impl ConfigUi {
             .id_salt("config_custom_mods")
             .default_open(true)
             .show(ui, |ui| {
+                // a group that went holds no edit
+                self.pending.retain(|key, _| {
+                    key.rsplit(':')
+                        .next()
+                        .and_then(|i| i.parse::<usize>().ok())
+                        .is_some_and(|i| i < groups.len())
+                });
                 for (i, group) in groups.iter().enumerate() {
                     self.custom_mod_group(ui, i, group, behind, commands);
                     ui.add_space(6.0);
@@ -1169,6 +1230,12 @@ impl ConfigUi {
                 }),
             );
             self.note(format!("mod_title:{i}"), &response);
+            self.note_pending(
+                &format!("mod_title:{i}"),
+                &response,
+                &group.title,
+                |title| Command::SetCustomModTitle { group: i, title },
+            );
             if let Some(title) = title {
                 commands.push(Command::SetCustomModTitle { group: i, title });
             }
@@ -1199,6 +1266,9 @@ impl ConfigUi {
             None,
         );
         self.note(format!("mod_text:{i}"), &response);
+        self.note_pending(&format!("mod_text:{i}"), &response, &group.text, |text| {
+            Command::SetCustomModText { group: i, text }
+        });
         if let Some(text) = text {
             commands.push(Command::SetCustomModText { group: i, text });
         }

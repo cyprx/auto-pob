@@ -204,21 +204,13 @@ impl ItemsUi {
             },
             |p: &ItemDrag| p.index,
             |ui, i| {
-                let fill = if selected == Some(rows[i].id) {
-                    ui.visuals().selection.bg_fill
-                } else {
-                    Color32::TRANSPARENT
-                };
-                egui::Frame::NONE
-                    .fill(fill)
-                    .inner_margin(2.0)
-                    .show(ui, |ui| {
-                        ui.set_min_width(ui.available_width());
-                        ui.add(
-                            egui::Label::new(pob_text(&rows[i].display_label, 14.0, default))
-                                .selectable(false),
-                        );
-                    });
+                crate::theme::row_frame(ui, selected == Some(rows[i].id), |ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.add(
+                        egui::Label::new(pob_text(&rows[i].display_label, 14.0, default))
+                            .selectable(false),
+                    );
+                });
             },
         );
         if rows.is_empty() {

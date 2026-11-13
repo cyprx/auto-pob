@@ -21,6 +21,8 @@ fn control(name: &str, kind: PopupControlKind, pos: [f32; 2], size: [f32; 2]) ->
         divisions: None,
         checked: false,
         text: String::new(),
+        ascii_only: false,
+        limit: None,
         tooltip_text: None,
         hover_tooltip: false,
         rows: vec![],
@@ -1159,4 +1161,18 @@ fn a_drag_between_scrolled_rows_moves_by_their_place_in_the_whole_list() {
             }
         )]
     );
+}
+
+/// A popup box made with `EditControl`'s own filter takes ASCII text only and its byte limit
+/// (EditControl.lua:46, 148), as the craft window's Name box does (ItemsTab.lua:2569)
+#[test]
+fn a_popup_box_with_pobs_default_filter_keeps_ascii_and_its_limit() {
+    let mut edit = control("title", PopupControlKind::Edit, [0.0, 0.0], [200.0, 20.0]);
+    edit.ascii_only = true;
+    edit.limit = Some(5);
+    let mut h = Harness::new(popup(vec![edit]));
+    h.click("edit_title");
+    h.frame(vec![Event::Text("\u{65e5}\u{672c} ab\u{e9}cdefg".into())]);
+    h.frame(vec![]);
+    assert_eq!(h.popup.box_text("title"), Some(" abcd"));
 }

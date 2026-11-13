@@ -33,7 +33,7 @@ end
 local function set_ids(tab)
 	local sets = {}
 	for _, id in ipairs(tab.configSetOrderList) do
-		sets[#sets + 1] = { id = id, title = tab.configSets[id].title or "Default" }
+		sets[#sets + 1] = { id = id, title = tab.configSets[id].title or "Default", untitled = tab.configSets[id].title == nil }
 	end
 	return sets
 end

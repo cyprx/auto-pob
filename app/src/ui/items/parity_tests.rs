@@ -603,7 +603,12 @@ fn a_shared_set_name_follows_pobs_filter() {
     h.settle();
     h.type_into("shared_sets_name", "\u{65e5}\u{672c}");
     assert!(h.click("shared_sets_save").commands.is_empty());
-    h.type_into("shared_sets_name", "\u{65e5} b");
+    // over the selected title PoB refuses a text with a character it drops; emptied, it keeps the rest
+    h.click("shared_sets_name");
+    h.key(Key::A, Modifiers::COMMAND);
+    h.key(Key::Backspace, Modifiers::NONE);
+    h.frame(vec![Event::Text("\u{65e5} b".into())]);
+    h.frame(vec![]);
     assert_eq!(
         debug(&h.click("shared_sets_save").commands),
         ["RenameSharedItemSet { index: 0, title: \" b\" }"]

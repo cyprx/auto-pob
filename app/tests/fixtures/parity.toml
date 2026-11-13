@@ -1276,6 +1276,7 @@ ported = "app/src/ui/items/display.rs Save / Add to build"
 
 [controls."items.craftDisplayItem"]
 ported = "app/src/ui/items/display.rs Craft item (PoB popup session)"
+note = "the popup's Name box (ItemsTab.lua:2569) is a generic popup Edit: ascii_only and limit come from the control, see popup.rs and popup_tests a_popup_box_with_pobs_default_filter_keeps_ascii_and_its_limit"
 
 [controls."items.craftingSorting"]
 ported = "app/src/ui/items/crafting.rs Modifier sorting"

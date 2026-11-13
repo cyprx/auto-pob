@@ -870,7 +870,7 @@ fn a_skill_set_name_follows_pobs_box() {
     h.click("manage");
     h.frame(vec![]);
     h.click("sets_new");
-    for name in ["\u{65e5}\u{672c}", "\u{3a9}\u{3bc}", "  "] {
+    for name in ["\u{65e5}\u{672c}", "\u{3a9}\u{3bc}"] {
         h.click("sets_name");
         h.frame_key(Key::A, Modifiers::COMMAND);
         h.type_text(name);
@@ -888,9 +888,15 @@ fn a_skill_set_name_follows_pobs_box() {
     h.frame(vec![]);
     h.click("sets_new");
     h.click("sets_name");
+    // typed key by key it stops at the limit; pasted it is refused whole
     h.type_text(&"x".repeat(130));
     h.frame(vec![]);
     assert_eq!(h.ui.sets.naming_text().map(str::len), Some(100));
+    h.frame_key(Key::A, Modifiers::COMMAND);
+    h.frame_key(Key::Backspace, Modifiers::NONE);
+    h.frame(vec![Event::Paste("x".repeat(101))]);
+    h.frame(vec![]);
+    assert_eq!(h.ui.sets.naming_text(), Some(""), "refused whole");
 }
 
 /// PoB opens the rename box on the set's own title: a set with none opens it empty
@@ -919,7 +925,9 @@ fn a_group_label_takes_fifty_characters() {
     let mut h = Harness::new(sample());
     h.click("g0_label");
     h.frame_key(Key::A, Modifiers::COMMAND);
-    h.type_text(&"x".repeat(60));
+    h.frame_key(Key::Backspace, Modifiers::NONE);
+    h.type_text(&"x".repeat(50));
+    h.type_text("y");
     let o = h.press(Key::Enter);
     assert_eq!(
         debug(&o.commands),

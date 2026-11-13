@@ -143,14 +143,13 @@ impl FolderPicker {
             let mut create = false;
             let mut cancel = false;
             ui.horizontal(|ui| {
-                let edit = ui.add(egui::TextEdit::singleline(text).hint_text("Folder name"));
+                let (edit, _) = name_box::edit(ui, text, Filter::Path, name_box::NAME_LIMIT, |t| {
+                    t.hint_text("Folder name")
+                });
                 mark(ui, "picker_name", &edit);
                 if self.focus_name {
                     edit.request_focus();
                     self.focus_name = false;
-                }
-                if edit.changed() {
-                    name_box::clean(text, Filter::Path, name_box::NAME_LIMIT);
                 }
                 // PoB's Create asks for `%S` (Main.lua:1697)
                 let ok = name_box::has_visible(text);
@@ -386,7 +385,8 @@ mod tests {
         h.folder = "alpha/".into();
         h.click("picker_new");
         h.click("picker_name");
-        h.frame(vec![Event::Text("\u{65e5}".repeat(40))]);
+        h.frame(vec![Event::Text("\u{65e5}".repeat(33))]);
+        h.frame(vec![Event::Text("\u{65e5}".into())]);
         assert_eq!(
             h.picker.naming.as_deref().map(|t| t.chars().count()),
             Some(33)

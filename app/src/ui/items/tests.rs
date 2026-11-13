@@ -2440,7 +2440,7 @@ fn an_item_set_name_follows_pobs_box() {
     h.click("manage");
     h.frame(vec![]);
     h.click("sets_new");
-    for name in ["\u{65e5}\u{672c}", "\u{3a9}\u{3bc}", "  "] {
+    for name in ["\u{65e5}\u{672c}", "\u{3a9}\u{3bc}"] {
         h.type_into("sets_name", name);
         let o = h.click("sets_save");
         assert!(o.commands.is_empty(), "{name}: {:?}", o.commands);
@@ -2452,8 +2452,14 @@ fn an_item_set_name_follows_pobs_box() {
     // 100 bytes at most
     h.frame(vec![]);
     h.click("sets_new");
+    // typed key by key it stops at the limit; pasted it is refused whole
     h.type_into("sets_name", &"x".repeat(130));
     assert_eq!(h.ui.sets.naming_text().map(str::len), Some(100));
+    h.key(Key::A, Modifiers::COMMAND);
+    h.key(Key::Backspace, Modifiers::NONE);
+    h.frame(vec![Event::Paste("x".repeat(101))]);
+    h.frame(vec![]);
+    assert_eq!(h.ui.sets.naming_text(), Some(""), "refused whole");
 }
 
 /// PoB opens the rename box on the set's own title: a set with none opens it empty

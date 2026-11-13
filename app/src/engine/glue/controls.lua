@@ -26,13 +26,18 @@ function glue.confirm_popup(what)
 end
 
 -- Types `text` into the edit control as PoB's EditControl takes an edit that turns its text into
--- it: the control's filter and limit apply to the inserted part only (EditControl.lua:162-172),
--- so text the box already holds (a name being renamed) stays as it is. False when the edit
--- would insert nothing but characters the filter drops.
-function glue.type_into(control, text)
+-- it. The filter and limit apply to the inserted part only (EditControl.lua:140-172), so text the
+-- box already holds (a name being renamed) stays as it is. Typed text goes in one key at a time:
+-- over a selection the first key is ReplaceSel, which refuses a character the filter drops (the
+-- selection stays), every key after it is Insert, which drops such a character, and a key that
+-- would pass the limit is refused. `pasted` text is one insertion: Insert drops the rejected
+-- characters, ReplaceSel refuses the whole text if it has one, and a text that would pass the
+-- limit is refused whole (an error here). False when the text changed nothing.
+function glue.type_into(control, text, pasted)
 	text = text:gsub("\r", "")
 	local old = control.buf or ""
-	-- the edit replaced text[head + 1 .. #text - tail]; both cuts fall between characters
+	-- the edit replaced old[head + 1 .. #old - tail] with text[head + 1 .. #text - tail]; both
+	-- cuts fall between characters
 	local head = 0
 	while head < #old and head < #text and old:byte(head + 1) == text:byte(head + 1) do
 		head = head + 1
@@ -48,17 +53,41 @@ function glue.type_into(control, text)
 	while tail > 0 and (text:byte(#text - tail + 1) or 0) >= 0x80 and (text:byte(#text - tail + 1) or 0) < 0xC0 do
 		tail = tail - 1
 	end
+	local front, back = text:sub(1, head), text:sub(#text - tail + 1)
 	local inserted = text:sub(head + 1, #text - tail)
-	local kept = inserted:gsub(control.filterPattern, "")
-	-- everything was filtered out: EditControl:Insert does nothing
-	if inserted ~= "" and kept == "" then
-		return false
+	local replacing = head + tail < #old
+	local limit = control.limit
+	local kept, refused = "", false
+	if inserted ~= "" then
+		if pasted then
+			kept = inserted:gsub(control.filterPattern, "")
+			if kept == "" or (replacing and kept ~= inserted) then
+				return false
+			end
+			if limit and #front + #kept + #back > limit then
+				error("the text is too long", 0)
+			end
+		else
+			for char in inserted:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+				if not char:find(control.filterPattern) then
+					local held = replacing and 0 or #kept
+					if limit and #front + held + #char + #back > limit then
+						refused = true
+					else
+						kept = (replacing and "" or kept) .. char
+						replacing = false
+					end
+				end
+			end
+			if refused then
+				error("the text is too long", 0)
+			end
+			if replacing or kept == "" then
+				return false
+			end
+		end
 	end
-	text = text:sub(1, head) .. kept .. text:sub(#text - tail + 1)
-	if control.limit and #text > control.limit and #text > #old then
-		error("the text is too long", 0)
-	end
-	control:SetText(text, true)
+	control:SetText(front .. kept .. back, true)
 	return true
 end
 
@@ -69,12 +98,12 @@ end
 
 -- Pastes into an edit control as PoB's EditControl does on Ctrl+V (EditControl.lua:530): the
 -- text goes through the control's `pasteFilter`, then is typed as any other text.
-function glue.paste_into(control, text)
+function glue.paste_into(control, text, typed)
 	if control.pasteFilter then
 		text = control.pasteFilter(text)
 	end
 	text = text:gsub("[\128-\255]", "?")
-	return glue.type_into(control, text)
+	return glue.type_into(control, text, not typed)
 end
 
 -- ---- Item and skill sets: the manage popup and its name popup ----

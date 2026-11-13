@@ -91,16 +91,23 @@ fn set_and_tree_names_pass_through_pobs_edit_filter() {
     let last = trees(&mut s).len() - 1;
     s.run(Command::RenameSpec {
         index: last,
-        title: format!("{JAPANESE}b"),
+        title: format!(" a {JAPANESE}b"),
     })
     .unwrap();
-    assert_eq!(trees(&mut s)[last], "b");
+    assert_eq!(trees(&mut s)[last], " a b");
     s.run(Command::CopySpec {
         index: last,
-        title: format!("c{JAPANESE}"),
+        title: format!(" a b{JAPANESE}c"),
     })
     .unwrap();
-    assert_eq!(trees(&mut s).last().map(String::as_str), Some("c"));
+    assert_eq!(trees(&mut s).last().map(String::as_str), Some(" a bc"));
+    // over a selection, one character the box drops refuses the whole text
+    s.run(Command::RenameSpec {
+        index: last,
+        title: JAPANESE.into(),
+    })
+    .expect_err("a replacement of only characters the box drops");
+    assert_eq!(trees(&mut s)[last], " a b");
     s.run(Command::ImportTreeLink {
         title: JAPANESE.into(),
         url: "https://www.pathofexile.com/passive-skill-tree/AAAABgAAAAAA".into(),
@@ -155,17 +162,17 @@ fn custom_mod_titles_and_build_names_pass_through_pobs_edit_filter() {
     let group = s.config().custom_mods.len() - 1;
     s.run(Command::SetCustomModTitle {
         group,
-        title: format!("{JAPANESE} t"),
+        title: format!("Group 2{JAPANESE} t"),
     })
     .unwrap();
-    assert_eq!(s.config().custom_mods[group].title, " t");
+    assert_eq!(s.config().custom_mods[group].title, "Group 2 t");
     // nothing left to type: the box keeps its text
     s.run(Command::SetCustomModTitle {
         group,
         title: JAPANESE.into(),
     })
     .unwrap();
-    assert_eq!(s.config().custom_mods[group].title, " t");
+    assert_eq!(s.config().custom_mods[group].title, "Group 2 t");
 
     let before = std::fs::read_dir(s.builds_dir()).unwrap().count();
     for name in [
@@ -191,4 +198,35 @@ fn custom_mod_titles_and_build_names_pass_through_pobs_edit_filter() {
             .join(format!("{JAPANESE} build .xml"))
             .exists()
     );
+}
+
+/// Save As opens on `main.predefinedBuildName` for a build never saved, which a character
+/// import sets, and else on the build's name with the characters its box forbids made "-"
+/// (Build.lua:1400)
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn save_as_opens_on_pobs_name() {
+    let _guard = lock();
+    let mut s = Session::start("names-saveas");
+    s.open_fixture("attack", &fixture_xml("attack"));
+    s.backend
+        .lua
+        .load("pob.build.buildName = 'a:b/c*d'")
+        .exec()
+        .unwrap();
+    assert_eq!(s.backend.build_view().unwrap().save_as_name, "a-b-c-d");
+    // never saved, with a name from a character import
+    s.backend
+        .lua
+        .load("pob.build.dbFileName = nil pob.main.main.predefinedBuildName = 'Acct - Char'")
+        .exec()
+        .unwrap();
+    assert_eq!(s.backend.build_view().unwrap().save_as_name, "Acct - Char");
+    // never saved and no import: the build's own name
+    s.backend
+        .lua
+        .load("pob.main.main.predefinedBuildName = nil")
+        .exec()
+        .unwrap();
+    assert_eq!(s.backend.build_view().unwrap().save_as_name, "a-b-c-d");
 }

@@ -37,14 +37,6 @@ pub fn filtered(text: &str, filter: Filter) -> String {
     text.chars().filter(|c| filter.keeps(*c)).collect()
 }
 
-/// `name` with each character the path filter drops turned into "-", as Save As prefills
-/// (`gsub("[\\/:%*%?\"<>|%c]", "-")`)
-pub fn dashed(name: &str) -> String {
-    name.chars()
-        .map(|c| if Filter::Path.keeps(c) { c } else { '-' })
-        .collect()
-}
-
 /// Lua's `%s` in the C locale
 fn is_lua_space(c: char) -> bool {
     c == ' ' || ('\t'..='\r').contains(&c)
@@ -57,16 +49,22 @@ pub fn has_visible(text: &str) -> bool {
     text.chars().any(|c| !is_lua_space(c))
 }
 
-/// Applies the filter, then the byte limit, to `text` in place
-pub fn clean(text: &mut String, filter: Filter, limit: usize) {
-    *text = spliced("", text, filter, limit);
+/// Whether this frame pastes text into the box
+pub fn pasted(ui: &egui::Ui) -> bool {
+    ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))))
 }
 
 /// What PoB's box holds after the edit that turned `before` into `raw`. PoB filters and limits
-/// only the text an edit inserts (`Insert`, EditControl.lua:162-172): the text already in the
-/// box, such as a name being renamed, is kept as it is, non-ASCII bytes included.
-pub fn spliced(before: &str, raw: &str, filter: Filter, limit: usize) -> String {
-    // the edit replaced `raw[head..raw.len() - tail]`
+/// only the text an edit inserts, so the text already in the box, such as a name being renamed,
+/// stays as it is (EditControl.lua:140-172).
+///
+/// Typed text goes in one key at a time: over a selection the first key is `ReplaceSel`, which
+/// refuses a character the filter drops (the selection stays), and every key after it is
+/// `Insert`, which drops such a character; a key that would pass the limit is refused. A paste
+/// is one insertion: `Insert` drops the rejected characters and refuses nothing else, `ReplaceSel`
+/// refuses the whole text if it has one, and either refuses the whole text past the limit.
+pub fn spliced(before: &str, raw: &str, filter: Filter, limit: usize, pasted: bool) -> String {
+    // the edit replaced `before[head..before.len() - tail]` with `raw[head..raw.len() - tail]`
     let head: usize = before
         .chars()
         .zip(raw.chars())
@@ -82,19 +80,38 @@ pub fn spliced(before: &str, raw: &str, filter: Filter, limit: usize) -> String 
         .sum();
     let (front, rest) = raw.split_at(head);
     let (inserted, back) = rest.split_at(rest.len() - tail);
-    let mut out = String::from(front);
-    // typed one by one, as PoB takes it: a character that no longer fits is refused
-    let room = limit.saturating_sub(front.len() + back.len());
-    let mut used = 0;
-    for c in inserted.chars().filter(|c| filter.keeps(*c)) {
-        if used + c.len_utf8() > room {
-            break;
-        }
-        used += c.len_utf8();
-        out.push(c);
+    if inserted.is_empty() {
+        return raw.to_owned();
     }
-    out.push_str(back);
-    out
+    let mut replacing = head + tail < before.len();
+    let mut out = String::new();
+    if pasted {
+        let kept: String = inserted.chars().filter(|c| filter.keeps(*c)).collect();
+        if kept.is_empty() || (replacing && kept != inserted) {
+            return before.to_owned();
+        }
+        out = kept;
+    } else {
+        for c in inserted.chars() {
+            if !filter.keeps(c) {
+                continue;
+            }
+            let held = if replacing { 0 } else { out.len() };
+            if front.len() + held + c.len_utf8() + back.len() > limit {
+                continue;
+            }
+            out.push(c);
+            replacing = false;
+        }
+        if replacing {
+            return before.to_owned();
+        }
+    }
+    let result = format!("{front}{out}{back}");
+    if pasted && result.len() > limit {
+        return before.to_owned();
+    }
+    result
 }
 
 /// A single-line name box that holds what PoB's would. True in the second place when the text
@@ -107,11 +124,12 @@ pub fn edit(
     build: impl FnOnce(egui::TextEdit<'_>) -> egui::TextEdit<'_>,
 ) -> (egui::Response, bool) {
     let before = text.clone();
+    let pasted = pasted(ui);
     let response = ui.add(build(egui::TextEdit::singleline(text)));
     let mut changed = response.changed();
     if changed {
         let same = *text == before;
-        *text = spliced(&before, text, filter, limit);
+        *text = spliced(&before, text, filter, limit, pasted);
         // typing over the text with itself is an edit; a character the box drops is none
         changed = same || *text != before;
     }
@@ -144,40 +162,72 @@ mod tests {
     }
 
     #[test]
-    fn save_as_prefill_dashes_the_forbidden_characters() {
-        assert_eq!(dashed("a:b/c\u{7}\u{65e5}"), "a-b-c-\u{65e5}");
+    fn an_edit_filters_only_what_it_inserts() {
+        let plain =
+            |before: &str, raw: &str, pasted| spliced(before, raw, Filter::Plain, 100, pasted);
+        for pasted in [false, true] {
+            // a title the file holds is kept as it is; the inserted text is the only part checked
+            assert_eq!(
+                plain("\u{dc}n\u{ef}", "\u{dc}n\u{ef}x", pasted),
+                "\u{dc}n\u{ef}x"
+            );
+            assert_eq!(
+                plain("\u{dc}n\u{ef}", "\u{dc}n\u{ef}\u{e9}", pasted),
+                "\u{dc}n\u{ef}"
+            );
+            assert_eq!(plain("ab", "a\u{e9}b", pasted), "ab");
+            assert_eq!(plain("ab", "a\u{e9}cb", pasted), "acb");
+            // deleting never trips the limit
+            let long = "x".repeat(120);
+            assert_eq!(
+                spliced(&long, &long[1..], Filter::Plain, 100, pasted).len(),
+                119
+            );
+        }
     }
 
     #[test]
-    fn an_edit_filters_only_what_it_inserts() {
-        // a title the file holds is kept as it is; the typed character is the only one checked
+    fn typed_text_goes_in_key_by_key() {
+        // over a selection the first accepted key replaces it, a rejected one leaves it
+        assert_eq!(spliced("abc", "x5", Filter::Plain, 100, false), "x5");
+        assert_eq!(spliced("abc", "\u{e9}5", Filter::Plain, 100, false), "5");
         assert_eq!(
-            spliced("\u{dc}n\u{ef}", "\u{dc}n\u{ef}x", Filter::Plain, 100),
-            "\u{dc}n\u{ef}x"
+            spliced("abc", "\u{e9}\u{e8}", Filter::Plain, 100, false),
+            "abc"
+        );
+        // keys past the limit are refused one by one
+        let full = "x".repeat(98);
+        assert_eq!(
+            spliced(&full, &format!("{full}yyyy"), Filter::Plain, 100, false).len(),
+            100
         );
         assert_eq!(
-            spliced("\u{dc}n\u{ef}", "\u{dc}n\u{ef}\u{e9}", Filter::Plain, 100),
-            "\u{dc}n\u{ef}"
-        );
-        assert_eq!(spliced("ab", "a\u{e9}b", Filter::Plain, 100), "ab");
-        // deleting never trips the limit, an insertion past it is cut
-        assert_eq!(
-            spliced(&"x".repeat(120), &"x".repeat(119), Filter::Plain, 100).len(),
-            119
-        );
-        assert_eq!(
-            spliced(&"x".repeat(100), &"x".repeat(101), Filter::Plain, 100).len(),
+            spliced("", &"x".repeat(130), Filter::Plain, 100, false).len(),
             100
         );
     }
 
     #[test]
+    fn a_paste_is_refused_whole() {
+        let full = "x".repeat(98);
+        assert_eq!(
+            spliced(&full, &format!("{full}yyyy"), Filter::Plain, 100, true),
+            full
+        );
+        assert_eq!(spliced("", &"x".repeat(130), Filter::Plain, 100, true), "");
+        // over a selection, one rejected character refuses the whole text; an insertion drops it
+        assert_eq!(spliced("abc", "x\u{e9}", Filter::Plain, 100, true), "abc");
+        assert_eq!(spliced("abc", "xy", Filter::Plain, 100, true), "xy");
+        assert_eq!(spliced("", "x\u{e9}y", Filter::Plain, 100, true), "xy");
+    }
+
+    #[test]
     fn the_limit_counts_bytes() {
-        let mut text = "x".repeat(130);
-        clean(&mut text, Filter::Path, NAME_LIMIT);
-        assert_eq!(text.len(), 100);
-        let mut text = "日".repeat(40);
-        clean(&mut text, Filter::Path, NAME_LIMIT);
-        assert_eq!(text.chars().count(), 33);
+        let full = "\u{65e5}".repeat(33);
+        assert_eq!(full.len(), 99);
+        let more = format!("{full}\u{65e5}");
+        assert_eq!(spliced("", &full, Filter::Path, NAME_LIMIT, true), full);
+        assert_eq!(spliced(&full, &more, Filter::Path, NAME_LIMIT, false), full);
+        assert_eq!(spliced(&full, &more, Filter::Path, NAME_LIMIT, true), full);
     }
 }

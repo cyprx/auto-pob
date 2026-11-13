@@ -456,6 +456,8 @@ pub(crate) mod testing {
             divisions: None,
             checked: false,
             text: String::new(),
+            ascii_only: false,
+            limit: None,
             tooltip_text: None,
             hover_tooltip: false,
             rows: vec![],

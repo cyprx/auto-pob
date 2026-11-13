@@ -206,6 +206,18 @@ fn sort_label(sort: BuildSort) -> &'static str {
         .map_or("Sort by Name", |(_, l)| l)
 }
 
+/// Whether PoB's Save is on for a build named `text` in the folder of `path`, whose name is
+/// `original`: a different name needs no build of that name on disk, the same name in another
+/// case needs only the case to differ (BuildListControl.lua:99-109)
+fn build_name_is_free(path: &std::path::Path, original: &str, text: &str) -> bool {
+    if text.to_lowercase() != original.to_lowercase() {
+        let file = path.with_file_name(format!("{text}.xml"));
+        !file.exists()
+    } else {
+        text != original
+    }
+}
+
 /// What PoB's search box keeps.
 fn clean_search(text: &mut String) {
     text.retain(|c| !c.is_control() && c != '(' && c != ')');
@@ -927,10 +939,12 @@ impl BuildListUi {
                         what.to_lowercase()
                     ));
                     let ok = name_edit(ui, name_id, text, focus, edited);
-                    // a folder's Save needs only a visible name; a build's must differ from
-                    // the build's own (BuildListControl.lua:93-115)
-                    let valid =
-                        *edited && name_box::has_visible(text) && (*is_folder || text != original);
+                    // a folder's Save needs only a visible name; a build's must be a new
+                    // name, or the same name in another case, and no build of that name may
+                    // exist (BuildListControl.lua:93-115)
+                    let valid = *edited
+                        && name_box::has_visible(text)
+                        && (*is_folder || build_name_is_free(path, original, text));
                     let (save, cancelled) = buttons(ui, "Save", valid);
                     cancel |= cancelled;
                     if (save || ok) && valid {
@@ -984,6 +998,7 @@ fn name_edit(
     edited: &mut bool,
 ) -> bool {
     let before = text.clone();
+    let pasted = name_box::pasted(ui);
     let edit = ui.add(
         egui::TextEdit::singleline(text)
             .desired_width(f32::INFINITY)
@@ -995,7 +1010,7 @@ fn name_edit(
         *focus = false;
     }
     if edit.changed() {
-        *text = name_box::spliced(&before, text, Filter::Path, name_box::NAME_LIMIT);
+        *text = name_box::spliced(&before, text, Filter::Path, name_box::NAME_LIMIT, pasted);
     }
     // PoB's change function runs only when a key changed the text
     *edited |= *text != before;
@@ -1335,19 +1350,35 @@ mod tests {
         assert_eq!(h.click("name_ok"), None);
         assert!(h.ui.dialog.is_some());
         h.click("name_edit");
+        // over a selection, a key for a character the box drops is refused
         h.key(Key::A, Modifiers::COMMAND);
+        h.text("/:");
+        let Some(Dialog::Name { text, .. }) = &h.ui.dialog else {
+            panic!("no name box");
+        };
+        assert_eq!(text, "one");
+        h.key(Key::A, Modifiers::COMMAND);
+        h.key(Key::Backspace, Modifiers::NONE);
         h.text("a/b:c*d?e\"f<g>h|i\\j");
         let Some(Dialog::Name { text, .. }) = &h.ui.dialog else {
             panic!("no name box");
         };
         assert_eq!(text, "abcdefghij");
-        // 100 characters at most
+        // 100 bytes at most: typed key by key it stops there, pasted it is refused whole
         h.key(Key::A, Modifiers::COMMAND);
+        h.key(Key::Backspace, Modifiers::NONE);
         h.text(&"x".repeat(130));
         let Some(Dialog::Name { text, .. }) = &h.ui.dialog else {
             panic!("no name box");
         };
         assert_eq!(text.len(), 100);
+        h.key(Key::A, Modifiers::COMMAND);
+        h.key(Key::Backspace, Modifiers::NONE);
+        h.frame(vec![Event::Paste("x".repeat(101))]);
+        let Some(Dialog::Name { text, .. }) = &h.ui.dialog else {
+            panic!("no name box");
+        };
+        assert_eq!(text.len(), 0);
         h.key(Key::A, Modifiers::COMMAND);
         h.text("new name");
         assert_eq!(
@@ -1438,11 +1469,12 @@ mod tests {
         h.click("list_new_folder");
         h.frame(vec![]);
         h.click("name_edit");
-        h.text(&"\u{65e5}".repeat(40));
+        // 33 three-byte characters fit in 100 bytes; one more is refused
+        h.text(&"\u{65e5}".repeat(33));
+        h.text("\u{65e5}");
         let Some(Dialog::NewFolder { text, .. }) = &h.ui.dialog else {
             panic!("no name box");
         };
-        // 33 three-byte characters fit in 100 bytes
         assert_eq!(text.chars().count(), 33);
         // a Unicode space is no Lua space, so it is a visible name
         h.key(Key::A, Modifiers::COMMAND);
@@ -1491,6 +1523,46 @@ mod tests {
         h.key(Key::Backspace, Modifiers::NONE);
         assert_eq!(h.click("name_ok"), None);
         assert!(h.ui.dialog.is_some());
+    }
+
+    /// A build's Save is off while a build of that name exists in its folder
+    /// (BuildListControl.lua:99-109); a folder's has no such check (:94-98)
+    #[test]
+    fn a_build_name_that_exists_keeps_save_disabled() {
+        let dir = crate::test_dir::TestDir::new("list-exists");
+        std::fs::write(dir.join("two.xml"), "").unwrap();
+        let mut h = H::new(view(""));
+        h.view.entries[1].path = dir.join("one.xml");
+        h.view.entries[2].path = dir.join("two.xml");
+        let rename = |h: &mut H, name: &str| {
+            h.select(1);
+            h.key(Key::F2, Modifiers::NONE);
+            h.focus = false;
+            h.frame(vec![]);
+            h.frame(vec![]);
+            h.click("name_edit");
+            h.key(Key::A, Modifiers::COMMAND);
+            h.key(Key::Backspace, Modifiers::NONE);
+            h.text(name);
+        };
+        rename(&mut h, "two");
+        assert_eq!(h.click("name_ok"), None, "a build of that name exists");
+        assert!(h.ui.dialog.is_some());
+        // the same name in another case is the build itself
+        h.click("name_edit");
+        h.key(Key::A, Modifiers::COMMAND);
+        h.key(Key::Backspace, Modifiers::NONE);
+        h.text("ONE");
+        assert_eq!(
+            h.click("name_ok"),
+            Some(ListScreenAction::Rename {
+                path: dir.join("one.xml"),
+                name: "ONE".into(),
+            })
+        );
+        // a free name
+        rename(&mut h, "three");
+        assert!(h.click("name_ok").is_some());
     }
 
     #[test]

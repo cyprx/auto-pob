@@ -1222,7 +1222,17 @@ mod tests {
         let pos = h.tab.rects.map["spec_rename_name"].center();
         h.click_at(pos);
         select_all(&mut h);
+        h.frame(vec![Event::Key {
+            key: egui::Key::Backspace,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        // past the limit, an insertion is refused whole
         h.frame(vec![Event::Text("x".repeat(130))]);
+        h.frame(vec![Event::Text("x".repeat(100))]);
+        h.frame(vec![Event::Text("y".into())]);
         h.frame(vec![]);
         let pos = h.tab.rects.map["spec_rename_ok"].center();
         let sent = debug(&h.click_at(pos).commands);

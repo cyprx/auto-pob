@@ -977,3 +977,61 @@ fn a_preload_after_the_load_ended_asks_nothing_more() {
     let asked: i64 = s.backend.lua.load("return preloadAsked").eval().unwrap();
     assert!(asked <= 1, "asked {asked} times");
 }
+
+/// The load ahead belongs to PoB's `main`, not to the build: leaving the build, the build list,
+/// an import and a comparison in the middle of it leave it to finish as it would, and the
+/// loop then goes idle.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn item_databases_preload_survives_leaving_the_build() {
+    let _guard = lock();
+    let want = {
+        let mut s = Session::start("item-db-preload-leave-ref");
+        s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+        json_of(&lists(&mut s, ItemDb::Rares))
+    };
+    let mut s = Session::start("item-db-preload-leave");
+    let attack = s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+    s.run(Command::PreloadItemDbs).unwrap();
+    let step = |s: &mut Session| {
+        if let Some(task) = s.backend.next_background() {
+            s.backend.background_step(task, &|_| {}).unwrap();
+        }
+    };
+    step(&mut s);
+    step(&mut s);
+    s.open_fixture("minion", &fixtures_dir().join("minion.xml"));
+    step(&mut s);
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .unwrap();
+    step(&mut s);
+    let xml = std::fs::read_to_string(&attack).unwrap();
+    let code = super::share_code(&s, &xml);
+    s.run(Command::ImportShareCode { code }).unwrap();
+    step(&mut s);
+    s.run(Command::LoadCompare {
+        source: auto_pob::engine::CompareSource::File(attack.clone()),
+    })
+    .unwrap();
+    assert!(databases_loading(&mut s), "the load ended already");
+    let mut steps = 0;
+    while let Some(task) = s.backend.next_background() {
+        s.backend.background_step(task, &|_| {}).unwrap();
+        steps += 1;
+        assert!(steps < 1000, "the load never ends");
+    }
+    let done: bool = s
+        .backend
+        .lua
+        .load(
+            "local m = pob.main.main
+            return m.onFrameFuncs.LoadItems == nil and m.uniqueDB.loading == nil
+                and m.rareDB.loading == nil",
+        )
+        .eval()
+        .unwrap();
+    assert!(done, "the load did not end");
+    assert_eq!(json_of(&lists(&mut s, ItemDb::Rares)), want);
+}

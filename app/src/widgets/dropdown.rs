@@ -205,6 +205,9 @@ impl<'a> Dropdown<'a> {
             let mut search: String = ui.data(|d| d.get_temp(search_id)).unwrap_or_default();
             let first = !ui.data(|d| d.get_temp::<bool>(open_id).unwrap_or(false));
             ui.data_mut(|d| d.insert_temp(open_id, true));
+            // PoB's dropped list has no use for Enter: nothing is picked and the search goes on
+            // (DropDownControl.lua:430-458, SearchHost.lua:108-117)
+            swallow_enter(ui, search_id);
             // typing goes to the search as soon as the list drops (DropDownControl.lua:422-427)
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut search)
@@ -249,6 +252,24 @@ impl<'a> Dropdown<'a> {
             });
         }
         shown
+    }
+}
+
+/// Takes Enter out of the frame while the dropped list's search box `search` has the keyboard:
+/// egui's box would give up the keyboard on it, where PoB's list keeps it and does nothing
+pub(crate) fn swallow_enter(ui: &egui::Ui, search: egui::Id) {
+    if ui.memory(|m| m.has_focus(search)) {
+        ui.input_mut(|i| {
+            i.events.retain(|e| {
+                !matches!(
+                    e,
+                    egui::Event::Key {
+                        key: Key::Enter,
+                        ..
+                    }
+                )
+            });
+        });
     }
 }
 
@@ -408,6 +429,20 @@ mod tests {
     fn text(h: &mut Harness, t: &str) {
         h.frame(vec![Event::Text(t.into())]);
         h.frame(vec![]);
+    }
+
+    /// Enter in the search does nothing: no pick, the list stays dropped and typing goes on
+    /// searching (DropDownControl.lua:430-458, SearchHost.lua:108-117)
+    #[test]
+    fn enter_in_the_search_does_nothing() {
+        let mut h = Harness::new();
+        h.click(h.button.center());
+        text(&mut h, "a");
+        h.key(Key::Enter);
+        assert!(h.picks.is_empty() && h.steps.is_empty(), "{:?}", h.picks);
+        assert!(!h.entries.is_empty(), "the list closed");
+        text(&mut h, "mm");
+        assert_eq!(h.entries.keys().copied().collect::<Vec<_>>(), [2]);
     }
 
     #[test]

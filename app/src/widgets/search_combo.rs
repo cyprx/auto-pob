@@ -59,6 +59,8 @@ pub fn search_combo_ui(
             .unwrap_or_default();
         let first = !ui.data_mut(|d| d.get_temp::<bool>(open_id).unwrap_or(false));
         ui.data_mut(|d| d.insert_temp(open_id, true));
+        // PoB's dropped list has no use for Enter (DropDownControl.lua:430-458)
+        super::dropdown::swallow_enter(ui, filter_id);
         let edit = ui.add(
             egui::TextEdit::singleline(&mut filter)
                 .id(filter_id)
@@ -69,7 +71,6 @@ pub fn search_combo_ui(
             edit.request_focus();
         }
         super::scroll_step::note_search(ui.ctx(), filter_id);
-        let mut first_match = None;
         egui::ScrollArea::vertical()
             .max_height(320.0)
             .auto_shrink([true, true])
@@ -79,7 +80,6 @@ pub fn search_combo_ui(
                     if !super::dropdown::search_matches(&filter, &text.text) {
                         continue;
                     }
-                    first_match.get_or_insert(i);
                     let item =
                         super::dropdown::either_button(ui.selectable_label(i == selected, text));
                     entry(i, &item);
@@ -92,13 +92,6 @@ pub fn search_combo_ui(
                     }
                 }
             });
-        if edit.lost_focus()
-            && ui.input(|i| i.key_pressed(egui::Key::Enter))
-            && let Some(i) = first_match
-            && i != selected
-        {
-            picked = Some(i);
-        }
         if picked.is_some() {
             filter.clear();
             ui.close();
@@ -310,6 +303,22 @@ mod tests {
             h.entries.is_empty(),
             "Esc with no search didn't close the list"
         );
+    }
+
+    /// Enter in the search picks nothing: the list stays dropped and typing goes on searching
+    /// (DropDownControl.lua:430-458, SearchHost.lua:108-117)
+    #[test]
+    fn enter_in_the_search_picks_nothing_and_keeps_searching() {
+        let mut h = Harness::new(&["Alpha", "Beta", "Gamma", "Delta"], 0);
+        h.open();
+        h.frame(vec![Event::Text("a".into())]);
+        h.frame(vec![key(Key::Enter)]);
+        h.frame(vec![]);
+        assert!(h.picks.is_empty(), "{:?}", h.picks);
+        assert_eq!(h.entries.len(), 4, "the list closed");
+        h.frame(vec![Event::Text("lp".into())]);
+        h.frame(vec![]);
+        assert_eq!(h.entries.keys().copied().collect::<Vec<_>>(), [0]);
     }
 
     #[test]

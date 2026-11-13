@@ -38,10 +38,19 @@ local function frame()
 	-- above. Its draw only lays out and reads the tree. The build's own `viewMode` is put back
 	-- afterwards, so Save still writes the tab it was saved on. Opening a build sets `viewMode`
 	-- in the same frame (Init, then OnFrame), so the swap happens inside OnFrame.
+	--
+	-- PoB loads its item databases a slice at a time in its first frames
+	-- (`onFrameFuncs.LoadItems`, Main.lua:270-280). Only the Items tab's database panel reads
+	-- them (ItemsTab.lua:281-294), and its job (`glue.item_db_step`) runs that load itself, so a
+	-- frame leaves it alone too: otherwise each of the first edits after a start would pay for
+	-- a slice (25-80 ms), and the databases would be held even when the panel never opens.
 	local build = pob.build
 	local viewer = build.treeTab and build.treeTab.viewer
 	local heatmap = viewer and viewer.showHeatMap
 	if viewer then viewer.showHeatMap = false end
+	local frameFuncs = pob.main.main.onFrameFuncs
+	local loadItems = frameFuncs.LoadItems
+	frameFuncs.LoadItems = nil
 	local onFrame = rawget(build, "OnFrame")
 	build.OnFrame = function(self, ...)
 		local saved = self.viewMode
@@ -53,6 +62,7 @@ local function frame()
 	local ok, err = pcall(runCallback, "OnFrame")
 	build.OnFrame = onFrame
 	if viewer then viewer.showHeatMap = heatmap end
+	frameFuncs.LoadItems = loadItems
 	if not ok then error(err, 0) end
 	-- Launch.lua catches errors from a frame and shows them as a prompt
 	local message = pob.main.promptMsg

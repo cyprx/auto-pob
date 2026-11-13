@@ -3026,6 +3026,40 @@ fn search_matches_pob() {
     assert!(!unsaved(&mut s), "the saved search is not a change");
 }
 
+/// The tree state reads the tree view's own search results only while nothing but searches ran
+/// since its frame matched them: after any other command the nodes are matched again.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn search_matches_again_after_other_commands() {
+    let _guard = lock();
+    let mut s = attack_session("tree-search-again");
+    let matches = |s: &mut Session| s.backend.tree_state_view().unwrap().search_matches;
+    s.run(search("qzxv")).unwrap();
+    assert!(matches(&mut s).is_empty());
+    // a node now reads as the search, behind the view's back
+    s.backend
+        .lua
+        .load(
+            "local spec = pob.build.spec
+            for _, n in pairs(spec.nodes[spec.curClass.startNodeId].linked) do
+                if n.type == 'Normal' then n.dn = 'Qzxv' return end
+            end
+            error('no neighbour')",
+        )
+        .exec()
+        .unwrap();
+    // the same text again: the view's results are the ones its frame took, as PoB shows them
+    s.run(search("qzxv")).unwrap();
+    assert!(matches(&mut s).is_empty());
+    // any other command: matched again, so the renamed node is found
+    s.run(set("conditionFullLife", ConfigValue::Bool(true)))
+        .unwrap();
+    assert_eq!(matches(&mut s).len(), 1);
+    // and the same text after it doesn't go back to the view's old results
+    s.run(search("qzxv")).unwrap();
+    assert_eq!(matches(&mut s).len(), 1);
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn jewel_radius_matches_pob() {

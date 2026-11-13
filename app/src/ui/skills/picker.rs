@@ -56,6 +56,8 @@ pub struct GemPicker {
     tooltip: Option<Arc<GemTooltipView>>,
     focus_pending: bool,
     scroll_to_selected: bool,
+    /// The height of one list entry as last drawn; only the entries in view are laid out
+    row_height: Option<f32>,
     pub(crate) rects: Rects,
 }
 
@@ -84,6 +86,7 @@ impl GemPicker {
             tooltip: None,
             focus_pending: true,
             scroll_to_selected: false,
+            row_height: None,
             rects: Rects::default(),
         }
     }
@@ -372,28 +375,59 @@ impl GemPicker {
         };
         let imbued = self.imbued();
         let mut hovered = None;
+        // Only the entries in view are laid out: the list holds every gem, and laying them all
+        // out took about 4 ms a frame. An entry is one line; its height is the one last drawn.
+        // an empty list has one entry: its note
+        let total = view.rows.len().max(1) + usize::from(imbued);
+        let row_height = self.row_height.unwrap_or_else(|| {
+            ui.spacing()
+                .interact_size
+                .y
+                .max(ui.text_style_height(&egui::TextStyle::Body))
+        });
+        let spacing = ui.spacing().item_spacing.y;
         egui::ScrollArea::vertical()
             .max_height(360.0)
             .auto_shrink([false, true])
-            .show(ui, |ui| {
-                if imbued {
-                    let row = self.entry_frame(ui, 0, |ui| {
-                        ui.label("None");
-                    });
-                    self.rects.note(&row, || "picker_none".into());
-                    if row.clicked() {
-                        out.commands.push(Command::SetImbuedSupport {
-                            group: self.group,
-                            gem_id: None,
-                        });
-                        out.close = true;
-                    }
+            .show_rows(ui, row_height, total, |ui, shown| {
+                // the keyboard's entry is brought into view even when it isn't laid out
+                if self.scroll_to_selected
+                    && let Some(selected) = self.selected
+                    && !shown.contains(&selected)
+                {
+                    let top = ui.cursor().top()
+                        + (selected as f32 - shown.start as f32) * (row_height + spacing);
+                    let rect = egui::Rect::from_min_size(
+                        egui::pos2(ui.cursor().left(), top),
+                        egui::vec2(ui.available_width(), row_height),
+                    );
+                    ui.scroll_to_rect(rect, None);
                 }
-                for (i, gem) in view.rows.iter().enumerate() {
-                    let entry = i + usize::from(imbued);
+                for entry in shown {
+                    if imbued && entry == 0 {
+                        let row = self.entry_frame(ui, 0, |ui| {
+                            ui.label("None");
+                        });
+                        self.note_height(&row);
+                        self.rects.note(&row, || "picker_none".into());
+                        if row.clicked() {
+                            out.commands.push(Command::SetImbuedSupport {
+                                group: self.group,
+                                gem_id: None,
+                            });
+                            out.close = true;
+                        }
+                        continue;
+                    }
+                    let i = entry - usize::from(imbued);
+                    let Some(gem) = view.rows.get(i) else {
+                        ui.weak("No gems match.");
+                        continue;
+                    };
                     let response = self.entry_frame(ui, entry, |ui| {
                         gem_row(ui, gem, view.base_dps);
                     });
+                    self.note_height(&response);
                     self.rects.note(&response, || format!("picker_row_{i}"));
                     if response.hovered() {
                         hovered = Some(gem.gem_id.clone());
@@ -409,12 +443,13 @@ impl GemPicker {
                         out.close = true;
                     }
                 }
-                if view.rows.is_empty() {
-                    ui.weak("No gems match.");
-                }
             });
         self.scroll_to_selected = false;
         self.ask_tooltip(ui, hovered, now, out);
+    }
+
+    fn note_height(&mut self, entry: &egui::Response) {
+        self.row_height = Some(entry.rect.height());
     }
 
     /// One clickable list entry, highlighted when it is the keyboard's.
@@ -776,6 +811,49 @@ mod tests {
         h.frame(vec![Event::PointerMoved(pos)]);
         h.frame(vec![]);
         assert_eq!(h.p.hovered_gem().map(|g| g.gem_id.as_str()), Some("b"));
+    }
+
+    #[test]
+    fn a_long_list_lays_out_only_the_rows_in_view_and_the_keys_scroll_it() {
+        let ids: Vec<String> = (0..300).map(|i| format!("g{i}")).collect();
+        let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let mut h = Harness::new(GemTarget::Slot(0), &refs);
+        let laid_out = |h: &mut Harness| {
+            for _ in 0..3 {
+                h.frame(vec![]);
+            }
+            h.p.rects.map.clear();
+            h.frame(vec![]);
+            let mut rows: Vec<usize> =
+                h.p.rects
+                    .map
+                    .keys()
+                    .filter_map(|k| k.strip_prefix("picker_row_")?.parse().ok())
+                    .collect();
+            rows.sort_unstable();
+            rows
+        };
+        let rows = laid_out(&mut h);
+        assert!(rows.len() > 5 && rows.len() < 40, "{rows:?}");
+        assert_eq!(rows[0], 0);
+        // the rows sit one under the other at the height the list assumes
+        let (a, b) = (h.p.rects.map["picker_row_0"], h.p.rects.map["picker_row_1"]);
+        assert_eq!(a.height(), h.p.row_height.unwrap());
+        let gap = h.ctx.global_style().spacing.item_spacing.y;
+        assert!((b.top() - a.bottom() - gap).abs() < 0.01, "{a:?} {b:?}");
+        // the keyboard goes past the view, and the list follows it
+        for _ in 0..100 {
+            h.key(Key::ArrowDown);
+        }
+        let rows = laid_out(&mut h);
+        assert!(rows.contains(&99), "{rows:?}");
+        assert!(!rows.contains(&0), "{rows:?}");
+        let o = h.key(Key::Enter);
+        assert!(
+            debug(&o.commands)[0].contains("\"g99\""),
+            "{:?}",
+            o.commands
+        );
     }
 
     #[test]

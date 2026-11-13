@@ -68,6 +68,10 @@ pub struct PobBackend {
     pub timeless_budget_ms: u32,
     /// The path traced with Shift that the next node tooltip is built with (empty: none)
     trace: Vec<u32>,
+    /// Nothing but tree searches ran since one whose frame matched every node of the build's
+    /// spec, so the tree view's own results are current and the tree state reads them instead
+    /// of matching every node a second time
+    fresh_search: bool,
 }
 
 /// R17: a timeless search step yields once this much of `GetTime()` has passed
@@ -204,6 +208,7 @@ impl PobBackend {
             on_list,
             net,
             timeless_job: false,
+            fresh_search: false,
             timeless_budget_ms: TIMELESS_BUDGET_MS,
             trace: Vec::new(),
         })
@@ -1397,7 +1402,8 @@ impl PobBackend {
                 self.network_affected()
             }
             Command::SetTreeSearch { text } => {
-                self.call::<_, ()>("set_tree_search", text)?;
+                let fresh = std::mem::take(&mut self.fresh_search);
+                self.fresh_search = self.call("set_tree_search", (text, fresh))?;
                 Ok(Affected {
                     build: true,
                     tree: true,
@@ -2304,6 +2310,10 @@ impl Backend for PobBackend {
             self.call::<_, ()>("set_stepping", false)?;
             return result;
         }
+        // any other command may change the nodes the search looks at
+        if !matches!(command, Command::SetTreeSearch { .. }) {
+            self.fresh_search = false;
+        }
         // a structural command ends the search only when it went through (R13); one that
         // failed changed nothing, and a changed group table ends the search on its own
         let ends = ends_gem_search(&command);
@@ -2387,6 +2397,7 @@ impl Backend for PobBackend {
     }
 
     fn recalculate(&mut self) -> Result<()> {
+        self.fresh_search = false;
         // a new output revision makes PoB's sort cache start the DPS sort again
         self.call::<_, ()>("recalculate", ())
     }
@@ -2437,7 +2448,7 @@ impl Backend for PobBackend {
     }
 
     fn tree_state_view(&mut self) -> Result<TreeState> {
-        self.view("tree_state", ())
+        self.view("tree_state", self.fresh_search)
     }
 
     fn calcs_view(&mut self) -> Result<CalcsView> {
@@ -2511,6 +2522,7 @@ impl Backend for PobBackend {
     }
 
     fn background_step(&mut self, task: BackgroundTask, send: &dyn Fn(Event)) -> Result<Affected> {
+        self.fresh_search = false;
         #[derive(serde::Deserialize)]
         struct Step {
             percent: Option<u32>,

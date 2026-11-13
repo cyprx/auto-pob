@@ -267,7 +267,7 @@ fn affix_row(
                 },
             );
             // the wheel and the arrows move it (SliderControl.lua:164-180)
-            if let Some(to) = crate::widgets::scroll_step::page_slider_step(ui, &slider, value) {
+            if let Some(to) = crate::widgets::scroll_step::slider_step(ui, &slider, value) {
                 state.affix_sliders.insert(slot, to);
                 out.push(Command::SetAffixRange { slot, value: to });
             }
@@ -323,7 +323,7 @@ fn cluster_rows(
             .filter(|r| count_of(*r) == cluster.count)
             .unwrap_or(current);
         if span > 0
-            && let Some(to) = crate::widgets::scroll_step::page_slider_step(ui, &slider, raw)
+            && let Some(to) = crate::widgets::scroll_step::slider_step(ui, &slider, raw)
         {
             state.cluster_raw = Some(to);
             let count = count_of(to);

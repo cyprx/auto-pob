@@ -2643,7 +2643,10 @@ impl Backend for PobBackend {
         {
             return Some(BackgroundTask::ItemDb);
         }
-        // the load ahead of a panel open, at the same rank; it ends once PoB's load has
+        // the load ahead of a panel open, at the same rank; it ends once PoB's load has.
+        // It goes before node power, so with the heat map on, the first Items visit holds the
+        // power job back by the load (about a second, once per session): the heat map isn't
+        // shown on the Items tab, and the panel's first open is what the load is for.
         if self.item_db_preload
             && self
                 .call::<_, bool>("item_db_preload_pending", ())

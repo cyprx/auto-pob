@@ -289,15 +289,35 @@ fn deflate(lua: &Lua, data: LuaString) -> mlua::Result<Value> {
     Ok(Value::String(lua.create_string(&out)?))
 }
 
-/// Matches `*` (any run) and `?` (any one character) against the whole name.
-fn glob_match(pattern: &[char], name: &[char]) -> bool {
+/// One unit a glob matches: a character, or a byte that isn't part of valid UTF-8, so names
+/// that aren't UTF-8 are told apart byte for byte
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Unit {
+    Char(char),
+    Byte(u8),
+}
+
+fn units(bytes: &[u8]) -> Vec<Unit> {
+    let mut out = Vec::with_capacity(bytes.len());
+    for chunk in bytes.utf8_chunks() {
+        out.extend(chunk.valid().chars().map(Unit::Char));
+        out.extend(chunk.invalid().iter().copied().map(Unit::Byte));
+    }
+    out
+}
+
+/// Matches `*` (any run) and `?` (any one character, or one byte that isn't UTF-8) against
+/// the whole name.
+fn glob_match(pattern: &[Unit], name: &[Unit]) -> bool {
+    const STAR: Unit = Unit::Char('*');
+    const ANY: Unit = Unit::Char('?');
     let (mut p, mut n) = (0, 0);
     let mut star: Option<(usize, usize)> = None;
     while n < name.len() {
-        if p < pattern.len() && (pattern[p] == '?' || pattern[p] == name[n]) && pattern[p] != '*' {
+        if p < pattern.len() && (pattern[p] == ANY || pattern[p] == name[n]) && pattern[p] != STAR {
             p += 1;
             n += 1;
-        } else if p < pattern.len() && pattern[p] == '*' {
+        } else if p < pattern.len() && pattern[p] == STAR {
             star = Some((p, n));
             p += 1;
         } else if let Some((sp, sn)) = star {
@@ -308,7 +328,7 @@ fn glob_match(pattern: &[char], name: &[char]) -> bool {
             return false;
         }
     }
-    pattern[p..].iter().all(|&c| c == '*')
+    pattern[p..].iter().all(|&c| c == STAR)
 }
 
 struct Entry {
@@ -369,7 +389,7 @@ fn new_file_search(
         Some(i) => (&pattern[..i], &pattern[i + 1..]),
         None => (b".", &pattern[..]),
     };
-    let file_pattern: Vec<char> = String::from_utf8_lossy(file_pattern).chars().collect();
+    let file_pattern = units(file_pattern);
     let Ok(read) = fs::read_dir(std::ffi::OsStr::from_bytes(dir)) else {
         return Ok(None);
     };
@@ -379,8 +399,7 @@ fn new_file_search(
             let name = e.file_name().into_vec();
             // follows symlinks, like the classic app's `is_dir`
             let is_dir = e.path().is_dir();
-            let chars: Vec<char> = String::from_utf8_lossy(&name).chars().collect();
-            (is_dir == dirs_only && glob_match(&file_pattern, &chars)).then(|| Entry {
+            (is_dir == dirs_only && glob_match(&file_pattern, &units(&name))).then(|| Entry {
                 name,
                 path: e.path(),
             })
@@ -488,6 +507,37 @@ mod tests {
     fn file_search_returns_nil_when_nothing_matches() {
         let dir = populated();
         assert!(names(&lua(), &dir.0, "*.zip", false).is_none());
+    }
+
+    /// Names that aren't UTF-8 are told apart byte for byte: "caf\xE9.xml" isn't
+    /// "caf\xE8.xml" (review M3), and `?` stands for one such byte
+    #[test]
+    fn file_search_tells_names_that_arent_utf8_apart() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = TempDir::new("latin-search");
+        fs::create_dir_all(&dir.0).unwrap();
+        fs::write(dir.0.join(std::ffi::OsStr::from_bytes(b"caf\xE8.xml")), "x").unwrap();
+        let lua = lua();
+        lua.globals()
+            .set("dir", dir.0.to_string_lossy().into_owned())
+            .unwrap();
+        let count = |pattern: &[u8]| -> usize {
+            let pattern = lua.create_string(pattern).unwrap();
+            lua.load(
+                r#"local pattern = ...
+                local h = NewFileSearch(dir .. "/" .. pattern, false)
+                if not h then return 0 end
+                local n = 0
+                repeat n = n + 1 until not h:NextFile()
+                return n"#,
+            )
+            .call::<usize>(pattern)
+            .unwrap()
+        };
+        assert_eq!(count(b"caf\xE9.xml"), 0, "another name matched");
+        assert_eq!(count(b"caf\xE8.xml"), 1);
+        assert_eq!(count(b"caf?.xml"), 1);
+        assert_eq!(count(b"caf\xE9*"), 0);
     }
 
     #[test]

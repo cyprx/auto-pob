@@ -2026,3 +2026,31 @@ fn an_escaped_list_view_walks_the_tree_once() {
     // the root, a/, a/b/ and d\xE9p/, each once
     assert_eq!(auto_pob::engine::tree_reads() - before, 4);
 }
+
+/// A list view spelled escaped doesn't mark a build's text as escaped (review M3): its names
+/// come back as their own bytes, never through the text encoding
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn an_escaped_list_view_leaves_text_unescaped() {
+    use std::os::unix::ffi::OsStrExt;
+    let _guard = lock();
+    let mut s = super::Session::start("escaped-list-text");
+    let builds = s.builds_dir();
+    fs::create_dir_all(&builds).unwrap();
+    fs::copy(
+        super::fixture_xml("attack"),
+        builds.join(std::ffi::OsStr::from_bytes(b"caf\xE9.xml")),
+    )
+    .unwrap();
+    s.run(Command::ListBuilds {
+        folder: String::new(),
+    })
+    .expect("list");
+    auto_pob::engine::bytes_text::reset();
+    let view = s.backend.build_list_view().expect("the list view");
+    assert!(view.entries.iter().any(|e| e.name == "caf\u{F7E9}"));
+    assert!(
+        !auto_pob::engine::bytes_text::seen(),
+        "the list marked text as escaped"
+    );
+}

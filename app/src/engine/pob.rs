@@ -680,7 +680,7 @@ fn view_of<T: serde::de::DeserializeOwned>(lua: &mlua::Lua, value: mlua::Value) 
         .get("AutoPobHasEscapes")
         .map_err(|e| anyhow!("{e}"))?;
     if scan.call::<bool>(&value).map_err(|e| anyhow!("{e}"))? {
-        let fixed = lossy_strings(lua, &value, 0)
+        let fixed = lossy_strings(lua, &value, 0, true)
             .map_err(|e| anyhow!("{e}"))?
             .unwrap_or(value);
         return lua.from_value(fixed).map_err(|e| anyhow!("{e}"));
@@ -691,7 +691,7 @@ fn view_of<T: serde::de::DeserializeOwned>(lua: &mlua::Lua, value: mlua::Value) 
             // PoB's strings are bytes: a build's notes, names or item text can hold bytes
             // that aren't UTF-8 (a file from a Windows-1252 editor), which serde refuses.
             // Such a view shows them escaped (`bytes_text`) instead of failing.
-            match lossy_strings(lua, &value, 0).map_err(|e| anyhow!("{e}"))? {
+            match lossy_strings(lua, &value, 0, true).map_err(|e| anyhow!("{e}"))? {
                 Some(fixed) => lua.from_value(fixed).map_err(|e| anyhow!("{e}")),
                 None => Err(anyhow!("{e}")),
             }
@@ -701,15 +701,23 @@ fn view_of<T: serde::de::DeserializeOwned>(lua: &mlua::Lua, value: mlua::Value) 
 
 /// `value` with every string that isn't UTF-8 (or holds an escape character) replaced by its
 /// escaped form (`bytes_text`), keys
-/// included; `None` when every string already was
+/// included; `None` when every string already was. `text`: the strings are a build's text,
+/// which comes back through `encode`, so they mark escapes as seen; file names (the build
+/// list) come back through `path_from_escaped` and don't (`escape_name`).
 fn lossy_strings(
     lua: &mlua::Lua,
     value: &mlua::Value,
     depth: usize,
+    text: bool,
 ) -> mlua::Result<Option<mlua::Value>> {
     match value {
-        mlua::Value::String(text) if super::bytes_text::needs_decode(&text.as_bytes()) => {
-            let fixed = super::bytes_text::decode(&text.as_bytes()).into_owned();
+        mlua::Value::String(string) if super::bytes_text::needs_decode(&string.as_bytes()) => {
+            let bytes = string.as_bytes();
+            let fixed = if text {
+                super::bytes_text::decode(&bytes).into_owned()
+            } else {
+                super::bytes_text::escape_name(&bytes).into_owned()
+            };
             Ok(Some(mlua::Value::String(lua.create_string(fixed)?)))
         }
         // a view is a tree of plain tables; the depth guards against a cycle
@@ -718,14 +726,14 @@ fn lossy_strings(
             let copy = lua.create_table()?;
             for pair in table.pairs::<mlua::Value, mlua::Value>() {
                 let (key, item) = pair?;
-                let key = match lossy_strings(lua, &key, depth + 1)? {
+                let key = match lossy_strings(lua, &key, depth + 1, text)? {
                     Some(fixed) => {
                         changed = true;
                         fixed
                     }
                     None => key,
                 };
-                let item = match lossy_strings(lua, &item, depth + 1)? {
+                let item = match lossy_strings(lua, &item, depth + 1, text)? {
                     Some(fixed) => {
                         changed = true;
                         fixed
@@ -2792,7 +2800,7 @@ impl Backend for PobBackend {
         let mut view = match plain {
             Some(view) => view,
             None => {
-                let fixed = lossy_strings(&self.lua, &value, 0)
+                let fixed = lossy_strings(&self.lua, &value, 0, false)
                     .map_err(|e| anyhow!("{e}"))?
                     .unwrap_or(value);
                 let mut view: BuildListView =

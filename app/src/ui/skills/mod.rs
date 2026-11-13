@@ -221,10 +221,12 @@ impl SkillsUi {
         if let Some(text) = self.clipboard.take() {
             ui.ctx().copy_text(text);
         }
-        // Ctrl+V outside any dialog: the tab reads it before its controls, so a box of its own
-        // with the keyboard takes the paste too (SkillsTab.lua:628)
+        // Ctrl+V outside a text field and any dialog. PoB reads it before its controls
+        // (SkillsTab.lua:628), so it also pastes while a box has the keyboard, silently when the
+        // text has no gems; the engine reports that as an error, so a box's paste stays its own.
         if !self.has_dialog()
             && !self.modal
+            && !ui.ctx().text_edit_focused()
             && let Some(text) = crate::ui::shortcuts::ctrl_v_text(ui)
         {
             self.select_new = true;

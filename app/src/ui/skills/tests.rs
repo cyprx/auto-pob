@@ -98,8 +98,6 @@ struct Harness {
     ctx: egui::Context,
     time: f64,
     copied: Vec<String>,
-    /// The next frame's paste is a right-click's
-    right_paste: bool,
 }
 
 fn debug(commands: &[Command]) -> Vec<String> {
@@ -115,7 +113,6 @@ impl Harness {
             ctx: egui::Context::default(),
             time: 1.0,
             copied: Vec::new(),
-            right_paste: false,
         };
         h.frame(vec![]);
         h
@@ -131,11 +128,7 @@ impl Harness {
         };
         let mut out = SkillsOutput::default();
         let time = self.time;
-        let right_paste = std::mem::take(&mut self.right_paste);
         let output = self.ctx.run_ui(input, |ui| {
-            if right_paste {
-                crate::ui::shortcuts::mark_right_click_paste(ui.ctx());
-            }
             // egui may run a frame twice; each pass's output counts
             let pass = self.ui.show(ui, time, false);
             out.commands.extend(pass.commands);
@@ -290,26 +283,18 @@ fn copy_reply_reaches_clipboard_only_when_asked() {
 }
 
 #[test]
-fn ctrl_v_pastes_a_group_even_while_a_box_has_the_keyboard() {
+fn paste_event_sends_paste_outside_text_fields() {
     let mut h = Harness::new(sample());
     let o = h.frame(vec![Event::Paste("Label: p".into())]);
     assert_eq!(
         debug(&o.commands),
         ["PasteSocketGroup { text: \"Label: p\" }"]
     );
-    // the tab reads Ctrl+V before its controls (SkillsTab.lua:628): the box takes the text
-    // and PoB's PasteSocketGroup runs too
+    // a box with the keyboard takes the paste (the engine would report a text with no gems
+    // as an error)
     h.click("g0_label");
     let o = h.frame(vec![Event::Paste("Label: q".into())]);
-    assert_eq!(
-        debug(&o.commands),
-        ["PasteSocketGroup { text: \"Label: q\" }"]
-    );
-    // a right-click's paste into the box is no Ctrl+V
-    h.click("g0_label");
-    h.right_paste = true;
-    let o = h.frame(vec![Event::Paste("Label: r".into())]);
-    assert!(o.commands.is_empty(), "{:?}", debug(&o.commands));
+    assert!(o.commands.is_empty(), "the text field takes the paste");
 }
 
 #[test]

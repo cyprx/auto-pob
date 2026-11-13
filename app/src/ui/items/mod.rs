@@ -401,13 +401,17 @@ impl ItemsUi {
         out
     }
 
-    /// Ctrl+V, Ctrl+D. The tab reads them before its controls, so they act while a box of its
-    /// own has the keyboard too (ItemsTab.lua:1452-1484)
+    /// Ctrl+V (outside a text field), Ctrl+D. The tab reads Ctrl+D before its controls, so it
+    /// acts while a box of its own has the keyboard too (ItemsTab.lua:1481)
     fn shortcuts(&mut self, ui: &egui::Ui, view: &ItemsView, out: &mut ItemsOutput) {
         if self.has_dialog() || self.modal {
             return;
         }
-        if let Some(text) = crate::ui::shortcuts::ctrl_v_text(ui) {
+        // PoB also tries a box's paste as an item, silently when it isn't one; the engine
+        // reports that as an error, so a box's paste stays its own
+        if !ui.ctx().text_edit_focused()
+            && let Some(text) = crate::ui::shortcuts::ctrl_v_text(ui)
+        {
             out.commands.push(Command::PasteItem { text });
         }
         if crate::widgets::scroll_step::build_box_typing(ui.ctx()) {

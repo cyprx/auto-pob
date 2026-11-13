@@ -3775,3 +3775,29 @@ fn a_build_that_raises_while_loading_leaves_the_engine_working() {
     assert!(!s.backend.skills_view().unwrap().groups.is_empty());
     s.run(Command::NewBuild).expect("new");
 }
+
+/// PoB pastes into its Import Comparison box at once (EditControl:Insert); ours typed the
+/// text one character at a time, joining as it went, which took minutes for a long paste
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_long_comparison_paste_is_quick() {
+    let _guard = lock();
+    let mut s = Session::start("long-compare");
+    s.open_fixture("attack", &fixture_xml("attack"));
+    let start = std::time::Instant::now();
+    let error = s
+        .run(Command::LoadCompare {
+            source: auto_pob::engine::CompareSource::Import {
+                text: "A".repeat(400_000),
+                name: None,
+            },
+        })
+        .expect_err("not a build code")
+        .to_string();
+    assert!(error.contains("Invalid build code"), "{error}");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(10),
+        "took {:?}",
+        start.elapsed()
+    );
+}

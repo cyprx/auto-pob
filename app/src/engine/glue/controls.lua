@@ -92,17 +92,25 @@ function glue.type_into(control, text, pasted)
 				error("the text is too long", 0)
 			end
 		else
+			-- the kept characters gather in a list: joining them one at a time would copy the
+			-- text once per character, minutes for a pasted build code of some size
+			local parts, length = { }, 0
 			for char in inserted:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
 				if not char:find(control.filterPattern) then
-					local held = replacing and 0 or #kept
+					local held = replacing and 0 or length
 					if limit and #front + held + #char + #back > limit then
 						refused = true
 					else
-						kept = (replacing and "" or kept) .. char
+						if replacing then
+							parts, length = { }, 0
+						end
+						parts[#parts + 1] = char
+						length = length + #char
 						replacing = false
 					end
 				end
 			end
+			kept = table.concat(parts)
 			if refused then
 				error("the text is too long", 0)
 			end

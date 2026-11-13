@@ -3106,20 +3106,25 @@ fn tree_paths_are_kept_but_never_stale() {
         state
     };
     let state = check(&mut s, "open");
-    // an edit that leaves the tree alone: the glue doesn't send them again
-    s.run(set("conditionFullLife", ConfigValue::Bool(true)))
-        .unwrap();
-    let sent: bool = s
+    // an edit that leaves the tree alone: the glue doesn't send them again, across its
+    // recalculation
+    let token: i64 = s
         .backend
         .lua
-        .load(
-            "local _, token = glue.tree_state(false, nil)
-            local _, again, sent = glue.tree_state(false, token)
-            assert(again == token)
-            return sent",
-        )
+        .load("local _, token = glue.tree_state(false, nil) return token")
         .eval()
         .unwrap();
+    s.run(set("conditionFullLife", ConfigValue::Bool(true)))
+        .unwrap();
+    let (again, sent): (i64, bool) = s
+        .backend
+        .lua
+        .load(format!(
+            "local _, again, sent = glue.tree_state(false, {token}) return again, sent"
+        ))
+        .eval()
+        .unwrap();
+    assert_eq!(again, token);
     assert!(!sent, "unchanged paths were sent again");
     check(&mut s, "config edit");
     // every kind of change

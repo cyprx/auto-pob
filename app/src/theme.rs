@@ -120,9 +120,27 @@ impl egui::Plugin for HandCursor {
         "auto-pob hand cursor"
     }
 
+    fn on_begin_pass(&mut self, ui: &mut egui::Ui) {
+        ui.ctx().data_mut(|d| d.remove::<egui::IdSet>(no_hand_id()));
+    }
+
     fn on_end_pass(&mut self, ui: &mut egui::Ui) {
         hand_cursor(ui.ctx());
     }
+}
+
+/// Where this pass's [`no_hand`] widgets are kept
+fn no_hand_id() -> egui::Id {
+    egui::Id::unique("auto-pob no hand")
+}
+
+/// Keeps the pointing hand off `response`'s widget this pass: one that senses clicks for
+/// something other than a left click (e.g. a right-click menu)
+pub fn no_hand(ui: &egui::Ui, response: &egui::Response) {
+    ui.ctx().data_mut(|d| {
+        d.get_temp_mut_or_default::<egui::IdSet>(no_hand_id())
+            .insert(response.id)
+    });
 }
 
 fn hand_cursor(ctx: &egui::Context) {
@@ -130,14 +148,16 @@ fn hand_cursor(ctx: &egui::Context) {
         return;
     }
     let hovered = ctx.interaction_snapshot(|s| s.hovered.clone());
+    let skipped: egui::IdSet = ctx.data(|d| d.get_temp(no_hand_id()).unwrap_or_default());
     let clickable = hovered.iter().any(|id| {
-        ctx.read_response(*id).is_some_and(|r| {
-            r.enabled()
-                && r.hovered()
-                && r.sense.senses_click()
-                && !r.sense.senses_drag()
-                && r.rect.height() <= HAND_MAX_HEIGHT
-        })
+        !skipped.contains(id)
+            && ctx.read_response(*id).is_some_and(|r| {
+                r.enabled()
+                    && r.hovered()
+                    && r.sense.senses_click()
+                    && !r.sense.senses_drag()
+                    && r.rect.height() <= HAND_MAX_HEIGHT
+            })
     });
     if clickable {
         ctx.set_cursor_icon(CursorIcon::PointingHand);
@@ -702,6 +722,28 @@ mod tests {
                 .rect
         });
         assert_eq!(canvas.cursor, CursorIcon::Default);
+    }
+
+    /// A widget opted out with `no_hand` keeps the arrow though it senses clicks
+    #[test]
+    fn a_no_hand_widget_keeps_the_arrow() {
+        let label = |opt_out: bool| {
+            move |ui: &mut egui::Ui| {
+                let r = ui.add(
+                    egui::Label::new("Helmet:")
+                        .selectable(false)
+                        .sense(egui::Sense::click()),
+                );
+                if opt_out {
+                    no_hand(ui, &r);
+                }
+                r.rect
+            }
+        };
+        let hand = run(frames(true), label(false));
+        assert!(hand.rect.contains(AT), "{:?}", hand.rect);
+        assert_eq!(hand.cursor, CursorIcon::PointingHand);
+        assert_eq!(run(frames(true), label(true)).cursor, CursorIcon::Default);
     }
 
     /// A dropped dropdown keeps the gold border (PoB's is white)

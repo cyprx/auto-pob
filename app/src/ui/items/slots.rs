@@ -208,6 +208,8 @@ impl ItemsUi {
                 );
                 self.rects
                     .note(&label, || format!("slot_label_{}", slot.name));
+                // it senses clicks for its right-click menu only: no hand
+                crate::theme::no_hand(ui, &label);
                 // PoB's trade search for the slot's item (R10); an empty slot has none. The menu
                 // is the slot name's: the dropdown's own popup would share its id.
                 if slot.selected != 0 {

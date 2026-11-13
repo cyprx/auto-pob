@@ -3605,9 +3605,10 @@ fn a_build_with_bytes_that_are_not_utf8_shows_in_every_view() {
     let _guard = lock();
     let mut s = Session::start("non-utf8");
     let good = fs::read_to_string(fixture_xml("attack")).unwrap();
-    // \u{1} marks where a lone Windows-1252 "é" byte goes
+    // \u{1} marks where a lone Windows-1252 "é" byte goes; \u{2} and \u{3} are the bytes
+    // 0x92 (a continuation byte) and 0xFC (never a lead byte)
     let marked = good
-        .replace("label=\"\"", "label=\"Caf\u{1}\"")
+        .replace("label=\"\"", "label=\"Caf\u{1}\u{2}\u{3}\"")
         .replace(
             "Rarity: NORMAL\nDriftwood Maul",
             "Rarity: RARE\nCaf\u{1} Smasher\nDriftwood Maul",
@@ -3631,7 +3632,12 @@ fn a_build_with_bytes_that_are_not_utf8_shows_in_every_view() {
     let bytes: Vec<u8> = marked
         .into_bytes()
         .into_iter()
-        .map(|b| if b == 1 { 0xE9 } else { b })
+        .map(|b| match b {
+            1 => 0xE9,
+            2 => 0x92,
+            3 => 0xFC,
+            b => b,
+        })
         .collect();
     let path = s.builds_dir().join("latin.xml");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -3640,6 +3646,9 @@ fn a_build_with_bytes_that_are_not_utf8_shows_in_every_view() {
         .expect("open");
     // the byte 0xE9 as the views show it
     const E: char = '\u{F7E9}';
+    // and 0x92, 0xFC
+    const Q: char = '\u{F792}';
+    const U: char = '\u{F7FC}';
     let notes = s.backend.notes_view().expect("notes view");
     assert!(
         notes.text.contains(&format!("caf{E} notes")),
@@ -3647,7 +3656,7 @@ fn a_build_with_bytes_that_are_not_utf8_shows_in_every_view() {
         notes.text
     );
     let skills = s.backend.skills_view().expect("skills view");
-    assert_eq!(skills.groups[0].label, format!("Caf{E}"));
+    assert_eq!(skills.groups[0].label, format!("Caf{E}{Q}{U}"));
     s.backend.items_view().expect("items view");
     let item = s.backend.item_text(1).expect("item text");
     assert!(
@@ -3665,9 +3674,16 @@ fn a_build_with_bytes_that_are_not_utf8_shows_in_every_view() {
         text: format!("{} more", notes.text),
     })
     .expect("notes");
+    // each edit deletes the character just before a byte: the box's diff then holds the
+    // bytes after it
     s.run(Command::SetGroupLabel {
         group: 0,
-        text: format!("Caf{E}!"),
+        text: format!("Ca{E}{Q}{U}"),
+    })
+    .expect("label");
+    s.run(Command::SetGroupLabel {
+        group: 0,
+        text: format!("Ca{Q}{U}!"),
     })
     .expect("label");
     s.run(Command::SetCustomModText {
@@ -3692,12 +3708,12 @@ fn a_build_with_bytes_that_are_not_utf8_shows_in_every_view() {
     let saved = fs::read(&path).unwrap();
     let has = |needle: &[u8]| saved.windows(needle.len()).any(|w| w == needle);
     assert!(
-        !has("\u{fffd}".as_bytes()) && !has("\u{F7E9}".as_bytes()),
+        !has("\u{fffd}".as_bytes()) && ![E, Q, U].iter().any(|c| has(c.to_string().as_bytes())),
         "an edit wrote the byte as text"
     );
     for needle in [
         &b"caf\xE9 notes"[..],
-        b"Caf\xE9!",
+        b"label=\"Ca\x92\xFC!\"",
         b"Caf\xE9 line",
         b"+1 to Dexterity",
         // PoB's Save makes the item through sanitiseText (Item.lua:93): one byte, one "?"

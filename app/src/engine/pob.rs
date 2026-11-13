@@ -24,6 +24,8 @@ use pob_runtime::net::{NetConfig, Waker};
 use std::path::{Path, PathBuf};
 
 pub struct PobBackend {
+    /// Why the build PoB reopened at start failed, until the UI is told
+    startup_notice: Option<String>,
     pub lua: Lua,
     pub game: Game,
     pob_dir: PathBuf,
@@ -141,6 +143,11 @@ pub(crate) fn new_lua(pob_dir: &Path) -> Result<Lua> {
 impl PobBackend {
     /// Starts PoB from `pob_dir`, keeping its user data in `user_dir`; requests go out
     /// through curl with the app's timeouts (R7).
+    /// Why the build PoB reopened at start failed (it starts on the build list then), once
+    pub fn take_startup_notice(&mut self) -> Option<String> {
+        self.startup_notice.take()
+    }
+
     pub fn start(game: Game, pob_dir: &Path, user_dir: &Path) -> Result<PobBackend> {
         PobBackend::start_with(game, pob_dir, user_dir, NetConfig::app())
     }
@@ -207,7 +214,17 @@ impl PobBackend {
         // PoB reopened the build its last exit recorded: the UI shows it, as PoB does
         let loaded: mlua::Function = glue.get("build_loaded").map_err(lua_error)?;
         let on_list = !loaded.call::<bool>(()).map_err(lua_error)?;
+        // the last build's reopen raised: PoB's error, for the UI to show once (bootstrap.lua)
+        let startup_notice = lua
+            .globals()
+            .get::<Option<mlua::LuaString>>("AutoPobStartupError")
+            .map_err(lua_error)?
+            .map(|text| super::bytes_text::decode(&text.as_bytes()).into_owned());
+        if let Some(notice) = &startup_notice {
+            log::warn!("the last build couldn't be reopened: {notice}");
+        }
         Ok(PobBackend {
+            startup_notice,
             lua,
             game,
             pob_dir: pob_dir.to_owned(),
@@ -3180,7 +3197,15 @@ impl Engine {
                 let pob_dir = crate::pob_files::ensure_pob(game, &data_dir, &mut |progress| {
                     send(Event::Downloading(progress))
                 })?;
-                Ok(Box::new(PobBackend::start(game, &pob_dir, &user_dir)?) as Box<dyn Backend>)
+                let mut backend = PobBackend::start(game, &pob_dir, &user_dir)?;
+                // a last build that raised on reopening: say so on the build list
+                if let Some(text) = backend.take_startup_notice() {
+                    send(Event::Message {
+                        title: "Couldn't reopen the last build".into(),
+                        text,
+                    });
+                }
+                Ok(Box::new(backend) as Box<dyn Backend>)
             },
             wake_ui,
         )

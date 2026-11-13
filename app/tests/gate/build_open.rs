@@ -592,6 +592,10 @@ fn starting_on_the_build_the_exit_save_recorded() {
     .unwrap();
     let mut next = restart(&s);
     assert!(!next.build_loaded().unwrap(), "PoB went to its list");
+    // PoB's error is kept for the UI to show once
+    let notice = next.take_startup_notice().expect("the start-up error");
+    assert!(notice.contains("CalcTools.lua:46"), "{notice}");
+    assert_eq!(next.take_startup_notice(), None);
     next.apply(
         Command::OpenBuild {
             path: builds.join("attack.xml"),

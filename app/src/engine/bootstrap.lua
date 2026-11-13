@@ -223,7 +223,10 @@ runCallback("OnFrame") -- Need at least one frame for everything to initialise
 -- BUILD mode with its error prompt up; PoB's prompt offers F4, back to the build list
 -- (Launch.lua:386). Starting would otherwise fail on every launch until Settings.xml changed.
 -- The half-loaded tabs are dropped once the glue is in (glue.settle_startup).
+-- PoB's message is kept for the UI to show once (pob.rs `take_startup_notice`).
 if mainObject.promptMsg and mainObject.main and mainObject.main.mode == "BUILD" then
+	local plain = mainObject.promptMsg:gsub("%^x%x%x%x%x%x%x", ""):gsub("%^%d", "")
+	AutoPobStartupError = plain:match("(In '[^\n]*)") or plain
 	mainObject.promptMsg = nil
 	mainObject.main:SetMode("LIST")
 	runCallback("OnFrame")

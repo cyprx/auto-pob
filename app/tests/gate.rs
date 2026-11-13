@@ -4709,6 +4709,9 @@ fn save_as_keeps_the_bytes_of_a_name_that_isnt_utf8() {
         folder: String::new(),
     })
     .expect("list");
+    // the list the UI holds, whose spelling the folder below comes in
+    let list = s.backend.build_list_view().expect("the list view");
+    assert!(list.tree.iter().any(|f| f.path == "d\u{F7E9}p/"));
     s.run(Command::OpenBuild {
         path: file(b"caf\xE9.xml"),
     })

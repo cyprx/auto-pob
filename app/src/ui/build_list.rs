@@ -1026,6 +1026,7 @@ fn name_edit(
 ) -> bool {
     let before = text.clone();
     let pasted = name_box::pasted(ui);
+    let sel = name_box::selection(ui.ctx(), id);
     let edit = ui.add(
         egui::TextEdit::singleline(text)
             .desired_width(f32::INFINITY)
@@ -1038,7 +1039,10 @@ fn name_edit(
         *focus = false;
     }
     if edit.changed() {
-        *text = name_box::spliced(&before, text, Filter::Path, name_box::NAME_LIMIT, pasted);
+        let raw = std::mem::take(text);
+        let keeps = |c| Filter::Path.keeps(c);
+        *text = name_box::spliced_at(&before, &raw, sel, keeps, name_box::NAME_LIMIT, pasted);
+        name_box::place_caret(ui.ctx(), id, &before, &raw, text, sel);
     }
     // PoB's change function runs only when a key changed the text
     *edited |= *text != before;
@@ -1371,6 +1375,28 @@ mod tests {
                 kind: DeleteKind::Folder,
             })
         );
+    }
+
+    /// A key the rename box refuses leaves the caret where it was, as PoB's (EditControl.lua:
+    /// 140-172): the next key goes in at the same place
+    #[test]
+    fn a_refused_key_in_the_rename_box_leaves_the_caret() {
+        let mut h = H::new(view(""));
+        h.select(1);
+        h.key(Key::F2, Modifiers::NONE);
+        h.focus = false;
+        h.frame(vec![]);
+        h.click("name_edit");
+        h.key(Key::A, Modifiers::COMMAND);
+        h.key(Key::Backspace, Modifiers::NONE);
+        h.text("ab");
+        h.key(Key::ArrowLeft, Modifiers::NONE);
+        h.text("/");
+        h.text("x");
+        let Some(Dialog::Name { text, .. }) = &h.ui.dialog else {
+            panic!("no name box");
+        };
+        assert_eq!(text, "axb");
     }
 
     #[test]

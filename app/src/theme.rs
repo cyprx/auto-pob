@@ -187,6 +187,19 @@ pub fn list_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R
     out
 }
 
+/// Draws `add`, an `egui_extras` table, with its hovered row in [`list_row`]'s warm fill.
+/// Only the hovered fill changes (the one value egui_extras reads for a hovered row), so
+/// borders and the pressed look of anything else in the table stay as they are.
+pub fn table_rows<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let hovered = &mut ui.visuals_mut().widgets.hovered;
+    let old = (hovered.bg_fill, hovered.weak_bg_fill);
+    (hovered.bg_fill, hovered.weak_bg_fill) = (ROW_HOVERED, ROW_HOVERED);
+    let out = add(ui);
+    let hovered = &mut ui.visuals_mut().widgets.hovered;
+    (hovered.bg_fill, hovered.weak_bg_fill) = old;
+    out
+}
+
 /// A list row's border: none to see
 const ROW_BORDER: Stroke = Stroke {
     width: 1.0,

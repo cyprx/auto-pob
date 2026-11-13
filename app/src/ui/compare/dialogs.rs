@@ -109,29 +109,40 @@ impl CompareUi {
             }
         });
         let mut load = None;
+        // the folders, then the builds or a line saying why there are none; only the rows
+        // in view are laid out, so a folder of thousands of builds costs a screenful a frame
+        let list = self.list.clone();
+        let folders = list
+            .as_deref()
+            .map(|l| subfolders(&l.tree, folder))
+            .unwrap_or_default();
+        let browse = self.browse.clone().filter(|b| b.folder == *folder);
+        let builds = browse.as_ref().map_or(0, |b| b.entries.len());
+        let total = folders.len() + builds.max(1);
+        let row_height = ui.spacing().interact_size.y;
         egui::ScrollArea::vertical()
+            .id_salt("compare_saved_builds")
             .max_height(320.0)
-            .show(ui, |ui| {
+            .show_rows(ui, row_height, total, |ui, shown| {
                 ui.set_min_width(360.0);
-                let tree = self
-                    .list
-                    .as_ref()
-                    .map(|l| l.tree.clone())
-                    .unwrap_or_default();
-                for name in subfolders(&tree, folder) {
-                    let r = ui.selectable_label(false, format!("\u{1f4c1} {name}"));
-                    self.rects.note(&r, || format!("folder:{name}"));
-                    if r.clicked() {
-                        go = Some(format!("{folder}{name}/"));
-                    }
-                }
-                match self.browse.as_deref().filter(|b| b.folder == *folder) {
-                    Some(view) => {
-                        if view.entries.is_empty() {
-                            ui.weak("No builds here.");
+                for row in shown {
+                    if let Some(name) = folders.get(row) {
+                        let r = ui.add(
+                            egui::Button::selectable(false, format!("\u{1f4c1} {name}")).truncate(),
+                        );
+                        self.rects.note(&r, || format!("folder:{name}"));
+                        if r.clicked() {
+                            go = Some(format!("{folder}{name}/"));
                         }
-                        for (i, entry) in view.entries.iter().enumerate() {
-                            let r = ui.selectable_label(false, &entry.name);
+                        continue;
+                    }
+                    let i = row - folders.len();
+                    match &browse {
+                        Some(view) if i < view.entries.len() => {
+                            let entry = &view.entries[i];
+                            let r = ui.add(
+                                egui::Button::selectable(false, entry.name.as_str()).truncate(),
+                            );
                             self.rects.note(&r, || format!("saved:{i}"));
                             if r.clicked() {
                                 load = Some(Command::LoadCompare {
@@ -139,9 +150,21 @@ impl CompareUi {
                                 });
                             }
                         }
-                    }
-                    None => {
-                        ui.spinner();
+                        Some(view) => match &view.error {
+                            Some(error) => {
+                                let r = ui.colored_label(
+                                    theme::NEGATIVE,
+                                    format!("Couldn't list this folder: {error}"),
+                                );
+                                self.rects.note(&r, || "browse_error".into());
+                            }
+                            None => {
+                                ui.weak("No builds here.");
+                            }
+                        },
+                        None => {
+                            ui.spinner();
+                        }
                     }
                 }
             });

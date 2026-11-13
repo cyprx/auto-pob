@@ -9,10 +9,29 @@ use eframe::egui::{Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-fn temp_config(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("auto-pob-appopts-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    dir.join("auto-pob.toml")
+/// `auto-pob.toml` in a folder that isn't made yet and goes when the test ends
+struct TempConfig {
+    _dir: crate::test_dir::TestDir,
+    path: PathBuf,
+}
+
+impl std::ops::Deref for TempConfig {
+    type Target = PathBuf;
+    fn deref(&self) -> &PathBuf {
+        &self.path
+    }
+}
+
+impl AsRef<std::path::Path> for TempConfig {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+fn temp_config(name: &str) -> TempConfig {
+    let dir = crate::test_dir::TestDir::reserved(&format!("appopts-{name}"));
+    let path = dir.join("auto-pob.toml");
+    TempConfig { _dir: dir, path }
 }
 
 fn app(settings: AppSettings, config: &std::path::Path) -> (AutoPobApp, egui::Context) {
@@ -191,6 +210,46 @@ fn options_save_writes_overrides_then_sends_them() {
     assert_eq!(app.settings.overrides.len(), 2);
 }
 
+/// A sign-in's token save cancels an open Options window in the engine (R29): the user is
+/// told, and an override ticked in it goes back to the saved map
+#[test]
+fn a_window_lost_to_a_token_save_says_so() {
+    let config = temp_config("lost");
+    let (mut app, ctx) = app(AppSettings::default(), &config);
+    until_ready(&mut app, &ctx);
+    open_options(&mut app, &ctx);
+    let pos = marked("override_showFlavourText").unwrap().center();
+    click(&mut app, &ctx, pos);
+    show_controls(&mut app, &ctx);
+    assert_eq!(
+        app.sent_log.last().map(String::as_str),
+        Some("SetOverrides")
+    );
+    let notices = app.notices.len();
+    let seq = app.last_sent;
+    // a Save in flight that the cancel beat: the window's edits are not written either
+    app.options.save_sent(seq);
+    app.on_popup_snapshot(&Snapshot::Popup(None), seq);
+    app.on_settings(
+        &SettingsView {
+            options_lost: true,
+            ..settings_view(&[])
+        },
+        seq,
+    );
+    assert_eq!(app.notices.len(), notices + 1);
+    assert!(app.notices.last().unwrap().contains("Options closed"));
+    assert_eq!(
+        app.sent_log.last().map(String::as_str),
+        Some("SetOverrides")
+    );
+    assert_eq!(app.sent_full.last().unwrap(), "SetOverrides { values: {} }");
+    assert!(!config.exists());
+    // a view that doesn't say so adds nothing
+    app.on_settings(&settings_view(&[]), seq);
+    assert_eq!(app.notices.len(), notices + 1);
+}
+
 #[test]
 fn options_cancel_writes_nothing() {
     let config = temp_config("cancel");
@@ -234,6 +293,7 @@ fn zoom_follows_dpi_override() {
             row("showTitlebarName", "titlebarName", title, SettingEffect::Ui),
         ],
         saved_overrides: BTreeMap::new(),
+        options_lost: false,
     };
     app.on_settings(&view("150", "false"), 0);
     // the factor becomes active as the next pass starts

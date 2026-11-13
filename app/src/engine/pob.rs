@@ -52,6 +52,8 @@ pub struct PobBackend {
     item_db_failed: bool,
     /// The database closed or the build changed; `ItemDb(None)` is still to be sent (R21)
     item_db_ended: bool,
+    /// A save PoB made by itself cancelled the Options window; the next settings view says so
+    options_lost: bool,
     /// Lua's heap after the last memory release, in bytes
     released_lua_bytes: usize,
     /// The UI shows the build list: it asked for a listing since it last opened or imported
@@ -197,6 +199,7 @@ impl PobBackend {
             item_db: None,
             item_db_failed: false,
             item_db_ended: false,
+            options_lost: false,
             released_lua_bytes: 0,
             on_list,
             net,
@@ -426,6 +429,7 @@ impl PobBackend {
         }
         affected.short_link = self.call("short_link_ready", ())?;
         if self.call::<_, bool>("popup_take_lost", ())? {
+            self.options_lost = true;
             affected.popup = true;
             affected.settings = true;
         }
@@ -2210,6 +2214,7 @@ impl Backend for PobBackend {
         }
         // a save PoB made by itself cancelled an open Options window first
         if self.call::<_, bool>("popup_take_lost", ())? {
+            self.options_lost = true;
             affected.popup = true;
             affected.settings = true;
         }
@@ -2681,7 +2686,9 @@ impl Backend for PobBackend {
     }
 
     fn settings_view(&mut self) -> Result<SettingsView> {
-        self.view("settings_view", ())
+        let mut view: SettingsView = self.view("settings_view", ())?;
+        view.options_lost = std::mem::take(&mut self.options_lost);
+        Ok(view)
     }
 
     fn share_view(&mut self) -> Result<ShareView> {

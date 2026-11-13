@@ -412,6 +412,8 @@ impl ImportUi {
 
     /// The tab is not showing: an answer that was to be copied is no longer wanted.
     pub fn leave(&mut self) -> Option<Command> {
+        // an Enter waiting for PoB's check never imports after the tab is left
+        self.enter_after = None;
         self.await_code = false;
         self.copy_ready = None;
         self.flush()
@@ -1093,7 +1095,8 @@ impl ImportUi {
                 && !view.fetching
             {
                 self.enter_after = None;
-                act |= ok;
+                // the check answered: Enter acts only on a passed check, with no question open
+                act |= ok && !self.modal;
             }
             if act {
                 let url = self.code.trim().to_owned();
@@ -1965,6 +1968,34 @@ pub(crate) mod tests {
             h.log[1..],
             ["ImportFromUrl { url: \"https://pobb.in/abcx\", mode: Comparison }"]
         );
+        // an Enter left waiting when the tab is left never imports on its own later
+        h.log.clear();
+        h.click("code_box");
+        h.frame(vec![egui::Event::Text("y".into())]);
+        h.frame(vec![enter()]);
+        let typed = h.ui.code.clone();
+        assert_eq!(h.log, [format!("SetImportCode {{ text: {typed:?} }}")]);
+        assert!(h.ui.leave().is_none());
+        let mut view = valid_share();
+        view.import.text = typed;
+        h.share(view.clone());
+        for _ in 0..3 {
+            h.frame(vec![]);
+        }
+        assert_eq!(h.log.len(), 1, "imported on its own: {:?}", h.log);
+        // nor once a question is open when the check answers
+        h.click("code_box");
+        h.frame(vec![egui::Event::Text("z".into())]);
+        h.frame(vec![enter()]);
+        assert_eq!(h.log.len(), 2, "{:?}", h.log);
+        h.ui.set_modal(true);
+        view.import.text = h.ui.code.clone();
+        h.share(view);
+        h.frame(vec![]);
+        h.ui.set_modal(false);
+        h.frame(vec![]);
+        assert_eq!(h.log.len(), 2, "imported under a question: {:?}", h.log);
+        assert!(h.confirms.is_empty());
     }
 
     #[test]

@@ -1048,6 +1048,10 @@ impl AutoPobApp {
         if let Some(command) = self.options.window.flush() {
             self.send(command);
         }
+        // a count typed into a Compare selector box
+        if let Some(command) = self.compare.flush() {
+            self.send(command);
+        }
     }
 
     fn run_action(&mut self, ctx: &egui::Context, action: Pending) {

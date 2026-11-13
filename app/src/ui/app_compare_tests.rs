@@ -558,3 +558,32 @@ fn a_later_snapshot_ends_the_wait() {
     });
     assert!(!app.compare_waiting());
 }
+
+/// A count typed into a Compare selector box goes out before Save, as every other box's
+/// edit does (`flush_edits`): PoB's box applied it key by key, so a Save after it has it
+#[test]
+fn a_typed_count_goes_out_before_save() {
+    let (mut app, ctx) = open_build();
+    show_compare(&mut app, &ctx);
+    click(&mut app, &ctx, "edit_cmpStageCount");
+    frame(&mut app, &ctx, vec![Event::Text("4".into())]);
+    assert!(app.compare.has_pending());
+    let before = app.sent_full.len();
+    frame(
+        &mut app,
+        &ctx,
+        vec![Event::Key {
+            key: Key::S,
+            physical_key: Some(Key::S),
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        }],
+    );
+    assert_eq!(
+        app.sent_full[before..].first().map(String::as_str),
+        Some("SetCompareControl { name: \"cmpStageCount\", value: Text(\"4\") }"),
+        "{:?}",
+        &app.sent_full[before..]
+    );
+}

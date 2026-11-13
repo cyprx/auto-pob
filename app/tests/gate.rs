@@ -3265,6 +3265,100 @@ fn tree_paths_are_kept_but_never_stale() {
     check(&mut s, "another build");
 }
 
+/// Pastes, saves and socket a jewel into the nearest socket `pick` chooses; returns the number
+/// of nodes the spec has afterwards
+fn socket_jewel(s: &mut Session, pick: &str, text: &str) -> usize {
+    let socket: u32 = s.backend.lua.load(pick).eval().unwrap();
+    s.run(Command::AllocNode { id: socket }).unwrap();
+    // the view takes the tree with the socket allocated, so the jewel is the only change
+    s.backend.tree_state_view().unwrap();
+    s.run(Command::PasteItem { text: text.into() }).unwrap();
+    s.run(Command::SaveDisplayItem).unwrap();
+    let jewel: u32 = s
+        .backend
+        .lua
+        .load(
+            "local m = 0 for id in pairs(pob.build.itemsTab.items) do if id > m then m = id end end return m",
+        )
+        .eval()
+        .unwrap();
+    s.run(Command::EquipItem {
+        slot: format!("Jewel {socket}"),
+        id: Some(jewel),
+    })
+    .unwrap();
+    let count: usize = s
+        .backend
+        .lua
+        .load("local n = 0 for _ in pairs(pob.build.spec.nodes) do n = n + 1 end return n")
+        .eval()
+        .unwrap();
+    count
+}
+
+/// Jewels that change the tree's reach or its nodes: the paths and dependants follow them.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn tree_paths_follow_jewels() {
+    let _guard = lock();
+    let mut s = attack_session("tree-paths-jewels");
+    let check = |s: &mut Session, what: &str| {
+        let state = s.backend.tree_state_view().unwrap();
+        let (paths, depends) = paths_from_scratch(s);
+        assert!(state.paths == paths, "{what}: stale paths");
+        assert!(state.depends == depends, "{what}: stale dependants");
+        state
+    };
+    let before = check(&mut s, "open");
+    let nodes_before: usize = s
+        .backend
+        .lua
+        .load("local n = 0 for _ in pairs(pob.build.spec.nodes) do n = n + 1 end return n")
+        .eval()
+        .unwrap();
+    // a radius jewel that lets the nodes around it be taken unconnected: reach changes with
+    // no change of allocation
+    let nearest = |filter: &str| {
+        format!(
+            "local best, d = 0, 1e9
+            for id in pairs(pob.build.itemsTab.sockets) do
+                local n = pob.build.spec.nodes[id]
+                if n and n.name ~= 'Charm Socket' and not n.alloc and n.path and ({filter})
+                    and n.pathDist < d then best, d = id, n.pathDist end
+            end
+            assert(best ~= 0, 'no socket')
+            return best"
+        )
+    };
+    socket_jewel(
+        &mut s,
+        &nearest("not n.expansionJewel"),
+        "Rarity: UNIQUE\nIntuitive Leap\nViridian Jewel\nRadius: Small\nImplicits: 0\n\
+         Passives in Radius can be Allocated without being connected to your tree\nCorrupted",
+    );
+    let leap = check(&mut s, "intuitive leap");
+    assert!(leap.paths != before.paths, "the jewel changed no path");
+    // a large cluster jewel in an outer socket adds nodes to the spec
+    let nodes = socket_jewel(
+        &mut s,
+        &nearest("n.expansionJewel and n.expansionJewel.size == 2"),
+        "Rarity: RARE\nTest Cluster\nLarge Cluster Jewel\nItem Level: 84\nImplicits: 3\n\
+         {crafted}Adds 8 Passive Skills\n{crafted}2 Added Passive Skills are Jewel Sockets\n\
+         {crafted}Added Small Passive Skills grant: 12% increased Fire Damage",
+    );
+    assert!(nodes > nodes_before, "the cluster added no nodes ({nodes})");
+    check(&mut s, "cluster jewel");
+    // a timeless jewel conquers the nodes around it
+    socket_jewel(
+        &mut s,
+        &nearest("not n.expansionJewel"),
+        "Rarity: UNIQUE\nLethal Pride\nTimeless Jewel\nRadius: Large\nImplicits: 0\n\
+         Commanded leadership over 12000 warriors under Kaom\n\
+         Passives in radius are Conquered by the Karui\nCorrupted",
+    );
+    check(&mut s, "timeless jewel");
+}
+
 /// A tree switch between two identical searches matches the new tree's nodes, not the old
 /// tree's results.
 #[test]

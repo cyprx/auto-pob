@@ -26,8 +26,46 @@ end
 local INVALID_BORDER = 0.753
 local INVALID_TEXT = "This config option is conditional with missing source and is invalid."
 
+-- `StripEscapes` is a pure function of its text, and the view strips the same labels, choices
+-- and tooltips on every edit, so its results are kept. The cache is emptied when it grows past
+-- `MEMO_LIMIT` entries, so text that keeps changing can't make it grow without end.
+local MEMO_LIMIT = 4096
+local stripped, stripped_count = {}, 0
+
 local function strip(text)
-	return (StripEscapes(tostring(text)))
+	text = tostring(text)
+	local out = stripped[text]
+	if not out then
+		out = StripEscapes(text)
+		if stripped_count >= MEMO_LIMIT then
+			stripped, stripped_count = {}, 0
+		end
+		stripped[text] = out
+		stripped_count = stripped_count + 1
+	end
+	return out
+end
+
+-- A `tooltipText`'s lines as the recorder splits and the view strips them, by the text: shared
+-- between views, so they are never changed after this
+local text_lines, text_lines_count = {}, 0
+
+local function lines_of_text(text)
+	local lines = text_lines[text]
+	if not lines then
+		local recorder = glue.tooltip()
+		recorder:AddLine(14, text)
+		lines = {}
+		for i, line in ipairs(recorder:lines()) do
+			lines[i] = { size = line.size, text = strip(line.text) }
+		end
+		if text_lines_count >= MEMO_LIMIT then
+			text_lines, text_lines_count = {}, 0
+		end
+		text_lines[text] = lines
+		text_lines_count = text_lines_count + 1
+	end
+	return lines
 end
 
 local function set_ids(tab)
@@ -38,19 +76,21 @@ local function set_ids(tab)
 	return sets
 end
 
--- What the option's tooltip shows now, as a recorder would see it.
+-- What the option's tooltip shows now, as a recorder would see it. The lines can be shared
+-- with other views (`lines_of_text`): copy them before adding to them.
+local NO_LINES = {}
 local function tooltip_lines(tab, control, varData)
-	local recorder = glue.tooltip()
-	local ok
-	if varData.tooltipFunc then
-		local index = control.selIndex
-		local value = control.list and index and control.list[index]
-		ok = pcall(varData.tooltipFunc, recorder, "BODY", index, value)
-	else
-		local text
-		ok, text = pcall(control.GetProperty, control, "tooltipText")
-		if ok and text and text ~= "" then recorder:AddLine(14, text) end
+	if not varData.tooltipFunc then
+		local ok, text = pcall(control.GetProperty, control, "tooltipText")
+		if ok and text and text ~= "" then
+			return lines_of_text(text)
+		end
+		return NO_LINES
 	end
+	local recorder = glue.tooltip()
+	local index = control.selIndex
+	local value = control.list and index and control.list[index]
+	local ok = pcall(varData.tooltipFunc, recorder, "BODY", index, value)
 	local lines = {}
 	if ok then
 		for _, line in ipairs(recorder:lines()) do
@@ -108,7 +148,9 @@ local function option_view(tab, varData, control)
 	local tooltip = tooltip_lines(tab, control, varData)
 	if view.invalid then
 		-- the wording of the line ConfigTab.lua appends to the control's tooltip
-		tooltip[#tooltip + 1] = { size = 14, text = INVALID_TEXT }
+		local copy = { unpack(tooltip) }
+		copy[#copy + 1] = { size = 14, text = INVALID_TEXT }
+		tooltip = copy
 	end
 	if #tooltip > 0 then view.tooltip = tooltip end
 	return view

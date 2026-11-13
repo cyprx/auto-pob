@@ -2487,7 +2487,7 @@ ported = "app/src/ui/skills/picker.rs gem picker"
 note = "part of skills.gemSlot#Name"
 
 [controls."skills.gemSlot#Quality"]
-ported = "app/src/ui/skills/group.rs Quality box with PoB's what-if hover tooltip (HoverTooltip, R22); a %D box (widgets/edit_box.rs EditBoxOptions::number): + and - buttons, Up/Down and the wheel step it (EditControl.lua:64-75, 680-700)"
+ported = "app/src/ui/skills/group.rs Quality box with PoB's what-if hover tooltip (HoverTooltip, R22); a %D box (widgets/edit_box.rs EditBoxOptions::number): + and - buttons, Up/Down and the wheel step it (EditControl.lua:64-75, 680-700); a gem that fits its socket borders it in the gem's colour (borderFunc, SkillsTab.lua:852-859; test a_matching_socket_borders_the_quality_box)"
 
 [controls."skills.gemSlot#Quality.buttonDown"]
 ported = "app/src/ui/skills/group.rs Quality box"

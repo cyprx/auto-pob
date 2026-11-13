@@ -310,7 +310,7 @@ impl SkillsUi {
                 slot: si,
             });
         }
-        // unknown gems are red; a gem that fits its socket gets a border in its colour
+        // unknown gems are red
         let unknown = gem.error.is_some() || gem.gem_id.is_none();
         let colour = if unknown {
             ERROR
@@ -322,11 +322,9 @@ impl SkillsUi {
         } else {
             colour.gamma_multiply(0.5)
         };
-        let mut button = egui::Button::new(egui::RichText::new(&gem.name_spec).color(colour));
-        if gem.matches_socket {
-            button = button.stroke(Stroke::new(1.5, colour));
-        }
-        let name = ui.add(button);
+        let name = ui.add(egui::Button::new(
+            egui::RichText::new(&gem.name_spec).color(colour),
+        ));
         self.rects.note(&name, || format!("gem_{si}_name"));
         // PoB's gem box drops its list on a right click too (GemSelectControl.lua:800-804)
         if name.clicked() || name.secondary_clicked() {
@@ -359,6 +357,16 @@ impl SkillsUi {
             },
             &mut out.commands,
         );
+        // a gem that fits its socket borders its Quality box in the gem's colour, enabled or
+        // not (SkillsTab.lua:852-859)
+        if gem.matches_socket && !gem.colour.is_empty() {
+            ui.painter().rect_stroke(
+                quality.rect,
+                ui.visuals().widgets.inactive.corner_radius,
+                Stroke::new(1.0, pob_colour(&gem.colour, default)),
+                egui::StrokeKind::Inside,
+            );
+        }
         self.hover_tip.track(
             &quality,
             HoverTarget::GemQuality {

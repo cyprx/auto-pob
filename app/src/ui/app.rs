@@ -674,14 +674,16 @@ impl AutoPobApp {
                     self.reset_build_state();
                 }
                 // an import that answered at once replaced the build: its first view comes
-                // before the new build's others
-                if matches!(snapshot, Snapshot::Build(_)) && self.import_seq == Some(seq) {
+                // before the new build's others. Its batch may hold later commands, whose seq
+                // the views then carry.
+                let import_answered = self.import_seq.is_some_and(|at| seq >= at);
+                if matches!(snapshot, Snapshot::Build(_)) && import_answered {
                     self.import_seq = None;
                     self.reset_for_new_build();
                 }
                 // a link's answer is its request, with no new build yet: the import is over as
                 // far as the reset goes (a code's has no request left, every one was cancelled)
-                if self.import_seq == Some(seq)
+                if import_answered
                     && matches!(&snapshot, Snapshot::Requests(view) if !view.pending.is_empty())
                 {
                     self.import_seq = None;
@@ -7428,6 +7430,45 @@ mod tests {
             snapshot: Snapshot::Build(Arc::new((**app.build.as_ref().unwrap()).clone())),
         });
         assert_eq!(app.tab, BuildTab::Tree);
+    }
+
+    #[test]
+    fn an_import_answered_in_a_later_commands_batch_still_resets() {
+        // a command sent after the import (a tab's state, a hover question) lands in the same
+        // batch, whose views carry its seq, not the import's
+        let (mut app, ctx) = import_app();
+        deliver(&mut app, valid_share());
+        frame(&mut app, &ctx, vec![]);
+        click_mark(&mut app, &ctx, "mode:this");
+        click_mark(&mut app, &ctx, "import_code");
+        click_mark(&mut app, &ctx, "confirm_yes");
+        let seq = app.last_sent + 1;
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: requests_snapshot(&[], vec![]),
+        });
+        assert_eq!(app.import_seq, Some(seq - 1));
+        app.tab = BuildTab::Import;
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: Snapshot::Build(Arc::new((**app.build.as_ref().unwrap()).clone())),
+        });
+        assert_eq!(app.import_seq, None);
+        assert_eq!(app.tab, BuildTab::Tree, "the new build's reset was skipped");
+
+        // a link: its pending request ends the import's reset the same way
+        let (mut app, ctx) = import_app();
+        deliver(&mut app, valid_share());
+        frame(&mut app, &ctx, vec![]);
+        click_mark(&mut app, &ctx, "mode:this");
+        click_mark(&mut app, &ctx, "import_code");
+        click_mark(&mut app, &ctx, "confirm_yes");
+        let seq = app.last_sent + 1;
+        app.on_event(Event::Snapshot {
+            seq,
+            snapshot: requests_snapshot(&[(7, "Fetching build from pobb.in")], vec![]),
+        });
+        assert_eq!(app.import_seq, None);
     }
 
     #[test]

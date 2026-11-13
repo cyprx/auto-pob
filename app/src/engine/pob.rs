@@ -464,6 +464,73 @@ impl PobBackend {
         Ok(affected)
     }
 
+    /// One `ItemDb` step: the open panel's work, else a slice of the load ahead
+    fn item_db_step(&mut self, send: &dyn Fn(Event)) -> Result<Affected> {
+        #[derive(serde::Deserialize)]
+        struct Step {
+            percent: Option<u32>,
+            finished: bool,
+            #[serde(default)]
+            rejected: Option<String>,
+        }
+        // the open panel's own work goes first, as `next_background` offers it. Once
+        // its database has loaded (the uniques load before the rares) only the load
+        // ahead is left, which the panel's step would never run.
+        let panel = match &self.item_db {
+            Some(query) if !self.item_db_failed => self
+                .call::<_, bool>("item_db_pending", db_name(query.db))
+                .unwrap_or(false)
+                .then_some(query),
+            _ => None,
+        };
+        let query = match panel {
+            Some(query) => query,
+            // a slice of the load ahead of a panel open (`PreloadItemDbs`). Nothing
+            // shows it: a failure only stops it, and the panel's own job reports the
+            // load's failure when it opens (`glue.item_db_step`).
+            None => {
+                if let Err(e) = self.call::<_, ()>("item_db_preload_step", ()) {
+                    log::warn!("item database load: {e:#}");
+                    self.item_db_preload = false;
+                }
+                return Ok(Affected::default());
+            }
+        };
+        let step: Step = match self.view("item_db_step", db_name(query.db)) {
+            Ok(step) => step,
+            Err(e) => {
+                self.item_db_failed = true;
+                return Err(e);
+            }
+        };
+        if let Some(percent) = step.percent {
+            send(Event::Progress {
+                task: BackgroundTask::ItemDb,
+                percent,
+            });
+        }
+        // a query that waited out the load turned out bad: the panel closes, so the
+        // UI's query and PoB's controls agree, and the reason is the job's failure
+        if let Some(message) = step.rejected {
+            self.item_db = None;
+            self.item_db_ended = true;
+            let _ = self.call::<_, ()>("item_db_close", ());
+            send(Event::BackgroundFailed {
+                task: BackgroundTask::ItemDb,
+                message,
+            });
+            return Ok(Affected {
+                item_db: true,
+                ..Affected::default()
+            });
+        }
+        // the panel shows the rows once the list builder ends
+        Ok(Affected {
+            item_db: step.finished,
+            ..Affected::default()
+        })
+    }
+
     fn view<T: serde::de::DeserializeOwned>(
         &self,
         name: &str,
@@ -2587,8 +2654,6 @@ impl Backend for PobBackend {
         struct Step {
             percent: Option<u32>,
             finished: bool,
-            #[serde(default)]
-            rejected: Option<String>,
         }
         match task {
             BackgroundTask::Network => {
@@ -2665,62 +2730,16 @@ impl Backend for PobBackend {
                 })
             }
             BackgroundTask::ItemDb => {
-                // the open panel's own work goes first, as `next_background` offers it. Once
-                // its database has loaded (the uniques load before the rares) only the load
-                // ahead is left, which the panel's step would never run.
-                let panel = match &self.item_db {
-                    Some(query) if !self.item_db_failed => self
-                        .call::<_, bool>("item_db_pending", db_name(query.db))
+                let result = self.item_db_step(send);
+                // once PoB's load has ended, by either job, the loop stops asking about it
+                if self.item_db_preload
+                    && !self
+                        .call::<_, bool>("item_db_preload_pending", ())
                         .unwrap_or(false)
-                        .then_some(query),
-                    _ => None,
-                };
-                let query = match panel {
-                    Some(query) => query,
-                    // a slice of the load ahead of a panel open (`PreloadItemDbs`). Nothing
-                    // shows it: a failure only stops it, and the panel's own job reports the
-                    // load's failure when it opens (`glue.item_db_step`).
-                    None => {
-                        if let Err(e) = self.call::<_, ()>("item_db_preload_step", ()) {
-                            log::warn!("item database load: {e:#}");
-                            self.item_db_preload = false;
-                        }
-                        return Ok(Affected::default());
-                    }
-                };
-                let step: Step = match self.view("item_db_step", db_name(query.db)) {
-                    Ok(step) => step,
-                    Err(e) => {
-                        self.item_db_failed = true;
-                        return Err(e);
-                    }
-                };
-                if let Some(percent) = step.percent {
-                    send(Event::Progress {
-                        task: BackgroundTask::ItemDb,
-                        percent,
-                    });
+                {
+                    self.item_db_preload = false;
                 }
-                // a query that waited out the load turned out bad: the panel closes, so the
-                // UI's query and PoB's controls agree, and the reason is the job's failure
-                if let Some(message) = step.rejected {
-                    self.item_db = None;
-                    self.item_db_ended = true;
-                    let _ = self.call::<_, ()>("item_db_close", ());
-                    send(Event::BackgroundFailed {
-                        task: BackgroundTask::ItemDb,
-                        message,
-                    });
-                    return Ok(Affected {
-                        item_db: true,
-                        ..Affected::default()
-                    });
-                }
-                // the panel shows the rows once the list builder ends
-                Ok(Affected {
-                    item_db: step.finished,
-                    ..Affected::default()
-                })
+                result
             }
             BackgroundTask::GemDps => {
                 let step: Step = match self.view("gem_dps_step", ()) {

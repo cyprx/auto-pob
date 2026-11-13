@@ -163,11 +163,9 @@ pub fn register(lua: &Lua, pob_dir: &Path, user_dir: &Path) -> mlua::Result<()> 
         })?,
     )?;
 
-    // PoB appends "Path of Building/" to the user path, so it needs a trailing slash
-    let mut user = user_dir.to_string_lossy().into_owned();
-    if !user.ends_with('/') {
-        user.push('/');
-    }
+    // without a trailing slash, as SimpleGraphic and the classic runtime answer: PoB appends
+    // "/Path of Building/" itself (Main.lua:94)
+    let user = user_dir.to_string_lossy().trim_end_matches('/').to_owned();
     let pob = pob_dir.to_string_lossy().into_owned();
     g.set(
         "GetUserPath",
@@ -481,7 +479,7 @@ mod tests {
         let lua = lua();
         assert_eq!(
             lua.load("return GetUserPath()").eval::<String>().unwrap(),
-            "/user/"
+            "/user"
         );
         assert_eq!(
             lua.load("return GetScriptPath()").eval::<String>().unwrap(),

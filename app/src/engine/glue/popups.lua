@@ -828,7 +828,7 @@ function glue.set_control(control, control_kind, kind, value, label)
 		if entry == nil then
 			error("no such choice", 0)
 		end
-		if (type(entry) == "table" and entry.label or entry) ~= label then
+		if not glue.same_text(type(entry) == "table" and entry.label or entry, label) then
 			error("the list changed; pick again", 0)
 		end
 		control:SetSel(value + 1)
@@ -846,7 +846,7 @@ function glue.set_control(control, control_kind, kind, value, label)
 		-- Shift is held for a range pick (`OverrideSelectIndex`, which then takes the click)
 		glue.list_sync(control)
 		for i, entry in ipairs(control.list) do
-			if row_key(entry, i) == value then
+			if glue.same_text(row_key(entry, i), value) then
 				local real = IsKeyDown
 				if kind == "row_shift" then
 					IsKeyDown = function(key)
@@ -874,7 +874,7 @@ function glue.set_control(control, control_kind, kind, value, label)
 		end
 		local from
 		for i, entry in ipairs(control.list) do
-			if row_key(entry, i) == value then
+			if glue.same_text(row_key(entry, i), value) then
 				from = i
 			end
 		end

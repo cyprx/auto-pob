@@ -3577,7 +3577,21 @@ fn a_build_with_bytes_that_are_not_utf8_shows_in_every_view() {
             "Rarity: NORMAL\nDriftwood Maul",
             "Rarity: RARE\nCaf\u{1} Smasher\nDriftwood Maul",
         )
-        .replace("<Notes>", "<Notes>caf\u{1} notes");
+        .replace("<Notes>", "<Notes>caf\u{1} notes")
+        // a loadout: the four sets share a title (Build.lua:301-415)
+        .replace("<Spec ", "<Spec title=\"Tr\u{1}e\" ")
+        .replace(
+            "<SkillSet id=\"1\">",
+            "<SkillSet id=\"1\" title=\"Tr\u{1}e\">",
+        )
+        .replace(
+            "<ConfigSet id=\"1\">",
+            "<ConfigSet id=\"1\" title=\"Tr\u{1}e\">",
+        )
+        .replace(
+            "<ItemSet useSecondWeaponSet=\"nil\" id=\"1\">",
+            "<ItemSet useSecondWeaponSet=\"nil\" id=\"1\" title=\"Tr\u{1}e\">",
+        );
     let bytes: Vec<u8> = marked
         .into_bytes()
         .into_iter()
@@ -3596,4 +3610,23 @@ fn a_build_with_bytes_that_are_not_utf8_shows_in_every_view() {
     assert!(item.text.contains("Caf\u{fffd} Smasher"), "{}", item.text);
     let group = s.backend.socket_group_text(0).expect("group text");
     assert!(group.text.contains("Caf\u{fffd}"), "{}", group.text);
+    // what the UI shows is what it sends back: lookups by that text find the entry
+    let build = s.backend.build_view().expect("build view");
+    let loadout = build
+        .loadouts
+        .iter()
+        .find(|l| l.contains('\u{fffd}'))
+        .unwrap_or_else(|| panic!("no loadout: {:?}", build.loadouts))
+        .clone();
+    s.run(Command::SelectLoadout { label: loadout })
+        .expect("select the loadout");
+    s.run(Command::DeleteSocketGroup {
+        group: 0,
+        name: Some(skills.groups[0].label.clone()),
+    })
+    .expect("delete the group");
+    assert!(
+        s.backend.skills_view().unwrap().groups.is_empty(),
+        "the group is still there"
+    );
 }

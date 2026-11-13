@@ -2,6 +2,18 @@
 
 glue = glue or {}
 
+-- Whether PoB's string `ours` is the text `sent` the UI showed for it: the views show bytes that
+-- aren't UTF-8 as U+FFFD, so a lookup by text compares in that form too
+function glue.same_text(ours, sent)
+	if ours == sent then
+		return true
+	end
+	if type(ours) ~= "string" or type(sent) ~= "string" then
+		return false
+	end
+	return AutoPobLossy(ours) == sent
+end
+
 -- Runs `fn`, then closes every popup it left open, also when it fails.
 function glue.in_popups(fn)
 	local popups = pob.main.main.popups

@@ -231,6 +231,17 @@ pub fn register_compression(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
     g.set("Inflate", lua.create_function(inflate)?)?;
     g.set("Deflate", lua.create_function(deflate)?)?;
+    // the text a view shows for a PoB string (`pob.rs` reads strings that aren't UTF-8 with
+    // their bad bytes as U+FFFD), so the glue can find an entry by the text the UI sent
+    g.set(
+        "AutoPobLossy",
+        lua.create_function(|lua, text: LuaString| {
+            match String::from_utf8_lossy(&text.as_bytes()) {
+                std::borrow::Cow::Borrowed(_) => Ok(text),
+                std::borrow::Cow::Owned(fixed) => lua.create_string(fixed),
+            }
+        })?,
+    )?;
     Ok(())
 }
 

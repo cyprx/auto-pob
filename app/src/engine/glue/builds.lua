@@ -250,7 +250,7 @@ local function loadout_index(label)
 	local drop = pob.build.controls.buildLoadouts
 	require_usable(drop)
 	for index, entry in ipairs(drop.list) do
-		if entry == label then
+		if glue.same_text(entry, label) then
 			return drop, index
 		end
 	end

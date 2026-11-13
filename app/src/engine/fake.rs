@@ -64,6 +64,8 @@ pub type Step = Result<Affected, String>;
 pub struct Fake {
     pub log: Arc<Mutex<Log>>,
     pub fail_set_config: Option<String>,
+    /// `BrowseBuilds` fails with this, as a Lua call after the command's own work could
+    pub fail_browse: Option<String>,
     /// Node power steps still to run; the loop works through them while no command is waiting.
     pub background: Arc<Mutex<VecDeque<Step>>>,
     /// Gem DPS steps still to run; they go before the power steps.
@@ -120,6 +122,7 @@ impl Fake {
             Fake {
                 log: log.clone(),
                 fail_set_config: None,
+                fail_browse: None,
                 background: Arc::default(),
                 gem_background: Arc::default(),
                 anoint_background: Arc::default(),
@@ -283,6 +286,9 @@ impl Fake {
                 share_code: true,
                 ..Affected::default()
             }),
+            Command::BrowseBuilds { .. } if self.fail_browse.is_some() => {
+                anyhow::bail!("{}", self.fail_browse.clone().unwrap_or_default())
+            }
             Command::BrowseBuilds { folder } => Ok(Affected {
                 browse: Some(folder),
                 ..Affected::default()

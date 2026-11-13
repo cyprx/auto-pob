@@ -530,6 +530,7 @@ dependencies = [
  "arboard",
  "directories",
  "eframe",
+ "egui",
  "egui_extras",
  "env_logger",
  "flate2",

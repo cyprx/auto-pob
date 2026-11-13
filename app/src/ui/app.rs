@@ -1736,7 +1736,6 @@ impl AutoPobApp {
         let config = self.config.clone();
         egui::CentralPanel::default().show(ui, |ui| {
             build::tab_strip(ui, &mut self.tab);
-            ui.separator();
             match self.tab {
                 BuildTab::Tree => {
                     self.tree.set_enabled_sockets(self.items.enabled_sockets());

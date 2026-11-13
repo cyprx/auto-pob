@@ -95,20 +95,10 @@ impl SkillsUi {
                         let id = ui.scope_id().with(("skills_row", i));
                         let selected = i == self.selected;
                         let inner = ui.dnd_drag_source(id, i, |ui| {
-                            let fill = if selected {
-                                ui.visuals().selection.bg_fill
-                            } else {
-                                Color32::TRANSPARENT
-                            };
-                            egui::Frame::NONE
-                                .fill(fill)
-                                .inner_margin(2.0)
-                                .show(ui, |ui| {
-                                    ui.set_min_width(ui.available_width());
-                                    ui.add(
-                                        egui::Label::new(row_text(g, default)).selectable(false),
-                                    );
-                                });
+                            crate::theme::row_frame(ui, selected, |ui| {
+                                ui.set_min_width(ui.available_width());
+                                ui.add(egui::Label::new(row_text(g, default)).selectable(false));
+                            });
                         });
                         // the click goes over the drag source, which senses only drags
                         let row = ui.interact(

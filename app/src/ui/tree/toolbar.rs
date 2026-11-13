@@ -1049,18 +1049,10 @@ impl Toolbar {
                             } else {
                                 spec.title.clone()
                             };
-                            let fill = if i == selected {
-                                ui.visuals().selection.bg_fill
-                            } else {
-                                egui::Color32::TRANSPARENT
-                            };
-                            egui::Frame::NONE
-                                .fill(fill)
-                                .inner_margin(2.0)
-                                .show(ui, |ui| {
-                                    ui.set_min_width(240.0);
-                                    ui.add(egui::Label::new(label).selectable(false));
-                                });
+                            crate::theme::row_frame(ui, i == selected, |ui| {
+                                ui.set_min_width(240.0);
+                                ui.add(egui::Label::new(label).selectable(false));
+                            });
                         },
                     );
                     for (i, row) in rows.rows.iter().enumerate() {

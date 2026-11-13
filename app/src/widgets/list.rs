@@ -109,64 +109,68 @@ pub fn list_with(
 
     let sort = list_sort(ui.ctx(), id);
     let mut clicked_row = false;
-    let mut table = TableBuilder::new(ui)
-        .id_salt(id)
-        .striped(true)
-        .sense(Sense::click())
-        .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
-    for c in columns {
-        table = table.column(Column::exact(c.width));
-    }
-    if let Some(i) = scroll_to {
-        table = table.scroll_to_row(i, None);
-    }
     let mut new_sort = None;
-    table
-        .header(ROW_HEIGHT, |mut header| {
-            for (i, c) in columns.iter().enumerate() {
-                header.col(|ui| {
-                    let arrow = match sort {
-                        Some(s) if s.column == i => {
-                            if s.ascending {
-                                " ^"
-                            } else {
-                                " v"
+    // a hovered row gets the list rows' warm fill. That also tints a hovered widget's fill in
+    // the table (the scroll bar's handle), so cells hold plain labels only.
+    theme::table_rows(ui, |ui| {
+        let mut table = TableBuilder::new(ui)
+            .id_salt(id)
+            .striped(true)
+            .sense(Sense::click())
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
+        for c in columns {
+            table = table.column(Column::exact(c.width));
+        }
+        if let Some(i) = scroll_to {
+            table = table.scroll_to_row(i, None);
+        }
+        table
+            .header(ROW_HEIGHT, |mut header| {
+                for (i, c) in columns.iter().enumerate() {
+                    header.col(|ui| {
+                        let arrow = match sort {
+                            Some(s) if s.column == i => {
+                                if s.ascending {
+                                    " ^"
+                                } else {
+                                    " v"
+                                }
                             }
+                            _ => "",
+                        };
+                        let text = egui::RichText::new(format!("{}{arrow}", c.title))
+                            .color(theme::HEADING)
+                            .strong();
+                        let sense = if sortable {
+                            Sense::click()
+                        } else {
+                            Sense::hover()
+                        };
+                        if ui.add(Label::new(text).sense(sense)).clicked() {
+                            new_sort = Some(ListSort {
+                                column: i,
+                                ascending: !matches!(sort, Some(s) if s.column == i && s.ascending),
+                            });
                         }
-                        _ => "",
-                    };
-                    let text = egui::RichText::new(format!("{}{arrow}", c.title))
-                        .color(theme::HEADING)
-                        .strong();
-                    let sense = if sortable {
-                        Sense::click()
-                    } else {
-                        Sense::hover()
-                    };
-                    if ui.add(Label::new(text).sense(sense)).clicked() {
-                        new_sort = Some(ListSort {
-                            column: i,
-                            ascending: !matches!(sort, Some(s) if s.column == i && s.ascending),
-                        });
+                    });
+                }
+            })
+            .body(|body| {
+                body.rows(ROW_HEIGHT, rows, |mut r| {
+                    let i = r.index();
+                    r.set_selected(*selected == Some(i));
+                    row(i, &mut r);
+                    let resp = r.response();
+                    if resp.clicked() {
+                        *selected = Some(i);
+                        clicked_row = true;
+                    }
+                    if resp.double_clicked() {
+                        action = Some(ListAction::Activate(i));
                     }
                 });
-            }
-        })
-        .body(|body| {
-            body.rows(ROW_HEIGHT, rows, |mut r| {
-                let i = r.index();
-                r.set_selected(*selected == Some(i));
-                row(i, &mut r);
-                let resp = r.response();
-                if resp.clicked() {
-                    *selected = Some(i);
-                    clicked_row = true;
-                }
-                if resp.double_clicked() {
-                    action = Some(ListAction::Activate(i));
-                }
             });
-        });
+    });
 
     if let Some(s) = new_sort {
         ui.ctx().data_mut(|d| d.insert_temp(id, s));

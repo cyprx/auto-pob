@@ -5,7 +5,7 @@ use crate::engine::Command;
 use crate::engine::views::{SkillSetEntry, SkillsView};
 use crate::ui::items::list::reorder_rows;
 use crate::ui::name_box::{self, Filter};
-use eframe::egui::{self, Color32};
+use eframe::egui;
 
 /// What a dragged set row carries: its position
 struct SetDrag(usize);
@@ -170,18 +170,10 @@ impl SkillsUi {
                             } else {
                                 title(set).to_owned()
                             };
-                            let fill = if selected == Some(set.id) {
-                                ui.visuals().selection.bg_fill
-                            } else {
-                                Color32::TRANSPARENT
-                            };
-                            egui::Frame::NONE
-                                .fill(fill)
-                                .inner_margin(2.0)
-                                .show(ui, |ui| {
-                                    ui.set_min_width(240.0);
-                                    ui.add(egui::Label::new(label).selectable(false));
-                                });
+                            crate::theme::row_frame(ui, selected == Some(set.id), |ui| {
+                                ui.set_min_width(240.0);
+                                ui.add(egui::Label::new(label).selectable(false));
+                            });
                         },
                     );
                     for (i, row) in rows.rows.iter().enumerate() {

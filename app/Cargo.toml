@@ -22,6 +22,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 directories = "6.0.0"
 eframe = "0.37"
+# `experimental` makes egui's widget themes public: the edit boxes' hover look (theme.rs
+# EditBoxStyle, the only user of that API). Keep the version identical to eframe's, or the
+# build gets two eguis; the theme API is unstable, so check EditBoxStyle on every bump.
+egui = { version = "0.37", features = ["experimental"] }
 egui_extras = "0.37"
 flate2 = "1.1.2"
 image = { version = "0.25.8", default-features = false, features = ["jpeg", "png", "webp"] }

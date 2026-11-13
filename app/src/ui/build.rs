@@ -439,18 +439,30 @@ fn new_loadout_dialog(ctx: &egui::Context, state: &mut TopBarState, commands: &m
     }
 }
 
-pub fn tab_strip(ui: &mut egui::Ui, tab: &mut BuildTab) {
-    ui.horizontal(|ui| {
-        ui.selectable_value(tab, BuildTab::Tree, "Tree");
-        ui.selectable_value(tab, BuildTab::Skills, "Skills");
-        ui.selectable_value(tab, BuildTab::Items, "Items");
-        ui.selectable_value(tab, BuildTab::Calcs, "Calcs");
-        ui.selectable_value(tab, BuildTab::Config, "Config");
-        ui.selectable_value(tab, BuildTab::Notes, "Notes");
-        ui.selectable_value(tab, BuildTab::Compare, "Compare");
-        ui.selectable_value(tab, BuildTab::Import, "Import/Export");
-    });
+/// The main tabs; their responses, in order
+pub fn tab_strip(ui: &mut egui::Ui, tab: &mut BuildTab) -> Vec<egui::Response> {
+    let tabs = TABS.map(|(_, label)| label);
+    let selected = TABS.iter().position(|(t, _)| t == tab).unwrap_or(0);
+    let responses = crate::theme::main_tabs(ui, &tabs, selected);
+    for (response, (t, _)) in responses.iter().zip(TABS) {
+        if response.clicked() {
+            *tab = t;
+        }
+    }
+    responses
 }
+
+/// The main tabs, in the strip's order
+const TABS: [(BuildTab, &str); 8] = [
+    (BuildTab::Tree, "Tree"),
+    (BuildTab::Skills, "Skills"),
+    (BuildTab::Items, "Items"),
+    (BuildTab::Calcs, "Calcs"),
+    (BuildTab::Config, "Config"),
+    (BuildTab::Notes, "Notes"),
+    (BuildTab::Compare, "Compare"),
+    (BuildTab::Import, "Import/Export"),
+];
 
 #[cfg(test)]
 mod tests {
@@ -935,5 +947,232 @@ mod tests {
         );
         let sent = h.click("bloodline_1");
         assert_eq!(sent, ["SelectSecondaryAscendancy { id: 8 }"]);
+    }
+
+    const GOLD: egui::Color32 = egui::Color32::from_rgb(200, 160, 80);
+    const BAND: egui::Color32 = egui::Color32::from_rgb(11, 9, 7);
+
+    /// [`strip_at`] on a 1200 pt wide screen
+    fn strip(tab: &mut BuildTab, frames: Vec<Vec<Event>>) -> (Vec<Rect>, Vec<Painted>) {
+        strip_at(1200.0, tab, frames)
+    }
+
+    /// A painted rectangle: where, its fill, its border's colour (transparent when none)
+    type Painted = (Rect, egui::Color32, egui::Color32);
+
+    /// Draws the main tab strip, with the app's fonts, in a central panel `width` wide, frame
+    /// by frame; the last frame's tab rectangles and painted rectangles
+    fn strip_at(
+        width: f32,
+        tab: &mut BuildTab,
+        frames: Vec<Vec<Event>>,
+    ) -> (Vec<Rect>, Vec<Painted>) {
+        fn gold(shape: &egui::Shape, out: &mut Vec<Painted>) {
+            match shape {
+                egui::Shape::Rect(r) => {
+                    let border = if r.stroke.width > 0.0 {
+                        r.stroke.color
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+                    out.push((r.rect, r.fill, border))
+                }
+                // a line as a flat rectangle, its colour as the border
+                egui::Shape::LineSegment { points, stroke } => out.push((
+                    Rect::from_two_pos(points[0], points[1]),
+                    egui::Color32::TRANSPARENT,
+                    stroke.color,
+                )),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| gold(s, out)),
+                _ => {}
+            }
+        }
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        let mut out = (Vec::new(), Vec::new());
+        for events in frames {
+            let input = RawInput {
+                events,
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 400.0),
+                )),
+                ..Default::default()
+            };
+            let mut tabs = Vec::new();
+            let output = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    tabs = tab_strip(ui, tab).iter().map(|r| r.rect).collect();
+                });
+            });
+            let mut accents = Vec::new();
+            for c in &output.shapes {
+                gold(&c.shape, &mut accents);
+            }
+            output.drop_without_applying_deltas();
+            out = (tabs, accents);
+        }
+        out
+    }
+
+    /// The main tabs are 30 px tall with gaps between them; the selected one alone has the
+    /// gold line along its top edge
+    #[test]
+    fn main_tabs_are_tall_and_the_selected_one_has_a_gold_top() {
+        let mut tab = BuildTab::Items;
+        let (tabs, gold) = strip(&mut tab, vec![vec![], vec![]]);
+        assert_eq!(tabs.len(), 8);
+        for t in &tabs {
+            assert_eq!(t.height(), crate::theme::TAB_HEIGHT, "{t:?}");
+        }
+        for pair in tabs.windows(2) {
+            assert!(pair[1].left() > pair[0].right(), "{pair:?}");
+        }
+        let items = tabs[2];
+        let band: Vec<Rect> = gold.iter().filter(|g| g.1 == BAND).map(|g| g.0).collect();
+        let gold: Vec<Rect> = gold.iter().filter(|g| g.1 == GOLD).map(|g| g.0).collect();
+        // the band spans the panel, margins included, and holds the tabs
+        assert_eq!(band.len(), 1, "{band:?}");
+        assert_eq!((band[0].left(), band[0].right()), (0.0, 1200.0));
+        assert!(band[0].top() <= items.top() && band[0].bottom() == items.bottom());
+        assert_eq!(gold.len(), 1, "{gold:?}");
+        let accent = gold[0];
+        assert_eq!(accent.top(), items.top());
+        assert_eq!(accent.x_range(), items.x_range());
+        assert_eq!(accent.height(), crate::theme::TAB_ACCENT);
+    }
+
+    /// A click on a tab selects it
+    #[test]
+    fn a_click_on_a_main_tab_selects_it() {
+        let mut tab = BuildTab::Tree;
+        let (tabs, _) = strip(&mut tab, vec![vec![]]);
+        let at = tabs[3].center();
+        let press = |pressed| Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let (_, gold) = strip(
+            &mut tab,
+            vec![
+                vec![Event::PointerMoved(at)],
+                vec![press(true)],
+                vec![press(false)],
+                vec![],
+            ],
+        );
+        assert_eq!(tab, BuildTab::Calcs);
+        let accent = gold.iter().find(|g| g.1 == GOLD).unwrap().0;
+        assert_eq!(accent.x_range(), tabs[3].x_range());
+    }
+
+    /// In a narrow panel the strip shrinks, then wraps: every tab stays inside the panel and
+    /// under the band, and the last one still takes a click
+    #[test]
+    fn a_narrow_strip_keeps_every_tab_inside_the_panel() {
+        for width in [600.0, 450.0] {
+            let mut tab = BuildTab::Tree;
+            let (tabs, painted) = strip_at(width, &mut tab, vec![vec![], vec![]]);
+            let panel = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 400.0));
+            assert_eq!(tabs.len(), 8);
+            for t in &tabs {
+                assert!(panel.contains_rect(*t), "{width}: {t:?}");
+                assert_eq!(t.height(), crate::theme::TAB_HEIGHT);
+            }
+            let bottom = tabs.iter().map(|t| t.bottom()).fold(0.0, f32::max);
+            let band = painted.iter().find(|p| p.1 == BAND).unwrap().0;
+            assert_eq!(band.bottom(), bottom, "{width}");
+            assert!(tabs.iter().all(|t| band.contains_rect(*t)), "{width}");
+            let at = tabs[7].center();
+            let press = |pressed| Event::PointerButton {
+                pos: at,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            strip_at(
+                width,
+                &mut tab,
+                vec![
+                    vec![Event::PointerMoved(at)],
+                    vec![press(true)],
+                    vec![press(false)],
+                    vec![],
+                ],
+            );
+            assert_eq!(tab, BuildTab::Import, "{width}");
+        }
+    }
+
+    /// A main tab reached with the keyboard shows the hovered outline, so Enter's target shows
+    #[test]
+    fn a_focused_main_tab_has_the_hover_outline() {
+        let border = egui::Color32::from_rgb(236, 204, 134);
+        let tab_key = Event::Key {
+            key: Key::Tab,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        let outlined = |tab: BuildTab, t: usize| {
+            let mut tab = tab;
+            let (tabs, painted) = strip(
+                &mut tab,
+                vec![vec![], vec![tab_key.clone()], vec![], vec![]],
+            );
+            painted.iter().any(|p| p.0 == tabs[t] && p.2 == border)
+        };
+        // Tree, the first tab, takes the focus: unselected, then selected
+        assert!(outlined(BuildTab::Items, 0));
+        assert!(outlined(BuildTab::Tree, 0));
+        // without focus no tab has it
+        let mut tab = BuildTab::Items;
+        let (_, painted) = strip(&mut tab, vec![vec![], vec![]]);
+        assert!(painted.iter().all(|p| p.2 != border));
+    }
+
+    /// A hovered main tab lights up: the lighter fill and the light gold border
+    #[test]
+    fn a_hovered_main_tab_lights_up() {
+        let mut tab = BuildTab::Items;
+        let (tabs, _) = strip(&mut tab, vec![vec![]]);
+        let (_, painted) = strip(
+            &mut tab,
+            vec![vec![], vec![Event::PointerMoved(tabs[4].center())], vec![]],
+        );
+        let fill = egui::Color32::from_rgb(76, 60, 40);
+        let border = egui::Color32::from_rgb(236, 204, 134);
+        assert!(
+            painted.iter().any(|p| p.0 == tabs[4] && p.1 == fill),
+            "{painted:?}"
+        );
+        assert!(painted.iter().any(|p| p.0 == tabs[4] && p.2 == border));
+        // the others don't
+        assert!(painted.iter().all(|p| p.0 != tabs[3] || p.1 != fill));
+    }
+
+    /// The line under the band is broken under the selected tab, joining it to the content
+    #[test]
+    fn the_line_under_the_band_breaks_under_the_selected_tab() {
+        let bronze = egui::Color32::from_rgb(120, 92, 58);
+        let mut tab = BuildTab::Calcs;
+        let (tabs, painted) = strip(&mut tab, vec![vec![], vec![]]);
+        let selected = tabs[3];
+        let mut lines: Vec<Rect> = painted
+            .iter()
+            .filter(|p| p.2 == bronze && p.0.height() == 0.0)
+            .map(|p| p.0)
+            .collect();
+        lines.sort_by(|a, b| a.left().total_cmp(&b.left()));
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[0].center().y, selected.bottom() - 0.5);
+        assert_eq!((lines[0].left(), lines[0].right()), (0.0, selected.left()));
+        assert_eq!(
+            (lines[1].left(), lines[1].right()),
+            (selected.right(), 1200.0)
+        );
     }
 }

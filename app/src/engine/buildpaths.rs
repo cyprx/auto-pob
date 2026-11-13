@@ -200,28 +200,71 @@ pub(crate) fn name_free(entry: &str, new_name: &str, rename: bool) -> Result<()>
 const TREE_FOLDERS: usize = 2000;
 const TREE_DEPTH: usize = 12;
 
+// How often the tree walk read a folder or looked at an entry's metadata, counted in tests
+#[cfg(test)]
+thread_local! {
+    static WALK_COUNTS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+fn walk_read(dir: &Path) -> std::io::Result<fs::ReadDir> {
+    #[cfg(test)]
+    WALK_COUNTS.with(|c| c.set((c.get().0 + 1, c.get().1)));
+    fs::read_dir(dir)
+}
+
+fn walk_stat(path: &Path) -> std::io::Result<fs::Metadata> {
+    #[cfg(test)]
+    WALK_COUNTS.with(|c| c.set((c.get().0, c.get().1 + 1)));
+    fs::symlink_metadata(path)
+}
+
 /// Every folder below `root`, links not followed (a link could lead out, or loop), shallowest
-/// first, each in name order.
+/// first, each in name order. Each folder is read once, and only folders are looked at: a
+/// file's type comes from the listing, so a Builds folder of many builds costs no stat per build.
 pub(crate) fn folder_tree(root: &str) -> Vec<crate::engine::views::FolderNode> {
     use crate::engine::views::FolderNode;
-    let mut out = Vec::new();
-    let mut level = vec![(PathBuf::from(root_dir(root)), String::new())];
-    for _ in 0..TREE_DEPTH {
+    let mut out: Vec<FolderNode> = Vec::new();
+    // a folder to read, its path below the root, and where it is in `out` (none for the root)
+    let mut level = vec![(PathBuf::from(root_dir(root)), String::new(), None)];
+    for depth in 0..=TREE_DEPTH {
         let mut next = Vec::new();
-        for (dir, rel) in level {
-            let Ok(read) = fs::read_dir(&dir) else {
+        for (dir, rel, at) in level {
+            let Ok(read) = walk_read(&dir) else {
                 continue;
             };
-            let mut names: Vec<_> = read.filter_map(Result::ok).collect();
-            names.sort_by_key(|e| e.file_name());
-            for entry in names {
-                let Ok(meta) = fs::symlink_metadata(entry.path()) else {
+            let mut any = false;
+            let mut folders = Vec::new();
+            for entry in read {
+                any = true;
+                // below the deepest level only whether a folder is empty counts
+                if depth == TREE_DEPTH {
+                    break;
+                }
+                let Ok(entry) = entry else {
                     continue;
                 };
+                // the listing's own type: a link is never a folder here
+                if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    folders.push(entry);
+                }
+            }
+            if let Some(at) = at {
+                let node: &mut FolderNode = &mut out[at];
+                node.empty = !any;
+            }
+            folders.sort_by_key(|e| e.file_name());
+            for entry in folders {
+                if out.len() >= TREE_FOLDERS {
+                    break;
+                }
                 let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
                     continue;
                 };
-                if !meta.is_dir() || out.len() >= TREE_FOLDERS {
+                // looked at again, not followed: it may have changed since the listing
+                let Ok(meta) = walk_stat(&entry.path()) else {
+                    continue;
+                };
+                if !meta.is_dir() {
                     continue;
                 }
                 let path = format!("{rel}{name}/");
@@ -232,9 +275,9 @@ pub(crate) fn folder_tree(root: &str) -> Vec<crate::engine::views::FolderNode> {
                         .ok()
                         .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
                         .map_or(0, |d| d.as_secs()),
-                    empty: fs::read_dir(entry.path()).is_ok_and(|mut r| r.next().is_none()),
+                    empty: false,
                 });
-                next.push((entry.path(), path));
+                next.push((entry.path(), path, Some(out.len() - 1)));
             }
         }
         level = next;
@@ -486,6 +529,37 @@ mod tests {
             [(".dot/", true), ("sub/", false), ("sub/deep/", true)]
         );
         assert!(folders.iter().all(|f| f.modified > 0));
+    }
+
+    #[test]
+    fn the_folder_tree_looks_only_at_folders() {
+        let tree = Tree::new("treecost");
+        fs::create_dir_all(tree.0.join("Builds/sub/deep")).unwrap();
+        for i in 0..50 {
+            fs::write(tree.0.join(format!("Builds/b{i}.xml")), "b").unwrap();
+            fs::write(tree.0.join(format!("Builds/sub/s{i}.xml")), "s").unwrap();
+        }
+        WALK_COUNTS.with(|c| c.set((0, 0)));
+        let folders = folder_tree(&tree.root());
+        assert_eq!(folders.len(), 2);
+        // the root and each folder read once; a stat per folder, none per build
+        assert_eq!(WALK_COUNTS.with(|c| c.get()), (3, 2));
+    }
+
+    #[test]
+    fn the_folder_tree_stops_at_its_depth_and_still_knows_empty_folders() {
+        let tree = Tree::new("treedepth");
+        let mut deep = tree.0.join("Builds/sub");
+        for i in 0..TREE_DEPTH + 2 {
+            deep.push(format!("d{i}"));
+        }
+        fs::create_dir_all(&deep).unwrap();
+        let folders = folder_tree(&tree.root());
+        assert_eq!(folders.len(), TREE_DEPTH);
+        let last = folders.last().unwrap();
+        assert_eq!(last.path.matches('/').count(), TREE_DEPTH);
+        assert!(!last.empty, "the deepest listed folder holds one more");
+        assert!(folders.iter().all(|f| !f.empty));
     }
 
     #[test]

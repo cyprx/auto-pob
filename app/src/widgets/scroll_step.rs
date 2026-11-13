@@ -54,6 +54,13 @@ fn held(ctx: &egui::Context) -> bool {
     scope.typing && (scope.build_box || !scope.build_host)
 }
 
+/// A box of the top bar or the sidebar has the keyboard: Build's host takes every key before
+/// the tab sees it (Build.lua:1230)
+pub fn build_box_typing(ctx: &egui::Context) -> bool {
+    let scope: FocusScope = ctx.data(|d| d.get_temp(scope_id())).unwrap_or_default();
+    scope.typing && scope.build_box
+}
+
 /// Under one of the app's windows, a control of a panel behind it gets nothing: panels are
 /// egui's background layer, and the windows' own controls are drawn above it
 fn behind_window(ctx: &egui::Context, response: &egui::Response) -> bool {

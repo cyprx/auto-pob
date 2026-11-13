@@ -3335,7 +3335,7 @@ ported = "app/src/ui/items/db.rs F1 over a database row opens its poewiki page (
 ported = "app/src/ui/items/slots.rs F1 over an item row opens its poewiki page (unique name, else base)"
 
 [keys."items.d"]
-ported = "app/src/ui/items/mod.rs Ctrl+D"
+ported = "app/src/ui/items/mod.rs Ctrl+D, also while a box of the tab has the keyboard (ItemsTab.lua:1481)"
 
 [keys."items.e"]
 ported = "app/src/ui/items/slots.rs E over a slot holding an item sends EditItem"
@@ -3344,7 +3344,7 @@ ported = "app/src/ui/items/slots.rs E over a slot holding an item sends EditItem
 ported = "app/src/ui/items/slots.rs Ctrl+F opens the item database on PoB's unique or rare search (items/db.rs focus_search)"
 
 [keys."items.v"]
-ported = "app/src/ui/items/mod.rs Ctrl+V paste"
+ported = "app/src/ui/items/mod.rs Ctrl+V paste, read before the controls as ItemsTab.lua:1454: a box of the tab with the keyboard takes the text and the item is tried too (shortcuts.rs ctrl_v_text; not a right-click paste, not a top bar box)"
 
 [keys."items.y"]
 ported = "app/src/ui/app.rs Ctrl+Y redo"
@@ -3458,7 +3458,7 @@ ported = "app/src/ui/skills/groups.rs right-click menu; Ctrl+right-click sends S
 ported = "app/src/ui/skills/keys.rs F1 over a socket group opens its first gem's poewiki page"
 
 [keys."skills.v"]
-ported = "app/src/ui/skills/mod.rs Ctrl+V paste"
+ported = "app/src/ui/skills/mod.rs Ctrl+V paste, read before the controls as SkillsTab.lua:628: also while a box of the tab has the keyboard (shortcuts.rs ctrl_v_text)"
 
 [keys."skills.y"]
 ported = "app/src/ui/app.rs Ctrl+Y redo"

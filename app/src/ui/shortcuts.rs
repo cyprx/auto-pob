@@ -119,6 +119,34 @@ fn copy(input: &egui::InputState) -> bool {
     input.events.iter().any(|e| matches!(e, Event::Copy)) || pressed(input, Key::C, true)
 }
 
+fn right_paste_id() -> egui::Id {
+    egui::Id::NULL.with("pob_right_click_paste")
+}
+
+/// The app marks the frame whose paste is a right-click's into a box, which is no Ctrl+V
+pub fn mark_right_click_paste(ctx: &egui::Context) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(right_paste_id(), pass));
+}
+
+/// The text Ctrl+V pastes this frame, for a tab that reads the key before its controls, so
+/// even while a box of its own has the keyboard and takes the paste too (ItemsTab.lua:1454,
+/// SkillsTab.lua:628). A right-click's paste into a box isn't the key; a box of the top bar or
+/// the sidebar takes the key before the tab (Build.lua:1230).
+pub fn ctrl_v_text(ui: &egui::Ui) -> Option<String> {
+    let ctx = ui.ctx();
+    let right = ctx.data(|d| d.get_temp::<u64>(right_paste_id())) == Some(ctx.cumulative_pass_nr());
+    if right || crate::widgets::scroll_step::build_box_typing(ctx) {
+        return None;
+    }
+    ui.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            Event::Paste(text) => Some(text.clone()),
+            _ => None,
+        })
+    })
+}
+
 /// PoB's list keys (ListControl.lua:375-382): Up and Down step the selection round the list,
 /// Home and End go to its ends. The new index, the key taken out of `input`.
 pub fn list_key(

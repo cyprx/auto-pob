@@ -1254,6 +1254,7 @@ impl AutoPobApp {
     fn right_click_paste(&mut self, ctx: &egui::Context) {
         if let Some(text) = self.paste_next.take() {
             ctx.input_mut(|i| i.events.insert(0, egui::Event::Paste(text)));
+            shortcuts::mark_right_click_paste(ctx);
         }
         if !ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
             return;

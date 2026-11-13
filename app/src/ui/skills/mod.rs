@@ -221,18 +221,14 @@ impl SkillsUi {
         if let Some(text) = self.clipboard.take() {
             ui.ctx().copy_text(text);
         }
-        // Ctrl+V outside a text field and any dialog
-        if !self.has_dialog() && !self.modal && !ui.ctx().text_edit_focused() {
-            let pasted = ui.input(|i| {
-                i.events.iter().find_map(|e| match e {
-                    egui::Event::Paste(text) => Some(text.clone()),
-                    _ => None,
-                })
-            });
-            if let Some(text) = pasted {
-                self.select_new = true;
-                out.commands.push(Command::PasteSocketGroup { text });
-            }
+        // Ctrl+V outside any dialog: the tab reads it before its controls, so a box of its own
+        // with the keyboard takes the paste too (SkillsTab.lua:628)
+        if !self.has_dialog()
+            && !self.modal
+            && let Some(text) = crate::ui::shortcuts::ctrl_v_text(ui)
+        {
+            self.select_new = true;
+            out.commands.push(Command::PasteSocketGroup { text });
         }
 
         self.set_row(ui, &view, &mut out);

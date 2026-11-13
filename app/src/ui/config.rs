@@ -1124,8 +1124,10 @@ impl ConfigUi {
                 text = step_number(&text, hint, step > 0, kind);
             }
             if step != 0 {
-                // SetText(..., true): sent at once (EditControl.lua:96-103)
+                // SetText(..., true): sent at once, and the box's undo starts over
+                // (EditControl.lua:96-103)
                 changed = true;
+                crate::widgets::edit_box::forget_undo(ui.ctx(), response.id);
             }
         }
         if matches!(style, FieldStyle::Multi { .. }) {
@@ -1747,6 +1749,35 @@ mod tests {
             debug(&sent),
             ["SetConfig { var: \"n\", value: Number(1234567890.0) }"]
         );
+    }
+
+    /// A step of the focused count box is PoB's `SetText(..., true)`, which starts the box's
+    /// undo over (EditControl.lua:96-103, 680-700): Ctrl+Z after it changes nothing
+    #[test]
+    fn a_step_starts_the_count_boxs_undo_over() {
+        let mut h = with_number(ConfigKind::Count, Some(5.0), None);
+        h.click("field:n");
+        h.time += 2.0;
+        h.frame(vec![Event::Text("2".into())]);
+        h.time += 2.0;
+        h.frame(vec![]);
+        let key = |key, modifiers| Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        assert_eq!(
+            debug(&h.frame(vec![key(egui::Key::ArrowUp, Modifiers::NONE)])),
+            ["SetConfig { var: \"n\", value: Number(53.0) }"]
+        );
+        let mut sent = vec![];
+        for _ in 0..3 {
+            h.time += 2.0;
+            sent.extend(h.frame(vec![key(egui::Key::Z, Modifiers::COMMAND)]));
+        }
+        assert!(sent.is_empty(), "{:?}", debug(&sent));
     }
 
     /// PoB's number box sets its option to tonumber(buf) (ConfigTab.lua:273-280): a count of

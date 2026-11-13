@@ -216,8 +216,11 @@ impl EditBox {
                     self.text = stepped(&self.text, step > 0, opts.signed);
                 }
                 self.sent.clone_from(&self.text);
+                self.watch.sent(&self.text);
                 self.pending = false;
                 self.stepped = true;
+                // SetText resets the box's undo (EditControl.lua:103)
+                forget_undo(ui.ctx(), id);
                 send = Some(self.text.clone());
             }
             (response, send)
@@ -747,6 +750,26 @@ mod tests {
         h.focus();
         undo_keys(&mut h);
         assert_eq!(h.a.text, "");
+    }
+
+    /// A step of a focused `%D` box is PoB's `SetText(..., true)`, which starts its undo over
+    /// (EditControl.lua:96-103, 680-700): Ctrl+Z after it doesn't take the box back to the
+    /// number it held before, nor to what was typed
+    #[test]
+    fn a_step_starts_the_undo_over() {
+        let mut h = Harness::new("5");
+        h.opts = EditBoxOptions::number(50.0, Some(3));
+        h.frame(vec![]);
+        h.focus();
+        h.type_text("2");
+        h.time += 2.0;
+        h.frame(vec![]);
+        assert_eq!(h.key(Key::ArrowUp), ["53"]);
+        h.time += 2.0;
+        h.frame(vec![]);
+        undo_keys(&mut h);
+        assert_eq!(h.a.text, "53");
+        assert!(h.click_away().is_empty());
     }
 
     #[test]

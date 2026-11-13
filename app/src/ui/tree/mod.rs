@@ -1626,6 +1626,36 @@ mod tests {
         );
     }
 
+    /// A step of the focused Custom depth box is PoB's `SetText(..., true)`, which starts its
+    /// undo over (EditControl.lua:96-103, 680-700): Ctrl+Z after it keeps the stepped depth
+    #[test]
+    fn a_step_starts_the_custom_depth_boxs_undo_over() {
+        let mut h = heat_harness();
+        press(&mut h, "heat_depth");
+        press(&mut h, "depth:custom");
+        press(&mut h, "depth_custom");
+        h.frame(vec![Event::Text("7".into())]);
+        let key = |key, modifiers| Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        h.time += 2.0;
+        h.frame(vec![]);
+        let out = h.frame(vec![key(egui::Key::ArrowUp, egui::Modifiers::NONE)]);
+        assert_eq!(
+            debug(&out.commands),
+            ["SetHeatmap { stat: Some(\"Life\"), max_depth: Some(8) }"]
+        );
+        for _ in 0..3 {
+            h.time += 2.0;
+            h.frame(vec![key(egui::Key::Z, egui::Modifiers::COMMAND)]);
+        }
+        assert_eq!(h.tab.toolbar.custom_depth_for_test(), Some("8"));
+    }
+
     #[test]
     fn a_refused_shrink_still_ends_as_done() {
         // TreeTab.lua:820-826: the button always ends as Done

@@ -815,6 +815,10 @@ impl Toolbar {
                 for _ in 0..step.unsigned_abs() {
                     *text = crate::widgets::edit_box::stepped(text, step > 0, false);
                 }
+                if step != 0 {
+                    // SetText(..., true) starts the box's undo over (EditControl.lua:103)
+                    crate::widgets::edit_box::forget_undo(ui.ctx(), field.id);
+                }
                 if step != 0 || field.lost_focus() {
                     // an empty box is no limit, as PoB's `tonumber("")`
                     let depth = text.parse::<u32>().ok();

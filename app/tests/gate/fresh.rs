@@ -371,3 +371,69 @@ fn the_host_functions_pob_calls_are_there() {
     let _ = std::fs::remove_dir_all(&pob);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// New Loadout with a name of non-ASCII characters only, on the build a fresh start opens:
+/// PoB's name box runs under LuaJIT without `main.unicode`, so its filter (EditControl.lua:46)
+/// drops every byte, Save stays disabled (Build.lua:319-344) and nothing is made. Ours refuses.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_non_ascii_loadout_name_makes_nothing_as_in_pob() {
+    let _guard = lock();
+    let root = std::env::temp_dir().join(format!("auto-pob-loadout-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let user = missing_user(&root, "ours");
+    let pob = pob_farm("loadout");
+    const NAME: &str = "日本語";
+
+    let lua = upstream_lua(&pob).expect("upstream PoB");
+    lua.globals().set("NAME", NAME).unwrap();
+    let (unicode, buf, enabled, specs): (bool, String, bool, i64) = lua
+        .load(
+            r#"
+            local drop = build.controls.buildLoadouts
+            for i, value in ipairs(drop.list) do
+                if value == "^7^7New Loadout" then drop:SetSel(i) end
+            end
+            local popup = main.popups[1]
+            local edit = popup.controls.edit
+            edit:SelectAll()
+            edit:Insert(NAME)
+            local enabled = popup.controls.save.enabled and true or false
+            main:ClosePopup()
+            return main.unicode and true or false, edit.buf, enabled, #build.treeTab.specList
+            "#,
+        )
+        .eval()
+        .unwrap();
+    assert!(!unicode, "upstream runs without main.unicode");
+    // the selection stays: Insert dropped everything before replacing it
+    assert_eq!(buf, "New Loadout");
+    assert!(!enabled, "PoB's Save stays disabled");
+    assert_eq!(specs, 1);
+
+    let mut backend = PobBackend::start_with(Game::Poe1, &pob, &user, canned(&canned_web()))
+        .expect("starting PoB");
+    let unicode: bool = backend
+        .lua
+        .load("return pob.main.main.unicode and true or false")
+        .eval()
+        .unwrap();
+    assert!(!unicode, "our PoB runs without main.unicode too");
+    let err = backend
+        .apply(
+            auto_pob::engine::Command::NewLoadout { name: NAME.into() },
+            &|_| {},
+        )
+        .unwrap_err();
+    assert_eq!(err.to_string(), "the loadout needs a name");
+    let specs: i64 = backend
+        .lua
+        .load("return #pob.build.treeTab.specList")
+        .eval()
+        .unwrap();
+    assert_eq!(specs, 1, "nothing was made");
+    drop(backend);
+    drop(lua);
+    let _ = std::fs::remove_dir_all(&pob);
+    let _ = std::fs::remove_dir_all(&root);
+}

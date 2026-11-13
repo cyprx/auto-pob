@@ -134,6 +134,9 @@ pub struct BuildListUi {
     navigating: Option<String>,
     /// Where each visible row was drawn this frame
     row_rects: Vec<(usize, egui::Rect)>,
+    /// The path's segments as drawn, with the folder each stands for: drop targets for a
+    /// dragged row (BuildListControl.lua:27-50)
+    crumb_rects: Vec<(egui::Rect, String)>,
     search_id: egui::Id,
     menu_id: egui::Id,
     dialog_id: egui::Id,
@@ -159,6 +162,7 @@ impl Default for BuildListUi {
             forward: Vec::new(),
             navigating: None,
             row_rects: Vec::new(),
+            crumb_rects: Vec::new(),
             search_id: egui::Id::unique("build_search"),
             menu_id: egui::Id::unique("build_row_menu"),
             dialog_id: egui::Id::unique("build_list_dialog"),
@@ -377,16 +381,19 @@ impl BuildListUi {
         let mut action = None;
         let mut path_action = None;
         // the path: every segment goes back to that folder
+        let mut crumbs = Vec::new();
         ui.horizontal(|ui| {
             let segments: Vec<&str> = view.folder.split('/').filter(|s| !s.is_empty()).collect();
             let mut target = String::new();
-            let crumb = |ui: &mut egui::Ui, key: &str, text: &str, target: &str, last: bool| {
+            let mut crumb = |ui: &mut egui::Ui, key: &str, text: &str, target: &str, last: bool| {
                 if last {
-                    theme::heading(ui, text);
+                    let r = ui.heading(egui::RichText::new(text).color(theme::HEADING));
+                    crumbs.push((r.rect, target.to_owned()));
                     None
                 } else {
                     let r = ui.link(text);
                     mark(ui, key, &r);
+                    crumbs.push((r.rect, target.to_owned()));
                     r.clicked()
                         .then(|| ListScreenAction::OpenFolder(target.to_owned()))
                 }
@@ -407,6 +414,7 @@ impl BuildListUi {
             }
         });
         action = path_action.or(action);
+        self.crumb_rects = crumbs;
         ui.horizontal(|ui| {
             ui.add_enabled_ui(!blocked && self.dialog.is_none(), |ui| {
                 let new = ui.add(theme::primary_button("New"));
@@ -831,9 +839,17 @@ impl BuildListUi {
         if pos.distance(drag.origin) < DRAG_DISTANCE {
             return None;
         }
-        let folder = match row.map(|i| &rows[i]) {
-            Some(Row::Up) => parent_folder(&view.folder),
-            Some(Row::Entry(e)) if e.is_folder && e.path != drag.path => own_path(e),
+        // a segment of the path is a folder to drop on too (BuildListControl.lua:27-50)
+        let crumb = self
+            .crumb_rects
+            .iter()
+            .find(|(r, _)| r.contains(pos))
+            .map(|(_, folder)| folder.clone());
+        let folder = match (crumb, row.map(|i| &rows[i])) {
+            (Some(folder), _) if folder != view.folder => folder,
+            (Some(_), _) => return None,
+            (None, Some(Row::Up)) => parent_folder(&view.folder),
+            (None, Some(Row::Entry(e))) if e.is_folder && e.path != drag.path => own_path(e),
             _ => return None,
         };
         Some(ListScreenAction::Move {
@@ -1693,6 +1709,33 @@ mod tests {
         assert_eq!(h.drag(one, one + Vec2::new(0.0, 2.0)), None);
         // the `..` row can't be dragged
         assert_eq!(h.drag(up, sub), None);
+    }
+
+    /// A segment of the path is a drop target too (BuildListControl.lua:27-50)
+    #[test]
+    fn drag_to_a_path_segment_sends_move() {
+        let mut h = H::new(view("a/sub/"));
+        // rows: .., sub/, one, two
+        let one = h.row_center(2);
+        let builds = h.ui.crumb_rects[0].0.center();
+        let a = h.ui.crumb_rects[1].0.center();
+        let here = h.ui.crumb_rects[2].0.center();
+        assert_eq!(
+            h.drag(one, builds),
+            Some(ListScreenAction::Move {
+                path: "/b/one.xml".into(),
+                folder: String::new(),
+            })
+        );
+        assert_eq!(
+            h.drag(one, a),
+            Some(ListScreenAction::Move {
+                path: "/b/one.xml".into(),
+                folder: "a/".into(),
+            })
+        );
+        // the folder it is in already: nothing
+        assert_eq!(h.drag(one, here), None);
     }
 
     /// The sort is one of PoB's searchable dropdowns (SearchHost)

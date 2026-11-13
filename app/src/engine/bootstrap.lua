@@ -262,6 +262,13 @@ AutoPobGuardTreeSearch()
 -- Options' Save would rewrite manifest.xml in the pinned PoB folder to switch branches; the
 -- folder is read-only for us and the beta branch is ruled out (R13)
 mainObject.main.SetManifestBranch = function() end
+-- PoB loads its item databases a slice at a time in its first frames (`onFrameFuncs.LoadItems`,
+-- Main.lua:270-280). Only the Items tab's database panel reads them, and its job runs that load
+-- itself; the glue's frames leave it alone (glue.frame), and so do the start's: a slice here
+-- cost about 40 ms of every start, and the databases would be partly loaded for nothing.
+local frameFuncs = mainObject.main.onFrameFuncs
+local loadItems = frameFuncs.LoadItems
+frameFuncs.LoadItems = nil
 runCallback("OnFrame") -- Need at least one frame for everything to initialise
 
 -- PoB reopens the last build at start. A build whose load raises (Build:Init) leaves PoB in
@@ -276,6 +283,7 @@ if mainObject.promptMsg and mainObject.main and mainObject.main.mode == "BUILD" 
 	mainObject.main:SetMode("LIST")
 	runCallback("OnFrame")
 end
+frameFuncs.LoadItems = loadItems
 
 if mainObject.promptMsg then
 	error(mainObject.promptMsg)

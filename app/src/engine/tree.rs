@@ -98,7 +98,11 @@ pub(super) fn layout(lua: &Lua, pob_dir: &Path) -> mlua::Result<TreeLayout> {
     })
 }
 
-/// Decodes a sprite sheet, caching it since every loaded build resends the tree.
+/// Decodes a sprite sheet, caching it since every loaded build resends the tree. The cache is
+/// the engine thread's, and each UI gets an engine thread of its own (a restart spawns a new
+/// one), so once that UI took a sheet's pixels to upload them it has the texture: the sheet is
+/// handed out again without them rather than decoded again (about 30 ms for a 3.29 tree,
+/// which a mastery pick would pay, since it resends the layout).
 fn load_sheet(path: &Path) -> Option<Arc<SheetImage>> {
     thread_local! {
         static CACHE: RefCell<HashMap<PathBuf, Arc<SheetImage>>> = RefCell::default();
@@ -113,11 +117,11 @@ fn load_sheet(path: &Path) -> Option<Arc<SheetImage>> {
             return None;
         }
     };
-    let sheet = Arc::new(SheetImage {
-        path: path.to_owned(),
-        size: [image.width() as usize, image.height() as usize],
-        rgba: image.into_raw(),
-    });
+    let sheet = Arc::new(SheetImage::new(
+        path.to_owned(),
+        [image.width() as usize, image.height() as usize],
+        image.into_raw(),
+    ));
     CACHE.with(|cache| {
         cache
             .borrow_mut()

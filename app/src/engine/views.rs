@@ -419,8 +419,32 @@ pub struct TreeLayout {
 pub struct SheetImage {
     pub path: PathBuf,
     pub size: [usize; 2],
-    /// RGBA, 8 bits per channel, not premultiplied
-    pub rgba: Vec<u8>,
+    /// RGBA, 8 bits per channel, not premultiplied, until the UI takes it to upload: the GPU
+    /// copy is what gets drawn, so the pixels aren't kept twice (about 17 MB on a 3.29 tree)
+    rgba: std::sync::Mutex<Option<Vec<u8>>>,
+}
+
+impl SheetImage {
+    pub fn new(path: PathBuf, size: [usize; 2], rgba: Vec<u8>) -> SheetImage {
+        SheetImage {
+            path,
+            size,
+            rgba: std::sync::Mutex::new(Some(rgba)),
+        }
+    }
+
+    /// The pixels, once: `None` after the first call.
+    pub fn take_rgba(&self) -> Option<Vec<u8>> {
+        self.rgba.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+
+    /// Whether `take_rgba` would still give the pixels
+    pub fn has_rgba(&self) -> bool {
+        self.rgba
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
+    }
 }
 
 impl std::fmt::Debug for SheetImage {

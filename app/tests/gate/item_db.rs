@@ -786,6 +786,32 @@ fn item_databases_load_only_for_the_panel() {
     assert!(!left, "the load is still listed");
 }
 
+/// The start's own frame leaves that load alone too: PoB would run a slice of it there, which
+/// cost about 40 ms of every start and made entries no panel had asked for.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn the_start_leaves_the_item_databases_unloaded() {
+    let _guard = lock();
+    let mut s = Session::start("item-db-start");
+    let untouched = |s: &mut Session| -> bool {
+        s.backend
+            .lua
+            .load(
+                "local m = pob.main.main
+                assert(m.onFrameFuncs.LoadItems, 'the load is gone')
+                return next(m.uniqueDB.list) == nil and next(m.rareDB.list) == nil",
+            )
+            .eval()
+            .unwrap()
+    };
+    assert!(untouched(&mut s), "the start ran a slice of the load");
+    s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+    assert!(untouched(&mut s), "the open ran a slice of the load");
+    // the panel's job still loads them in full
+    let view = lists(&mut s, ItemDb::Uniques);
+    assert!(!view.loading && !view.rows.is_empty());
+}
+
 /// Whether PoB's item database load is still to run (both databases still loading)
 fn databases_loading(s: &mut Session) -> bool {
     s.backend

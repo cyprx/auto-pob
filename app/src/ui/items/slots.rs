@@ -212,6 +212,7 @@ impl ItemsUi {
                 // is the slot name's: the dropdown's own popup would share its id.
                 if slot.selected != 0 {
                     label.context_menu(|ui| {
+                        crate::widgets::scroll_step::note_tab_popup(ui.ctx());
                         let buy = ui.button("Buy similar\u{2026}");
                         self.rects.note(&buy, || format!("slot_buy_{}", slot.name));
                         if buy.clicked() {
@@ -344,11 +345,10 @@ impl ItemsUi {
                 // selected, a list excepted (ItemSlotControl.lua:47-52): a box with the
                 // keyboard or another dropped list. A dropped list of Build's is Build's
                 // selected control, not the tab's (ItemSlotControl.lua:51 reads only
-                // itemsTab.selControl)
+                // itemsTab.selControl), and so is a menu of another host's
                 let own_dropped =
                     egui::Popup::is_id_open(ui.ctx(), combo.inner.response.id.with("popup"));
-                let tab_dropped = egui::Popup::is_any_open(ui.ctx())
-                    && !crate::widgets::scroll_step::build_box_typing(ui.ctx());
+                let tab_dropped = crate::widgets::scroll_step::tab_popup_open(ui.ctx());
                 let blank = !own_dropped && (self.tab_box_selected || tab_dropped);
                 if slot.selected != 0 && !blank {
                     self.note_hover(

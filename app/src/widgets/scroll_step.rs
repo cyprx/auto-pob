@@ -81,15 +81,40 @@ fn build_searches_id() -> egui::Id {
 
 /// A dropped list of Build's own dropdown notes itself: it is Build's selected control
 /// (Build.lua:1230), though it sits in a popup outside the top bar and the sidebar
+/// A tab's own dropped list notes itself too, so a tab can tell its selected control from a
+/// popup that isn't its own
 pub fn note_search(ctx: &egui::Context, search: egui::Id) {
     let scope: FocusScope = ctx.data(|d| d.get_temp(scope_id())).unwrap_or_default();
+    let pass = ctx.cumulative_pass_nr();
     if scope.build_host {
-        let pass = ctx.cumulative_pass_nr();
         ctx.data_mut(|d| {
             d.get_temp_mut_or_default::<Vec<(u64, egui::Id)>>(build_searches_id())
                 .push((pass, search))
         });
+    } else {
+        note_tab_popup(ctx);
     }
+}
+
+fn tab_popup_id() -> egui::Id {
+    egui::Id::NULL.with("pob_tab_popup")
+}
+
+/// A popup of the tab being drawn is open (its contents call this while shown)
+pub fn note_tab_popup(ctx: &egui::Context) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(tab_popup_id(), pass));
+}
+
+/// The open popup is the tab's own: one was noted this frame or the last. A dropped list of
+/// Build's, or a menu of another host, is not the tab's selected control (ItemSlotControl.lua
+/// :51 reads only the tab's selControl).
+pub fn tab_popup_open(ctx: &egui::Context) -> bool {
+    let now = ctx.cumulative_pass_nr();
+    egui::Popup::is_any_open(ctx)
+        && ctx
+            .data(|d| d.get_temp::<u64>(tab_popup_id()))
+            .is_some_and(|pass| pass + 1 >= now)
 }
 
 /// Whether one of Build's dropdowns was dropped last frame; forgets the notes

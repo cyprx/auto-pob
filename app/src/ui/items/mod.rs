@@ -43,6 +43,9 @@ pub struct ItemsUi {
     view: Option<Arc<ItemsView>>,
     /// The selected item's id
     selected: Option<u32>,
+    /// A row of the item list had the keyboard as the list was last drawn: the list is PoB's
+    /// selected control
+    list_row_focused: bool,
     /// An item in use the user asked to delete, with PoB's question
     confirm_delete: Option<(u32, String)>,
     confirm_delete_all: bool,
@@ -354,9 +357,14 @@ impl ItemsUi {
         // scope. A repeated pass keeps the first pass's answer.
         if ui.ctx().current_pass_index() == 0 {
             let ctx = ui.ctx();
+            // a selected list takes the press too: the item list (a row with the keyboard) or
+            // the database list (ListControl:OnKeyDown, ControlHost.lua:4-8); the shared list
+            // shows only without a display item, so it never has mod lines beside it
             self.display.control_selected = ctx.text_edit_focused()
                 || egui::Popup::is_any_open(ctx)
-                || crate::widgets::scroll_step::control_selected_at_start(ctx);
+                || crate::widgets::scroll_step::control_selected_at_start(ctx)
+                || self.list_row_focused
+                || self.db.list_focus;
         }
         // a selected database list takes the keys before a slider pointed at (ControlHost.lua:
         // 56-73); it holds its selection apart from egui's focus

@@ -288,6 +288,7 @@ impl ItemsUi {
             }
             list_focus |= row.has_focus();
         }
+        self.list_row_focused = list_focus;
         // Up, Down, Home and End move the selection (ListControl.lua:375-382)
         if list_focus && !self.has_dialog() && !self.modal && !ui.ctx().text_edit_focused() {
             let at = self

@@ -1053,6 +1053,29 @@ fn a_press_that_closes_a_dropdown_toggles_no_mod_line() {
     );
 }
 
+/// The press that leaves a selected list goes to the list in PoB (ListControl:OnKeyDown,
+/// ControlHost.lua:4-8): the item list's or the database's, the mod line stays as it is
+#[test]
+fn a_press_that_leaves_a_selected_list_toggles_no_mod_line() {
+    let toggled = |o: &ItemsOutput| {
+        debug(&o.commands)
+            .iter()
+            .any(|c| c.starts_with("ToggleModLine"))
+    };
+    for row in ["row_1", "db_row_0"] {
+        let mut h = Harness::new(sample());
+        h.show_display(display_view());
+        h.open_db();
+        h.settle();
+        h.click(row);
+        let o = h.click("tip_line_0");
+        assert!(!toggled(&o), "{row}: {:?}", o.commands);
+        // the next press is the line's
+        let o = h.click("tip_line_0");
+        assert!(toggled(&o), "{row}: {:?}", o.commands);
+    }
+}
+
 #[test]
 fn hidden_editors_are_not_drawn() {
     let mut h = Harness::new(sample());

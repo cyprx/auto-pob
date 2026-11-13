@@ -388,8 +388,14 @@ fn wheel_notches(ui: &egui::Ui) -> (f32, bool) {
                 ..
             } = event
             {
-                // with Shift some platforms already send the wheel sideways
-                let d = if delta.y != 0.0 { delta.y } else { delta.x };
+                // the vertical wheel only (PoB has WHEELUP and WHEELDOWN); with Shift some
+                // platforms already send it sideways, so then the sideways part counts. A
+                // sideways swipe or tilt without Shift zooms nothing.
+                let d = if delta.y != 0.0 || !modifiers.shift {
+                    delta.y
+                } else {
+                    delta.x
+                };
                 notches += match unit {
                     egui::MouseWheelUnit::Line => d,
                     egui::MouseWheelUnit::Point => d / 50.0,

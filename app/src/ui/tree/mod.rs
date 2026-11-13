@@ -1039,6 +1039,39 @@ mod tests {
         );
     }
 
+    /// A sideways swipe or tilt wheel without Shift doesn't zoom; with Shift (as macOS sends
+    /// it) it does; a trackpad pinch (`Event::Zoom`) zooms by its factor
+    #[test]
+    fn sideways_scroll_zooms_only_with_shift_and_a_pinch_zooms() {
+        let (l, s) = sample();
+        let mut h = Harness::new(l, s);
+        h.frame(vec![Event::PointerMoved(Pos2::new(400.0, 300.0))]);
+        let sideways = |modifiers| Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            source: egui::MouseWheelSource::Wheel,
+            delta: Vec2::new(1.0, 0.0),
+            phase: egui::TouchPhase::Move,
+            modifiers,
+        };
+        let start = h.tab.camera.zoom;
+        h.frame(vec![sideways(egui::Modifiers::NONE)]);
+        assert_eq!(h.tab.camera.zoom, start, "a sideways swipe zoomed");
+        h.frame(vec![sideways(egui::Modifiers::SHIFT)]);
+        let shifted = h.tab.camera.zoom;
+        assert!(
+            (shifted / start - 1.2f32.powi(3)).abs() < 1e-3,
+            "{}",
+            shifted / start
+        );
+        h.frame(vec![Event::Zoom(0.5)]);
+        assert!(
+            (h.tab.camera.zoom / shifted - 0.5).abs() < 1e-3,
+            "{} {}",
+            h.tab.camera.zoom,
+            shifted
+        );
+    }
+
     #[test]
     fn unknown_ids_are_skipped() {
         let (layout, _) = sample();

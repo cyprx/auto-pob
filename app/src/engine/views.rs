@@ -1320,6 +1320,8 @@ mod tests {
                 ours: "^x33FF77Yes".into(),
                 theirs: "^8(not set)".into(),
                 common: true,
+                ours_control: None,
+                theirs_control: None,
             }],
             switched: true,
         };
@@ -1751,6 +1753,12 @@ pub struct CompareConfigRow {
     /// is relevant to either build, or with "Show All Configurations" on
     #[serde(default)]
     pub common: bool,
+    /// PoB's box for this build's value (`cfg_p_<var>`), set with `SetCompareControl`
+    #[serde(default)]
+    pub ours_control: Option<PopupControl>,
+    /// PoB's box for the comparison's value (`cfg_c_<var>`)
+    #[serde(default)]
+    pub theirs_control: Option<PopupControl>,
 }
 
 /// The builds in one folder of the Builds folder (`BrowseBuilds`), by name
@@ -2065,7 +2073,7 @@ pub struct ShareView {
     /// The sites Share uploads to, in PoB's dropdown order
     #[serde(default)]
     pub sites: Vec<SiteRef>,
-    /// The site chosen last in this build, if any
+    /// The site PoB's drop-down shows: the one chosen last, else PoB's default (Pastebin)
     #[serde(default)]
     pub last_site: Option<String>,
     /// The link the last Share made, until the code box changes
@@ -2140,6 +2148,9 @@ pub struct OAuthView {
     /// PoB's "Character import status", with colour codes stripped
     #[serde(default)]
     pub status: String,
+    /// The same with PoB's colour codes, as its label draws it
+    #[serde(default)]
+    pub status_coded: String,
     /// PoB's error line (`oauthErrCode`)
     #[serde(default)]
     pub error: Option<String>,
@@ -2149,6 +2160,14 @@ pub struct OAuthView {
     /// A fetch or import runs (`oauthLoading`)
     #[serde(default)]
     pub busy: bool,
+    /// The league drop-down's selection: PoB's last league, else its first; `None` for "Any"
+    /// or no list (ImportTab.lua:121-131)
+    #[serde(default)]
+    pub league_selected: Option<String>,
+    /// The character drop-down's selection: the last character imported, else the first
+    /// (ImportTab.lua:1085-1093)
+    #[serde(default)]
+    pub character_selected: Option<String>,
 }
 
 impl Default for OAuthView {
@@ -2163,9 +2182,12 @@ impl Default for OAuthView {
             leagues: Vec::new(),
             characters: Vec::new(),
             status: String::new(),
+            status_coded: String::new(),
             error: None,
             retry_at: None,
             busy: false,
+            league_selected: None,
+            character_selected: None,
         }
     }
 }
@@ -2190,6 +2212,9 @@ pub struct PublicView {
     /// PoB's "Character import status" line, with colour codes stripped
     #[serde(default)]
     pub status: String,
+    /// The same with PoB's colour codes, as its label draws it
+    #[serde(default)]
+    pub status_coded: String,
     /// PoB's label under a name without a discriminator (`siteAccountNameMissingDiscriminator`)
     #[serde(default)]
     pub missing_discriminator: String,
@@ -2199,6 +2224,13 @@ pub struct PublicView {
     /// The account PoB's history dropdown has selected, if any
     #[serde(default)]
     pub history_selected: Option<String>,
+    /// The league drop-down's selection while a list shows: the last league used (or its
+    /// Standard league), else the first; `None` for "All" (ImportTab.lua:991-1013)
+    #[serde(default)]
+    pub league_selected: Option<String>,
+    /// The character drop-down's selection: the last character imported, else the first
+    #[serde(default)]
+    pub character_selected: Option<String>,
 }
 
 /// What PoB's account name box allows (ImportTab.lua:367-404): whether its "Missing
@@ -2226,9 +2258,12 @@ impl Default for PublicView {
             leagues: Vec::new(),
             characters: Vec::new(),
             status: String::new(),
+            status_coded: String::new(),
             missing_discriminator: String::new(),
             bandit_note: String::new(),
             history_selected: None,
+            league_selected: None,
+            character_selected: None,
         }
     }
 }
@@ -2250,6 +2285,9 @@ pub struct CharacterEntry {
     pub class: String,
     pub level: u32,
     pub league: String,
+    /// PoB's colour code for the class in the entry's detail (`BuildCharacterList`)
+    #[serde(default)]
+    pub colour: String,
 }
 
 /// PoB's help (`help.txt`) as its About window shows it (`main:OpenAboutPopup`,

@@ -106,6 +106,7 @@ function importDump()
 		fetching = tab.importCodeFetching and true or false,
 		share_label = controls.generateCodeByLink.label,
 		last_site = tab.exportWebsiteSelected,
+		selected_site = controls.exportFrom:GetSelValue() and controls.exportFrom:GetSelValue().id,
 		unsaved = build.unsaved and true or false,
 		import_link = build.importLink,
 	}
@@ -186,9 +187,19 @@ function act.frame()
 end
 
 -- What the account name import shows, in PoB's own terms
+-- The class colour an entry's detail starts with (BuildCharacterList)
+local function detailColour(entry)
+	local detail = entry.detail or ""
+	return detail:match("^(%^x%x%x%x%x%x%x)") or detail:match("^(%^%d)") or ""
+end
+
 function accountDump()
 	local tab = build.importTab
 	local controls = tab.controls
+	-- the drop-downs' own picks, before the "All" listing below moves them
+	local leagueSel = controls.siteCharSelectLeague:GetSelValue()
+	local charSel = controls.siteCharSelect:GetSelValue()
+	local leagueIndex, charIndex = controls.siteCharSelectLeague.selIndex, controls.siteCharSelect.selIndex
 	local out = {
 		account = controls.siteAccountName.buf,
 		realm = controls.siteAccountRealm:GetSelValue().id,
@@ -206,11 +217,18 @@ function accountDump()
 		if entry.league == nil then all = index end
 	end
 	if all then
+		out.league_selected = type(leagueSel) == "table" and leagueSel.league or nil
+		out.character_selected = type(charSel) == "table" and charSel.label or nil
 		controls.siteCharSelectLeague:SetSel(all)
 		for _, entry in ipairs(controls.siteCharSelect.list) do
 			local char = entry.char
-			out.characters[#out.characters + 1] = { name = char.name, class = char.class, level = char.level, league = char.league }
+			out.characters[#out.characters + 1] = { name = char.name, class = char.class, level = char.level, league = char.league, colour = detailColour(entry) }
 		end
+		-- put the picks back as they were, so the next steps start from PoB's own state
+		controls.siteCharSelectLeague.selIndex = leagueIndex
+		local realm = controls.siteAccountRealm:GetSelValue().realmCode
+		tab:BuildCharacterList(realm, controls.siteCharSelectLeague:GetSelValueByKey("league"), tab.lastCharList, controls.siteCharSelect)
+		controls.siteCharSelect.selIndex = charIndex
 	end
 	return out
 end
@@ -253,11 +271,15 @@ function oauthDump(json, realm)
 	controls.accountRealm.selFunc()
 	local out = { leagues = {}, characters = {} }
 	for _, league in ipairs(controls.charSelectLeague.list) do out.leagues[#out.leagues + 1] = league end
+	local league = controls.charSelectLeague:GetSelValue()
+	out.league_selected = league ~= "Any" and league or nil
+	local char = controls.charSelect:GetSelValue()
+	out.character_selected = char and char.label or nil
 	local scratch = { list = {} }
 	tab:BuildCharacterList(realm, nil, list, scratch)
 	for _, entry in ipairs(scratch.list) do
 		local char = entry.char
-		out.characters[#out.characters + 1] = { name = char.name, class = char.class, level = char.level, league = char.league }
+		out.characters[#out.characters + 1] = { name = char.name, class = char.class, level = char.level, league = char.league, colour = detailColour(entry) }
 	end
 	return out
 end

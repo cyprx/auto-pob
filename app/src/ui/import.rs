@@ -26,7 +26,11 @@ const TREE_OVERWRITE: &str = "Importing the passive tree will overwrite your cur
 const BUILD_OVERWRITE: &str =
     "Importing to the current build will erase ALL existing data for this build.";
 
-const GOOD: egui::Color32 = egui::Color32::from_rgb(0x4c, 0xaf, 0x50);
+/// PoB's tips on the import options (ImportTab.lua:297-333, 445-461)
+const TIP_JEWELS: &str = "Delete all equipped jewels when importing.";
+const TIP_SKILLS: &str = "Delete all existing skills when importing.";
+const TIP_ITEMS: &str = "Delete all equipped items when importing.";
+const TIP_SWAP: &str = "Ignore items and skills in weapon swap.";
 
 /// The commands of one character import: PoB's two buttons. The second goes only after the
 /// first request has ended, as PoB's buttons do (one import at a time).
@@ -106,7 +110,14 @@ pub struct ImportUi {
     code_dirty: Option<f64>,
     /// The latest `SetImportCode`; an older view would put older text back
     code_sent_seq: u64,
-    mode: ImportMode,
+    /// The seq of the latest box verdict (`Snapshot::Share`)
+    share_seq: u64,
+    /// Enter was pressed on text PoB had not judged yet: the `SetImportCode` before it went out
+    /// as this seq, and Enter acts once the verdict on the newer text comes
+    enter_after: Option<u64>,
+    /// The mode picked; `None` is PoB's drop-down as it starts: "Import to this build" for a
+    /// build with a file, else "Import to a new build" (ImportTab.lua:585-587, 680)
+    mode: Option<ImportMode>,
 
     site: Option<String>,
     /// An `ExportShareCode` is out; its answer is copied
@@ -116,6 +127,11 @@ pub struct ImportUi {
     focus_code: bool,
     /// The account picked in PoB's history dropdown (NF-8)
     history_pick: Option<String>,
+    /// The realm drop-down has taken PoB's (its remembered realm, `main.lastRealm`)
+    realm_seen: bool,
+    /// The character list whose picks were taken from PoB's drop-downs: a new list starts on
+    /// PoB's league and character, as PoB's own drop-downs do
+    list_seen: Option<(bool, Realm, Vec<String>)>,
 }
 
 impl Default for ImportUi {
@@ -149,12 +165,16 @@ impl Default for ImportUi {
             code: String::new(),
             code_dirty: None,
             code_sent_seq: 0,
-            mode: ImportMode::NewBuild,
+            share_seq: 0,
+            enter_after: None,
+            mode: None,
             site: None,
             await_code: false,
             copy_ready: None,
             focus_code: false,
             history_pick: None,
+            realm_seen: false,
+            list_seen: None,
         }
     }
 }
@@ -193,9 +213,14 @@ pub(crate) fn clear_marks() {
     MARKS.with(|m| m.borrow_mut().clear());
 }
 
-/// The colour of PoB's verdict on the import box.
-pub fn detail_colour(valid: bool, visuals: &egui::Visuals) -> egui::Color32 {
-    if valid { GOOD } else { visuals.error_fg_color }
+/// The colour of PoB's verdict on the import box: its `POSITIVE` or `NEGATIVE` code
+/// (ImportTab.lua:577-620)
+pub fn detail_colour(valid: bool) -> egui::Color32 {
+    if valid {
+        theme::POSITIVE
+    } else {
+        theme::NEGATIVE
+    }
 }
 
 /// Whether the account list has settled: no fetch or import runs (the next part may go).
@@ -211,7 +236,7 @@ fn realm_label(realm: Realm) -> &'static str {
     match realm {
         Realm::Pc => "PC",
         Realm::Xbox => "Xbox",
-        Realm::Sony => "PlayStation",
+        Realm::Sony => "Sony",
     }
 }
 
@@ -246,6 +271,7 @@ impl ImportUi {
             }
             Snapshot::Share(view) => {
                 self.share = Some(view.clone());
+                self.share_seq = self.share_seq.max(seq);
                 // The user's newer typing wins, and so does text sent after the view was taken
                 if self.code_dirty.is_none() && seq >= self.code_sent_seq {
                     self.code.clone_from(&view.import.text);
@@ -386,6 +412,8 @@ impl ImportUi {
 
     /// The tab is not showing: an answer that was to be copied is no longer wanted.
     pub fn leave(&mut self) -> Option<Command> {
+        // an Enter waiting for PoB's check never imports after the tab is left
+        self.enter_after = None;
         self.await_code = false;
         self.copy_ready = None;
         self.flush()
@@ -433,6 +461,11 @@ impl ImportUi {
             ui.spinner();
             return;
         };
+        // the drop-down starts on PoB's remembered realm (ImportTab.lua:204, 339)
+        if !self.realm_seen {
+            self.realm_seen = true;
+            self.realm = account.oauth.realm;
+        }
         ui.horizontal(|ui| {
             let before = self.realm;
             let combo = crate::widgets::dropdown::Dropdown::from_id_salt("import_realm")
@@ -527,9 +560,19 @@ impl ImportUi {
                     out.commands.push(Command::SignIn);
                 }
             }
-            Self::status_lines(ui, &oauth.status, oauth.error.as_deref());
+            Self::status_lines(
+                ui,
+                &oauth.status,
+                &oauth.status_coded,
+                oauth.error.as_deref(),
+            );
             return;
         }
+        let picks = (
+            oauth.realm,
+            oauth.league_selected.clone(),
+            oauth.character_selected.clone(),
+        );
         // Fetch: not while a sign-in or another fetch runs (the engine would refuse)
         let fetched = oauth.fetched && oauth.realm == self.realm;
         let waiting = oauth.retry_at.map_or(0, |at| (at - now).max(0));
@@ -567,12 +610,18 @@ impl ImportUi {
             ui.colored_label(ui.visuals().warn_fg_color, format!("Retry in {waiting} s"));
             ui.ctx().request_repaint_after(Duration::from_secs(1));
         }
-        Self::status_lines(ui, &oauth.status, oauth.error.as_deref());
+        Self::status_lines(
+            ui,
+            &oauth.status,
+            &oauth.status_coded,
+            oauth.error.as_deref(),
+        );
         if fetched {
             let realm = self.realm;
             let importing = oauth.busy;
             self.character_list(
                 ui,
+                (true, picks),
                 &oauth.leagues,
                 &oauth.characters,
                 importing,
@@ -591,6 +640,8 @@ impl ImportUi {
         let public = &account.public;
         match public.stage {
             PublicStage::EnterAccount => {
+                // PoB's line above the box (ImportTab.lua:333-337)
+                ui.label("To start importing a character, enter the character's account name:");
                 ui.horizontal(|ui| {
                     let opts = EditBoxOptions {
                         width: 220.0,
@@ -620,7 +671,14 @@ impl ImportUi {
                     // PoB enables Start only for a name with its discriminator (NF-8)
                     let (_, can_start) = account_name_state(&self.account_box.text);
                     let name = self.account_box.text.trim().to_owned();
-                    let start = ui.add_enabled(can_start, theme::primary_button("Start"));
+                    let mut start = ui.add_enabled(can_start, theme::primary_button("Start"));
+                    // PoB's tip on Start for a name without its discriminator
+                    // (ImportTab.lua:370-375)
+                    if account_name_state(&self.account_box.text).0 {
+                        let tip =
+                            format!("Missing discriminator e.g. {}#1234", self.account_box.text);
+                        start = start.on_disabled_hover_text(tip);
+                    }
                     mark(ui, "start", &start);
                     // Only Start asks for the list: PoB's box has no Enter function
                     // (ImportTab.lua:340-341), and leaving it is no request either
@@ -690,20 +748,31 @@ impl ImportUi {
                     }
                 });
                 if account_name_state(&self.account_box.text).0 {
-                    ui.colored_label(ui.visuals().error_fg_color, &public.missing_discriminator);
+                    // PoB's "^1" (red) label
+                    ui.label(crate::widgets::pob_text(
+                        &format!("^1{}", public.missing_discriminator),
+                        14.0,
+                        ui.visuals().text_color(),
+                    ));
                 }
-                Self::status_lines(ui, &public.status, None);
+                Self::status_lines(ui, &public.status, &public.status_coded, None);
             }
             PublicStage::Fetching | PublicStage::Importing => {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label(&public.status);
+                    Self::status_lines(ui, &public.status, &public.status_coded, None);
                 });
             }
             PublicStage::SelectCharacter => {
-                Self::status_lines(ui, &public.status, None);
+                Self::status_lines(ui, &public.status, &public.status_coded, None);
+                let picks = (
+                    public.realm,
+                    public.league_selected.clone(),
+                    public.character_selected.clone(),
+                );
                 self.character_list(
                     ui,
+                    (false, picks),
                     &public.leagues,
                     &public.characters,
                     false,
@@ -722,25 +791,52 @@ impl ImportUi {
         }
     }
 
-    fn status_lines(ui: &mut egui::Ui, status: &str, error: Option<&str>) {
+    /// PoB's "Character import status: ..." label and its "Error: ..." label in its
+    /// `NEGATIVE` colour (ImportTab.lua:78-81, 172-176)
+    fn status_lines(ui: &mut egui::Ui, status: &str, coded: &str, error: Option<&str>) {
         if !status.is_empty() {
-            ui.label(status);
+            // PoB's colours: a warning or a failure is coloured (`WARNING`, `NEGATIVE`)
+            let text = if coded.is_empty() { status } else { coded };
+            ui.label(crate::widgets::pob_text(
+                &format!("^7Character import status: {text}"),
+                14.0,
+                ui.visuals().text_color(),
+            ));
         }
         if let Some(error) = error {
-            ui.colored_label(ui.visuals().error_fg_color, error);
+            ui.colored_label(theme::NEGATIVE, format!("Error: {error}"));
         }
     }
 
-    /// The league filter, the characters, PoB's import options and the Import button.
+    /// The league filter, the characters, PoB's import options and the Import button. `picks`
+    /// is which section (OAuth or not) and PoB's realm, league and character picks: a new list
+    /// starts on them, as PoB's drop-downs do.
+    #[allow(clippy::too_many_arguments)]
     fn character_list(
         &mut self,
         ui: &mut egui::Ui,
+        (oauth, (realm, league, character)): (bool, (Realm, Option<String>, Option<String>)),
         leagues: &[String],
         characters: &[CharacterEntry],
         importing: bool,
         out: &mut ImportOutput,
         command: impl Fn(Option<String>, String, CharacterPart) -> Command,
     ) {
+        let key = (
+            oauth,
+            realm,
+            characters.iter().map(|c| c.name.clone()).collect(),
+        );
+        if self.list_seen.as_ref() != Some(&key) {
+            // PoB's picks are for its own realm; one of ours not fetched yet has none
+            if realm == self.realm {
+                self.league = league;
+                self.selected = character;
+            }
+            self.list_seen = Some(key);
+        }
+        // PoB's line above the list (ImportTab.lua:166, 410)
+        ui.label("Choose character to import data from:");
         ui.horizontal(|ui| {
             ui.label("League:");
             let combo = crate::widgets::dropdown::Dropdown::from_id_salt("import_league")
@@ -784,26 +880,56 @@ impl ImportUi {
             .show(ui, |ui| {
                 for c in &visible {
                     let selected = self.selected.as_ref() == Some(&c.name);
-                    let text = format!(
-                        "{}  -  Level {} {}  ({})",
-                        c.name, c.level, c.class, c.league
-                    );
-                    let r = ui.selectable_label(selected, text);
+                    // PoB's entry: the name, then the class in its colour and the level in
+                    // grey, with the league when no league is picked (ImportTab.lua:1068-1073)
+                    let colour = if c.colour.is_empty() { "^7" } else { &c.colour };
+                    let mut detail = format!("{colour}{} ^x808080lvl {}", c.class, c.level);
+                    if self.league.is_none() {
+                        detail.push_str(&format!(" in {}", c.league));
+                    }
+                    let default = ui.visuals().text_color();
+                    let text = format!("^7{}   {detail}", c.name);
+                    let r = ui
+                        .selectable_label(selected, crate::widgets::pob_text(&text, 14.0, default));
                     mark(ui, &format!("char:{}", c.name), &r);
                     if r.clicked() {
                         self.selected = Some(c.name.clone());
                     }
                 }
             });
-        ui.checkbox(&mut self.part_tree, "Passive tree and jewels");
+        // PoB's two buttons' names and their option boxes, with PoB's labels and tips
+        ui.checkbox(&mut self.part_tree, "Passive Tree and Jewels");
         ui.indent("import_tree_opts", |ui| {
-            ui.checkbox(&mut self.delete_jewels, "Delete jewels with the old tree");
+            let r = ui
+                .checkbox(&mut self.delete_jewels, "Delete jewels")
+                .on_hover_text(TIP_JEWELS);
+            mark(ui, "opt:jewels", &r);
         });
-        ui.checkbox(&mut self.part_items, "Items and skills");
+        ui.checkbox(&mut self.part_items, "Items and Skills");
         ui.indent("import_item_opts", |ui| {
-            ui.checkbox(&mut self.clear_skills, "Delete all existing skills");
-            ui.checkbox(&mut self.clear_items, "Delete all existing equipment");
-            ui.checkbox(&mut self.ignore_weapon_swap, "Ignore weapon swap");
+            for (value, label, tip, key) in [
+                (
+                    &mut self.clear_skills,
+                    "Delete skills",
+                    TIP_SKILLS,
+                    "opt:skills",
+                ),
+                (
+                    &mut self.clear_items,
+                    "Delete equipment",
+                    TIP_ITEMS,
+                    "opt:items",
+                ),
+                (
+                    &mut self.ignore_weapon_swap,
+                    "Ignore weapon swap",
+                    TIP_SWAP,
+                    "opt:swap",
+                ),
+            ] {
+                let r = ui.checkbox(value, label).on_hover_text(tip);
+                mark(ui, key, &r);
+            }
         });
         let can = self.selected.is_some() && (self.part_tree || self.part_items) && !importing;
         let r = ui.add_enabled(can, theme::primary_button("Import"));
@@ -853,13 +979,34 @@ impl ImportUi {
     fn code_panel(&mut self, ui: &mut egui::Ui, out: &mut ImportOutput) {
         theme::heading(ui, "Import from a link or share code");
         let now = ui.input(|i| i.time);
+        // Enter is PoB's `enterFunc` (Import when the text is valid, ImportTab.lua:671-675), so
+        // only Shift+Enter breaks the line
+        let entered = ui.input(|i| {
+            i.events.iter().any(|e| {
+                matches!(
+                    e,
+                    egui::Event::Key {
+                        key: egui::Key::Enter,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } if !modifiers.shift
+                )
+            })
+        });
         let r = ui.add(
             egui::TextEdit::multiline(&mut self.code)
                 .id_salt("import_code_box")
                 .hint_text("Paste a build link (pobb.in, pastebin, …) or a PoB share code")
+                .return_key(Some(egui::KeyboardShortcut::new(
+                    egui::Modifiers::SHIFT,
+                    egui::Key::Enter,
+                )))
                 .desired_rows(3)
                 .desired_width(f32::INFINITY),
         );
+        // a question open over the tab takes Enter itself
+        let entered = entered && r.has_focus() && !self.modal;
         mark(ui, "code_box", &r);
         crate::widgets::url_click::open_on_ctrl_click(ui, &r, &self.code);
         if std::mem::take(&mut self.focus_code) {
@@ -872,6 +1019,7 @@ impl ImportUi {
         }
         if r.changed() || cleared.is_some_and(|x| x.clicked()) {
             self.code_dirty = Some(now);
+            self.enter_after = None;
         }
         if let Some(since) = self.code_dirty {
             let left = DEBOUNCE - (now - since);
@@ -891,40 +1039,68 @@ impl ImportUi {
         };
         let stale = self.code_dirty.is_some();
         if !stale && !self.code.trim().is_empty() && !view.detail.is_empty() {
-            ui.colored_label(detail_colour(view.valid, ui.visuals()), &view.detail);
+            ui.colored_label(detail_colour(view.valid), &view.detail);
         }
-        // PoB offers both only for a build with a file
-        if !view.can_import_to_this_build && self.mode != ImportMode::NewBuild {
-            self.mode = ImportMode::NewBuild;
+        // PoB offers both only for a build with a file; its box puts a build without one on
+        // "Import to a new build" (ImportTab.lua:585-587)
+        if !view.can_import_to_this_build {
+            self.mode = Some(ImportMode::NewBuild);
         }
+        let mut mode = self.mode.unwrap_or(ImportMode::ThisBuild);
+        let ok = view.valid && !view.fetching && !stale && !self.code.trim().is_empty();
         ui.horizontal(|ui| {
-            let r = ui.radio_value(
-                &mut self.mode,
-                ImportMode::NewBuild,
-                "Import as a new build",
-            );
-            mark(ui, "mode:new", &r);
-            if view.can_import_to_this_build {
-                let r = ui.radio_value(&mut self.mode, ImportMode::ThisBuild, "Replace this build");
-                mark(ui, "mode:this", &r);
-                let r = ui.radio_value(
-                    &mut self.mode,
-                    ImportMode::Comparison,
-                    "Import as comparison",
-                );
-                mark(ui, "mode:compare", &r);
-            }
+            // PoB's drop-down waits for a valid text (ImportTab.lua:680-682)
+            ui.add_enabled_ui(ok, |ui| {
+                if view.can_import_to_this_build {
+                    let r =
+                        ui.radio_value(&mut mode, ImportMode::ThisBuild, "Import to this build");
+                    mark(ui, "mode:this", &r);
+                }
+                let r = ui.radio_value(&mut mode, ImportMode::NewBuild, "Import to a new build");
+                mark(ui, "mode:new", &r);
+                if view.can_import_to_this_build {
+                    let r =
+                        ui.radio_value(&mut mode, ImportMode::Comparison, "Import as comparison");
+                    mark(ui, "mode:compare", &r);
+                }
+            });
         });
+        if Some(mode) != self.mode && (self.mode.is_some() || mode != ImportMode::ThisBuild) {
+            self.mode = Some(mode);
+        }
         ui.horizontal(|ui| {
-            let ok = view.valid && !view.fetching && !stale && !self.code.trim().is_empty();
-            let r = ui.add_enabled(ok, theme::primary_button("Import"));
+            // PoB's button says so while the paste is fetched (ImportTab.lua:701-703)
+            let label = if view.fetching {
+                "Retrieving paste.."
+            } else {
+                "Import"
+            };
+            let r = ui.add_enabled(ok, theme::primary_button(label));
             mark(ui, "import_code", &r);
             if view.fetching {
                 ui.spinner();
             }
-            if r.clicked() {
+            // Enter on text still being judged: it goes now, and Enter acts on PoB's verdict
+            if entered && !ok && stale {
+                self.code_dirty = None;
+                self.enter_after = Some(self.code_sent_seq);
+                out.commands.push(Command::SetImportCode {
+                    text: self.code.clone(),
+                });
+            }
+            let mut act = r.clicked() || (entered && ok);
+            if let Some(before) = self.enter_after
+                && self.code_sent_seq > before
+                && self.share_seq >= self.code_sent_seq
+                && !view.fetching
+            {
+                self.enter_after = None;
+                // the check answered: Enter acts only on a passed check, with no question open
+                act |= ok && !self.modal;
+            }
+            if act {
                 let url = self.code.trim().to_owned();
-                match self.mode {
+                match mode {
                     ImportMode::ThisBuild => {
                         out.confirm = Some(Confirm::Ask {
                             message: BUILD_OVERWRITE,
@@ -1047,9 +1223,17 @@ pub(crate) mod tests {
 
     /// Texts drawn in a frame.
     fn texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
-        fn walk(shape: &egui::epaint::Shape, out: &mut Vec<String>) {
+        galleys(shapes)
+            .iter()
+            .map(|g| g.text().to_owned())
+            .collect()
+    }
+
+    /// The text galleys drawn in a frame.
+    fn galleys(shapes: &[egui::epaint::ClippedShape]) -> Vec<Arc<egui::Galley>> {
+        fn walk(shape: &egui::epaint::Shape, out: &mut Vec<Arc<egui::Galley>>) {
             match shape {
-                egui::epaint::Shape::Text(t) => out.push(t.galley.text().to_owned()),
+                egui::epaint::Shape::Text(t) => out.push(t.galley.clone()),
                 egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
                 _ => {}
             }
@@ -1071,6 +1255,7 @@ pub(crate) mod tests {
         pub opened: Vec<String>,
         pub copied: Vec<String>,
         pub drawn: Vec<String>,
+        pub galleys: Vec<Arc<egui::Galley>>,
     }
 
     impl Harness {
@@ -1086,6 +1271,7 @@ pub(crate) mod tests {
                 opened: Vec::new(),
                 copied: Vec::new(),
                 drawn: Vec::new(),
+                galleys: Vec::new(),
             };
             h.account(signed_in());
             h.share(share());
@@ -1117,6 +1303,7 @@ pub(crate) mod tests {
                 out = self.ui.show(ui, self.now);
             });
             self.drawn = texts(&full.shapes);
+            self.galleys = galleys(&full.shapes);
             full.drop_without_applying_deltas();
             for command in self.ui.take_ready().into_iter().chain(out.commands) {
                 self.seq += 1;
@@ -1149,6 +1336,20 @@ pub(crate) mod tests {
             self.frame(vec![]);
         }
 
+        /// The colour of the drawn section that reads `section`
+        pub fn colour_of(&self, section: &str) -> Option<egui::Color32> {
+            self.galleys.iter().find_map(|g| {
+                g.job
+                    .sections
+                    .iter()
+                    .find(|s| {
+                        let range = usize::from(s.byte_range.start)..usize::from(s.byte_range.end);
+                        &g.job.text[range] == section
+                    })
+                    .map(|s| s.format.color)
+            })
+        }
+
         pub fn has_text(&self, needle: &str) -> bool {
             self.drawn.iter().any(|t| t.contains(needle))
         }
@@ -1160,6 +1361,7 @@ pub(crate) mod tests {
             class: "Witch".into(),
             level: 90,
             league: league.into(),
+            colour: "^x7070FF".into(),
         }
     }
 
@@ -1644,11 +1846,9 @@ pub(crate) mod tests {
         assert_eq!(h.log, ["SetImportCode { text: \"https://pobb.in/abc\" }"]);
         h.idle_for(1.0);
         assert_eq!(h.log.len(), 1, "once");
-        // PoB's verdict, coloured by `valid`
-        let visuals = egui::Visuals::dark();
-        assert_eq!(detail_colour(true, &visuals), GOOD);
-        assert_eq!(detail_colour(false, &visuals), visuals.error_fg_color);
-        assert_ne!(GOOD, visuals.error_fg_color);
+        // PoB's verdict, in its POSITIVE or NEGATIVE colour
+        assert_eq!(detail_colour(true), theme::POSITIVE);
+        assert_eq!(detail_colour(false), theme::NEGATIVE);
         let mut view = share();
         view.import.text = "https://pobb.in/abc".into();
         view.import.valid = true;
@@ -1691,14 +1891,111 @@ pub(crate) mod tests {
         assert!(marked("mode:this").is_none());
         // a mode chosen earlier falls back
         let mut h = Harness::new();
+        h.share(valid_share());
         h.frame(vec![]);
-        h.click("mode:this");
-        assert_eq!(h.ui.mode, ImportMode::ThisBuild);
-        let mut view = share();
+        h.click("mode:compare");
+        assert_eq!(h.ui.mode, Some(ImportMode::Comparison));
+        let mut view = valid_share();
         view.import.can_import_to_this_build = false;
         h.share(view);
         h.frame(vec![]);
-        assert_eq!(h.ui.mode, ImportMode::NewBuild);
+        assert_eq!(h.ui.mode, Some(ImportMode::NewBuild));
+    }
+
+    /// PoB's drop-down starts on "Import to this build" for a build with a file, and waits for
+    /// a valid text (ImportTab.lua:680-682)
+    #[test]
+    fn the_mode_starts_on_this_build_and_waits_for_a_valid_text() {
+        let mut h = Harness::new();
+        h.frame(vec![]);
+        // not valid yet: the choice is off
+        h.click("mode:new");
+        assert_eq!(h.ui.mode, None);
+        h.share(valid_share());
+        h.frame(vec![]);
+        h.click("import_code");
+        let Some(Confirm::Ask { plan, .. }) = h.confirms.pop() else {
+            panic!("PoB's default mode asks first: {:?}", h.log);
+        };
+        assert_eq!(
+            format!("{:?}", plan.single().unwrap()),
+            "ImportFromUrl { url: \"https://pobb.in/abc\", mode: ThisBuild }"
+        );
+        h.click("mode:new");
+        assert_eq!(h.ui.mode, Some(ImportMode::NewBuild));
+    }
+
+    /// Enter in the box imports a valid text (`enterFunc`, ImportTab.lua:671-675); on text PoB
+    /// has not judged yet it sends the text and acts on the verdict
+    #[test]
+    fn enter_in_the_code_box_imports() {
+        let mut h = Harness::new();
+        h.share(valid_share());
+        h.frame(vec![]);
+        h.ui.mode = Some(ImportMode::Comparison);
+        h.click("code_box");
+        let enter = || egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        h.frame(vec![enter()]);
+        assert_eq!(
+            h.log,
+            ["ImportFromUrl { url: \"https://pobb.in/abc\", mode: Comparison }"]
+        );
+        assert!(!h.ui.code.contains('\n'), "Enter is no new line");
+        // with a question open (PoB's erase question) Enter is the question's
+        h.log.clear();
+        h.ui.set_modal(true);
+        h.frame(vec![enter()]);
+        assert!(h.log.is_empty() && h.confirms.is_empty(), "{:?}", h.log);
+        h.ui.set_modal(false);
+        // typed and not judged: the text goes now, the import on PoB's verdict
+        h.log.clear();
+        h.frame(vec![egui::Event::Text("x".into())]);
+        h.frame(vec![enter()]);
+        assert_eq!(h.log, ["SetImportCode { text: \"https://pobb.in/abcx\" }"]);
+        h.frame(vec![]);
+        assert_eq!(h.log.len(), 1, "nothing before the verdict");
+        let mut view = valid_share();
+        view.import.text = "https://pobb.in/abcx".into();
+        h.share(view);
+        h.frame(vec![]);
+        assert_eq!(
+            h.log[1..],
+            ["ImportFromUrl { url: \"https://pobb.in/abcx\", mode: Comparison }"]
+        );
+        // an Enter left waiting when the tab is left never imports on its own later
+        h.log.clear();
+        h.click("code_box");
+        h.frame(vec![egui::Event::Text("y".into())]);
+        h.frame(vec![enter()]);
+        let typed = h.ui.code.clone();
+        assert_eq!(h.log, [format!("SetImportCode {{ text: {typed:?} }}")]);
+        assert!(h.ui.leave().is_none());
+        let mut view = valid_share();
+        view.import.text = typed;
+        h.share(view.clone());
+        for _ in 0..3 {
+            h.frame(vec![]);
+        }
+        assert_eq!(h.log.len(), 1, "imported on its own: {:?}", h.log);
+        // nor once a question is open when the check answers
+        h.click("code_box");
+        h.frame(vec![egui::Event::Text("z".into())]);
+        h.frame(vec![enter()]);
+        assert_eq!(h.log.len(), 2, "{:?}", h.log);
+        h.ui.set_modal(true);
+        view.import.text = h.ui.code.clone();
+        h.share(view);
+        h.frame(vec![]);
+        h.ui.set_modal(false);
+        h.frame(vec![]);
+        assert_eq!(h.log.len(), 2, "imported under a question: {:?}", h.log);
+        assert!(h.confirms.is_empty());
     }
 
     #[test]
@@ -1709,7 +2006,7 @@ pub(crate) mod tests {
         h.frame(vec![]);
         assert!(marked("mode:compare").is_some());
         h.click("mode:compare");
-        assert_eq!(h.ui.mode, ImportMode::Comparison);
+        assert_eq!(h.ui.mode, Some(ImportMode::Comparison));
         // the build stays: no question, the import goes at once
         h.click("import_code");
         assert!(h.confirms.is_empty());
@@ -1723,7 +2020,7 @@ pub(crate) mod tests {
         h.share(view);
         h.frame(vec![]);
         assert!(marked("mode:compare").is_none());
-        assert_eq!(h.ui.mode, ImportMode::NewBuild);
+        assert_eq!(h.ui.mode, Some(ImportMode::NewBuild));
     }
 
     fn valid_share() -> ShareView {
@@ -1760,6 +2057,7 @@ pub(crate) mod tests {
         let mut h = Harness::new();
         h.share(valid_share());
         h.frame(vec![]);
+        h.click("mode:new");
         h.click("import_code");
         assert!(h.log.is_empty());
         assert!(matches!(
@@ -2204,5 +2502,188 @@ pub(crate) mod tests {
         h.click("mode:name");
         h.click("history_remove");
         assert_eq!(h.log, ["RemoveAccountHistory { account: \"alice#1234\" }"]);
+    }
+
+    /// PoB's drop-downs start on its own picks: the remembered realm, the last league (else
+    /// the first) and the last character (else the first) (ImportTab.lua:121-131, 1085-1093)
+    #[test]
+    fn the_lists_start_on_pobs_picks() {
+        let mut h = Harness::new();
+        let mut view = signed_in();
+        view.oauth.realm = Realm::Xbox;
+        view.oauth.league_selected = Some("Standard".into());
+        view.oauth.character_selected = Some("Cara".into());
+        h.account(view.clone());
+        h.frame(vec![]);
+        assert_eq!(h.ui.realm, Realm::Xbox);
+        assert!(h.has_text("Xbox"));
+        assert_eq!(h.ui.league.as_deref(), Some("Standard"));
+        assert_eq!(h.ui.selected.as_deref(), Some("Cara"));
+        assert!(marked("char:Bob").is_none(), "Bob plays in Settlers");
+        // one click imports PoB's pick, as PoB's buttons do
+        h.click("import_character");
+        assert!(h.log[0].contains("name: \"Cara\""), "{:?}", h.log);
+        // the user's own picks stay while the list is the same
+        h.click("league_combo");
+        h.click("league:Any");
+        h.click("char:Bob");
+        h.account(view);
+        h.frame(vec![]);
+        assert_eq!(h.ui.selected.as_deref(), Some("Bob"));
+        // PoB's realm label for Sony
+        assert_eq!(realm_label(Realm::Sony), "Sony");
+    }
+
+    /// The account name list starts on PoB's picks too
+    #[test]
+    fn the_public_list_starts_on_pobs_picks() {
+        let mut h = Harness::new();
+        let mut view = signed_out();
+        view.public.stage = PublicStage::SelectCharacter;
+        view.public.leagues = vec!["Settlers".into(), "Standard".into(), "All".into()];
+        view.public.characters = vec![ch("Alice", "Standard"), ch("Bob", "Settlers")];
+        view.public.league_selected = Some("Settlers".into());
+        view.public.character_selected = Some("Bob".into());
+        h.account(view);
+        h.frame(vec![]);
+        h.click("mode:name");
+        h.frame(vec![]);
+        assert_eq!(h.ui.league.as_deref(), Some("Settlers"));
+        assert_eq!(h.ui.selected.as_deref(), Some("Bob"));
+        assert!(marked("char:Alice").is_none());
+    }
+
+    /// PoB's entry: name, the class in its colour, "lvl N" in grey, and the league only with
+    /// no league picked (ImportTab.lua:1068-1073)
+    #[test]
+    fn a_character_entry_reads_as_pobs() {
+        let mut h = Harness::new();
+        h.frame(vec![]);
+        assert!(
+            h.has_text("Alice   Witch lvl 90 in Standard"),
+            "{:?}",
+            h.drawn
+        );
+        h.click("league_combo");
+        h.click("league:Standard");
+        h.frame(vec![]);
+        assert!(h.has_text("Alice   Witch lvl 90"));
+        assert!(!h.has_text("Alice   Witch lvl 90 in"));
+    }
+
+    /// PoB's option labels and tips (ImportTab.lua:297-333)
+    #[test]
+    fn the_import_options_carry_pobs_tips() {
+        let mut h = Harness::new();
+        h.frame(vec![]);
+        for (key, tip) in [
+            ("opt:jewels", TIP_JEWELS),
+            ("opt:skills", TIP_SKILLS),
+            ("opt:items", TIP_ITEMS),
+            ("opt:swap", TIP_SWAP),
+        ] {
+            let pos = marked(key).unwrap().center();
+            h.frame(vec![egui::Event::PointerMoved(pos)]);
+            for _ in 0..40 {
+                h.time += 0.1;
+                h.frame(vec![]);
+            }
+            assert!(h.has_text(tip), "{key}: {:?}", h.drawn);
+        }
+        for label in [
+            "Passive Tree and Jewels",
+            "Delete jewels",
+            "Items and Skills",
+            "Delete skills",
+            "Delete equipment",
+            "Ignore weapon swap",
+        ] {
+            assert!(h.has_text(label), "{label}");
+        }
+    }
+
+    /// PoB's labels: "Character import status: " and "Error: " (ImportTab.lua:78-81, 172-176)
+    #[test]
+    fn the_status_and_error_read_as_pobs() {
+        let mut h = Harness::new();
+        let mut view = signed_in();
+        view.oauth.status = "Authenticated".into();
+        view.oauth.error = Some("Could not import character".into());
+        h.account(view);
+        h.frame(vec![]);
+        assert!(h.has_text("Character import status: Authenticated"));
+        // a status PoB colours keeps its colour
+        let mut view = signed_out();
+        view.oauth.status = "Not authenticated".into();
+        view.oauth.status_coded = "^xFF9922Not authenticated".into();
+        h.account(view);
+        h.frame(vec![]);
+        assert_eq!(
+            h.colour_of("Not authenticated"),
+            Some(egui::Color32::from_rgb(0xFF, 0x99, 0x22))
+        );
+        let mut view = signed_in();
+        view.oauth.status = "Authenticated".into();
+        view.oauth.error = Some("Could not import character".into());
+        h.account(view);
+        h.frame(vec![]);
+        assert!(h.has_text("Character import status: Authenticated"));
+        assert!(h.has_text("Choose character to import data from:"));
+        assert!(h.has_text("Error: Could not import character"));
+    }
+
+    /// PoB's tip on Start for a name without its discriminator (ImportTab.lua:370-375)
+    #[test]
+    fn start_tells_what_the_name_lacks() {
+        let mut h = Harness::new();
+        h.account(signed_out());
+        h.frame(vec![]);
+        h.click("mode:name");
+        h.click("account_name");
+        h.frame(vec![egui::Event::Text("Someone".into())]);
+        h.idle_for(1.0);
+        assert!(h.has_text("To start importing a character, enter the character's account name:"));
+        let pos = marked("start").unwrap().center();
+        h.frame(vec![egui::Event::PointerMoved(pos)]);
+        for _ in 0..40 {
+            h.time += 0.1;
+            h.frame(vec![]);
+        }
+        assert!(
+            h.has_text("Missing discriminator e.g. Someone#1234"),
+            "{:?}",
+            h.drawn
+        );
+    }
+
+    /// PoB's Import button reads "Retrieving paste.." while a paste is fetched
+    #[test]
+    fn import_says_it_is_retrieving_the_paste() {
+        let mut h = Harness::new();
+        let mut view = valid_share();
+        view.import.fetching = true;
+        h.share(view);
+        h.frame(vec![]);
+        assert!(h.has_text("Retrieving paste.."));
+    }
+
+    /// Opening the tab, signed in with a realm PoB remembers and no list yet, makes no
+    /// request: PoB's `TryFetchCharacterList` (ImportTab.lua:734-739) is left out by the SP6
+    /// rule that only a click asks the network; the Fetch button does it
+    #[test]
+    fn opening_the_tab_makes_no_request() {
+        let mut h = Harness::new();
+        let mut view = signed_in();
+        view.oauth.fetched = false;
+        h.account(view);
+        for _ in 0..3 {
+            h.frame(vec![]);
+        }
+        assert!(h.log.is_empty(), "{:?}", h.log);
+        h.ui.leave();
+        h.frame(vec![]);
+        assert!(h.log.is_empty(), "{:?}", h.log);
+        h.click("fetch");
+        assert_eq!(h.log, ["ListCharacters { realm: Pc }"]);
     }
 }

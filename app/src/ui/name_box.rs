@@ -330,16 +330,23 @@ pub fn spliced_with(
         }
         out = kept;
     } else {
+        // the limit counts PoB's bytes: an escape is one (`bytes_text`). The text around the
+        // insert is counted once, and what is kept as it grows, so a long insert stays linear.
+        let around = if limit == usize::MAX {
+            0
+        } else {
+            pob_len(front) + pob_len(back)
+        };
+        let mut held = 0;
         for c in inserted.chars() {
             if !keeps(c) {
                 continue;
             }
-            // the limit counts PoB's bytes: an escape is one (`bytes_text`)
-            let held = if replacing { 0 } else { pob_len(&out) };
-            if pob_len(front) + held + pob_char_len(c) + pob_len(back) > limit {
+            if limit != usize::MAX && around + held + pob_char_len(c) > limit {
                 continue;
             }
             out.push(c);
+            held += pob_char_len(c);
             replacing = false;
         }
         if replacing {
@@ -615,6 +622,22 @@ mod tests {
             "x?"
         );
         assert_eq!(spliced(&held, &typed, Filter::Plain, 100, true), typed);
+    }
+
+    /// A long insert that isn't a paste (egui's own undo bringing back a cleared text, an IME
+    /// commit) is counted once, not once per character
+    #[test]
+    fn a_long_typed_insert_is_linear() {
+        let long = "a".repeat(40_000);
+        let start = std::time::Instant::now();
+        assert_eq!(spliced_by("", &long, |_| true, usize::MAX, false), long);
+        let limited = format!("{}{}", "\u{F7E9}".repeat(10), long);
+        assert_eq!(spliced_by("", &limited, |_| true, 50_000, false), limited);
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(500),
+            "{:?}",
+            start.elapsed()
+        );
     }
 
     #[test]

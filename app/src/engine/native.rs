@@ -108,6 +108,12 @@ pub(crate) fn arm_builds_root(lua: &Lua, root: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A path PoB passed, as its own bytes
+fn lua_path(path: &LuaString) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    PathBuf::from(std::ffi::OsStr::from_bytes(&path.as_bytes()))
+}
+
 /// Where `path` is below the root, and whether it is a link: every part above it must be a real
 /// folder, the root itself is never it.
 fn locate(root: Option<&(PathBuf, PathBuf)>, path: &Path) -> Option<(PathBuf, bool)> {
@@ -184,8 +190,10 @@ pub fn register(lua: &Lua, pob_dir: &Path, user_dir: &Path) -> mlua::Result<()> 
         "MakeDir",
         // true when this call made the folder; nil and the reason otherwise, also for one that
         // is there already, so a move or a copy never merges into a folder
-        lua.create_function(|_, path: String| {
-            if Path::new(&path).exists() {
+        // the path is PoB's bytes: a folder name needn't be UTF-8
+        lua.create_function(|_, path: LuaString| {
+            let path = lua_path(&path);
+            if path.exists() {
                 return Ok((None, Some("File exists".to_string())));
             }
             Ok(match fs::create_dir_all(&path) {
@@ -198,14 +206,15 @@ pub fn register(lua: &Lua, pob_dir: &Path, user_dir: &Path) -> mlua::Result<()> 
         "RemoveDir",
         // a folder, and with `recursive` everything in it (PoB asks first, BuildListControl.lua
         // :154), but only below the registered Builds folder (see `recursive_remove`)
-        lua.create_function(|lua, (path, recursive): (String, Option<bool>)| {
+        lua.create_function(|lua, (path, recursive): (LuaString, Option<bool>)| {
+            let path = lua_path(&path);
             let removed = if recursive.unwrap_or(false) {
                 let root = lua.app_data_ref::<BuildsRoot>().and_then(|r| r.0.clone());
-                recursive_remove(root.as_ref(), Path::new(&path))
+                recursive_remove(root.as_ref(), &path)
             } else {
                 // a link to a folder that PoB lists is removed as a link, below the root only
                 let root = lua.app_data_ref::<BuildsRoot>().and_then(|r| r.0.clone());
-                match locate(root.as_ref(), Path::new(&path)) {
+                match locate(root.as_ref(), &path) {
                     Some((walk, true)) if walk.is_dir() => fs::remove_file(walk),
                     _ => fs::remove_dir(path),
                 }
@@ -605,6 +614,27 @@ mod tests {
         assert_eq!(first, (Some(true), None));
         let again: (Option<bool>, Option<String>) = lua.load("return MakeDir(p)").eval().unwrap();
         assert_eq!(again, (None, Some("File exists".to_string())));
+    }
+
+    /// PoB's paths are bytes: a folder whose name isn't UTF-8 is made and removed as itself,
+    /// as SimpleGraphic does
+    #[test]
+    fn folders_whose_names_arent_utf8_are_made_and_removed() {
+        use std::os::unix::ffi::OsStrExt;
+        let lua = lua();
+        let tmp = TempDir::new("latin-dir");
+        let dir = tmp.0.join(std::ffi::OsStr::from_bytes(b"d\xE9p"));
+        let bytes = lua.create_string(dir.as_os_str().as_bytes()).unwrap();
+        lua.globals().set("p", bytes).unwrap();
+        let made: (Option<bool>, Option<String>) = lua.load("return MakeDir(p)").eval().unwrap();
+        assert_eq!(made, (Some(true), None));
+        assert!(dir.is_dir());
+        set_builds_root(&lua, Some(&tmp.0));
+        fs::write(dir.join("a.xml"), "a").unwrap();
+        let removed: (Option<bool>, Option<String>) =
+            lua.load("return RemoveDir(p, true)").eval().unwrap();
+        assert_eq!(removed, (Some(true), None));
+        assert!(!dir.exists());
     }
 
     #[test]

@@ -20,6 +20,18 @@ fn root_dir(root: &str) -> String {
     }
 }
 
+/// A folder below the Builds folder as the views spell it (escaped, `bytes_text`), as the path
+/// of its own bytes: a name that isn't UTF-8 is listed escaped and found as itself
+fn os_folder(folder: &str) -> PathBuf {
+    super::bytes_text::path_from_escaped(folder)
+}
+
+/// A path below the Builds folder as the views spell it
+fn spelled(rel: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    super::bytes_text::escape_name(rel.as_os_str().as_bytes()).into_owned()
+}
+
 fn real_root(root: &str) -> Result<PathBuf> {
     fs::canonicalize(root).map_err(|_| anyhow!("no such build"))
 }
@@ -118,8 +130,9 @@ fn lower_name(bytes: &[u8]) -> Vec<u8> {
 }
 
 /// The Builds sub-path `folder` names, with a closing slash ("" for the root), or the reason it
-/// is refused. A folder that doesn't exist is an error when `must_exist`, and passes (unless it
-/// is spelled to escape) otherwise.
+/// is refused. Both are spelled as the views spell folders: escaped (`bytes_text`). A folder
+/// that doesn't exist is an error when `must_exist`, and passes (unless it is spelled to
+/// escape) otherwise.
 /// `strict` refuses a link anywhere in the path.
 pub(crate) fn folder(root: &str, folder: &str, must_exist: bool, strict: bool) -> Result<String> {
     if folder.starts_with('/')
@@ -141,10 +154,11 @@ pub(crate) fn folder(root: &str, folder: &str, must_exist: bool, strict: bool) -
         Err(_) if !must_exist => return Ok(lexical()),
         Err(e) => return Err(e),
     };
-    if strict && path_has_links(&root_real, Path::new(folder)) {
+    let os = os_folder(folder);
+    if strict && path_has_links(&root_real, &os) {
         return Err(outside());
     }
-    let joined = root_real.join(folder);
+    let joined = root_real.join(&os);
     let real = match fs::canonicalize(&joined) {
         Ok(real) => real,
         Err(_) if !must_exist => return Ok(lexical()),
@@ -154,7 +168,7 @@ pub(crate) fn folder(root: &str, folder: &str, must_exist: bool, strict: bool) -
     if !real.is_dir() {
         return Err(anyhow!("no such folder"));
     }
-    let rel = rel.to_str().ok_or_else(|| anyhow!("no such folder"))?;
+    let rel = spelled(rel);
     Ok(if rel.is_empty() {
         String::new()
     } else {
@@ -164,10 +178,13 @@ pub(crate) fn folder(root: &str, folder: &str, must_exist: bool, strict: bool) -
 
 /// Refuses Save As onto `name.xml` in `folder` (checked by [`folder`]) when that is a link,
 /// a dangling one included: the save would write through it.
-pub(crate) fn save_target(root: &str, folder: &str, name: &str) -> Result<()> {
+/// `name` is bytes, as PoB's are.
+pub(crate) fn save_target(root: &str, folder: &str, name: &[u8]) -> Result<()> {
+    use std::os::unix::ffi::OsStringExt;
+    let file = std::ffi::OsString::from_vec([name, b".xml"].concat());
     let target = Path::new(&root_dir(root))
-        .join(folder)
-        .join(format!("{name}.xml"));
+        .join(os_folder(folder))
+        .join(file);
     if fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(outside());
     }
@@ -267,9 +284,8 @@ pub(crate) fn folder_tree(root: &str) -> Vec<crate::engine::views::FolderNode> {
                 if out.len() >= TREE_FOLDERS {
                     break;
                 }
-                let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-                    continue;
-                };
+                // a name that isn't UTF-8 is a folder too, spelled escaped as the list is
+                let name = spelled(Path::new(&entry.file_name()));
                 // looked at again, not followed: it may have changed since the listing
                 let Ok(meta) = walk_stat(&entry.path()) else {
                     continue;
@@ -303,29 +319,30 @@ pub(crate) fn browse(root: &str, folder: &str) -> Result<crate::engine::views::B
     // a Builds folder that went is a missing folder to the picker, not a missing build
     let real = real_root(&root_dir(root)).map_err(|_| anyhow!("no such folder"))?;
     let rel = self::folder(root, folder, true, true)?;
-    let dir = real.join(&rel);
+    let dir = real.join(os_folder(&rel));
     let mut entries = Vec::new();
     for entry in fs::read_dir(&dir).map_err(|_| anyhow!("no such folder"))? {
         let Ok(entry) = entry else {
             continue;
         };
         // the name first: a folder of other files costs no stat per entry
-        let Some(file) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
-        let Some(name) = file.strip_suffix(".xml") else {
+        let file = entry.file_name();
+        let Some(stem) =
+            std::os::unix::ffi::OsStrExt::as_bytes(file.as_os_str()).strip_suffix(b".xml")
+        else {
             continue;
         };
         // the entry's own type, a link's included: never followed
         let Ok(kind) = entry.file_type() else {
             continue;
         };
-        if !kind.is_file() || name.is_empty() {
+        if !kind.is_file() || stem.is_empty() {
             continue;
         }
+        // a name that isn't UTF-8 is escaped, and its path is its own bytes
         entries.push(BuildBrowseEntry {
-            name: name.to_owned(),
-            path: PathBuf::from(format!("{}{rel}{file}", root_dir(root))),
+            name: super::bytes_text::escape_name(stem).into_owned(),
+            path: Path::new(&root_dir(root)).join(os_folder(&rel)).join(&file),
         });
     }
     entries.sort_by(|a, b| {
@@ -350,7 +367,7 @@ pub(crate) fn move_target_free(entry: &Path, root: &str, dest_folder: &str) -> R
     let Some(file) = entry.file_name().map(OsStrExt::as_bytes) else {
         return Err(anyhow!("no such build"));
     };
-    let dir = Path::new(&root_dir(root)).join(dest_folder);
+    let dir = Path::new(&root_dir(root)).join(os_folder(dest_folder));
     let base = file.strip_suffix(b".xml").unwrap_or(file);
     let mut candidate = file.to_vec();
     let mut i = 2;

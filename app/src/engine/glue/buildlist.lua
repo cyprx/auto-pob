@@ -411,10 +411,10 @@ function glue.list_builds(subPath)
 				is_folder = false,
 				folder = item.subPath,
 				path = item.fullFileName,
-				-- read from the file's XML, not its name: a byte that isn't UTF-8 there is
-				-- escaped as in every view (bytes_text.rs), where the names stay as they are
-				class = item.className and AutoPobLossy(item.className),
-				ascendancy = item.ascendClassName and AutoPobLossy(item.ascendClassName),
+				-- read from the file's XML: a byte that isn't UTF-8 there is escaped with
+				-- the rest of the view (`build_list_view`, bytes_text.rs)
+				class = item.className,
+				ascendancy = item.ascendClassName,
 				level = item.level,
 				delete_prompt = prompt,
 			}

@@ -181,8 +181,9 @@ function glue.remove_custom(index)
 end
 
 -- The tooltip of an affix entry (`index`, 0-based) or, without one, of the slider, as PoB
--- builds it on hover. Nil when the control or the entry is gone, or while a popup is open.
-function glue.affix_tooltip(slot, index)
+-- builds it on hover: for the value under the pointer (`at`, 0..1), or the slider's own.
+-- Nil when the control or the entry is gone, or while a popup is open.
+function glue.affix_tooltip(slot, index, at)
 	local tab = items_tab()
 	-- PoB blanks these tooltips while a popup is open, and a session is one (R1)
 	if not tab.displayItem or glue.popup_live() then
@@ -203,7 +204,7 @@ function glue.affix_tooltip(slot, index)
 		if not drop.slider:IsShown() then
 			return nil
 		end
-		drop.slider.tooltipFunc(tooltip, drop.slider.val)
+		drop.slider.tooltipFunc(tooltip, at or drop.slider.val)
 	end
 	return glue.read_tooltip(tooltip)
 end

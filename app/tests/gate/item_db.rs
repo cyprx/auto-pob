@@ -339,8 +339,27 @@ fn item_db_matches_pob() {
         "the values didn't move with the recalculation"
     );
 
-    // refused: nothing changes
+    // Ctrl+C on a row copies what PoB's OnSelCopy copies (ItemDBControl.lua:368-370)
     let name = after.rows[0].name.clone();
+    let ours = s.backend.db_item_text(ItemDb::Uniques, &name).unwrap();
+    let theirs: String = lua
+        .load(format!(
+            "local text; local saved = Copy; Copy = function(t) text = t end; \
+             local c = build.itemsTab.controls.uniqueDB; c:OnSelCopy(1, c.db.list[{name:?}]); \
+             Copy = saved; return text"
+        ))
+        .eval()
+        .unwrap();
+    assert_eq!(ours.db_item.as_deref(), Some(name.as_str()));
+    assert_eq!(ours.text, theirs, "the database copy text");
+    assert!(ours.text.contains("\r\n"), "{}", ours.text);
+    assert!(
+        s.backend
+            .db_item_text(ItemDb::Uniques, "No Such Item")
+            .is_err()
+    );
+
+    // refused: nothing changes
     refused(
         &mut s,
         Command::ViewDbItem {

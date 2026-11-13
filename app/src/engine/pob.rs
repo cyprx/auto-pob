@@ -691,6 +691,7 @@ pub(crate) fn ends_popup_session(command: &Command) -> bool {
             | Command::ItemTooltip(_)
             | Command::CopyItem { .. }
             | Command::CopySharedItem { .. }
+            | Command::CopyDbItem { .. }
             | Command::Breakdown(_)
             | Command::GemTooltip(_)
             | Command::GroupTooltip { .. }
@@ -909,6 +910,10 @@ impl PobBackend {
             }
             Command::CopySharedItem { index } => Ok(Affected {
                 shared_text: Some(index),
+                ..Affected::default()
+            }),
+            Command::CopyDbItem { db, name } => Ok(Affected {
+                db_text: Some((db, name)),
                 ..Affected::default()
             }),
             Command::DropOnMinion { source } => {
@@ -2671,6 +2676,10 @@ impl Backend for PobBackend {
             ControlTooltipQuery::Affix { slot, index } => {
                 self.view("affix_tooltip", (*slot, index.map(|i| i as i64)))?
             }
+            ControlTooltipQuery::AffixSlider { slot, at } => self.view(
+                "affix_tooltip",
+                (*slot, None::<i64>, f64::from(*at.min(&1000)) / 1000.0),
+            )?,
             ControlTooltipQuery::DbItem { db, name, shift } => {
                 self.view("item_db_tooltip", (db_name(*db), name.clone(), *shift))?
             }
@@ -2687,6 +2696,7 @@ impl Backend for PobBackend {
             id,
             text,
             shared: false,
+            db_item: None,
         })
     }
 
@@ -2696,6 +2706,17 @@ impl Backend for PobBackend {
             id: index as u32,
             text,
             shared: true,
+            db_item: None,
+        })
+    }
+
+    fn db_item_text(&mut self, db: ItemDb, name: &str) -> Result<ItemText> {
+        let text: String = self.call("item_db_copy", (db_name(db), name))?;
+        Ok(ItemText {
+            id: 0,
+            text,
+            shared: false,
+            db_item: Some(name.to_owned()),
         })
     }
 
@@ -2857,6 +2878,10 @@ mod tests {
             }),
             Command::CopyItem { id: 1 },
             Command::CopySharedItem { index: 0 },
+            Command::CopyDbItem {
+                db: ItemDb::Uniques,
+                name: "x".into(),
+            },
             Command::Breakdown(CellRef {
                 section: "s".into(),
                 sub: 0,

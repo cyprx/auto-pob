@@ -468,6 +468,7 @@ fn copy_reply_reaches_clipboard_only_when_asked() {
             id,
             text: text.into(),
             shared: false,
+            db_item: None,
         }))
     };
     h.ui.on_snapshot(&reply(1, "unasked"));
@@ -2485,3 +2486,5 @@ fn renaming_an_untitled_item_set_starts_empty() {
     h.click("sets_rename");
     assert_eq!(h.ui.sets.naming_text(), Some("Alt"));
 }
+#[path = "audit2_tests.rs"]
+mod audit2_tests;

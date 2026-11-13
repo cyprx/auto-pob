@@ -141,10 +141,24 @@ fn single(
                             })
                             .inner;
                         seen(index, &response);
+                        // a toggleable line lights up under the pointer, and any mouse button
+                        // pressed on it toggles it, at the press (ItemsTab.lua:1521-1539)
                         if let Some(m) = mod_line
-                            && response.clicked()
+                            && response.hovered()
                         {
-                            clicked = Some(*m);
+                            ui.painter().rect_filled(
+                                response.rect,
+                                0.0,
+                                Color32::from_white_alpha(38),
+                            );
+                            let pressed = ui.input(|i| {
+                                i.events.iter().any(|e| {
+                                    matches!(e, egui::Event::PointerButton { pressed: true, .. })
+                                })
+                            });
+                            if pressed {
+                                clicked = Some(*m);
+                            }
                         }
                     }
                     ItemTooltipLine::Separator { .. } => {
@@ -234,11 +248,24 @@ mod tests {
                 modifiers: Modifiers::NONE,
             };
             run(&ctx, vec![Event::PointerMoved(pos)]);
-            run(&ctx, vec![button(true)]);
-            if let Some(hit) = run(&ctx, vec![button(false)]) {
+            // PoB toggles at the press
+            if let Some(hit) = run(&ctx, vec![button(true)]) {
                 found = Some(hit);
+                run(&ctx, vec![button(false)]);
+                // any button does (ItemsTab.lua:1530: `event.key:match("BUTTON")`)
+                let right = run(
+                    &ctx,
+                    vec![Event::PointerButton {
+                        pos,
+                        button: PointerButton::Secondary,
+                        pressed: true,
+                        modifiers: Modifiers::NONE,
+                    }],
+                );
+                assert_eq!(right, found, "a right press toggles too");
                 break;
             }
+            run(&ctx, vec![button(false)]);
         }
         assert_eq!(
             found,

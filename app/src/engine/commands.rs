@@ -987,6 +987,12 @@ pub enum Command {
     CopySharedItem {
         index: usize,
     },
+    /// Ctrl+C on a database row (ItemDBControl.lua:368-370): a query, answered with the text
+    /// PoB copies
+    CopyDbItem {
+        db: ItemDb,
+        name: String,
+    },
     /// An item dragged onto the sidebar's minion dropdown while it shows an item set (Animate
     /// Guardian): PoB equips it into that set for the minion (Build.lua:534-543)
     DropOnMinion {
@@ -1233,6 +1239,12 @@ pub enum ControlTooltipQuery {
     Affix {
         slot: usize,
         index: Option<usize>,
+    },
+    /// The slider under an affix dropdown, hovered at `at` thousandths of its travel: PoB's
+    /// slider tooltip is for the value under the pointer (SliderControl.lua:118-124)
+    AffixSlider {
+        slot: usize,
+        at: u16,
     },
     DbItem {
         db: ItemDb,

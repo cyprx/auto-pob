@@ -180,9 +180,15 @@ fn affix_row(
         let key = format!("affix_{slot}");
         let (response, picked) = combo(ui, state, &key, &affix.list, Some(slot));
         state.rects.note(&response, || key.clone());
-        state
-            .tip
-            .note(&response, ControlTooltipQuery::Affix { slot, index: None });
+        // the closed dropdown shows its selected entry's tooltip (DropDownControl.lua:288-296,
+        // mode "BODY")
+        state.tip.note(
+            &response,
+            ControlTooltipQuery::Affix {
+                slot,
+                index: Some(affix.list.selected),
+            },
+        );
         if let Some(index) = picked {
             out.push(Command::SetAffix {
                 slot,
@@ -193,9 +199,33 @@ fn affix_row(
     });
     if let Some(range) = affix.range {
         ui.horizontal(|ui| {
+            // PoB's label, grey while the dropdown is on "None" (ItemsTab.lua:969-971)
+            let roll = if affix.list.selected > 0 {
+                "^7Roll:"
+            } else {
+                "^x7F7F7FRoll:"
+            };
+            let label = ui.label(pob_text(roll, 14.0, default));
+            state.rects.note(&label, || format!("affix_roll_{slot}"));
             let mut value = state.affix_sliders.get(&slot).copied().unwrap_or(range);
             let slider = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).show_value(false));
             state.rects.note(&slider, || format!("affix_range_{slot}"));
+            // its own tooltip, for the value under the pointer, or the value while dragged
+            // (SliderControl.lua:117-125)
+            let at = if slider.dragged() {
+                value
+            } else {
+                slider.hover_pos().map_or(value, |p| {
+                    f64::from((p.x - slider.rect.left()) / slider.rect.width().max(1.0))
+                })
+            };
+            state.tip.note(
+                &slider,
+                ControlTooltipQuery::AffixSlider {
+                    slot,
+                    at: (at.clamp(0.0, 1.0) * 1000.0).round() as u16,
+                },
+            );
             // the wheel and the arrows move it (SliderControl.lua:164-180)
             if let Some(to) = crate::widgets::scroll_step::slider_step(ui, &slider, value) {
                 state.affix_sliders.insert(slot, to);

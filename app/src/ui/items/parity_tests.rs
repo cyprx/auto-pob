@@ -178,7 +178,7 @@ fn text_window_closes_on_escape_but_not_on_a_click_outside() {
     assert!(h.ui.display.text_window.is_none(), "Escape left it open");
 }
 
-fn stacked_view() -> DisplayItemView {
+pub(super) fn stacked_view() -> DisplayItemView {
     let line = |label: &str, slider: bool, mutable: bool| RangeLineView {
         label: label.into(),
         range: slider.then_some(0.5),
@@ -396,6 +396,7 @@ fn ctrl_c_on_a_shared_row_copies_it() {
             id,
             text: text.into(),
             shared,
+            db_item: None,
         }))
     };
     // a build item's text with the same number is not the shared one

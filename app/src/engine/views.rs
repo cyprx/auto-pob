@@ -1868,6 +1868,9 @@ pub struct ItemText {
     /// A shared item's text (`CopySharedItem`)
     #[serde(default)]
     pub shared: bool,
+    /// A database row's text (`CopyDbItem`): the row's name
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_item: Option<String>,
 }
 
 /// The item on the display panel (PoB's `displayItem`) with the controls PoB shows for it.

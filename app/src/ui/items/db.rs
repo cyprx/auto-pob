@@ -16,6 +16,8 @@ const DEBOUNCE: f64 = 0.3;
 /// Float slack for comparing times that are sums of tenths.
 const EPS: f64 = 1e-6;
 const ROW_HEIGHT: f32 = 18.0;
+/// PoB's search box holds 100 bytes (ItemDBControl.lua:51)
+const SEARCH_LIMIT: usize = 100;
 /// Filter dropdowns per line, so they fit a narrow column.
 const PER_ROW: usize = 3;
 
@@ -33,7 +35,7 @@ pub struct DbState {
     query: ItemDbQuery,
     /// The engine has a database open for us
     open_sent: bool,
-    search: EditBox,
+    pub(super) search: EditBox,
     /// The box's text when it was last seen changing, and when
     seen: (String, f64),
     percent: Option<u32>,
@@ -47,6 +49,10 @@ pub struct DbState {
     /// The wiki page of the row under the pointer: a unique's name, a rare's base
     /// (ItemDBControl.lua:375-382, ItemTools.lua:395-399)
     pub(super) hovered_wiki: Option<String>,
+    /// The rows are the selected control: the list's keys reach them (ListControl.lua:375-392)
+    list_focus: bool,
+    /// The row whose copy text was asked for (Ctrl+C, ItemDBControl.lua:368-370)
+    pub(super) copy_asked: Option<String>,
 }
 
 fn default_query(db: ItemDb) -> ItemDbQuery {
@@ -79,6 +85,8 @@ impl Default for DbState {
             search_id: None,
             focus_search: false,
             hovered_wiki: None,
+            list_focus: false,
+            copy_asked: None,
         }
     }
 }
@@ -342,9 +350,12 @@ fn body(
         }
     }
 
+    // PoB's box: filter `%c`, 100 bytes, clearable (ItemDBControl.lua:51)
     let opts = EditBoxOptions {
         width: 240.0,
         hint: Some("Search"),
+        byte_limit: Some(SEARCH_LIMIT),
+        filter: Some(|c| !c.is_control()),
         ..EditBoxOptions::default()
     };
     ui.horizontal(|ui| {
@@ -357,7 +368,17 @@ fn body(
         if std::mem::take(&mut state.focus_search) {
             response.request_focus();
         }
-        if let Some(text) = send {
+        // its "x" empties it and searches at once (EditControl.lua:73-77, SetText(.., true))
+        let cleared = crate::widgets::edit_box::clear_button(ui, &mut state.search.text)
+            .is_some_and(|x| {
+                state.rects.note(&x, || "db_search_clear".into());
+                x.clicked()
+            });
+        if cleared {
+            state.search.discard();
+            state.query.search.clear();
+            changed = true;
+        } else if let Some(text) = send {
             state.query.search = text;
             changed = true;
         } else if state.search.has_pending() {
@@ -452,6 +473,7 @@ fn body(
 fn rows(ui: &mut egui::Ui, view: &ItemDbView, state: &mut DbState, out: &mut ItemsOutput) {
     let default = ui.visuals().text_color();
     let db = state.query.db;
+    let mut row_clicked = false;
     egui::ScrollArea::vertical()
         .id_salt("items_db_rows")
         .auto_shrink(false)
@@ -497,6 +519,7 @@ fn rows(ui: &mut egui::Ui, view: &ItemDbView, state: &mut DbState, out: &mut Ite
                         name: row.name.clone(),
                     });
                 } else if response.clicked() {
+                    row_clicked = true;
                     state.selected = Some(row.name.clone());
                     // PoB's Ctrl+click adds the item and equips it (R15), Ctrl+Shift+click
                     // into the second slot (R23)
@@ -526,4 +549,30 @@ fn rows(ui: &mut egui::Ui, view: &ItemDbView, state: &mut DbState, out: &mut Ite
                 );
             }
         });
+    // a click on a row makes the list the selected control; a click elsewhere, or a text box
+    // taking the keyboard, ends that
+    if row_clicked {
+        state.list_focus = true;
+    } else if ui.input(|i| i.pointer.any_click()) || ui.ctx().text_edit_focused() {
+        state.list_focus = false;
+    }
+    if !state.list_focus {
+        return;
+    }
+    // Up, Down, Home and End move the selection (ListControl.lua:375-382)
+    let at = state
+        .selected
+        .as_ref()
+        .and_then(|name| view.rows.iter().position(|r| &r.name == name));
+    if let Some(i) = ui.input_mut(|inp| crate::ui::shortcuts::list_key(inp, view.rows.len(), at)) {
+        state.selected = Some(view.rows[i].name.clone());
+    }
+    // Ctrl+C copies the selected row's text, as PoB's OnSelCopy (ItemDBControl.lua:368-370)
+    if let Some(name) = state.selected.clone()
+        && view.rows.iter().any(|r| r.name == name)
+        && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)))
+    {
+        state.copy_asked = Some(name.clone());
+        out.queries.push(Command::CopyDbItem { db, name });
+    }
 }

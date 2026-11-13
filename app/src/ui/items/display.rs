@@ -511,6 +511,11 @@ fn stacked_range_lines(
                 state
                     .rects
                     .note(&slider, || format!("stacked_slider_{line}"));
+                // the wheel and the arrows move it, as every slider (SliderControl.lua:164-180)
+                if let Some(to) = crate::widgets::scroll_step::slider_step(ui, &slider, value) {
+                    state.slider = Some((line, to));
+                    out.push(Command::SetRangeLine { line, value: to });
+                }
                 if slider.dragged() || slider.changed() {
                     state.slider = Some((line, value));
                 }

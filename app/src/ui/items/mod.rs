@@ -269,12 +269,20 @@ impl ItemsUi {
                     self.tooltip = Some(t.clone());
                 }
             }
-            Snapshot::ItemText(t) if !t.shared && self.copy_asked == Some(t.id) => {
+            Snapshot::ItemText(t)
+                if !t.shared && t.db_item.is_none() && self.copy_asked == Some(t.id) =>
+            {
                 self.copy_asked = None;
                 self.clipboard = Some(t.text.clone());
             }
             Snapshot::ItemText(t) if t.shared && self.shared_copy_asked == Some(t.id as usize) => {
                 self.shared_copy_asked = None;
+                self.clipboard = Some(t.text.clone());
+            }
+            Snapshot::ItemText(t)
+                if t.db_item.is_some() && self.db.copy_asked.as_ref() == t.db_item.as_ref() =>
+            {
+                self.db.copy_asked = None;
                 self.clipboard = Some(t.text.clone());
             }
             _ => {}

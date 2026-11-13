@@ -571,13 +571,23 @@ fn options_cancel_sessions_and_unsaved_edits() {
         s.eval::<bool>("return pob.main.main.defaultGemQuality == 5"),
         "edit still live"
     );
+    assert!(!s.settings().options_lost, "kept, not lost");
 
     // ---- I4: a save PoB makes by itself never writes the window's edits (R29) ----
     set(&mut s, "showWarnings", PopupInput::Check(true));
     s.eval::<()>("pob.main.main:SaveSettings()");
     assert_eq!(misc(&s), seed, "an unsaved edit reached Settings.xml");
     assert!(s.popup().is_none(), "the window was cancelled");
-    assert!(s.eval::<bool>("return glue.popup_take_lost()"));
+    // the next command tells the UI, and its settings view says so once
+    let affected = s
+        .run(Command::SetOverrides {
+            values: [("defaultCharLevel".to_string(), "77".to_string())].into(),
+        })
+        .unwrap();
+    assert!(affected.popup && affected.settings);
+    assert!(s.settings().options_lost, "the UI isn't told why it closed");
+    assert!(!s.settings().options_lost, "said twice");
+    assert!(!s.eval::<bool>("return glue.popup_take_lost()"));
     assert!(
         s.eval::<bool>("return pob.main.main.defaultGemQuality == 20"),
         "cancelled"

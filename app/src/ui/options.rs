@@ -166,6 +166,17 @@ impl OptionsUi {
         commands
     }
 
+    /// A save PoB made by itself (a sign-in's token) cancelled the window: its edits are gone,
+    /// and the overrides it changed go back to the saved ones, as after a Cancel.
+    pub fn lost(&mut self) -> Vec<Command> {
+        self.folder = EditBox::default();
+        self.league = EditBox::default();
+        self.saving = None;
+        let mut commands = Vec::new();
+        self.restore(&mut commands);
+        commands
+    }
+
     /// After a Cancel the saved overrides are the ones that count.
     fn restore(&mut self, commands: &mut Vec<Command>) {
         if self.draft.overrides != self.base.overrides {
@@ -502,6 +513,7 @@ pub(crate) mod testing {
                 .iter()
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
                 .collect(),
+            options_lost: false,
         }
     }
 }

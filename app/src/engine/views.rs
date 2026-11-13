@@ -1286,6 +1286,7 @@ mod tests {
                 row("showAnimations", "true", SettingEffect::NoEffect),
             ],
             saved_overrides: BTreeMap::from([("defaultCharLevel".to_string(), "90".to_string())]),
+            options_lost: true,
         };
         let json = serde_json::to_string(&view).unwrap();
         assert_eq!(serde_json::from_str::<SettingsView>(&json).unwrap(), view);
@@ -1890,6 +1891,10 @@ pub struct SettingsView {
     /// The overrides an Options Save changed since the last view, for the UI to write (R12)
     #[serde(default)]
     pub saved_overrides: BTreeMap<String, String>,
+    /// A save PoB made by itself (a sign-in's token) cancelled the open Options window and its
+    /// unsaved edits since the last view; said once
+    #[serde(default)]
+    pub options_lost: bool,
 }
 
 /// The network requests: the pending ones in the order they began, and the ones finished since

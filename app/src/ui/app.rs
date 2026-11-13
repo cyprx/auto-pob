@@ -390,6 +390,16 @@ impl AutoPobApp {
             disable: on("disableScrollControlInteraction"),
             invert_slider: on("invertSliderScrollDirection"),
         };
+        if view.options_lost {
+            for command in self.options.lost() {
+                self.send(command);
+            }
+            self.notices.push(
+                "Options closed without saving: PoB saved its settings after a sign-in, so \
+                 the changes in the window were dropped."
+                    .into(),
+            );
+        }
         let Some(next) = self.options.on_settings(view, seq) else {
             return;
         };

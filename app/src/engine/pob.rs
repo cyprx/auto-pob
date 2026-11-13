@@ -21,6 +21,7 @@ use crate::game::Game;
 use anyhow::{Context as _, Result, anyhow};
 use mlua::{FromLuaMulti, IntoLuaMulti, Lua, LuaSerdeExt};
 use pob_runtime::net::{NetConfig, Waker};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 pub struct PobBackend {
@@ -31,6 +32,9 @@ pub struct PobBackend {
     pob_dir: PathBuf,
     /// The Builds sub-folder the list view shows; "" is the root.
     folder: String,
+    /// The last list view showed its names escaped (one isn't UTF-8, `bytes_text`): a name
+    /// typed over one of them (Rename, Copy) has its escapes turned back into the bytes
+    list_escaped: bool,
     /// The key of the last tree layout sent, so an unchanged layout isn't sent again.
     last_layout_key: Option<String>,
     /// Whether the heat map is on, as the last `SetHeatmap` left it.
@@ -231,6 +235,7 @@ impl PobBackend {
             game,
             pob_dir: pob_dir.to_owned(),
             folder: String::new(),
+            list_escaped: false,
             last_layout_key: None,
             heatmap_on: false,
             power_failed: false,
@@ -269,8 +274,26 @@ impl PobBackend {
     }
 
     /// `path` as PoB spells an entry of the Builds folder, or why it is refused (R16).
-    fn build_entry(&self, path: &Path, walks: bool) -> Result<String> {
+    fn build_entry(&self, path: &Path, walks: bool) -> Result<PathBuf> {
         buildpaths::entry(&self.build_root()?, path, walks)
+    }
+
+    /// A path or name as a Lua string of its own bytes (a file name needn't be UTF-8)
+    fn bytes_arg(&self, bytes: &[u8]) -> Result<mlua::LuaString> {
+        self.lua.create_string(bytes).map_err(|e| anyhow!("{e}"))
+    }
+
+    /// A new name for an entry (Rename, Copy), as PoB's bytes: over an escaped list its
+    /// escapes are the bytes the list showed (`bytes_text`), else it is its own UTF-8
+    fn entry_name(&self, name: &str) -> Vec<u8> {
+        use std::os::unix::ffi::OsStringExt;
+        if self.list_escaped {
+            super::bytes_text::path_from_escaped(name)
+                .into_os_string()
+                .into_vec()
+        } else {
+            name.as_bytes().to_vec()
+        }
     }
 
     /// Calls `glue.<name>(args)`, keeping only the error message.
@@ -1270,14 +1293,24 @@ impl PobBackend {
             }
             Command::RenameBuild { path, name } => {
                 let path = self.build_entry(&path, false)?;
+                let name = self.entry_name(&name);
                 buildpaths::name_free(&path, &name, true)?;
-                self.call_path::<_, ()>("rename_build", (path, name))?;
+                let args = (
+                    self.bytes_arg(path.as_os_str().as_bytes())?,
+                    self.bytes_arg(&name)?,
+                );
+                self.call_path::<_, ()>("rename_build", args)?;
                 Ok(list_changed())
             }
             Command::CopyBuild { path, name } => {
                 let path = self.build_entry(&path, true)?;
+                let name = self.entry_name(&name);
                 buildpaths::name_free(&path, &name, false)?;
-                self.call_path::<_, ()>("copy_build", (path, name))?;
+                let args = (
+                    self.bytes_arg(path.as_os_str().as_bytes())?,
+                    self.bytes_arg(&name)?,
+                );
+                self.call_path::<_, ()>("copy_build", args)?;
                 Ok(list_changed())
             }
             Command::DeleteBuild { path, kind } => {
@@ -1302,7 +1335,8 @@ impl PobBackend {
                 if !as_asked {
                     anyhow::bail!("the folder changed; look again");
                 }
-                self.call_path::<_, ()>("delete_build", (path.clone(), kind_name))?;
+                let lua_path = self.bytes_arg(path.as_os_str().as_bytes())?;
+                self.call_path::<_, ()>("delete_build", (lua_path, kind_name))?;
                 // PoB ignores what its delete answers: look at the file system
                 if std::fs::symlink_metadata(&path).is_ok() {
                     anyhow::bail!("couldn't delete that build");
@@ -1314,6 +1348,7 @@ impl PobBackend {
                 let path = self.build_entry(&path, true)?;
                 let folder = buildpaths::folder(&root, &folder, true, true)?;
                 buildpaths::move_target_free(&path, &root, &folder)?;
+                let path = self.bytes_arg(path.as_os_str().as_bytes())?;
                 self.call_path::<_, ()>("move_build", (path, folder))?;
                 Ok(list_changed())
             }
@@ -1322,6 +1357,7 @@ impl PobBackend {
                 let path = self.build_entry(&path, true)?;
                 let folder = buildpaths::folder(&root, &folder, true, true)?;
                 buildpaths::move_target_free(&path, &root, &folder)?;
+                let path = self.bytes_arg(path.as_os_str().as_bytes())?;
                 self.call_path::<_, ()>("copy_build_to", (path, folder))?;
                 Ok(list_changed())
             }
@@ -1357,12 +1393,7 @@ impl PobBackend {
                 self.on_list = false;
                 self.reset_heatmap();
                 // the path's own bytes: a file name that isn't UTF-8 opens as itself
-                let path = {
-                    use std::os::unix::ffi::OsStrExt;
-                    self.lua
-                        .create_string(path.as_os_str().as_bytes())
-                        .map_err(|e| anyhow!("{e}"))?
-                };
+                let path = self.bytes_arg(path.as_os_str().as_bytes())?;
                 self.call_path::<_, ()>("open_build", path)?;
                 self.all_views()
             }
@@ -2698,6 +2729,7 @@ impl Backend for PobBackend {
         // the entries are file names (valid UTF-8, buildpaths): they come and go as they are,
         // never escaped, as the paths of the commands about them do (`call_path`)
         let value: mlua::Value = self.call_path("list_builds", self.folder.clone())?;
+        self.list_escaped = false;
         let mut view: BuildListView = match self.lua.from_value(value.clone()) {
             Ok(view) => view,
             // a file name that isn't UTF-8, which PoB on Linux lists and opens: the list
@@ -2712,6 +2744,7 @@ impl Backend for PobBackend {
                     let shown = entry.path.to_string_lossy().into_owned();
                     entry.path = super::bytes_text::path_from_escaped(&shown);
                 }
+                self.list_escaped = true;
                 view
             }
         };

@@ -56,7 +56,10 @@ fn path_has_links(base: &Path, rel: &Path) -> bool {
 /// it is refused. `path` must be a build file or a folder that exists below `root`; a link is
 /// accepted only when its target is below `root` too. `walks` is true for Copy and Move, which
 /// follow links: they refuse a link anywhere in the path or the tree.
-pub(crate) fn entry(root: &str, path: &Path, walks: bool) -> Result<String> {
+///
+/// The path is bytes, as PoB's are: PoB on Linux lists a file whose name isn't UTF-8, and
+/// renames, copies, moves and deletes it as itself.
+pub(crate) fn entry(root: &str, path: &Path, walks: bool) -> Result<PathBuf> {
     let root = root_dir(root);
     let root_real = real_root(&root)?;
     if !path.is_absolute()
@@ -94,16 +97,24 @@ pub(crate) fn entry(root: &str, path: &Path, walks: bool) -> Result<String> {
     if walks && full.is_dir() && tree_has_links(&full) {
         return Err(outside());
     }
-    // PoB lists such a file and opens it (8103395); these commands need a UTF-8 path
-    let not_utf8 = || anyhow!("that build's file name isn't UTF-8");
-    let parent_rel = parent_rel.to_str().ok_or_else(not_utf8)?;
-    let name = name.to_str().ok_or_else(not_utf8)?;
-    let folder = if parent_rel.is_empty() {
-        String::new()
-    } else {
-        format!("{parent_rel}/")
-    };
-    Ok(format!("{root}{folder}{name}"))
+    let mut spelled = std::ffi::OsString::from(&root);
+    if !parent_rel.as_os_str().is_empty() {
+        spelled.push(parent_rel.as_os_str());
+        spelled.push("/");
+    }
+    spelled.push(name);
+    Ok(PathBuf::from(spelled))
+}
+
+/// `bytes` lowercased as a name: its UTF-8 parts by Unicode, any other byte as it is (two
+/// different such bytes never compare equal)
+fn lower_name(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    for chunk in bytes.utf8_chunks() {
+        out.extend_from_slice(chunk.valid().to_lowercase().as_bytes());
+        out.extend_from_slice(chunk.invalid());
+    }
+    out
 }
 
 /// The Builds sub-path `folder` names, with a closing slash ("" for the root), or the reason it
@@ -166,30 +177,29 @@ pub(crate) fn save_target(root: &str, folder: &str, name: &str) -> Result<()> {
 /// Refuses a new name that is taken in the entry's folder, exactly or as a case variant, a
 /// link (also a dangling one) included: a rename or copy would replace or write through it.
 /// `entry` is the approved source; `rename` lets the entry's own name through when only its
-/// case changes.
-pub(crate) fn name_free(entry: &str, new_name: &str, rename: bool) -> Result<()> {
+/// case changes. Names are bytes, as PoB's are.
+pub(crate) fn name_free(entry: &Path, new_name: &[u8], rename: bool) -> Result<()> {
+    use std::os::unix::ffi::OsStrExt;
     let taken = || anyhow!("a build with that name already exists");
-    let source = Path::new(entry);
-    let (Some(dir), Some(own)) = (source.parent(), source.file_name().and_then(|n| n.to_str()))
-    else {
+    let (Some(dir), Some(own)) = (entry.parent(), entry.file_name().map(OsStrExt::as_bytes)) else {
         return Err(anyhow!("no such build"));
     };
     // a link to a folder is a folder, as PoB treats it (it renames it to the bare name)
-    let is_folder = fs::metadata(source).is_ok_and(|m| m.is_dir());
-    let target = if is_folder {
-        new_name.to_string()
-    } else {
-        format!("{new_name}.xml")
-    };
+    let is_folder = fs::metadata(entry).is_ok_and(|m| m.is_dir());
+    let mut target = new_name.to_vec();
+    if !is_folder {
+        target.extend_from_slice(b".xml");
+    }
     if rename && target == own {
         return Err(taken());
     }
-    let lower = target.to_lowercase();
+    let lower = lower_name(&target);
     for found in fs::read_dir(dir).map_err(|_| anyhow!("no such build"))? {
         let found = found.map_err(|_| taken())?;
-        let name = found.file_name().to_string_lossy().into_owned();
+        let name = found.file_name();
+        let name = name.as_bytes();
         // a case variant counts as taken: stricter than PoB on Linux, by ruling (N2)
-        if name.to_lowercase() == lower && !(rename && name == own) {
+        if lower_name(name) == lower && !(rename && name == own) {
             return Err(taken());
         }
     }
@@ -335,23 +345,24 @@ pub(crate) fn browse(root: &str, folder: &str) -> Result<crate::engine::views::B
 /// `name[2]`, `name[3]` and so on while `io.open` succeeds (a readable file or a folder) and
 /// takes the first it can't open; `os.rename` then replaces whatever is there, a link or an
 /// unreadable file included.
-pub(crate) fn move_target_free(entry: &str, root: &str, dest_folder: &str) -> Result<()> {
-    let Some(file) = Path::new(entry).file_name().and_then(|n| n.to_str()) else {
+pub(crate) fn move_target_free(entry: &Path, root: &str, dest_folder: &str) -> Result<()> {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let Some(file) = entry.file_name().map(OsStrExt::as_bytes) else {
         return Err(anyhow!("no such build"));
     };
     let dir = Path::new(&root_dir(root)).join(dest_folder);
-    let base = file.strip_suffix(".xml").unwrap_or(file);
-    let mut candidate = file.to_string();
+    let base = file.strip_suffix(b".xml").unwrap_or(file);
+    let mut candidate = file.to_vec();
     let mut i = 2;
     loop {
-        let target = dir.join(&candidate);
+        let target = dir.join(std::ffi::OsString::from_vec(candidate));
         if fs::File::open(&target).is_err() {
             return match fs::symlink_metadata(&target) {
                 Ok(_) => Err(anyhow!("a build with that name already exists")),
                 Err(_) => Ok(()),
             };
         }
-        candidate = format!("{base}[{i}].xml");
+        candidate = [base, format!("[{i}].xml").as_bytes()].concat();
         i += 1;
     }
 }
@@ -384,7 +395,7 @@ mod tests {
         }
     }
 
-    fn refusal(result: Result<String>) -> String {
+    fn refusal<T: std::fmt::Debug>(result: Result<T>) -> String {
         result.expect_err("should be refused").to_string()
     }
 
@@ -393,29 +404,44 @@ mod tests {
         let tree = Tree::new("in");
         let root = tree.root();
         let a = tree.0.join("Builds/a.xml");
-        assert_eq!(entry(&root, &a, false).unwrap(), format!("{root}a.xml"));
+        let spelled = |rel: &str| PathBuf::from(format!("{root}{rel}"));
+        assert_eq!(entry(&root, &a, false).unwrap(), spelled("a.xml"));
         let b = tree.0.join("Builds/sub/b.xml");
-        assert_eq!(entry(&root, &b, true).unwrap(), format!("{root}sub/b.xml"));
+        assert_eq!(entry(&root, &b, true).unwrap(), spelled("sub/b.xml"));
         let sub = tree.0.join("Builds/sub");
-        assert_eq!(entry(&root, &sub, true).unwrap(), format!("{root}sub"));
+        assert_eq!(entry(&root, &sub, true).unwrap(), spelled("sub"));
     }
 
-    /// A file whose name isn't UTF-8 is listed and opens, but the list's other commands
-    /// refuse it: they say why, not that it doesn't exist (review M6)
+    /// A file whose name isn't UTF-8 is an entry as itself, as PoB on Linux lists, renames,
+    /// copies, moves and deletes it; its name is told apart from other such names
     #[test]
-    fn a_name_that_isnt_utf8_is_refused_with_its_reason() {
+    fn a_name_that_isnt_utf8_is_an_entry_as_its_own_bytes() {
         use std::os::unix::ffi::OsStrExt;
         let tree = Tree::new("latin");
         let root = tree.root();
-        let path = tree
-            .0
-            .join("Builds")
-            .join(std::ffi::OsStr::from_bytes(b"caf\xE9.xml"));
+        let os = |b: &[u8]| std::ffi::OsStr::from_bytes(b).to_owned();
+        let path = tree.0.join("Builds").join(os(b"caf\xE9.xml"));
         fs::write(&path, "x").unwrap();
+        let spelled = entry(&root, &path, true).unwrap();
         assert_eq!(
-            refusal(entry(&root, &path, false)),
-            "that build's file name isn't UTF-8"
+            spelled.as_os_str().as_bytes(),
+            [root.as_bytes(), b"caf\xE9.xml"].concat()
         );
+        // its own name, or the same in another case, is taken; another byte is not
+        assert!(name_free(&spelled, b"caf\xE9", false).is_err());
+        assert!(name_free(&spelled, b"CAF\xE9", false).is_err());
+        assert!(name_free(&spelled, b"caf\xE8", false).is_ok());
+        assert!(name_free(&spelled, b"caf\xE9 2", false).is_ok());
+        fs::write(tree.0.join("Builds").join(os(b"caf\xE8.xml")), "y").unwrap();
+        assert!(name_free(&spelled, b"caf\xE8", true).is_err());
+        // a move to sub/ is free until sub/ holds a dangling link of its name
+        assert!(move_target_free(&spelled, &root, "sub/").is_ok());
+        symlink(
+            tree.0.join("outside/gone.xml"),
+            tree.0.join("Builds/sub").join(os(b"caf\xE9.xml")),
+        )
+        .unwrap();
+        assert!(move_target_free(&spelled, &root, "sub/").is_err());
     }
 
     #[test]
@@ -460,7 +486,7 @@ mod tests {
         // a link that stays inside is fine, and is spelled by where it leads
         assert_eq!(
             entry(&root, &tree.0.join("Builds/inner/b.xml"), false).unwrap(),
-            format!("{root}sub/b.xml")
+            PathBuf::from(format!("{root}sub/b.xml"))
         );
         assert!(entry(&root, &tree.0.join("Builds/inner"), false).is_ok());
     }
@@ -505,7 +531,7 @@ mod tests {
     #[test]
     fn names_are_free_only_when_nothing_has_them_in_any_case() {
         let tree = Tree::new("names");
-        let a = format!("{}a.xml", tree.root());
+        let a = PathBuf::from(format!("{}a.xml", tree.root()));
         let err = |r: Result<()>| r.expect_err("taken").to_string();
         let taken = "a build with that name already exists";
         fs::write(tree.0.join("Builds/Other.xml"), "o").unwrap();
@@ -514,26 +540,26 @@ mod tests {
             tree.0.join("Builds/dangling.xml"),
         )
         .unwrap();
-        assert!(name_free(&a, "fresh", false).is_ok());
-        assert_eq!(err(name_free(&a, "a", false)), taken);
-        assert_eq!(err(name_free(&a, "a", true)), taken);
-        assert_eq!(err(name_free(&a, "other", true)), taken, "a case variant");
-        assert_eq!(err(name_free(&a, "OTHER", false)), taken);
+        assert!(name_free(&a, b"fresh", false).is_ok());
+        assert_eq!(err(name_free(&a, b"a", false)), taken);
+        assert_eq!(err(name_free(&a, b"a", true)), taken);
+        assert_eq!(err(name_free(&a, b"other", true)), taken, "a case variant");
+        assert_eq!(err(name_free(&a, b"OTHER", false)), taken);
         assert_eq!(
-            err(name_free(&a, "dangling", false)),
+            err(name_free(&a, b"dangling", false)),
             taken,
             "a dangling link"
         );
         // only the case of its own name changes
-        assert!(name_free(&a, "A", true).is_ok());
+        assert!(name_free(&a, b"A", true).is_ok());
         // both a.xml and A.xml exist: a -> A would replace A.xml
         fs::write(tree.0.join("Builds/A.xml"), "A").unwrap();
-        assert_eq!(err(name_free(&a, "A", true)), taken);
+        assert_eq!(err(name_free(&a, b"A", true)), taken);
         // a link to a folder is a folder: its new name is the bare name, not name.xml
         fs::write(tree.0.join("Builds/plain"), "p").unwrap();
         let link = tree.0.join("Builds/lnk");
         symlink(tree.0.join("Builds/sub"), &link).unwrap();
-        assert_eq!(err(name_free(link.to_str().unwrap(), "plain", true)), taken);
+        assert_eq!(err(name_free(&link, b"plain", true)), taken);
     }
 
     #[test]
@@ -590,10 +616,10 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let tree = Tree::new("movetarget");
         let root = tree.root();
-        let a = format!("{root}a.xml");
+        let a = PathBuf::from(format!("{root}a.xml"));
         // sub/ holds b.xml (readable: PoB names the move b[2]) so move a.xml there
         assert!(move_target_free(&a, &root, "sub/").is_ok());
-        let b = format!("{root}b.xml");
+        let b = PathBuf::from(format!("{root}b.xml"));
         assert!(
             move_target_free(&b, &root, "sub/").is_ok(),
             "a readable file is PoB's [2]"

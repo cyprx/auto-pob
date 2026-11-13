@@ -1689,3 +1689,134 @@ fn odd_names_work_as_in_pob() {
         );
     }
 }
+
+/// A build file whose name isn't UTF-8 (a Windows-1252 "é"): PoB on Linux renames, copies,
+/// moves, copies into a folder and deletes it as itself. The list shows the name escaped
+/// (`bytes_text`), and a name typed over that escaped text is the same bytes in PoB.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_build_named_with_bytes_that_arent_utf8_works_as_in_pob() {
+    use std::os::unix::ffi::OsStrExt;
+    let _guard = lock();
+    let mut t = start_pair("latin_name", LIST_MODE);
+    let file = |builds: &Path, rel: &[u8]| builds.join(std::ffi::OsStr::from_bytes(rel));
+    let attack = fs::read(fixtures_dir().join("attack.xml")).unwrap();
+    for builds in [t.builds.clone(), t.up.builds()] {
+        fs::write(file(&builds, b"caf\xE9.xml"), &attack).unwrap();
+    }
+    let up_path = |t: &Pair, rel: &[u8]| {
+        let path = file(&t.up.builds(), rel);
+        t.up.lua.create_string(path.as_os_str().as_bytes()).unwrap()
+    };
+    let up_name = |t: &Pair, name: &[u8]| t.up.lua.create_string(name).unwrap();
+    // the trees hold the same files, byte for byte in name and contents
+    let same_files = |t: &Pair, what: &str| {
+        assert_eq!(
+            contents(&tree(&t.builds)),
+            contents(&tree(&t.up.builds())),
+            "{what}: the trees differ"
+        );
+        assert_eq!(t.s.open_popups(), 0, "{what}: a popup is open");
+    };
+    same_files(&t, "start");
+    // the list shows it escaped, at its own path
+    let listed = t.list("");
+    let entry = listed
+        .entries
+        .iter()
+        .find(|e| e.name == "caf\u{F7E9}")
+        .expect("listed escaped");
+    assert_eq!(entry.path, file(&t.builds, b"caf\xE9.xml"));
+
+    // copy, with the escaped name typed on
+    let result = t.s.run(Command::CopyBuild {
+        path: file(&t.builds, b"caf\xE9.xml"),
+        name: "caf\u{F7E9} 2".into(),
+    });
+    let up: Option<String> = t.up.call(
+        "listRename",
+        (up_path(&t, b"caf\xE9.xml"), up_name(&t, b"caf\xE9 2"), true),
+    );
+    t.outcome(up, &result);
+    result.expect("copy");
+    same_files(&t, "copy");
+    assert!(file(&t.builds, b"caf\xE9 2.xml").is_file());
+
+    // rename
+    t.list("");
+    let result = t.s.run(Command::RenameBuild {
+        path: file(&t.builds, b"caf\xE9.xml"),
+        name: "caf\u{F7E9}-r".into(),
+    });
+    let up: Option<String> = t.up.call(
+        "listRename",
+        (
+            up_path(&t, b"caf\xE9.xml"),
+            up_name(&t, b"caf\xE9-r"),
+            false,
+        ),
+    );
+    t.outcome(up, &result);
+    result.expect("rename");
+    same_files(&t, "rename");
+    assert!(file(&t.builds, b"caf\xE9-r.xml").is_file());
+
+    // a name that is taken, in another case, is refused before PoB is asked
+    t.list("");
+    let taken =
+        t.s.run(Command::RenameBuild {
+            path: file(&t.builds, b"caf\xE9-r.xml"),
+            name: "CAF\u{F7E9} 2".into(),
+        })
+        .expect_err("a case variant");
+    assert_eq!(taken.to_string(), TAKEN);
+
+    // move into sub/
+    let result = t.s.run(Command::MoveBuild {
+        path: file(&t.builds, b"caf\xE9-r.xml"),
+        folder: "sub/".into(),
+    });
+    let up: Option<String> =
+        t.up.call("listMove", (up_path(&t, b"caf\xE9-r.xml"), "sub/"));
+    t.outcome(up, &result);
+    result.expect("move");
+    same_files(&t, "move");
+    assert!(file(&t.builds, b"sub/caf\xE9-r.xml").is_file());
+
+    // copy into sub/
+    let result = t.s.run(Command::CopyBuildTo {
+        path: file(&t.builds, b"caf\xE9 2.xml"),
+        folder: "sub/".into(),
+    });
+    let up: Option<String> =
+        t.up.call("listCopyTo", (up_path(&t, b"caf\xE9 2.xml"), "sub/"));
+    t.outcome(up, &result);
+    result.expect("copy into");
+    same_files(&t, "copy into");
+    assert!(file(&t.builds, b"sub/caf\xE9 2.xml").is_file());
+
+    // delete, with PoB's confirm text
+    for rel in [&b"sub/caf\xE9-r.xml"[..], b"caf\xE9 2.xml"] {
+        let folder = if rel.starts_with(b"sub/") { "sub/" } else { "" };
+        let view = t.list(folder);
+        let path = file(&t.builds, rel);
+        let entry = view
+            .entries
+            .iter()
+            .find(|e| e.path == path)
+            .unwrap_or_else(|| panic!("{path:?} is not listed"));
+        let (kind, prompt) = (entry.delete_kind(), entry.delete_prompt.clone());
+        let (text, message): (mlua::LuaString, Option<String>) =
+            t.up.call("listDelete", (up_path(&t, rel), true));
+        assert_eq!(message, None);
+        assert_eq!(
+            auto_pob::engine::bytes_text::decode(&text.as_bytes()),
+            prompt,
+            "PoB's confirm text"
+        );
+        let result = t.s.run(Command::DeleteBuild { path, kind });
+        t.outcome(None, &result);
+        same_files(&t, "delete");
+    }
+    assert!(!file(&t.builds, b"caf\xE9 2.xml").exists());
+}

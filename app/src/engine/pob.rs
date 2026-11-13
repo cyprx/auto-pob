@@ -73,7 +73,14 @@ pub struct PobBackend {
     trace: Vec<u32>,
     /// Nothing but tree searches ran since one whose frame matched every node of the build's
     /// spec, so the tree view's own results are current and the tree state reads them instead
-    /// of matching every node a second time
+    /// of matching every node a second time.
+    ///
+    /// Invariant: whatever may change the spec's nodes or their text must clear it. Today that
+    /// is every path that can: `apply` (any command but `SetTreeSearch`), `recalculate` and
+    /// `background_step`. A view or any other `Backend` method that ever edits the build, or
+    /// swaps the spec even for a moment, must clear it too, or a repeated identical search
+    /// reports the old spec's matches. The glue's `searchStrCached` check only covers a rebuild
+    /// of depends and paths (PassiveSpec.lua:1793), not a direct edit of a node.
     fresh_search: bool,
 }
 

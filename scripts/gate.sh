@@ -104,7 +104,7 @@ parallel=$(printf '%s\n' "$selected" | grep -Fxv -f <(printf '%s\n' "$is_serial"
 times=$root/target/gate-times.tsv
 order() {
     local list=$1
-    if [[ -f $times ]]; then
+    if [[ -s $times ]]; then
         awk -F'\t' 'NR==FNR { t[$1] = $2; next } { print (($0 in t) ? t[$0] : 1e9) "\t" $0 }' \
             "$times" <(printf '%s\n' "$list") | sort -t$'\t' -k1,1nr | cut -f2
     else
@@ -131,7 +131,7 @@ mkdir -p "$root/target"
 # a filtered run updates its own tests' times and keeps every other test's, so the next full
 # run still orders by the whole suite; a full run starts the file over
 merged=$logdir/times.tsv
-if [[ -n $filter && -f $times ]]; then
+if [[ -n $filter && -s $times ]]; then
     awk -F'\t' 'NR==FNR { seen[$1] = 1; print; next } !($1 in seen)' "$results" "$times" >"$merged"
 else
     cp "$results" "$merged"

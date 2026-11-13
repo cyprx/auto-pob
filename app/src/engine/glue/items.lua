@@ -72,6 +72,10 @@ local function item_entry(tab, list, index, id)
 	return entry
 end
 
+-- One set list a tab, kept: its GetRowValue reads the tab alone (ItemSetListControl.lua:72-77),
+-- so a kept list answers as a new one would
+local set_lists = setmetatable({}, { __mode = "k" })
+
 function glue.items_view()
 	local tab = items_tab()
 	local list = tab.controls.itemList
@@ -107,8 +111,12 @@ function glue.items_view()
 	end
 	-- the manager's rows and the tooltips of the rows and of the set dropdown's entries
 	-- (ItemSetListControl.lua:79-90, ItemsTab.lua:106-111), read through a list made for the
-	-- purpose, never shown
-	local set_list = new("ItemSetListControl", nil, { 0, 0, 300, 200 }, tab)
+	-- purpose, never shown, and kept for the next view
+	local set_list = set_lists[tab]
+	if not set_list then
+		set_list = new("ItemSetListControl", nil, { 0, 0, 300, 200 }, tab)
+		set_lists[tab] = set_list
+	end
 	for i, id in ipairs(tab.itemSetOrderList) do
 		local title = tab.itemSets[id].title
 		local tooltip = new("Tooltip")

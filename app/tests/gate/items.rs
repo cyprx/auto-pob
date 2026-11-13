@@ -1081,6 +1081,50 @@ fn set_recipe_matches_pob() {
     assert_eq!(ids(checks[4]), ids(checks[1]));
     assert_ne!(ids(checks[4]), ids(checks[2]));
 }
+/// The view reads the set rows through one ItemSetListControl kept for the tab, not a new one
+/// a view; the rows still follow the active set (ItemSetListControl.lua:72-77)
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn items_view_keeps_one_set_list() {
+    let _guard = lock();
+    let (mut s, _lua) = gear_sessions("items-set-list");
+    s.backend
+        .lua
+        .load(
+            r#"
+            set_lists_made = 0
+            local made_by = new
+            new = function(class, ...)
+                if class == "ItemSetListControl" then
+                    set_lists_made = set_lists_made + 1
+                end
+                return made_by(class, ...)
+            end
+            "#,
+        )
+        .exec()
+        .unwrap();
+    let current = |view: &ItemsView| -> Vec<u32> {
+        view.sets
+            .iter()
+            .filter(|e| e.row == format!("{}  ^9(Current)", e.title))
+            .map(|e| e.id)
+            .collect()
+    };
+    let view = s.backend.items_view().unwrap();
+    assert!(view.sets.len() >= 2, "{:?}", view.sets);
+    let (first, second) = (view.sets[0].id, view.sets[1].id);
+    let active = view.active_set;
+    assert_eq!(current(&view), [active]);
+    let other = if active == first { second } else { first };
+    s.run(Command::SelectItemSet { id: other }).unwrap();
+    let view = s.backend.items_view().unwrap();
+    assert_eq!(current(&view), [other]);
+    s.backend.items_view().unwrap();
+    let made: u32 = lua_value(&s.backend.lua, "return set_lists_made");
+    assert!(made <= 1, "{made} set lists made");
+}
+
 /// The number of entries in PoB's `itemSets` (orphans from a refused name show here)
 fn item_set_count(s: &Session) -> u32 {
     lua_value(

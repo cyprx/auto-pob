@@ -35,6 +35,9 @@ pub struct PobBackend {
     /// The last list view showed its names escaped (one isn't UTF-8, `bytes_text`): a name
     /// typed over one of them (Rename, Copy) has its escapes turned back into the bytes
     list_escaped: bool,
+    /// The build view's Save As name kept escapes (the file's name isn't UTF-8): the name
+    /// Save As sends has them turned back into those bytes
+    save_as_escaped: bool,
     /// The key of the last tree layout sent, so an unchanged layout isn't sent again.
     last_layout_key: Option<String>,
     /// Whether the heat map is on, as the last `SetHeatmap` left it.
@@ -236,6 +239,7 @@ impl PobBackend {
             pob_dir: pob_dir.to_owned(),
             folder: String::new(),
             list_escaped: false,
+            save_as_escaped: false,
             last_layout_key: None,
             heatmap_on: false,
             power_failed: false,
@@ -1536,8 +1540,11 @@ impl PobBackend {
                 }
                 let root: String = self.call("build_root", ())?;
                 let folder = buildpaths::folder(&root, &folder, false, true)?;
-                buildpaths::save_target(&root, &folder, name.as_bytes())?;
-                self.call_path::<_, ()>("save_as", (folder, name, overwrite))?;
+                // the name the build view showed escaped goes back as its file's bytes
+                let name = Self::name_bytes(&name, self.save_as_escaped);
+                buildpaths::save_target(&root, &folder, &name)?;
+                let args = (self.folder_arg(&folder)?, self.bytes_arg(&name)?, overwrite);
+                self.call_path::<_, ()>("save_as", args)?;
                 // PoB's save rewrites the notes' `^_` escapes; the Summary's header names the
                 // build (R4)
                 Ok(Affected {
@@ -2736,6 +2743,7 @@ impl Backend for PobBackend {
         };
         unescape(&mut view.name);
         unescape(&mut view.save_as_name);
+        self.save_as_escaped = view.save_as_name.chars().any(super::bytes_text::is_escape);
         if let Some(tooltip) = &mut view.name_tooltip {
             unescape(tooltip);
         }

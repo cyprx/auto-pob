@@ -2891,7 +2891,7 @@ ported = "app/src/ui/skills/groups.rs confirm"
 ported = "app/src/ui/tree/toolbar.rs confirm; audit 2: PoB's text"
 
 [popups."Edit Item Text"]
-ported = "app/src/ui/items/text_window.rs"
+ported = "app/src/ui/items/text_window.rs; its box filters as you type, as PoB's '^%C\\t\\n' box with sanitiseText as its paste filter (name_box::spliced_with, sanitise_text; test the_text_window_filters_as_you_type)"
 
 [popups."Enchant Item"]
 ported = "app/src/ui/popup.rs session (SP5b)"

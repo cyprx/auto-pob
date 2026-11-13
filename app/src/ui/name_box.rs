@@ -54,6 +54,77 @@ pub fn pasted(ui: &egui::Ui) -> bool {
     ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))))
 }
 
+/// PoB's `sanitiseText` (Common.lua:251-274), the item text box's paste filter: only for a
+/// text with a byte from 128 up or a "<", it drops `<...>` tags, turns the dashes, the minus
+/// sign, "ä" and "ö" into ASCII, and every other byte from 128 up into "?". It works on bytes, so
+/// a lone Windows-1252 dash byte inside another character becomes "-" too, as in PoB.
+pub fn sanitise_text(text: &str) -> String {
+    let bytes = text.as_bytes();
+    if !bytes.iter().any(|&b| b >= 128 || b == b'<') {
+        return text.to_owned();
+    }
+    // %b<>: a balanced pair, nested ones inside it
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'<' {
+            let mut depth = 0;
+            let mut end = None;
+            for (j, &b) in bytes.iter().enumerate().skip(i) {
+                if b == b'<' {
+                    depth += 1;
+                } else if b == b'>' {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(j);
+                        break;
+                    }
+                }
+            }
+            if let Some(end) = end {
+                i = end + 1;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    let replace = |v: Vec<u8>, from: &[u8], to: &[u8]| -> Vec<u8> {
+        let mut r = Vec::with_capacity(v.len());
+        let mut i = 0;
+        while i < v.len() {
+            if v[i..].starts_with(from) {
+                r.extend_from_slice(to);
+                i += from.len();
+            } else {
+                r.push(v[i]);
+                i += 1;
+            }
+        }
+        r
+    };
+    for (from, to) in [
+        (&b"\xE2\x80\x90"[..], &b"-"[..]),
+        (b"\xE2\x80\x91", b"-"),
+        (b"\xE2\x80\x92", b"-"),
+        (b"\xE2\x80\x93", b"-"),
+        (b"\xE2\x80\x94", b"-"),
+        (b"\xE2\x80\x95", b"-"),
+        (b"\xE2\x88\x92", b"-"),
+        (b"\xC3\xA4", b"a"),
+        (b"\xC3\xB6", b"o"),
+        (b"\x96", b"-"),
+        (b"\x97", b"-"),
+        (b"\xE4", b"a"),
+        (b"\xF6", b"o"),
+    ] {
+        out = replace(out, from, to);
+    }
+    out.iter()
+        .map(|&b| if b >= 128 { '?' } else { char::from(b) })
+        .collect()
+}
+
 /// What PoB's box holds after the edit that turned `before` into `raw`. PoB filters and limits
 /// only the text an edit inserts, so the text already in the box, such as a name being renamed,
 /// stays as it is (EditControl.lua:140-172).
@@ -74,6 +145,19 @@ pub fn spliced_by(
     keeps: impl Fn(char) -> bool,
     limit: usize,
     pasted: bool,
+) -> String {
+    spliced_with(before, raw, keeps, limit, pasted, None)
+}
+
+/// `spliced_by` for a box with a `pasteFilter`, which a paste goes through before anything
+/// else (EditControl.lua:530)
+pub fn spliced_with(
+    before: &str,
+    raw: &str,
+    keeps: impl Fn(char) -> bool,
+    limit: usize,
+    pasted: bool,
+    paste_filter: Option<fn(&str) -> String>,
 ) -> String {
     // the edit replaced `before[head..before.len() - tail]` with `raw[head..raw.len() - tail]`
     let head: usize = before
@@ -97,6 +181,8 @@ pub fn spliced_by(
     let mut replacing = head + tail < before.len();
     let mut out = String::new();
     if pasted {
+        let filtered = paste_filter.map(|f| f(inserted));
+        let inserted = filtered.as_deref().unwrap_or(inserted);
         // Ctrl+V turns every byte from 128 up into "?" before the filter sees it
         // (EditControl.lua:533)
         let swapped: String = inserted
@@ -105,6 +191,8 @@ pub fn spliced_by(
                 let n = if c.is_ascii() { 1 } else { c.len_utf8() };
                 std::iter::repeat_n(if c.is_ascii() { c } else { '?' }, n)
             })
+            // ReplaceSel and Insert drop "\r" before the filter (EditControl.lua:141, 163)
+            .filter(|c| *c != '\r')
             .collect();
         let inserted = swapped.as_str();
         let kept: String = inserted.chars().filter(|c| keeps(*c)).collect();
@@ -162,6 +250,22 @@ pub fn edit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitise_text_is_pobs() {
+        // nothing to do without a high byte or a "<"
+        assert_eq!(sanitise_text("Iron Ring\r\n+5"), "Iron Ring\r\n+5");
+        assert_eq!(sanitise_text("a<b>c<d"), "ac<d");
+        assert_eq!(sanitise_text("x<a<b>c>y"), "xy");
+        assert_eq!(
+            sanitise_text("10\u{2013}20 \u{2212}5 M\u{e4}r\u{f6}"),
+            "10-20 -5 Maro"
+        );
+        // a character it doesn't know is "?" a byte; a lone 0x96 inside one becomes "-"
+        assert_eq!(sanitise_text("\u{672c}"), "???");
+        assert_eq!(sanitise_text("\u{416}"), "?-");
+        assert_eq!(sanitise_text("\u{65e5}"), "?-?");
+    }
 
     #[test]
     fn plain_keeps_ascii_text_only() {

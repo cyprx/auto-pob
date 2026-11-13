@@ -137,6 +137,8 @@ pub fn show(
                 window.rarity = i;
             }
         });
+        let before = window.text.clone();
+        let pasted = crate::ui::name_box::pasted(ui);
         let edit = ui.add(
             egui::TextEdit::multiline(&mut window.text)
                 .id_salt("items_text_edit")
@@ -145,6 +147,17 @@ pub fn show(
                 .desired_width(f32::INFINITY),
         );
         rects.note(&edit, || "text_edit".into());
+        // PoB's box takes "^%C\t\n" and pastes through sanitiseText (ItemsTab.lua:2617-2624)
+        if edit.changed() {
+            window.text = crate::ui::name_box::spliced_with(
+                &before,
+                &window.text,
+                |c| !c.is_control() || c == '\t' || c == '\n',
+                usize::MAX,
+                pasted,
+                Some(crate::ui::name_box::sanitise_text),
+            );
+        }
         ui.horizontal(|ui| {
             // "Create" when there is no item yet; enabled while PoB reads the text as an item,
             // its tooltip the item's or PoB's hint (ItemsTab.lua:2626-2652)

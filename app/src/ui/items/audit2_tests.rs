@@ -673,3 +673,28 @@ fn a_selected_db_list_takes_the_arrows_before_a_hovered_slider() {
         "{sent:?}"
     );
 }
+
+/// The Edit / Create box filters as PoB's: typed control characters other than a tab or a line
+/// break are dropped, and a paste goes through sanitiseText, loses its "\r" and has every other
+/// high byte as "?" (ItemsTab.lua:2617-2624, EditControl.lua:527-536)
+#[test]
+fn the_text_window_filters_as_you_type() {
+    let mut h = Harness::new(sample());
+    h.settle();
+    h.click("create");
+    h.frame(vec![]);
+    h.click("text_edit");
+    h.frame(vec![Event::Text("Iron\u{7} Ring".into())]);
+    h.frame(vec![Event::Paste(
+        "\r\n+10\u{2013}20 to <b>Life</b> \u{65e5}".into(),
+    )]);
+    h.frame(vec![]);
+    let text =
+        h.ui.display
+            .text_window
+            .as_ref()
+            .expect("the window closed")
+            .text
+            .clone();
+    assert_eq!(text, "Iron Ring\n+10-20 to Life ?-?");
+}

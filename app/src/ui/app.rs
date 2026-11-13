@@ -1570,17 +1570,17 @@ impl AutoPobApp {
         let mut action = None;
         if !modal {
             let command = egui::Modifiers::COMMAND;
-            let shift = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
             ui.input_mut(|i| {
                 if i.consume_key(command, egui::Key::S) {
                     action = Some(BuildAction::Save);
                 }
                 if !typing && self.undo_tab().is_some() {
-                    // the Shift variant first: `consume_key` ignores extra Shift
-                    if i.consume_key(shift, egui::Key::Z) || i.consume_key(command, egui::Key::Y) {
-                        action = action.or(Some(BuildAction::Redo));
-                    } else if i.consume_key(command, egui::Key::Z) {
+                    // PoB's tabs read Ctrl+Z as undo whatever else is held, Ctrl+Shift+Z too
+                    // (TreeTab.lua:359, SkillsTab.lua:622): `consume_key` ignores extra Shift
+                    if i.consume_key(command, egui::Key::Z) {
                         action = action.or(Some(BuildAction::Undo));
+                    } else if i.consume_key(command, egui::Key::Y) {
+                        action = action.or(Some(BuildAction::Redo));
                     }
                 }
             });
@@ -3346,9 +3346,10 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_shift_z_redoes_and_ctrl_z_undoes() {
+    fn ctrl_shift_z_undoes_as_pob_and_ctrl_y_redoes() {
         let (mut app, ctx) = open_new_build();
         let before = app.last_sent;
+        // PoB checks only Ctrl on its "z" (TreeTab.lua:359): Ctrl+Shift+Z is undo too
         frame(
             &mut app,
             &ctx,
@@ -3358,14 +3359,13 @@ mod tests {
             ),
         );
         assert_eq!(app.last_sent, before + 1);
-        // the sent command was Redo: check via the engine's record
-        assert_eq!(app.sent_log.last().map(String::as_str), Some("Redo"));
+        assert_eq!(app.sent_log.last().map(String::as_str), Some("Undo"));
         frame(
             &mut app,
             &ctx,
-            key_with(egui::Key::Z, egui::Modifiers::COMMAND),
+            key_with(egui::Key::Y, egui::Modifiers::COMMAND),
         );
-        assert_eq!(app.sent_log.last().map(String::as_str), Some("Undo"));
+        assert_eq!(app.sent_log.last().map(String::as_str), Some("Redo"));
     }
 
     #[test]
@@ -3856,14 +3856,7 @@ mod tests {
         let (mut app, ctx) = tree_app();
         let before = app.sent_full.len();
         frame(&mut app, &ctx, ctrl(egui::Key::Z));
-        frame(
-            &mut app,
-            &ctx,
-            key_with(
-                egui::Key::Z,
-                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-            ),
-        );
+        frame(&mut app, &ctx, ctrl(egui::Key::Y));
         assert_eq!(sent_since(&app, before), ["Undo(Tree)", "Redo(Tree)"]);
     }
 
@@ -3910,14 +3903,7 @@ mod tests {
         frame(&mut app, &ctx, vec![]);
         let before = app.sent_full.len();
         frame(&mut app, &ctx, ctrl(egui::Key::Z));
-        frame(
-            &mut app,
-            &ctx,
-            key_with(
-                egui::Key::Z,
-                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-            ),
-        );
+        frame(&mut app, &ctx, ctrl(egui::Key::Y));
         assert_eq!(sent_since(&app, before), ["Undo(Calcs)", "Redo(Calcs)"]);
     }
 
@@ -3954,14 +3940,7 @@ mod tests {
         assert!(ctx.egui_wants_keyboard_input() && !ctx.text_edit_focused());
         let before = app.sent_full.len();
         frame(&mut app, &ctx, ctrl(egui::Key::Z));
-        frame(
-            &mut app,
-            &ctx,
-            key_with(
-                egui::Key::Z,
-                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-            ),
-        );
+        frame(&mut app, &ctx, ctrl(egui::Key::Y));
         assert_eq!(sent_since(&app, before), ["Undo(Skills)", "Redo(Skills)"]);
     }
 
@@ -4131,14 +4110,7 @@ mod tests {
         assert!(ctx.egui_wants_keyboard_input() && !ctx.text_edit_focused());
         let before = app.sent_full.len();
         frame(&mut app, &ctx, ctrl(egui::Key::Z));
-        frame(
-            &mut app,
-            &ctx,
-            key_with(
-                egui::Key::Z,
-                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-            ),
-        );
+        frame(&mut app, &ctx, ctrl(egui::Key::Y));
         assert_eq!(sent_since(&app, before), ["Undo(Items)", "Redo(Items)"]);
     }
 
@@ -4156,14 +4128,7 @@ mod tests {
         assert!(!ctx.text_edit_focused());
         let before = app.sent_full.len();
         frame(&mut app, &ctx, ctrl(egui::Key::Z));
-        frame(
-            &mut app,
-            &ctx,
-            key_with(
-                egui::Key::Z,
-                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-            ),
-        );
+        frame(&mut app, &ctx, ctrl(egui::Key::Y));
         assert_eq!(sent_since(&app, before), Vec::<String>::new());
     }
 
@@ -4977,14 +4942,7 @@ mod tests {
             &ctx,
             key_with(egui::Key::Z, egui::Modifiers::COMMAND),
         );
-        frame(
-            &mut app,
-            &ctx,
-            key_with(
-                egui::Key::Z,
-                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-            ),
-        );
+        frame(&mut app, &ctx, ctrl(egui::Key::Y));
         assert!(sent_since(&app, before).is_empty());
     }
 

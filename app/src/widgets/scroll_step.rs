@@ -140,12 +140,14 @@ fn steps(input: &egui::InputState, arrows: &[(Key, i32)]) -> (i32, i32, bool, bo
     (wheel + keys, wheel, shift, ctrl)
 }
 
-/// Takes the wheel and the keys out of this frame
-fn take(ui: &egui::Ui, arrows: &[(Key, i32)]) {
+/// Takes the keys out of this frame, and the wheel if `wheel`
+fn take(ui: &egui::Ui, arrows: &[(Key, i32)], wheel: bool) {
     ui.input_mut(|i| {
-        i.smooth_scroll_delta = egui::Vec2::ZERO;
+        if wheel {
+            i.smooth_scroll_delta = egui::Vec2::ZERO;
+        }
         i.events.retain(|e| match e {
-            Event::MouseWheel { .. } => false,
+            Event::MouseWheel { .. } => !wheel,
             Event::Key { key, .. } => !arrows.iter().any(|(k, _)| k == key),
             _ => true,
         });
@@ -216,7 +218,7 @@ pub fn dropdown_step_in(
     if step == 0 {
         return None;
     }
-    take(ui, if scrolls { arrows } else { &DROPDOWN_KEYS });
+    take(ui, if scrolls { arrows } else { &DROPDOWN_KEYS }, true);
     // ListIndexToDropIndex: a selection the search hides is before the first match
     let at = drop.iter().position(|&i| i == selected);
     let from = at.map_or(-1, |a| a as i64);
@@ -280,8 +282,24 @@ const SLIDER_KEYS: [(Key, i32); 4] = [
 
 /// A slider at `value` (0 to 1) drawn as `response`: the value the wheel or arrows move it to
 /// while it is pointed at: 0.05 a step, 0.25 with Shift, 0.01 with Ctrl, the wheel reversed
-/// by PoB's option.
+/// by PoB's option. The wheel is taken: a popup's slider (PoB's popups don't scroll).
 pub fn slider_step(ui: &egui::Ui, response: &egui::Response, value: f64) -> Option<f64> {
+    slider_step_with(ui, response, value, true)
+}
+
+/// `slider_step` for a tab's slider: the wheel steps it and is left for what holds it too.
+/// PoB's slider takes the wheel on KeyUp but answers nil, so the event stays and the tab
+/// behind scrolls as well (ControlHost.lua:66-71, ItemsTab.lua:1488-1496).
+pub fn page_slider_step(ui: &egui::Ui, response: &egui::Response, value: f64) -> Option<f64> {
+    slider_step_with(ui, response, value, false)
+}
+
+fn slider_step_with(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    value: f64,
+    take_wheel: bool,
+) -> Option<f64> {
     if !response.enabled()
         || !response.hovered()
         || held(ui.ctx())
@@ -304,7 +322,7 @@ pub fn slider_step(ui: &egui::Ui, response: &egui::Response, value: f64) -> Opti
     if step == 0 {
         return None;
     }
-    take(ui, arrows);
+    take(ui, arrows, take_wheel);
     let size = if shift {
         0.25
     } else if ctrl {
@@ -401,6 +419,64 @@ mod tests {
             slide(&ctx, 0.5, vec![wheel(-1.0, Modifiers::NONE)]),
             0.55
         ));
+    }
+
+    /// A tab's slider steps on the wheel and leaves it to the page behind, as PoB's (its KeyUp
+    /// answers nil); a popup's takes it. Returns the step and how far the page scrolled.
+    fn page_scroll(take_wheel: bool) -> (Option<f64>, f32) {
+        let ctx = egui::Context::default();
+        let at = Pos2::new(60.0, 20.0);
+        let mut step = None;
+        let mut offset = 0.0;
+        for (i, events) in [
+            vec![Event::PointerMoved(at)],
+            // a small trackpad step, which egui applies at once rather than spread over frames
+            vec![
+                Event::PointerMoved(at),
+                Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: Vec2::new(0.0, -5.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+        ]
+        .into_iter()
+        .chain(std::iter::repeat_with(Vec::new).take(20))
+        .enumerate()
+        {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 200.0))),
+                    time: Some(i as f64 * 0.05),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let shown = egui::ScrollArea::vertical().show(ui, |ui| {
+                        let mut v = 0.5;
+                        let r = ui.add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false));
+                        let s = slider_step_with(ui, &r, 0.5, take_wheel);
+                        step = step.or(s);
+                        ui.add_space(2000.0);
+                    });
+                    offset = shown.state.clamped_offset().y;
+                },
+            )
+            .drop_without_applying_deltas();
+        }
+        (step, offset)
+    }
+
+    #[test]
+    fn a_tab_slider_leaves_the_wheel_to_the_page() {
+        let (step, offset) = page_scroll(false);
+        assert!(step.is_some_and(|s| (s - 0.45).abs() < 1e-9), "{step:?}");
+        assert!(offset > 0.0, "the page scrolls too");
+        let (step, offset) = page_scroll(true);
+        assert!(step.is_some_and(|s| (s - 0.45).abs() < 1e-9), "{step:?}");
+        assert_eq!(offset, 0.0, "a popup's slider keeps the wheel");
     }
 
     /// `dropdown_step` on a dropped list of `len` entries, selected 0, with this frame's events

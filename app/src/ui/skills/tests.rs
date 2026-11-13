@@ -241,12 +241,25 @@ fn item_group_offers_only_pob_fields() {
     // only what the item group's frame draws
     h.ui.rects.map.clear();
     h.frame(vec![]);
-    for absent in ["slot", "imbued", "optimise", "gem_0_name", "gem_0_delete"] {
+    for absent in ["imbued", "optimise", "gem_0_name", "gem_0_delete"] {
         assert!(!h.ui.rects.map.contains_key(absent), "{absent} is drawn");
     }
-    for present in ["g2_label", "group_enabled", "group_full_dps", "g2_count"] {
+    for present in [
+        "g2_label",
+        "group_enabled",
+        "group_full_dps",
+        "g2_count",
+        "slot",
+    ] {
         assert!(h.ui.rects.map.contains_key(present), "{present} missing");
     }
+    // the slot shows, disabled (SkillsTab.lua:204-206)
+    h.click("slot");
+    h.frame(vec![]);
+    assert!(
+        !h.ui.rects.map.contains_key("slot_item_0"),
+        "a disabled slot drops nothing"
+    );
     h.click("g2_label");
     h.type_text("X");
     let o = h.press(Key::Enter);

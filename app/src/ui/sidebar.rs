@@ -1,11 +1,96 @@
 //! The stats sidebar: PoB's main-skill selector, then the player's rows and the minion's,
 //! coloured like PoB.
 
-use crate::engine::views::{DropList, MainSkillSelector, StatRow, StatsView};
-use crate::engine::{CalcsControl, CalcsCount, Command, PopupKind};
+use crate::engine::views::{DropList, GroupTooltipView, MainSkillSelector, StatRow, StatsView};
+use crate::engine::{CalcsControl, CalcsCount, Command, DropdownOwner, HoverTarget, PopupKind};
 use crate::theme;
-use crate::widgets::{EditBoxOptions, EditBoxes, pob_text};
+use crate::widgets::{EditBoxOptions, EditBoxes, pob_text, tooltip_ui};
 use eframe::egui;
+use std::sync::Arc;
+
+/// How long the pointer rests on a socket group before its tooltip is asked for
+const GROUP_HOVER_DELAY: f64 = 0.1;
+
+/// PoB's socket group tooltip on a main socket group dropdown (`mainSocketGroup.tooltipFunc`,
+/// Build.lua:476-481, CalcsTab.lua:46-51): the closed dropdown shows its group's, an entry of
+/// the dropped list its own. The tooltip is the Skills list's (`AddSocketGroupTooltip`).
+#[derive(Default)]
+pub struct GroupHover {
+    /// The group under the pointer and since when
+    hover: Option<(usize, f64)>,
+    asked: Option<usize>,
+    tooltip: Option<Arc<GroupTooltipView>>,
+    /// The questions to send, taken by the app
+    pub queries: Vec<Command>,
+}
+
+impl GroupHover {
+    /// An answer arrived; it is kept if it is about the group asked for
+    pub fn on_tooltip(&mut self, tooltip: &Arc<GroupTooltipView>) {
+        if self.asked == Some(tooltip.group) {
+            self.tooltip = Some(tooltip.clone());
+        }
+    }
+
+    /// The build was recalculated: a tooltip shown is asked for again (`CheckForUpdate` on
+    /// `outputRevision`)
+    pub fn forget(&mut self) {
+        self.asked = None;
+        self.tooltip = None;
+    }
+
+    /// Follows the group the pointer is on this frame, asking for its tooltip once the pointer
+    /// has rested, and shows the answer on `response`, the widget under the pointer.
+    fn track(&mut self, hovered: Option<(usize, &egui::Response)>, now: f64) {
+        let Some((group, response)) = hovered else {
+            self.hover = None;
+            self.forget();
+            return;
+        };
+        match self.hover {
+            Some((g, _)) if g == group => {}
+            _ => {
+                self.hover = Some((group, now));
+                self.forget();
+            }
+        }
+        let since = self.hover.map_or(now, |(_, t)| t);
+        if self.asked != Some(group) {
+            if now - since >= GROUP_HOVER_DELAY - 1e-6 {
+                self.asked = Some(group);
+                self.queries.push(Command::GroupTooltip { group });
+            } else {
+                response
+                    .ctx
+                    .request_repaint_after(std::time::Duration::from_millis(50));
+            }
+        }
+        if let Some(t) = &self.tooltip
+            && t.group == group
+            && !t.lines.is_empty()
+        {
+            response.clone().on_hover_ui(|ui| tooltip_ui(ui, &t.lines));
+        }
+    }
+}
+
+/// A main socket group dropdown: draws it as `combo` does and follows the group under the
+/// pointer for its tooltip. `items` gets each entry's response.
+pub fn track_group_hover(
+    hover: &mut GroupHover,
+    ui: &egui::Ui,
+    combo: &egui::Response,
+    items: &[(usize, egui::Response)],
+    selected: usize,
+) {
+    let now = ui.input(|i| i.time);
+    let hovered = items
+        .iter()
+        .find(|(_, r)| r.hovered())
+        .map(|(i, r)| (*i, r))
+        .or_else(|| combo.hovered().then_some((selected, combo)));
+    hover.track(hovered, now);
+}
 
 /// Where a widget was drawn, so tests can click it. Does nothing outside tests.
 #[cfg(test)]
@@ -21,6 +106,10 @@ fn note(_ui: &egui::Ui, _key: &str, _rect: egui::Rect) {}
 #[derive(Default)]
 pub struct SidebarState {
     counts: EditBoxes<&'static str>,
+    /// The main socket group's tooltip
+    pub group_hover: GroupHover,
+    /// The minion dropdown's tooltip (Build.lua:544-551)
+    minion_tip: crate::ui::hover::HoverTip,
 }
 
 fn count_command(key: &str, text: String) -> Command {
@@ -54,6 +143,22 @@ impl SidebarState {
     /// Drops the pending count (the user chose not to save).
     pub fn discard(&mut self) {
         self.counts.discard();
+    }
+
+    /// The tooltip questions to send
+    pub fn take_queries(&mut self) -> Vec<Command> {
+        std::mem::take(&mut self.group_hover.queries)
+    }
+
+    /// An answer to a hover question
+    pub fn on_hover(&mut self, view: &Arc<crate::engine::views::HoverTooltipView>) {
+        self.minion_tip.on_view(view);
+    }
+
+    /// A new calculation: the tooltips are asked for again
+    pub fn forget_hover(&mut self) {
+        self.group_hover.forget();
+        self.minion_tip.forget();
     }
 }
 
@@ -107,6 +212,7 @@ fn selector(
                 "Main skill",
                 CalcsControl::Group,
                 Some(&sel.group),
+                Some(Hover::Group(&mut state.group_hover)),
                 out,
             );
             dropdown(
@@ -115,6 +221,7 @@ fn selector(
                 "Active skill",
                 CalcsControl::Skill,
                 sel.skill.as_ref(),
+                None,
                 out,
             );
             dropdown(
@@ -123,6 +230,7 @@ fn selector(
                 "Skill part",
                 CalcsControl::Part,
                 sel.part.as_ref(),
+                None,
                 out,
             );
             if let Some(text) = &sel.stages {
@@ -137,6 +245,11 @@ fn selector(
                 "Minion",
                 CalcsControl::Minion,
                 sel.minion.as_ref(),
+                Some(Hover::Tip(
+                    &mut state.minion_tip,
+                    "mainSkillMinion",
+                    &mut state.group_hover.queries,
+                )),
                 out,
             );
             if let Some(rect) = minion {
@@ -158,10 +271,24 @@ fn selector(
                 "Minion skill",
                 CalcsControl::MinionSkill,
                 sel.minion_skill.as_ref(),
+                None,
                 out,
             );
         });
     ui.add_space(6.0);
+}
+
+/// What hovering a sidebar dropdown shows
+enum Hover<'a> {
+    /// A socket group's tooltip
+    Group(&'a mut GroupHover),
+    /// The dropdown's own `tooltipFunc`, by its name among Build's controls; the questions go
+    /// to the list given
+    Tip(
+        &'a mut crate::ui::hover::HoverTip,
+        &'static str,
+        &'a mut Vec<Command>,
+    ),
 }
 
 fn dropdown(
@@ -170,9 +297,11 @@ fn dropdown(
     label: &str,
     control: CalcsControl,
     list: Option<&DropList>,
+    hover: Option<Hover<'_>>,
     out: &mut Vec<Command>,
 ) -> Option<egui::Rect> {
     let list = list?;
+    let mut items = Vec::new();
     ui.label(label);
     let default = ui.visuals().text_color();
     let current = list.labels.get(list.selected).map_or("", String::as_str);
@@ -191,9 +320,29 @@ fn dropdown(
                     if item.clicked() && i != list.selected {
                         out.push(Command::SetMainSkillSelect { control, index: i });
                     }
+                    items.push((i, item));
                 }
             });
         note(ui, key, combo.response.rect);
+        match hover {
+            Some(Hover::Group(hover)) => {
+                track_group_hover(hover, ui, &combo.response, &items, list.selected);
+            }
+            Some(Hover::Tip(tip, name, queries)) => {
+                let now = ui.input(|i| i.time);
+                let target = |index, entry| HoverTarget::Dropdown {
+                    owner: DropdownOwner::Build,
+                    name: name.to_owned(),
+                    index,
+                    entry,
+                };
+                for (i, item) in &items {
+                    tip.track(item, target(*i, true), now, queries);
+                }
+                tip.track(&combo.response, target(list.selected, false), now, queries);
+            }
+            None => {}
+        }
         // the wheel and the arrows step it (DropDownControl.lua:476-516)
         if let Some(index) = crate::widgets::scroll_step::combo_step(
             ui,
@@ -407,6 +556,47 @@ mod tests {
         assert!(h.rect("group_item_1").is_some(), "the list opened");
         sent.extend(h.click("group_item_1"));
         assert_eq!(sent, ["SetMainSkillSelect { control: Group, index: 1 }"]);
+    }
+
+    #[test]
+    fn hovering_the_main_group_asks_for_its_tooltip() {
+        // Build.lua:476-481: the dropdown shows the hovered group's socket group tooltip
+        let mut h = Harness::new(view(base()));
+        let pos = h.rect("group").unwrap().center();
+        h.frame(vec![Event::PointerMoved(pos)]);
+        h.frame(vec![]);
+        h.frame(vec![]);
+        let asked: Vec<String> = h
+            .state
+            .group_hover
+            .queries
+            .drain(..)
+            .map(|c| format!("{c:?}"))
+            .collect();
+        assert_eq!(
+            asked,
+            ["GroupTooltip { group: 0 }"],
+            "once, for the shown group"
+        );
+        h.frame(vec![]);
+        assert!(h.state.group_hover.queries.is_empty());
+        // the answer is kept for the group asked about only
+        let answer = |group| {
+            Arc::new(GroupTooltipView {
+                group,
+                lines: vec![crate::engine::views::TooltipLine::Line {
+                    size: 16,
+                    text: "Active Skill #1:".into(),
+                }],
+            })
+        };
+        h.state.group_hover.on_tooltip(&answer(1));
+        assert!(h.state.group_hover.tooltip.is_none());
+        h.state.group_hover.on_tooltip(&answer(0));
+        assert!(h.state.group_hover.tooltip.is_some());
+        // leaving the dropdown forgets it
+        h.frame(vec![Event::PointerMoved(egui::pos2(590.0, 690.0))]);
+        assert!(h.state.group_hover.tooltip.is_none());
     }
 
     #[test]

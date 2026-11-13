@@ -677,6 +677,9 @@ impl AutoPobApp {
                         // a new calculation: the "what if" answers compared against the old one
                         self.skills.forget_hover();
                         self.config_ui.forget_hover();
+                        self.sidebar.forget_hover();
+                        self.tree.forget_hover();
+                        self.calcs.group_hover.forget();
                         self.stats = Some(view);
                     }
                     Snapshot::Config(view) => {
@@ -685,15 +688,22 @@ impl AutoPobApp {
                         self.config = Some(view);
                     }
                     Snapshot::Calcs(_) => self.calcs.on_snapshot(&snapshot),
+                    Snapshot::GroupTooltip(ref t) => {
+                        // the Skills list, the sidebar and the Calcs selector each ask
+                        self.sidebar.group_hover.on_tooltip(t);
+                        self.calcs.group_hover.on_tooltip(t);
+                        self.skills.on_snapshot(&snapshot);
+                    }
                     Snapshot::Skills(_)
                     | Snapshot::SocketGroupText(_)
-                    | Snapshot::GroupTooltip(_)
                     | Snapshot::GemSearch(_)
                     | Snapshot::GemTooltip(_) => self.skills.on_snapshot(&snapshot),
                     // the Skills and Config tabs each keep the answers to their own hovers
                     Snapshot::HoverTooltip(view) => {
                         self.skills
                             .on_snapshot(&Snapshot::HoverTooltip(view.clone()));
+                        self.sidebar.on_hover(&view);
+                        self.tree.on_hover(&view);
                         self.config_ui.on_hover(&view);
                     }
                     Snapshot::Items(_)
@@ -1688,6 +1698,10 @@ impl AutoPobApp {
         for command in sidebar_commands {
             self.send(command);
         }
+        // questions never leave the app waiting
+        for query in self.sidebar.take_queries() {
+            self.engine.send(query);
+        }
 
         let mut config_commands = Vec::new();
         let mut tree_out = TreeOutput::default();
@@ -1894,6 +1908,9 @@ impl AutoPobApp {
         }
         // only the latest question matters; the others are about cells the pointer has left
         if let Some(query) = calcs_out.queries.pop() {
+            self.engine.send(query);
+        }
+        for query in std::mem::take(&mut self.calcs.group_hover.queries) {
             self.engine.send(query);
         }
         if let Some(id) = calcs_out.focus_node {

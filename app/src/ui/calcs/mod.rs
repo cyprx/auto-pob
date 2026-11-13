@@ -48,6 +48,8 @@ pub struct CalcsUi {
     /// The sections popped out with "^" into their own windows, by id; UI state PoB doesn't
     /// save either (R24)
     pub(crate) popped: Vec<String>,
+    /// The socket group dropdown's tooltip (CalcsTab.lua:46-51)
+    pub group_hover: crate::ui::sidebar::GroupHover,
 }
 
 impl Default for CalcsUi {
@@ -63,6 +65,7 @@ impl Default for CalcsUi {
             search_id: egui::Id::unique("calcs_search"),
             rects: Rects::default(),
             popped: Vec::new(),
+            group_hover: Default::default(),
         }
     }
 }
@@ -304,6 +307,7 @@ impl CalcsUi {
         let default = ui.visuals().text_color();
         let current = list.labels.get(list.selected).map_or("", String::as_str);
         let mut response = None;
+        let mut items = Vec::new();
         ui.add_enabled_ui(list.enabled, |ui| {
             let combo = crate::widgets::dropdown::Dropdown::from_id_salt(("calcs_select", key))
                 .selected_text(pob_text(current, 14.0, default))
@@ -318,9 +322,19 @@ impl CalcsUi {
                         if item.clicked() && i != list.selected {
                             out.push(Command::SetCalcsSelect { control, index: i });
                         }
+                        items.push((i, item));
                     }
                 });
             self.rects.note(&combo.response, || key.to_owned());
+            if control == CalcsControl::Group {
+                crate::ui::sidebar::track_group_hover(
+                    &mut self.group_hover,
+                    ui,
+                    &combo.response,
+                    &items,
+                    list.selected,
+                );
+            }
             // the wheel and the arrows step it (DropDownControl.lua:476-516)
             if let Some(index) = crate::widgets::scroll_step::combo_step(
                 ui,

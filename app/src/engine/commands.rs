@@ -1027,6 +1027,24 @@ pub enum HoverTarget {
     ConfigOption { var: String },
     /// A custom modifier group's enable box (0-based): "Disabling/Enabling this group..."
     CustomModEnabled { group: usize },
+    /// A dropdown's `tooltipFunc` (DropDownControl.lua:291-361), by PoB's control name: for
+    /// the closed dropdown (`entry` false, PoB's "BODY" with its selected entry) or for an entry
+    /// of the dropped list (`entry` true, "HOVER"). `index` is the entry's 0-based position.
+    Dropdown {
+        owner: DropdownOwner,
+        name: String,
+        index: usize,
+        entry: bool,
+    },
+}
+
+/// Whose controls a [`HoverTarget::Dropdown`] is among
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DropdownOwner {
+    /// Build's own: the top bar and the sidebar
+    Build,
+    Tree,
+    Skills,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -2,7 +2,7 @@
 //! the timeless jewel search, heat map, the power report toggle and the link menu.
 
 use super::{Rects, TreeOutput};
-use crate::engine::{Command, PopupKind, TreeState};
+use crate::engine::{Command, DropdownOwner, HoverTarget, PopupKind, TreeState};
 use crate::theme;
 use crate::ui::items::list::reorder_rows;
 use crate::ui::name_box::{self, Filter};
@@ -87,6 +87,10 @@ pub(super) struct Toolbar {
     /// PoB's "Manage Passive Trees" window (TreeTab.lua:630), while open: its list's selected
     /// row, which Copy, Rename, Delete and F2 act on (NF-3)
     manager: Option<usize>,
+    /// The tree selector's tooltip (TreeTab.lua:51-104)
+    pub(super) spec_tip: crate::ui::hover::HoverTip,
+    /// Its questions, moved to the output when the toolbar is done
+    tip_queries: Vec<Command>,
 }
 
 impl Toolbar {
@@ -251,6 +255,7 @@ impl Toolbar {
             self.link_menu(ui, state, rects, commands, &mut out.queries);
         });
         self.dialogs(ui.ctx(), state, rects, commands);
+        out.queries.append(&mut self.tip_queries);
     }
 
     /// The tree set row. `manage`: the Tree tab's own, with its New, Rename, Delete, Copy and
@@ -264,6 +269,7 @@ impl Toolbar {
         manage: bool,
     ) {
         let active = state.specs.get(state.active_spec);
+        let mut items = Vec::new();
         let combo = crate::widgets::dropdown::Dropdown::from_id_salt("tree_spec")
             .selected_text(active.map_or("", |s| s.title.as_str()))
             .show_ui(ui, |ui| {
@@ -277,9 +283,31 @@ impl Toolbar {
                     if item.clicked() && i != state.active_spec {
                         commands.push(Command::SelectSpec { index: i });
                     }
+                    items.push((i, item));
                 }
             });
         rects.note(&combo.response, || "spec_combo".into());
+        // PoB's tooltip on the selector and its entries: the tree's class, points, sockets and
+        // what switching to it gives (TreeTab.lua:51-104); the Compare tab's has none
+        if manage {
+            let now = ui.input(|i| i.time);
+            let target = |index, entry| HoverTarget::Dropdown {
+                owner: DropdownOwner::Tree,
+                name: "specSelect".into(),
+                index,
+                entry,
+            };
+            for (i, item) in &items {
+                self.spec_tip
+                    .track(item, target(*i, true), now, &mut self.tip_queries);
+            }
+            self.spec_tip.track(
+                &combo.response,
+                target(state.active_spec, false),
+                now,
+                &mut self.tip_queries,
+            );
+        }
         // the wheel and the arrows step it (DropDownControl.lua:476-516)
         if let Some(index) = crate::widgets::scroll_step::combo_step(
             ui,

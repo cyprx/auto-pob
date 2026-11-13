@@ -593,6 +593,30 @@ function glue.tooltip_lines(tooltip)
 	return lines
 end
 
+-- What hovering a dropdown of Build, the Tree tab or the Skills tab shows: its own
+-- `tooltipFunc`, run into a fresh PoB `Tooltip` with PoB's mode, "BODY" for the closed dropdown
+-- and "HOVER" for an entry of the dropped list (DropDownControl.lua:291-361). `index` is 1-based.
+-- Nil when there is no such dropdown or entry, or no tooltip.
+function glue.dropdown_hover(owner, name, index, mode)
+	local build = pob.build
+	local controls = (owner == "build" and build.controls)
+		or (owner == "tree" and build.treeTab.controls)
+		or (owner == "skills" and build.skillsTab.controls)
+	local control = controls and controls[name]
+	if not (control and control.tooltipFunc) or index < 1 then
+		return nil
+	end
+	-- a list PoB fills only when it draws (the tree selector's) may be empty here: the tree
+	-- selector's tooltip reads the index alone
+	local value = control.list and control.list[index]
+	local tooltip = new("Tooltip")
+	local ok = pcall(control.tooltipFunc, tooltip, mode, index, value)
+	if not ok then
+		return nil
+	end
+	return glue.tooltip_lines(tooltip)
+end
+
 -- What hovering a gem's Quality box, enable box or Count box shows (SkillsTab.lua:861-1000):
 -- the control's own `tooltipFunc`, run into a fresh PoB `Tooltip`. The group is shown the way
 -- the views show it (`displayGroup` set by hand, then put back), so the hover changes nothing.

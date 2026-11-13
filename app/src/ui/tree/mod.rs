@@ -204,6 +204,16 @@ impl TreeTab {
         commands
     }
 
+    /// An answer to a hover question (the tree selector's tooltip)
+    pub fn on_hover(&mut self, view: &std::sync::Arc<crate::engine::views::HoverTooltipView>) {
+        self.toolbar.spec_tip.on_view(view);
+    }
+
+    /// A new calculation: the tree selector's tooltip is asked for again
+    pub fn forget_hover(&mut self) {
+        self.toolbar.spec_tip.forget();
+    }
+
     /// Opens PoB's "Manage Passive Trees" window (the Items tab's "Manage...",
     /// ItemsTab.lua:203-205): the Tree tab's own manager, with its questions.
     pub fn open_spec_manager(&mut self) {

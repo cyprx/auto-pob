@@ -2,7 +2,7 @@
 
 use super::{SkillsOutput, SkillsUi};
 use crate::engine::views::{GemView, SkillsView, SocketGroupView};
-use crate::engine::{Command, GemTarget, GemToggle, GemTooltipQuery, HoverTarget};
+use crate::engine::{Command, DropdownOwner, GemTarget, GemToggle, GemTooltipQuery, HoverTarget};
 use crate::widgets::{pob_colour, pob_text, tooltip_ui};
 use eframe::egui::{self, Color32, Stroke};
 
@@ -56,7 +56,8 @@ impl SkillsUi {
                 |text| Command::SetGroupLabel { group: gi, text },
                 &mut out.commands,
             );
-            if g.source.is_none() {
+            // PoB disables the slot of an item's group (SkillsTab.lua:204-206)
+            ui.add_enabled_ui(g.source.is_none(), |ui| {
                 ui.label("Slot:");
                 let current = view
                     .slot_choices
@@ -65,6 +66,7 @@ impl SkillsUi {
                     .map(|c| c.label.clone())
                     .or_else(|| g.slot.clone())
                     .unwrap_or_else(|| "None".into());
+                let mut items = Vec::new();
                 let combo = crate::widgets::dropdown::Dropdown::from_id_salt(("skills_slot", gi))
                     .selected_text(current)
                     .show_ui(ui, |ui| {
@@ -81,15 +83,34 @@ impl SkillsUi {
                                     slot: choice.slot.clone(),
                                 });
                             }
+                            items.push((i, item));
                         }
                     });
                 self.rects.note(&combo.response, || "slot".into());
-                // the wheel and the arrows step it (DropDownControl.lua:476-516)
                 let at = view
                     .slot_choices
                     .iter()
                     .position(|c| c.slot == g.slot)
                     .unwrap_or(0);
+                // PoB's tooltip: what the slot does, or the item in the slot (SkillsTab.lua:
+                // 188-203)
+                let target = |index, entry| HoverTarget::Dropdown {
+                    owner: DropdownOwner::Skills,
+                    name: "groupSlot".into(),
+                    index,
+                    entry,
+                };
+                for (i, item) in &items {
+                    self.hover_tip
+                        .track(item, target(*i, true), self.now, &mut out.queries);
+                }
+                self.hover_tip.track(
+                    &combo.response,
+                    target(at, false),
+                    self.now,
+                    &mut out.queries,
+                );
+                // the wheel and the arrows step it (DropDownControl.lua:476-516)
                 if let Some(i) = crate::widgets::scroll_step::combo_step(
                     ui,
                     &combo.response,
@@ -104,7 +125,7 @@ impl SkillsUi {
                 if !g.slot_enabled {
                     ui.colored_label(ERROR, "slot disabled");
                 }
-            }
+            });
         });
         ui.horizontal_wrapped(|ui| {
             let mut on = g.enabled;

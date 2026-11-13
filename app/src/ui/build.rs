@@ -123,8 +123,10 @@ fn note(ui: &egui::Ui, key: &str, rect: egui::Rect) {
 fn note(_ui: &egui::Ui, _key: &str, _rect: egui::Rect) {}
 
 /// `undo`: the tab has an engine history here; `history`: whether its undo and redo have
-/// anything to do; `unsaved`: the build has changes, the ones still being typed included. The right half is PoB's: points, Auto/Manual, the level box, class,
-/// ascendancy, bloodline and loadouts (Build.lua:186-415); the class part is the tree tab's.
+/// anything to do; `unsaved`: the build has changes, the ones still being typed included. The
+/// right half is PoB's: points, Auto/Manual, the level box, class, ascendancy, bloodline and
+/// loadouts (Build.lua:186-415); the class part is the tree tab's.
+#[allow(clippy::too_many_arguments)]
 pub fn top_bar(
     ui: &mut egui::Ui,
     view: &BuildView,

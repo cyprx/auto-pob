@@ -2801,6 +2801,20 @@ impl Backend for PobBackend {
             }
             HoverTarget::ConfigOption { var } => self.view("config_hover", var.clone())?,
             HoverTarget::CustomModEnabled { group } => self.view("custom_mod_hover", group + 1)?,
+            HoverTarget::Dropdown {
+                owner,
+                name,
+                index,
+                entry,
+            } => {
+                let owner = match owner {
+                    crate::engine::DropdownOwner::Build => "build",
+                    crate::engine::DropdownOwner::Tree => "tree",
+                    crate::engine::DropdownOwner::Skills => "skills",
+                };
+                let mode = if *entry { "HOVER" } else { "BODY" };
+                self.view("dropdown_hover", (owner, name.clone(), index + 1, mode))?
+            }
         };
         Ok(lines.map(|lines| HoverTooltipView {
             target: target.clone(),

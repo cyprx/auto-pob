@@ -997,7 +997,11 @@ impl PobBackend {
             // ended above
             Command::CloseItemDb => Ok(Affected::default()),
             Command::PreloadItemDbs => {
-                self.item_db_preload = true;
+                // nothing to run when PoB never registered the load or it already ended: the
+                // loop then never asks about it
+                self.item_db_preload = self
+                    .call::<_, bool>("item_db_preload_pending", ())
+                    .unwrap_or(false);
                 Ok(Affected::default())
             }
             Command::ViewDbItem { db, name } => {

@@ -942,3 +942,38 @@ fn an_item_db_step_without_a_preload_loads_nothing() {
         "a stray step loaded the databases"
     );
 }
+
+/// A preload asked for once PoB's load has ended leaves the loop alone: it doesn't ask the
+/// glue about the load on every turn.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_preload_after_the_load_ended_asks_nothing_more() {
+    let _guard = lock();
+    let mut s = Session::start("item-db-preload-late");
+    s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
+    s.run(Command::PreloadItemDbs).unwrap();
+    let mut steps = 0;
+    while let Some(task) = s.backend.next_background() {
+        s.backend.background_step(task, &|_| {}).unwrap();
+        steps += 1;
+        assert!(steps < 1000, "the load never ends");
+    }
+    s.backend
+        .lua
+        .load(
+            "local pending = glue.item_db_preload_pending
+            preloadAsked = 0
+            glue.item_db_preload_pending = function(...)
+                preloadAsked = preloadAsked + 1
+                return pending(...)
+            end",
+        )
+        .exec()
+        .unwrap();
+    s.run(Command::PreloadItemDbs).unwrap();
+    for _ in 0..5 {
+        assert_eq!(s.backend.next_background(), None);
+    }
+    let asked: i64 = s.backend.lua.load("return preloadAsked").eval().unwrap();
+    assert!(asked <= 1, "asked {asked} times");
+}

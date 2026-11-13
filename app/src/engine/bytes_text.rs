@@ -10,10 +10,11 @@
 //! has the character's own UTF-8 bytes escaped too when it is decoded. Text coming back is
 //! only turned into bytes once some text was decoded with an escape (`seen`), so a build with
 //! no such bytes sends its private-use characters as they are. The flag is process-wide; it
-//! resets when the engine leaves a build (`reset`, from `Pob::left_build`), so a later build
-//! with no such bytes sends a private-use character in this range typed or pasted as itself,
-//! not as a byte. Paths and file names are never escaped nor encoded (`Pob::call_path`, the
-//! build list).
+//! resets when the engine leaves a build with no window open (`reset`, `Pob::left_build`),
+//! so a later build with no such bytes sends a private-use character in this range typed or
+//! pasted as itself, not as a byte. Paths and file names are not encoded
+//! (`Pob::call_path`); the build list escapes only a file name that isn't UTF-8, and its
+//! entry's path holds the name's own bytes (`path_from_escaped`).
 
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};

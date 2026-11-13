@@ -430,9 +430,6 @@ impl PobBackend {
     fn left_build(&mut self) -> Result<Affected> {
         let mut affected = Affected::default();
         self.reset_heatmap();
-        // the escapes the old build showed are gone with it: the next build's views decide
-        // again whether text coming back holds them (`bytes_text`)
-        super::bytes_text::reset();
         // the old tree's paths are no use to the next one: let both copies go
         self.tree_paths = None;
         self.call::<_, ()>("tree_paths_forget", ())?;
@@ -442,6 +439,13 @@ impl PobBackend {
         if self.call::<_, bool>("popup_end", true)? {
             affected.popup = true;
             affected.settings = true;
+        }
+        // the escapes the old build showed are gone with it: the next build's views decide
+        // again whether text coming back holds them (`bytes_text`). An Options window that
+        // stays may show escaped text (a Builds path that isn't UTF-8) its edits send back,
+        // and the UI keeps its view, so the flag stays while it is open.
+        if !self.call::<_, bool>("popup_live", ())? {
+            super::bytes_text::reset();
         }
         if self.item_db.take().is_some() {
             self.item_db_failed = false;

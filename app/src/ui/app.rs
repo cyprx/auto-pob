@@ -1645,6 +1645,8 @@ impl AutoPobApp {
         let mut top_commands = Vec::new();
         // the top bar and the sidebar are Build's own controls (Build.lua:1230)
         crate::widgets::scroll_step::set_build_host(ui.ctx(), true);
+        // typed edits not yet sent count: PoB's boxes apply every keystroke
+        let unsaved = self.current_unsaved();
         let top = egui::Panel::top("top_bar").show(ui, |ui| {
             let history = match self.undo_tab() {
                 Some(Tab::Tree) => self.tree.history(),
@@ -1662,6 +1664,7 @@ impl AutoPobApp {
                 &mut self.top_bar,
                 &mut self.tree,
                 behind,
+                unsaved,
             );
             action = out.action.or(action);
             top_commands = out.commands;

@@ -193,6 +193,8 @@ function glue.build_view()
 		name = build.buildName or "",
 		save_as_name = save_as_name,
 		path = build.dbFileName or nil,
+		name_tooltip = (build.dbFileSubPath and build.dbFileSubPath ~= "")
+			and build.dbFileSubPath .. (build.buildName or "") or nil,
 		class = spec.curClassName or "",
 		ascendancy = ascendancy,
 		level = build.characterLevel or 1,

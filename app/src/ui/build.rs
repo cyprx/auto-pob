@@ -123,7 +123,7 @@ fn note(ui: &egui::Ui, key: &str, rect: egui::Rect) {
 fn note(_ui: &egui::Ui, _key: &str, _rect: egui::Rect) {}
 
 /// `undo`: the tab has an engine history here; `history`: whether its undo and redo have
-/// anything to do. The right half is PoB's: points, Auto/Manual, the level box, class,
+/// anything to do; `unsaved`: the build has changes, the ones still being typed included. The right half is PoB's: points, Auto/Manual, the level box, class,
 /// ascendancy, bloodline and loadouts (Build.lua:186-415); the class part is the tree tab's.
 pub fn top_bar(
     ui: &mut egui::Ui,
@@ -133,6 +133,7 @@ pub fn top_bar(
     state: &mut TopBarState,
     tree: &mut TreeTab,
     busy: bool,
+    unsaved: bool,
 ) -> TopBarOutput {
     let mut out = TopBarOutput::default();
     ui.horizontal_wrapped(|ui| {
@@ -141,12 +142,22 @@ pub fn top_bar(
         }
         ui.separator();
         let marker = if view.unsaved { " *" } else { "" };
-        ui.strong(format!("{}{marker}", view.name));
+        let name = ui.strong(format!("{}{marker}", view.name));
+        // PoB names the build's folder on hover when it is in one (Build.lua:166-171)
+        if let Some(path) = &view.name_tooltip {
+            name.on_hover_text(path);
+        }
         ui.separator();
-        if ui.button("Save").clicked() {
+        // PoB's Save is on for a build never saved or with changes, Save As for a build that
+        // has a file (Build.lua:126-135)
+        let save = ui.add_enabled(view.path.is_none() || unsaved, egui::Button::new("Save"));
+        note(ui, "save", save.rect);
+        if save.clicked() {
             out.action = Some(BuildAction::Save);
         }
-        if ui.button("Save as…").clicked() {
+        let save_as = ui.add_enabled(view.path.is_some(), egui::Button::new("Save as…"));
+        note(ui, "save_as", save_as.rect);
+        if save_as.clicked() {
             out.action = Some(BuildAction::SaveAs);
         }
         ui.separator();
@@ -480,7 +491,16 @@ mod tests {
             self.ctx
                 .run_ui(input, |ui| {
                     egui::Panel::top("top").show(ui, |ui| {
-                        out = top_bar(ui, view, true, (false, false), state, tree, false);
+                        out = top_bar(
+                            ui,
+                            view,
+                            true,
+                            (false, false),
+                            state,
+                            tree,
+                            false,
+                            view.unsaved,
+                        );
                     });
                 })
                 .drop_without_applying_deltas();
@@ -622,6 +642,33 @@ mod tests {
         assert!(sent.is_empty());
         assert!(!h.state.has_pending());
         assert_eq!(h.state.level.text, "90");
+    }
+
+    #[test]
+    fn save_and_save_as_are_on_as_pobs() {
+        // Build.lua:126-135: Save for a build with no file or with changes, Save As with a file
+        let click = |view: BuildView, key: &str| {
+            let mut h = Harness::new(view);
+            h.click(key);
+            h.action
+        };
+        let saved = || BuildView {
+            path: Some("/b/x.xml".into()),
+            ..view()
+        };
+        assert_eq!(click(view(), "save"), Some(BuildAction::Save));
+        assert_eq!(
+            click(view(), "save_as"),
+            None,
+            "a build with no file has no Save As"
+        );
+        assert_eq!(click(saved(), "save"), None, "nothing to save");
+        assert_eq!(click(saved(), "save_as"), Some(BuildAction::SaveAs));
+        let changed = BuildView {
+            unsaved: true,
+            ..saved()
+        };
+        assert_eq!(click(changed, "save"), Some(BuildAction::Save));
     }
 
     #[test]

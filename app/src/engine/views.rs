@@ -19,6 +19,10 @@ pub struct BuildView {
     pub save_as_name: String,
     #[serde(default)]
     pub path: Option<PathBuf>,
+    /// The build name's tooltip: its folder and name, for a build in a folder of Builds
+    /// (Build.lua:166-171)
+    #[serde(default)]
+    pub name_tooltip: Option<String>,
     pub class: String,
     #[serde(default)]
     pub ascendancy: Option<String>,

@@ -92,6 +92,8 @@ pub fn install(ctx: &egui::Context) {
 
 /// egui's edit box look, with a lighter fill and brighter text under the pointer (egui keeps
 /// both as they are). Read-only and focused boxes keep egui's look.
+/// The only user of egui's unstable widget-theme API (the `experimental` feature, see
+/// app/Cargo.toml): keep it that way.
 struct EditBoxStyle;
 
 impl StyleProvider<TextEditStyle> for EditBoxStyle {

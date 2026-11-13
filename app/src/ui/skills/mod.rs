@@ -299,8 +299,25 @@ impl SkillsUi {
         make: impl Fn(String) -> Command,
         out: &mut Vec<Command>,
     ) -> egui::Response {
+        self.field_limited(ui, key, current, width, None, busy, make, out)
+    }
+
+    /// `field` with the most characters PoB's box takes
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn field_limited(
+        &mut self,
+        ui: &mut egui::Ui,
+        key: &str,
+        current: &str,
+        width: f32,
+        limit: Option<usize>,
+        busy: bool,
+        make: impl Fn(String) -> Command,
+        out: &mut Vec<Command>,
+    ) -> egui::Response {
         let opts = EditBoxOptions {
             width,
+            char_limit: limit,
             ..EditBoxOptions::default()
         };
         let (response, sent) = self.boxes.show(ui, key.to_owned(), current, busy, &opts);

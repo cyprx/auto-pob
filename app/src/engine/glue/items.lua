@@ -106,7 +106,8 @@ function glue.items_view()
 		view.slots[i] = slot_view(slot)
 	end
 	for i, id in ipairs(tab.itemSetOrderList) do
-		view.sets[i] = { id = id, title = tab.itemSets[id].title or "Default" }
+		local title = tab.itemSets[id].title
+		view.sets[i] = { id = id, title = title or "Default", untitled = title == nil }
 	end
 	return view
 end

@@ -384,7 +384,7 @@ end
 local function spec_entries()
 	local entries = {}
 	for i, spec in ipairs(pob.build.treeTab.specList) do
-		entries[i] = { title = spec.title or "Default", version = spec.treeVersion, points = (spec:CountAllocNodes()) }
+		entries[i] = { title = spec.title or "Default", untitled = spec.title == nil, version = spec.treeVersion, points = (spec:CountAllocNodes()) }
 	end
 	return entries
 end
@@ -705,14 +705,10 @@ local function with_spec_list(fn)
 end
 
 -- Types a name into the rename popup that `RenameSpec` opened and saves it
--- (PassiveSpecListControl.lua:37-47: Save is disabled until the name has a visible character).
+-- (PassiveSpecListControl.lua:46-69): the box drops what its filter rejects, and Save stays
+-- disabled until the name has a visible character.
 local function save_name(title)
-	if not title:match("%S") then
-		error("the tree needs a name", 0)
-	end
-	local popup = main_module().popups[1]
-	popup.controls.edit.buf = title
-	popup.controls.save.onClick()
+	glue.save_name("tree", title)
 end
 
 -- The New button and the rename popup's Save (PassiveSpecListControl.lua:31-58). The new tree
@@ -834,8 +830,12 @@ local function resolve_short_link(tab, title, url)
 	local popup = main_module().popups[1]
 	local controls = popup.controls
 	-- typed in, so the Import button enables itself
-	controls.name:SetText(title, true)
-	controls.edit:SetText(url, true)
+	glue.type_into(controls.name, title)
+	glue.type_into(controls.edit, url)
+	if not controls.import.enabled then
+		main_module():ClosePopup()
+		error("the tree needs a name and a link", 0)
+	end
 	return press_in_popup("Resolving PoEURL link", popup, controls.import, {})
 end
 
@@ -877,8 +877,12 @@ function glue.import_tree_link(title, url)
 	in_popups(function()
 		tab:OpenImportPopup()
 		local controls = main_module().popups[1].controls
-		controls.name.buf = title
-		controls.edit.buf = url
+		glue.type_into(controls.name, title)
+		glue.type_into(controls.edit, url)
+		-- the boxes drop what their filter rejects, and Import stays off without a visible name
+		if not controls.import.enabled then
+			error("the tree needs a name and a link", 0)
+		end
 		local ok, err = pcall(controls.import.onClick)
 		if ok and #tab.specList > count then
 			return

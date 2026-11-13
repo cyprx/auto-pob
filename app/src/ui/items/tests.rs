@@ -82,10 +82,12 @@ pub(crate) fn sample() -> ItemsView {
             ItemSetEntry {
                 id: 1,
                 title: "Default".into(),
+                untitled: false,
             },
             ItemSetEntry {
                 id: 2,
                 title: "Alt".into(),
+                untitled: false,
             },
         ],
         active_set: 1,
@@ -622,6 +624,10 @@ fn copying_a_set_prefills_its_title() {
     h.frame(vec![]);
     h.click("sets_row_1");
     h.click("sets_copy");
+    // PoB's Save waits for an edit, even on the prefilled name
+    let o = h.click("sets_save");
+    assert!(o.commands.is_empty(), "{:?}", o.commands);
+    h.type_into("sets_name", "Alt");
     let o = h.click("sets_save");
     assert_eq!(
         debug(&o.commands),
@@ -2371,6 +2377,7 @@ fn f2_renames_the_selected_set() {
     h.click("sets_row_1");
     h.key(Key::F2, Modifiers::NONE);
     h.frame(vec![]);
+    h.type_into("sets_name", "Alt");
     let o = h.click("sets_save");
     assert_eq!(
         debug(&o.commands),
@@ -2411,6 +2418,7 @@ fn set_list_keys_move_the_selection_and_delete_asks() {
     h.key(Key::ArrowDown, Modifiers::NONE);
     h.key(Key::F2, Modifiers::NONE);
     h.frame(vec![]);
+    h.type_into("sets_name", "Alt");
     let o = h.click("sets_save");
     assert_eq!(
         debug(&o.commands),
@@ -2423,3 +2431,47 @@ fn set_list_keys_move_the_selection_and_delete_asks() {
 }
 #[path = "parity_tests.rs"]
 mod parity_tests;
+
+/// A set's name box is PoB's (ItemSetListControl.lua:44-69): its filter drops every non-ASCII
+/// byte, Save needs a visible character after an edit, and the name is saved as it stands
+#[test]
+fn an_item_set_name_follows_pobs_box() {
+    let mut h = Harness::new(sample());
+    h.click("manage");
+    h.frame(vec![]);
+    h.click("sets_new");
+    for name in ["\u{65e5}\u{672c}", "\u{3a9}\u{3bc}", "  "] {
+        h.type_into("sets_name", name);
+        let o = h.click("sets_save");
+        assert!(o.commands.is_empty(), "{name}: {:?}", o.commands);
+    }
+    h.type_into("sets_name", "\u{65e5}\u{672c} a ");
+    assert_eq!(h.ui.sets.naming_text(), Some(" a "));
+    let o = h.click("sets_save");
+    assert_eq!(debug(&o.commands), ["NewItemSet { title: \" a \" }"]);
+    // 100 bytes at most
+    h.frame(vec![]);
+    h.click("sets_new");
+    h.type_into("sets_name", &"x".repeat(130));
+    assert_eq!(h.ui.sets.naming_text().map(str::len), Some(100));
+}
+
+/// PoB opens the rename box on the set's own title: a set with none opens it empty
+#[test]
+fn renaming_an_untitled_item_set_starts_empty() {
+    let mut view = sample();
+    view.sets[0].untitled = true;
+    let mut h = Harness::new(view);
+    h.click("manage");
+    h.frame(vec![]);
+    h.click("sets_row_0");
+    h.click("sets_rename");
+    assert_eq!(h.ui.sets.naming_text(), Some(""));
+    // a titled one opens on its title
+    let mut h = Harness::new(sample());
+    h.click("manage");
+    h.frame(vec![]);
+    h.click("sets_row_1");
+    h.click("sets_rename");
+    assert_eq!(h.ui.sets.naming_text(), Some("Alt"));
+}

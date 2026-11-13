@@ -323,7 +323,8 @@ function glue.save()
 end
 
 function glue.save_as(subPath, name, overwrite)
-	if name == "" or name:find("[/\\]") then
+	-- Save As's name box drops these characters and Save needs a visible one (Build.lua:1399)
+	if not name:match("%S") or name:find('[\\/:%*%?"<>|%c]') then
 		error("that isn't a valid build name", 0)
 	end
 	if subPath:find("%.%.") or subPath:sub(1, 1) == "/" then

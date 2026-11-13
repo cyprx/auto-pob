@@ -5,6 +5,7 @@
 use crate::engine::views::{BuildListView, FolderNode};
 use crate::theme;
 use crate::ui::import::mark;
+use crate::ui::name_box::{self, Filter};
 use eframe::egui;
 
 /// How the folders are ordered (PoB's `saveAsSortMode`)
@@ -149,12 +150,10 @@ impl FolderPicker {
                     self.focus_name = false;
                 }
                 if edit.changed() {
-                    text.retain(|c| !c.is_control() && !"\\/:*?\"<>|".contains(c));
-                    if let Some((i, _)) = text.char_indices().nth(100) {
-                        text.truncate(i);
-                    }
+                    name_box::clean(text, Filter::Path, name_box::NAME_LIMIT);
                 }
-                let ok = !text.trim().is_empty();
+                // PoB's Create asks for `%S` (Main.lua:1697)
+                let ok = name_box::has_visible(text);
                 let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let go = ui.add_enabled(ok, theme::primary_button("Create"));
                 mark(ui, "picker_create", &go);
@@ -377,6 +376,28 @@ mod tests {
             })
         );
         assert!(h.picker.naming.is_none());
+    }
+
+    /// PoB's New Folder box keeps non-ASCII text, counts 100 bytes, and Create asks for `%S`
+    /// (Main.lua:1693-1718)
+    #[test]
+    fn new_folder_keeps_non_ascii_names_and_counts_bytes() {
+        let mut h = H::new();
+        h.folder = "alpha/".into();
+        h.click("picker_new");
+        h.click("picker_name");
+        h.frame(vec![Event::Text("\u{65e5}".repeat(40))]);
+        assert_eq!(
+            h.picker.naming.as_deref().map(|t| t.chars().count()),
+            Some(33)
+        );
+        assert_eq!(
+            h.click("picker_create"),
+            Some(PickerOutput::NewFolder {
+                folder: "alpha/".into(),
+                name: "\u{65e5}".repeat(33),
+            })
+        );
     }
 
     #[test]

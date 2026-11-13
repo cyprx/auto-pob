@@ -37,6 +37,8 @@ mod items;
 mod items_harness;
 #[path = "gate/longtail_harness.rs"]
 mod longtail_harness;
+#[path = "gate/names.rs"]
+mod names;
 #[path = "gate/net_harness.rs"]
 mod net_harness;
 #[path = "gate/network.rs"]

@@ -10,6 +10,7 @@ pub mod help;
 pub(crate) mod hover;
 pub mod import;
 pub mod items;
+pub mod name_box;
 pub mod notes;
 pub mod options;
 pub mod popup;

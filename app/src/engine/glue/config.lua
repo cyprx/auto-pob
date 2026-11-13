@@ -225,15 +225,26 @@ function glue.select_config_set(id)
 	tab:AddUndoState()
 end
 
+-- What the manager's name box (ConfigSetListControl.lua:45) holds once `title` is typed into
+-- it: the box's own filter and 100-byte limit, and Save needs a visible character
 local function valid_title(title)
-	if type(title) ~= "string" or not title:match("%S") then
+	if type(title) ~= "string" then
 		error("a config set needs a name", 0)
 	end
+	local box = new("EditControl", nil, {0, 0, 0, 0}, "", nil, nil, 100)
+	local text = title:gsub("\r", ""):gsub(box.filterPattern, "")
+	if not text:match("%S") then
+		error("a config set needs a name", 0)
+	end
+	if #text > box.limit then
+		error("the text is too long", 0)
+	end
+	return text
 end
 
 -- As the manager's New button does, then switches to the new set.
 function glue.new_config_set(title)
-	valid_title(title)
+	title = valid_title(title)
 	local tab = config_tab()
 	local configSet = tab:NewConfigSet(nil, title)
 	table.insert(tab.configSetOrderList, configSet.id)
@@ -243,7 +254,7 @@ function glue.new_config_set(title)
 end
 
 function glue.rename_config_set(id, title)
-	valid_title(title)
+	title = valid_title(title)
 	local tab = config_tab()
 	config_set_index(tab, id)
 	tab.configSets[id].title = title
@@ -290,7 +301,8 @@ function glue.set_custom_mod_title(group, title)
 	if type(title) ~= "string" then error("a group title must be text", 0) end
 	local controls, block = group_controls(group)
 	if (block.title or "Default") == title then return end
-	controls.titleEdit:SetText(title, true)
+	-- typed into its box, which drops what its filter rejects (ConfigTab.lua:35)
+	glue.type_into(controls.titleEdit, title)
 end
 
 function glue.set_custom_mod_enabled(group, enabled)

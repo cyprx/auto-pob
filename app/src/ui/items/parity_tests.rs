@@ -591,3 +591,21 @@ fn the_build_set_list_keys_wait_while_a_shared_set_row_has_the_keyboard() {
     h.settle();
     assert_ne!(h.ui.sets.selected, build_selected);
 }
+
+/// The shared set's box drops what `EditControl`'s filter rejects too
+#[test]
+fn a_shared_set_name_follows_pobs_filter() {
+    let mut h = Harness::new(shared_sample());
+    h.click("manage");
+    h.settle();
+    h.click("shared_sets_row_0");
+    h.click("shared_sets_rename");
+    h.settle();
+    h.type_into("shared_sets_name", "\u{65e5}\u{672c}");
+    assert!(h.click("shared_sets_save").commands.is_empty());
+    h.type_into("shared_sets_name", "\u{65e5} b");
+    assert_eq!(
+        debug(&h.click("shared_sets_save").commands),
+        ["RenameSharedItemSet { index: 0, title: \" b\" }"]
+    );
+}

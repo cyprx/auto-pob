@@ -584,9 +584,24 @@ pub struct JewelSocket {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SpecEntry {
+    /// "Default" for a tree with no title
     pub title: String,
+    /// The tree has no title: PoB's rename box opens empty (PassiveSpecListControl.lua:49)
+    #[serde(default)]
+    pub untitled: bool,
     pub version: String,
     pub points: u32,
+}
+
+impl SpecEntry {
+    /// What PoB's rename box opens with: the title as the file has it, empty when it has none
+    pub fn name_box_text(&self) -> String {
+        if self.untitled {
+            String::new()
+        } else {
+            self.title.clone()
+        }
+    }
 }
 
 /// The build's notes, and the colour buttons PoB's notes tab offers.
@@ -719,6 +734,20 @@ pub struct SkillSetEntry {
     pub id: u32,
     /// PoB shows "Default" for a set with no title
     pub title: String,
+    /// The set has no title: PoB's rename box opens empty (SkillSetListControl.lua:56)
+    #[serde(default)]
+    pub untitled: bool,
+}
+
+impl SkillSetEntry {
+    /// What PoB's rename box opens with: the title as the file has it, empty when it has none
+    pub fn name_box_text(&self) -> String {
+        if self.untitled {
+            String::new()
+        } else {
+            self.title.clone()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -961,6 +990,20 @@ pub struct ItemSetEntry {
     pub id: u32,
     /// "Default" for a set with no title
     pub title: String,
+    /// The set has no title: PoB's rename box opens empty (ItemSetListControl.lua:47)
+    #[serde(default)]
+    pub untitled: bool,
+}
+
+impl ItemSetEntry {
+    /// What PoB's rename box opens with: the title as the file has it, empty when it has none
+    pub fn name_box_text(&self) -> String {
+        if self.untitled {
+            String::new()
+        } else {
+            self.title.clone()
+        }
+    }
 }
 
 /// One of the selector's dropdowns. Labels keep PoB's colour codes.

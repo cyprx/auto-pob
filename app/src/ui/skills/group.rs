@@ -45,11 +45,13 @@ impl SkillsUi {
         }
         ui.horizontal_wrapped(|ui| {
             ui.label("Label:");
-            self.field(
+            // PoB's label box takes 50 bytes (SkillsTab.lua:161)
+            self.field_limited(
                 ui,
                 &format!("g{gi}_label"),
                 &g.label,
                 200.0,
+                Some(50),
                 busy,
                 |text| Command::SetGroupLabel { group: gi, text },
                 &mut out.commands,

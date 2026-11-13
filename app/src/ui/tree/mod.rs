@@ -1173,6 +1173,97 @@ mod tests {
         Harness::new(l, Arc::new(state))
     }
 
+    /// The New, Rename and Copy Tree boxes are PoB's (PassiveSpecListControl.lua:46-69): the
+    /// filter drops every non-ASCII byte, Save needs a visible character after an edit, and the
+    /// name is saved as it stands
+    #[test]
+    fn tree_names_follow_pobs_box() {
+        let select_all = |h: &mut Harness| {
+            h.frame(vec![Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            }]);
+        };
+        // New
+        let mut h = two_specs();
+        let pos = h.tab.rects.map["spec_new"].center();
+        h.click_at(pos);
+        h.frame(vec![]);
+        let pos = h.tab.rects.map["spec_new_name"].center();
+        h.click_at(pos);
+        h.frame(vec![Event::Text("\u{65e5}\u{672c}".into())]);
+        h.frame(vec![]);
+        let pos = h.tab.rects.map["spec_new_ok"].center();
+        assert!(h.click_at(pos).commands.is_empty());
+        let pos = h.tab.rects.map["spec_new_name"].center();
+        h.click_at(pos);
+        h.frame(vec![Event::Text("\u{65e5} a ".into())]);
+        h.frame(vec![]);
+        let pos = h.tab.rects.map["spec_new_ok"].center();
+        assert_eq!(
+            debug(&h.click_at(pos).commands),
+            ["NewSpec { title: \" a \" }"]
+        );
+        // Rename: untouched, Save is off; nothing PoB keeps, Save stays off; 100 bytes at most
+        let mut h = two_specs();
+        let pos = h.tab.rects.map["spec_rename"].center();
+        h.click_at(pos);
+        h.frame(vec![]);
+        let pos = h.tab.rects.map["spec_rename_ok"].center();
+        assert!(h.click_at(pos).commands.is_empty());
+        select_all(&mut h);
+        h.frame(vec![Event::Text("\u{3a9}".into())]);
+        h.frame(vec![]);
+        let pos = h.tab.rects.map["spec_rename_ok"].center();
+        assert!(h.click_at(pos).commands.is_empty());
+        let pos = h.tab.rects.map["spec_rename_name"].center();
+        h.click_at(pos);
+        select_all(&mut h);
+        h.frame(vec![Event::Text("x".repeat(130))]);
+        h.frame(vec![]);
+        let pos = h.tab.rects.map["spec_rename_ok"].center();
+        let sent = debug(&h.click_at(pos).commands);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(
+            sent[0],
+            format!("RenameSpec {{ index: 0, title: \"{}\" }}", "x".repeat(100))
+        );
+        // Copy drops the same characters; a key PoB's box refuses is no edit, so Save stays off
+        let mut h = two_specs();
+        let pos = h.tab.rects.map["spec_copy"].center();
+        h.click_at(pos);
+        h.frame(vec![]);
+        h.frame(vec![Event::Text("\u{65e5}".into())]);
+        h.frame(vec![]);
+        let pos = h.tab.rects.map["spec_copy_ok"].center();
+        assert!(h.click_at(pos).commands.is_empty());
+    }
+
+    /// PoB opens the rename box on the tree's own title: a tree with none opens it empty
+    #[test]
+    fn renaming_an_untitled_tree_starts_empty() {
+        let (l, s) = sample();
+        let mut state = (*s).clone();
+        state.specs = serde_json::from_value(serde_json::json!([
+            { "title": "Default", "untitled": true, "version": "3_28", "points": 1 },
+        ]))
+        .unwrap();
+        let mut h = Harness::new(l, Arc::new(state));
+        let pos = h.tab.rects.map["spec_rename"].center();
+        h.click_at(pos);
+        h.frame(vec![]);
+        h.frame(vec![Event::Text("x".into())]);
+        h.frame(vec![]);
+        let pos = h.tab.rects.map["spec_rename_ok"].center();
+        assert_eq!(
+            debug(&h.click_at(pos).commands),
+            ["RenameSpec { index: 0, title: \"x\" }"]
+        );
+    }
+
     #[test]
     fn spec_copy_asks_for_a_name_and_sends_copy_spec() {
         let mut h = two_specs();
@@ -1232,10 +1323,15 @@ mod tests {
         h.click_at(pos);
         key(&mut h, egui::Key::F2);
         h.frame(vec![]);
+        // PoB's Save waits for an edit, even on the name it opened with
+        let pos = h.tab.rects.map["spec_rename_ok"].center();
+        assert!(h.click_at(pos).commands.is_empty());
+        h.frame(vec![Event::Text("!".into())]);
+        h.frame(vec![]);
         let pos = h.tab.rects.map["spec_rename_ok"].center();
         assert_eq!(
             debug(&h.click_at(pos).commands),
-            ["RenameSpec { index: 1, title: \"Bare\" }"]
+            ["RenameSpec { index: 1, title: \"Bare!\" }"]
         );
         // the manager is still open; a typed Copy Tree name box leaves it the keyboard
         h.frame(vec![]);
@@ -1264,10 +1360,12 @@ mod tests {
         key(&mut h, egui::Key::ArrowUp);
         key(&mut h, egui::Key::F2);
         h.frame(vec![]);
+        h.frame(vec![Event::Text("!".into())]);
+        h.frame(vec![]);
         let pos = h.tab.rects.map["spec_rename_ok"].center();
         assert_eq!(
             debug(&h.click_at(pos).commands),
-            ["RenameSpec { index: 0, title: \"Main\" }"]
+            ["RenameSpec { index: 0, title: \"Main!\" }"]
         );
     }
 

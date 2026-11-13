@@ -539,6 +539,8 @@ fn f2_renames_the_selected_row_in_the_set_managers() {
     frame(&mut app, &ctx, plain(Key::F2));
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![Event::Text("!".into())]);
+    frame(&mut app, &ctx, vec![]);
     let before = app.sent_full.len();
     click(&mut app, &ctx, "spec_rename_ok");
     let sent = sent_since(&app, before);

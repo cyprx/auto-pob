@@ -25,16 +25,37 @@ function glue.confirm_popup(what)
 	button.onClick()
 end
 
--- Types into an edit control as PoB's EditControl would (R3)
+-- Types `text` into the edit control as PoB's EditControl takes an edit that turns its text into
+-- it: the control's filter and limit apply to the inserted part only (EditControl.lua:162-172),
+-- so text the box already holds (a name being renamed) stays as it is. False when the edit
+-- would insert nothing but characters the filter drops.
 function glue.type_into(control, text)
 	text = text:gsub("\r", "")
-	local typed = text
-	text = text:gsub(control.filterPattern, "")
+	local old = control.buf or ""
+	-- the edit replaced text[head + 1 .. #text - tail]; both cuts fall between characters
+	local head = 0
+	while head < #old and head < #text and old:byte(head + 1) == text:byte(head + 1) do
+		head = head + 1
+	end
+	while head > 0 and (text:byte(head + 1) or 0) >= 0x80 and (text:byte(head + 1) or 0) < 0xC0 do
+		head = head - 1
+	end
+	local tail = 0
+	while tail < #old - head and tail < #text - head
+		and old:byte(#old - tail) == text:byte(#text - tail) do
+		tail = tail + 1
+	end
+	while tail > 0 and (text:byte(#text - tail + 1) or 0) >= 0x80 and (text:byte(#text - tail + 1) or 0) < 0xC0 do
+		tail = tail - 1
+	end
+	local inserted = text:sub(head + 1, #text - tail)
+	local kept = inserted:gsub(control.filterPattern, "")
 	-- everything was filtered out: EditControl:Insert does nothing
-	if typed ~= "" and text == "" then
+	if inserted ~= "" and kept == "" then
 		return false
 	end
-	if control.limit and #text > control.limit then
+	text = text:sub(1, head) .. kept .. text:sub(#text - tail + 1)
+	if control.limit and #text > control.limit and #text > #old then
 		error("the text is too long", 0)
 	end
 	control:SetText(text, true)

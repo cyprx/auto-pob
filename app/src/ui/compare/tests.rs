@@ -1040,11 +1040,13 @@ fn items_view_offers_our_tree_set() {
             title: "Default".into(),
             version: "3_27".into(),
             points: 10,
+            untitled: false,
         },
         crate::engine::views::SpecEntry {
             title: "Late".into(),
             version: "3_27".into(),
             points: 90,
+            untitled: false,
         },
     ];
     h.ui.on_snapshot(&Snapshot::Tree(Arc::new(state)));

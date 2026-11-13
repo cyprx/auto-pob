@@ -18,6 +18,7 @@ use crate::ui::folder_picker::{FolderPicker, PickerOutput};
 use crate::ui::help::{self, HelpStart, HelpUi};
 use crate::ui::import::{Confirm, ImportOutput, ImportUi, Plan};
 use crate::ui::items::{ItemsOutput, ItemsUi};
+use crate::ui::name_box::{self, Filter};
 use crate::ui::notes::NotesUi;
 use crate::ui::options::{self, OptionsUi};
 use crate::ui::popup::{self, PopupWindow};
@@ -993,10 +994,12 @@ impl AutoPobApp {
     }
 
     fn open_save_as(&mut self, then: Option<Pending>) {
+        // PoB's box opens on the build's name with the characters it forbids turned into "-"
+        // (Build.lua:1400)
         let name = self
             .build
             .as_ref()
-            .map(|b| b.name.clone())
+            .map(|b| name_box::dashed(&b.name))
             .unwrap_or_default();
         self.save_as = Some(SaveAsDialog {
             folder: self.list_folder(),
@@ -1018,7 +1021,7 @@ impl AutoPobApp {
         dialog.confirm_overwrite = false;
         let command = Command::SaveAs {
             folder: dialog.folder.clone(),
-            name: dialog.name.trim().to_owned(),
+            name: dialog.name.clone(),
             overwrite,
         };
         let then = dialog.then.clone();
@@ -2079,8 +2082,15 @@ impl AutoPobApp {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.add_enabled_ui(!dialog.waiting, |ui| {
-                    let name = ui
-                        .add(egui::TextEdit::singleline(&mut dialog.name).hint_text("Build name"));
+                    // PoB's box drops `\/:*?"<>|` and control characters, 100 bytes at most
+                    let (name, _) = name_box::edit(
+                        ui,
+                        &mut dialog.name,
+                        Filter::Path,
+                        name_box::NAME_LIMIT,
+                        |t| t.hint_text("Build name"),
+                    );
+                    crate::ui::import::mark(ui, "save_as_name", &name);
                     if name.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         submit = true;
                     }
@@ -2105,11 +2115,10 @@ impl AutoPobApp {
                         });
                     } else {
                         ui.horizontal(|ui| {
-                            let valid = !dialog.name.trim().is_empty();
-                            if ui
-                                .add_enabled(valid, theme::primary_button("Save"))
-                                .clicked()
-                            {
+                            let valid = name_box::has_visible(&dialog.name);
+                            let save = ui.add_enabled(valid, theme::primary_button("Save"));
+                            crate::ui::import::mark(ui, "save_as_save", &save);
+                            if save.clicked() {
                                 submit = true;
                             }
                             if ui.button("Cancel").clicked() {
@@ -2130,7 +2139,7 @@ impl AutoPobApp {
             self.save_as = None;
         } else if overwrite {
             self.send_save_as(true);
-        } else if submit && !dialog.name.trim().is_empty() {
+        } else if submit && name_box::has_visible(&dialog.name) {
             self.send_save_as(false);
         }
     }
@@ -2921,6 +2930,76 @@ mod tests {
         frame(&mut app, &ctx, vec![]);
         assert!(app.save_as.is_none(), "Esc left it open");
         assert!(app.sent_full.iter().all(|c| !c.starts_with("SaveAs")));
+    }
+
+    /// Save As opens on the build's name with the characters its box forbids turned into "-"
+    /// (Build.lua:1400)
+    #[test]
+    fn save_as_opens_on_the_dashed_build_name() {
+        let (mut app, _ctx) = items_app_typing();
+        let mut view = (**app.build.as_ref().unwrap()).clone();
+        view.name = "a:b/c".into();
+        app.build = Some(Arc::new(view));
+        app.open_save_as(None);
+        assert_eq!(app.save_as.as_ref().unwrap().name, "a-b-c");
+    }
+
+    /// Save As's name box is PoB's (Build.lua:1399-1400): it drops `\/:*?"<>|` and control
+    /// characters but not other text, and what is left is saved as it stands
+    #[test]
+    fn save_as_names_follow_pobs_box() {
+        let (mut app, ctx) = started();
+        deliver(&mut app, picker_list());
+        app.open_save_as(None);
+        frame(&mut app, &ctx, vec![]);
+        app.save_as.as_mut().unwrap().name.clear();
+        click_mark(&mut app, &ctx, "save_as_name");
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text("a/b:c*d?\"<>|  ".into())],
+        );
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.save_as.as_ref().unwrap().name, "abcd  ");
+        // only spaces: Save is off
+        let select_all = || {
+            vec![egui::Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            }]
+        };
+        click_mark(&mut app, &ctx, "save_as_name");
+        frame(&mut app, &ctx, select_all());
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text(" /\u{65e5} ".into())],
+        );
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.save_as.as_ref().unwrap().name, " \u{65e5} ");
+        frame(&mut app, &ctx, select_all());
+        frame(&mut app, &ctx, vec![egui::Event::Text("/ :".into())]);
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        click_mark(&mut app, &ctx, "save_as_save");
+        assert_eq!(sent_since(&app, before), [] as [&str; 0]);
+        // a name PoB keeps is saved as it stands
+        click_mark(&mut app, &ctx, "save_as_name");
+        frame(&mut app, &ctx, select_all());
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text("\u{65e5}\u{672c} x ".into())],
+        );
+        frame(&mut app, &ctx, vec![]);
+        click_mark(&mut app, &ctx, "save_as_save");
+        assert_eq!(
+            sent_since(&app, before),
+            ["SaveAs { folder: \"\", name: \"\u{65e5}\u{672c} x \", overwrite: false }"]
+        );
     }
 
     #[test]

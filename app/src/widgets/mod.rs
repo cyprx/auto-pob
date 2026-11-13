@@ -10,6 +10,7 @@ pub mod scroll_step;
 pub mod search_combo;
 pub mod size_grip;
 pub mod tooltip;
+pub mod url_click;
 
 pub use edit_box::{EditBox, EditBoxOptions, EditBoxes};
 pub use item_tooltip::{item_tooltip_ui, item_tooltip_ui_with};

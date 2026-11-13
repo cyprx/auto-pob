@@ -3248,7 +3248,7 @@ ported = "app/src/ui"
 note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
 
 [keys."EditControl.LEFTBUTTON"]
-ported = "app/src/ui"
+ported = "app/src/ui egui TextEdit editing; app/src/widgets/url_click.rs: Ctrl+click on a box that holds a link opens its text (EditControl.lua:485-486), at the shared EditBox, the name boxes, the Import code box, Notes and the Config fields"
 note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
 
 [keys."EditControl.PAGEDOWN"]

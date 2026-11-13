@@ -234,6 +234,7 @@ impl NotesUi {
                         .desired_width(f32::INFINITY)
                         .desired_rows(rows);
                     let response = ui.add(edit);
+                    crate::widgets::url_click::open_on_ctrl_click(ui, &response, &self.text);
                     if response.changed() {
                         self.touch(now);
                     }

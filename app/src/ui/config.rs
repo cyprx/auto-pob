@@ -781,6 +781,7 @@ impl ConfigUi {
                 .min_size(egui::vec2(0.0, self.box_height(&key))),
         };
         let response = ui.add(edit.hint_text(hint));
+        crate::widgets::url_click::open_on_ctrl_click(ui, &response, &text);
         if response.changed()
             && let Some(filter) = filter
         {

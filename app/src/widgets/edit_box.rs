@@ -78,6 +78,7 @@ impl EditBox {
             edit = edit.hint_text(hint);
         }
         let response = ui.add(edit);
+        crate::widgets::url_click::open_on_ctrl_click(ui, &response, &self.text);
         self.refused = false;
         if let Some(before) = before
             && response.changed()

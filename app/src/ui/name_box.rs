@@ -147,6 +147,7 @@ pub fn edit(
     let before = text.clone();
     let pasted = pasted(ui);
     let response = ui.add(build(egui::TextEdit::singleline(text)));
+    crate::widgets::url_click::open_on_ctrl_click(ui, &response, text);
     let mut changed = response.changed();
     if changed {
         let same = *text == before;

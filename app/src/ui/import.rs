@@ -842,6 +842,7 @@ impl ImportUi {
                 .desired_width(f32::INFINITY),
         );
         mark(ui, "code_box", &r);
+        crate::widgets::url_click::open_on_ctrl_click(ui, &r, &self.code);
         if std::mem::take(&mut self.focus_code) {
             r.request_focus();
         }

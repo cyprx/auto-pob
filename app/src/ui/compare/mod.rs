@@ -61,6 +61,8 @@ enum Dialog {
         sent: Option<Option<u64>>,
         /// PoB's red text in the popup's state line (CompareTab.lua:1476-1479)
         error: Option<String>,
+        /// A link's download is out: PoB's "Downloading..." line, until it ends
+        downloading: bool,
     },
     /// PoB's "Convert to Version" popup, opened by a pick in a Tree view version dropdown
     Convert {
@@ -69,6 +71,9 @@ enum Dialog {
         label: String,
     },
 }
+
+/// The label of the Import popup's download, as the engine lists it (glue `compare_import`)
+const IMPORT_REQUEST: &str = "Fetching comparison build";
 
 /// PoB's top-bar selectors, with their captions (`compare*Label`, `cmpSkillLabel` and so on),
 /// in two rows as PoB draws them.
@@ -247,16 +252,52 @@ impl CompareUi {
         }
     }
 
-    /// Every snapshot up to `seq` is here: an Import with no error has done its work (a code
-    /// added the comparison, a link's download is out), and the popup closes as PoB's does
+    /// Every snapshot up to `seq` is here: an Import with no error has done its work. A code
+    /// added the comparison and the popup closes; a link's download is out, and the popup
+    /// shows PoB's "Downloading..." until it ends (CompareTab.lua:1488-1503). A build code
+    /// has no "." (base64), a build site's link always has one.
     pub fn import_settled(&mut self, seq: u64) {
         if let Some(Dialog::Import {
+            text,
             sent: Some(Some(at)),
+            downloading,
             ..
-        }) = &self.dialog
+        }) = &mut self.dialog
             && *at <= seq
         {
-            self.dialog = None;
+            if text.contains('.') {
+                *downloading = true;
+            } else {
+                self.dialog = None;
+            }
+        }
+    }
+
+    /// A request ended. The Import popup's download: it closes when the comparison landed,
+    /// else PoB's text shows in it in red, the link and the name kept. Returns whether it was
+    /// the popup's, so the app posts no notice for it.
+    pub fn import_request_ended(&mut self, label: &str, error: Option<&str>) -> bool {
+        if label != IMPORT_REQUEST {
+            return false;
+        }
+        match &mut self.dialog {
+            Some(Dialog::Import {
+                sent,
+                error: shown,
+                downloading,
+                ..
+            }) if *downloading => {
+                match error {
+                    None => self.dialog = None,
+                    Some(e) => {
+                        *downloading = false;
+                        *sent = None;
+                        *shown = Some(e.to_owned());
+                    }
+                }
+                true
+            }
+            _ => false,
         }
     }
 
@@ -421,6 +462,7 @@ impl CompareUi {
                         name: String::new(),
                         sent: None,
                         error: None,
+                        downloading: false,
                     });
                 }
             });

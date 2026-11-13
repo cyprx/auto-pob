@@ -49,7 +49,8 @@ impl CompareUi {
                     name,
                     sent,
                     error,
-                } => self.import(ui, text, name, sent, error, out, &mut keep),
+                    downloading,
+                } => self.import(ui, text, name, sent, error, *downloading, out, &mut keep),
                 Dialog::Convert {
                     theirs,
                     index,
@@ -203,6 +204,7 @@ impl CompareUi {
         name: &mut String,
         sent: &mut Option<Option<u64>>,
         error: &mut Option<String>,
+        downloading: bool,
         out: &mut CompareOutput,
         keep: &mut bool,
     ) {
@@ -214,16 +216,21 @@ impl CompareUi {
             t.hint_text("Name (optional)").desired_width(450.0)
         });
         self.rects.note(&field, || "dialog_name".into());
-        // PoB's state line under the Name box
-        if let Some(error) = error {
+        // PoB's state line under the Name box: WARNING while downloading, NEGATIVE on a failure
+        if downloading {
+            // colorCodes.WARNING (Global.lua:21)
+            let r = ui.colored_label(egui::Color32::from_rgb(0xFF, 0x99, 0x22), "Downloading...");
+            self.rects.note(&r, || "dialog_downloading".into());
+        } else if let Some(error) = error {
             let r = ui.colored_label(theme::NEGATIVE, error.as_str());
             self.rects.note(&r, || "dialog_error".into());
         }
         ui.horizontal(|ui| {
-            let go = ui.add_enabled(sent.is_none(), theme::primary_button("Import"));
+            let idle = sent.is_none() && !downloading;
+            let go = ui.add_enabled(idle, theme::primary_button("Import"));
             self.rects.note(&go, || "dialog_load".into());
             // PoB's Import does nothing for an empty box
-            if (go.clicked() || (enter && sent.is_none())) && !text.is_empty() {
+            if (go.clicked() || (enter && idle)) && !text.is_empty() {
                 out.commands.push(Command::LoadCompare {
                     source: CompareSource::Import {
                         text: text.clone(),

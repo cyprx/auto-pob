@@ -492,8 +492,32 @@ fn load_menu_sends_each_source() {
         debug(&out.commands),
         ["LoadCompare { source: Import { text: \"https://pobb.in/abc\", name: None } }"]
     );
+    // the press is answered with the download out: PoB's "Downloading..." until it ends
     h.ui.import_sent(9);
     h.ui.import_settled(9);
+    h.frame(vec![]);
+    assert!(h.ui.has_dialog());
+    assert!(h.ui.rects.map.contains_key("dialog_downloading"));
+    assert!(
+        !h.ui
+            .import_request_ended("Fetching build from pobb.in", None),
+        "not its own"
+    );
+    // a failure shows in red in it, the link kept, and Import can be pressed again
+    assert!(h.ui.import_request_ended("Fetching comparison build", Some("Response code: 500")));
+    h.frame(vec![]);
+    assert!(h.ui.has_dialog());
+    assert!(h.ui.rects.map.contains_key("dialog_error"));
+    let out = h.click("dialog_load");
+    assert_eq!(
+        debug(&out.commands),
+        ["LoadCompare { source: Import { text: \"https://pobb.in/abc\", name: None } }"]
+    );
+    // the comparison landed: it closes
+    h.ui.import_sent(10);
+    h.ui.import_settled(10);
+    assert!(h.ui.has_dialog());
+    assert!(h.ui.import_request_ended("Fetching comparison build", None));
     assert!(!h.ui.has_dialog());
     // an empty box imports nothing
     h.click("load");

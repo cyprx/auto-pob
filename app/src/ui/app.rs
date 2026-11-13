@@ -819,6 +819,13 @@ impl AutoPobApp {
             finished: Vec::new(),
         };
         for done in &view.finished {
+            // the Compare tab's Import popup shows its own download's end, as PoB's does
+            if self
+                .compare
+                .import_request_ended(&done.label, done.error.as_deref())
+            {
+                continue;
+            }
             // a cancel is the user's own doing
             if let Some(error) = done.error.as_ref().filter(|_| !done.cancelled) {
                 self.notices.push(format!("{}: {error}", done.label));

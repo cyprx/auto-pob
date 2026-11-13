@@ -1538,6 +1538,34 @@ fn build_sites_match_pob() {
     assert_eq!(theirs, "Invalid build code");
     s.assert_clean("compare popup");
     assert_eq!(up.eval::<usize>("return #main.popups"), 0);
+    // a link whose download fails: PoB's popup stays with the site's text, which is the
+    // request's error (the UI shows it in its popup)
+    web.route("GET", &sites[0].download_url(), Canned::status(500, "oops"));
+    up_popup(&up, sites[0].link(), "");
+    up.pump(Duration::from_secs(15));
+    let theirs = up.eval::<String>("return StripEscapes(main.popups[1].controls.state.label())");
+    up.eval::<()>("main:ClosePopup()");
+    s.backend
+        .apply(
+            Command::LoadCompare {
+                source: CompareSource::Import {
+                    text: sites[0].link().into(),
+                    name: None,
+                },
+            },
+            &|_| {},
+        )
+        .expect("popup link");
+    let entry = finish_request(&mut s);
+    assert_eq!(entry.label, "Fetching comparison build");
+    assert_eq!(entry.error.as_deref(), Some(theirs.as_str()));
+    assert!(!theirs.is_empty() && theirs != "Downloading...", "{theirs}");
+    web.route(
+        "GET",
+        &sites[0].download_url(),
+        Canned::ok(attack_code.clone()),
+    );
+    s.assert_clean("failed compare popup link");
 
     // ---- A failure leaves nothing stuck, and the same request then works ----
     let pobbin = sites.iter().find(|site| site.id == "POBBin").unwrap();

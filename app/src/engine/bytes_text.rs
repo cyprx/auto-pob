@@ -24,8 +24,19 @@ fn escape(b: u8) -> char {
     char::from_u32(FIRST + u32::from(b) - 0x80).expect("a private-use character")
 }
 
-fn is_escape(c: char) -> bool {
+/// Whether `c` stands for one of PoB's bytes
+pub fn is_escape(c: char) -> bool {
     (FIRST..=LAST).contains(&(c as u32))
+}
+
+/// The bytes `c` is in PoB's string: one for an escape
+pub fn pob_char_len(c: char) -> usize {
+    if is_escape(c) { 1 } else { c.len_utf8() }
+}
+
+/// The bytes `text` is in PoB's string, as its limits count them: an escape is one byte
+pub fn pob_len(text: &str) -> usize {
+    text.len() - 2 * text.chars().filter(|c| is_escape(*c)).count()
 }
 
 /// The UTF-8 of an escape character starts EF 9E or EF 9F

@@ -1199,3 +1199,26 @@ fn the_config_search_box_takes_pobs_filter_and_limit() {
     h.type_text(&"c".repeat(120));
     assert_eq!(h.ui.config_filter.len(), 100);
 }
+
+/// The Skills, Items and Config views head their columns with our short build name in PoB's
+/// POSITIVE colour and the comparison's label in WARNING (CompareTab.lua:1810-1813, 4370-4371,
+/// 4922-4925)
+#[test]
+fn the_views_head_their_columns_with_both_names_in_pobs_colours() {
+    let mut h = Harness::new(Some(sample()));
+    for tab in ["sub:skills", "sub:items", "sub:config"] {
+        h.click(tab);
+        h.frame(vec![]);
+        let drawn_in = |text: &str, colour: egui::Color32| {
+            h.texts.iter().any(|g| {
+                g.job.text == text && g.job.sections.first().map(|s| s.format.color) == Some(colour)
+            })
+        };
+        assert!(drawn_in("attack", theme::POSITIVE), "{tab}");
+        assert!(
+            drawn_in("dot", egui::Color32::from_rgb(0xFF, 0x99, 0x22)),
+            "{tab}"
+        );
+        assert!(!h.drew("This build"), "{tab}");
+    }
+}

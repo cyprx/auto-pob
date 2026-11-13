@@ -586,6 +586,11 @@ fn readdress(command: Command) -> Command {
     }
 }
 
+/// A view's column header as PoB draws it, its colour code kept
+fn header(text: &str, default: egui::Color32) -> egui::text::LayoutJob {
+    crate::widgets::pob_text(text, 16.0, default)
+}
+
 /// PoB's text without its colour codes.
 fn plain(text: &str) -> String {
     crate::widgets::pob_text(text, 14.0, egui::Color32::WHITE).text

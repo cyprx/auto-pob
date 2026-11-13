@@ -896,15 +896,15 @@ ruled_out = "R9"
 note = "Compare Calcs sub-view out"
 
 [controls."compare.subTabConfig"]
-ported = "app/src/ui/compare/mod.rs sub_tabs Config (app/src/ui/compare/config.rs)"
+ported = "app/src/ui/compare/mod.rs sub_tabs Config (app/src/ui/compare/config.rs); columns headed by both build names in PoB's colours, PoB's empty-view line"
 note = "Compare sub-tabs"
 
 [controls."compare.subTabItems"]
-ported = "app/src/ui/compare/mod.rs sub_tabs Items (app/src/ui/compare/items.rs), after Skills as PoB's order (CompareTab.lua:197)"
+ported = "app/src/ui/compare/mod.rs sub_tabs Items (app/src/ui/compare/items.rs), after Skills as PoB's order (CompareTab.lua:197); columns headed by both build names in PoB's colours"
 note = "Compare sub-tabs"
 
 [controls."compare.subTabSkills"]
-ported = "app/src/ui/compare/mod.rs sub_tabs Skills (app/src/ui/compare/skills.rs), before Items as PoB's order (CompareTab.lua:197)"
+ported = "app/src/ui/compare/mod.rs sub_tabs Skills (app/src/ui/compare/skills.rs), before Items as PoB's order (CompareTab.lua:197); columns headed by both build names in PoB's colours"
 note = "Compare sub-tabs"
 
 [controls."compare.subTabSummary"]

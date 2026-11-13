@@ -526,6 +526,22 @@ fn a_failed_view_on_entering_the_tab_leaves_its_controls_on() {
         ["RemoveCompare { index: 0 }".to_owned()],
         "the tab's controls stayed off"
     );
+    // a command of the tab whose Compare view fails too: its tree view answers the batch
+    // (`compare_changed`), so the controls come back as well
+    // (the same error counts on the notice already up)
+    let start = Instant::now();
+    while app.behind() {
+        assert!(start.elapsed() < Duration::from_secs(10), "no answer came");
+        frame(&mut app, &ctx, vec![]);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let before = app.sent_full.len();
+    click(&mut app, &ctx, "remove");
+    assert_eq!(
+        app.sent_full[before..],
+        ["RemoveCompare { index: 0 }".to_owned()],
+        "the controls stayed off after a failed view of the tab's own command"
+    );
 }
 
 /// A snapshot of the seq the tab waits for, or a later one, ends the wait: the engine has

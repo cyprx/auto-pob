@@ -258,3 +258,116 @@ fn a_fresh_folder_matches_pob() {
     let _ = std::fs::remove_dir_all(&pob);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Every function SimpleGraphic gives PoB (`ui_api.cpp`'s registrations, besides the image and
+/// search handles' methods), so no PoB path can call a missing one
+const SIMPLEGRAPHIC: [&str; 60] = [
+    "RenderInit",
+    "GetScreenSize",
+    "GetScreenScale",
+    "SetClearColor",
+    "SetDrawLayer",
+    "GetDrawLayer",
+    "SetViewport",
+    "SetDrawColor",
+    "GetDrawColor",
+    "SetDPIScaleOverridePercent",
+    "GetDPIScaleOverridePercent",
+    "DrawImage",
+    "DrawImageQuad",
+    "DrawString",
+    "DrawStringWidth",
+    "DrawStringCursorIndex",
+    "StripEscapes",
+    "GetAsyncCount",
+    "GetCloudProvider",
+    "SetWindowTitle",
+    "GetCursorPos",
+    "SetCursorPos",
+    "ShowCursor",
+    "IsKeyDown",
+    "Copy",
+    "Paste",
+    "Deflate",
+    "Inflate",
+    "GetTime",
+    "GetScriptPath",
+    "GetRuntimePath",
+    "GetUserPath",
+    "MakeDir",
+    "RemoveDir",
+    "SetWorkDir",
+    "GetWorkDir",
+    "LaunchSubScript",
+    "AbortSubScript",
+    "IsSubScriptRunning",
+    "LoadModule",
+    "PLoadModule",
+    "PCall",
+    "ConPrintf",
+    "ConPrintTable",
+    "ConExecute",
+    "ConClear",
+    "print",
+    "SpawnProcess",
+    "OpenURL",
+    "SetProfiling",
+    "TakeScreenshot",
+    "Restart",
+    "Exit",
+    "SetForeground",
+    "SetCallback",
+    "GetCallback",
+    "SetMainObject",
+    "NewImageHandle",
+    "NewFileSearch",
+    "GetVirtualScreenSize",
+];
+
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn the_host_functions_pob_calls_are_there() {
+    let _guard = lock();
+    let root = std::env::temp_dir().join(format!("auto-pob-host-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let user = missing_user(&root, "ours");
+    let pob = pob_farm("host");
+    let backend = PobBackend::start_with(Game::Poe1, &pob, &user, canned(&canned_web()))
+        .expect("starting PoB");
+    let missing: Vec<&str> = SIMPLEGRAPHIC
+        .into_iter()
+        .filter(|name| {
+            backend
+                .lua
+                .globals()
+                .get::<mlua::Value>(*name)
+                .map_or(true, |v| !v.is_function())
+        })
+        .collect();
+    assert!(missing.is_empty(), "missing host functions: {missing:?}");
+    // the values PoB reads at start, as SimpleGraphic answers on a 1920x1080 display at 100%
+    // with no override
+    let (scale, dpi): (f64, i64) = backend
+        .lua
+        .load("return GetScreenScale(), GetDPIScaleOverridePercent()")
+        .eval()
+        .unwrap();
+    assert_eq!((scale, dpi), (1.0, 0));
+    // a tooltip line with a background (a gem mod line's) saves and restores the draw colour
+    // (Tooltip.lua:605-609)
+    backend
+        .lua
+        .load(
+            r#"
+            local tip = new("Tooltip")
+            pob.main.main.showFlavourText = true
+            tip:AddLine(16, "a line", nil, nil, "Assets/ItemsHeaderUniqueLeft.png")
+            tip:Draw(0, 0, 100, 100, { x = 0, y = 0, width = 1920, height = 1080 })
+            "#,
+        )
+        .exec()
+        .expect("drawing a tooltip with a line background");
+    drop(backend);
+    let _ = std::fs::remove_dir_all(&pob);
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -225,19 +225,16 @@ fn sort_label(sort: BuildSort) -> &'static str {
 /// Whether PoB's Save is on for a build named `text` in the folder of `path`, whose name is
 /// `original`: a different name needs no build of that name on disk, the same name in another
 /// case needs only the case to differ (BuildListControl.lua:99-109)
-/// The name is the list's spelling: in a list spelled escaped (a name in the Builds tree isn't
-/// UTF-8), escapes stand for bytes; the entry's own name tells, as it differs from its file's.
-fn build_name_is_free(path: &std::path::Path, original: &str, text: &str) -> bool {
+/// The name is in the spelling of the view the box opened over (`escaped`): in a list spelled
+/// escaped (a name in the Builds tree isn't UTF-8), escapes stand for bytes, as the engine
+/// reads them.
+fn build_name_is_free(path: &std::path::Path, original: &str, text: &str, escaped: bool) -> bool {
     if !text.eq_ignore_ascii_case(original) {
-        let stem = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|f| f.strip_suffix(".xml").unwrap_or(f));
         let typed = format!("{text}.xml");
-        let name = if stem == Some(original) {
-            std::path::PathBuf::from(typed)
-        } else {
+        let name = if escaped {
             crate::engine::bytes_text::path_from_escaped(&typed)
+        } else {
+            std::path::PathBuf::from(typed)
         };
         let file = path.with_file_name(name);
         !file.exists()
@@ -1009,7 +1006,7 @@ impl BuildListUi {
                     // exist (BuildListControl.lua:93-115)
                     let valid = *edited
                         && name_box::has_visible(text)
-                        && (*is_folder || build_name_is_free(path, original, text));
+                        && (*is_folder || build_name_is_free(path, original, text, *escaped));
                     let (save, cancelled) = buttons(ui, "Save", valid);
                     cancel |= cancelled;
                     if (save || ok) && valid {
@@ -1457,13 +1454,33 @@ mod tests {
         std::fs::write(file(b"caf\xE9.xml"), "a").unwrap();
         std::fs::write(file(b"caf\xE9 2.xml"), "b").unwrap();
         let path = file(b"caf\xE9.xml");
-        assert!(!build_name_is_free(&path, "caf\u{F7E9}", "caf\u{F7E9} 2"));
-        assert!(build_name_is_free(&path, "caf\u{F7E9}", "caf\u{F7E9} 3"));
+        assert!(!build_name_is_free(
+            &path,
+            "caf\u{F7E9}",
+            "caf\u{F7E9} 2",
+            true
+        ));
+        assert!(build_name_is_free(
+            &path,
+            "caf\u{F7E9}",
+            "caf\u{F7E9} 3",
+            true
+        ));
+        // a plain-named build of the same escaped list, renamed to a name that is taken
+        // (review hunt7 m1): its own name says nothing of the spelling
+        std::fs::write(dir.join("a.xml"), "e").unwrap();
+        assert!(!build_name_is_free(
+            &dir.join("a.xml"),
+            "a",
+            "caf\u{F7E9}",
+            true
+        ));
         // in a list of UTF-8 names a real character of the escapes' range is itself
         std::fs::write(dir.join("x\u{F7E9}.xml"), "c").unwrap();
         std::fs::write(dir.join("y\u{F7E9}.xml"), "d").unwrap();
         let real = dir.join("x\u{F7E9}.xml");
-        assert!(!build_name_is_free(&real, "x\u{F7E9}", "y\u{F7E9}"));
+        assert!(!build_name_is_free(&real, "x\u{F7E9}", "y\u{F7E9}", false));
+        assert!(build_name_is_free(&real, "x\u{F7E9}", "caf\u{F7E9}", false));
     }
 
     /// Each Rename box is a new `EditControl` in PoB, with no undo of its own: Ctrl+Z in the

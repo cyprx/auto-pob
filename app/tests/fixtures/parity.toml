@@ -635,7 +635,7 @@ ported = "app/src/ui/compare/config.rs our config set combo (SelectConfigSet), o
 note = "part of compare.configPrimarySetSelect"
 
 [controls."compare.configSearchEdit"]
-ported = "app/src/ui/compare/config.rs search box over the option labels: PoB's %c filter and 100-byte limit, matchOrPattern (| alternatives, (..) groups, no trim)"
+ported = "app/src/ui/compare/config.rs search box over the option labels: PoB's %c filter and 100-byte limit, matchOrPattern (| alternatives, (..) groups, no trim) on the raw lowercased label, colour codes included"
 note = "NF-9 (new finding, in scope by controller ruling): not in R6's control list; R25 already has Ctrl+F on Compare Config, so the box is implied"
 
 [controls."compare.configSearchEdit.buttonClear"]

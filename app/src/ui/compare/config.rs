@@ -17,7 +17,8 @@ pub(super) fn matches(row: &CompareConfigRow, filter: &str) -> bool {
     if filter.chars().all(is_lua_space) {
         return true;
     }
-    match_or_pattern(&lua_lower(&super::plain(&row.label)), &lua_lower(filter))
+    // PoB lowers the raw label, its colour codes included (CompareTab.lua:2094)
+    match_or_pattern(&lua_lower(&row.label), &lua_lower(filter))
 }
 
 /// Lua's `%s` in the C locale

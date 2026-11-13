@@ -1194,6 +1194,11 @@ fn the_config_search_matches_as_pobs() {
             "{filter:?} on charges"
         );
     }
+    // the raw label, colour codes and all, as PoB's (CompareTab.lua:2094)
+    let coded = row("Are you always on Full ^xE05030Life?");
+    assert!(!config::matches(&coded, "full life"));
+    assert!(config::matches(&coded, "e05030"));
+    assert!(config::matches(&coded, "full ^xe05030life"));
 }
 
 /// PoB's box drops control characters and holds 100 bytes (CompareTab.lua:936)

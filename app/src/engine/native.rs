@@ -43,7 +43,8 @@ pub(crate) fn redact(line: &str) -> String {
 struct BuildsRoot(Option<(PathBuf, PathBuf)>);
 
 /// Folders that no Builds root may be or contain: the PoB folder, the user folder and more
-/// (the home folder), canonical.
+/// (the home folder), as given: each is resolved when a root is checked, since a first run's
+/// user folder only exists once PoB has made it.
 struct Protected(Vec<PathBuf>);
 
 /// Adds folders (such as the home folder) that no Builds root may be or contain.
@@ -52,8 +53,23 @@ pub fn protect(lua: &Lua, folders: &[PathBuf]) {
         .app_data_ref::<Protected>()
         .map(|p| p.0.clone())
         .unwrap_or_default();
-    all.extend(folders.iter().filter_map(|f| fs::canonicalize(f).ok()));
+    all.extend(
+        folders
+            .iter()
+            .map(|f| std::path::absolute(f).unwrap_or_else(|_| f.clone())),
+    );
     lua.set_app_data(Protected(all));
+}
+
+/// The protected folders now: canonical where they exist, as given where they don't
+fn protected(lua: &Lua) -> Vec<PathBuf> {
+    lua.app_data_ref::<Protected>()
+        .map(|p| {
+            p.0.iter()
+                .map(|f| fs::canonicalize(f).unwrap_or_else(|_| f.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Sets the folder a recursive `RemoveDir` is confined to. A root that can't be resolved, is
@@ -66,12 +82,10 @@ pub fn set_builds_root(lua: &Lua, root: Option<&Path>) -> bool {
         .into_iter();
     let allowed = real.as_ref().is_some_and(|(_, real)| {
         real.parent().is_some()
-            && !lua.app_data_ref::<Protected>().is_some_and(|p| {
-                p.0.iter()
-                    .cloned()
-                    .chain(home.clone())
-                    .any(|f| f.starts_with(real))
-            })
+            && !protected(lua)
+                .into_iter()
+                .chain(home.clone())
+                .any(|f| f.starts_with(real))
     });
     if !allowed && root.is_some() {
         log::warn!("the Builds folder is not one recursive deletes may work in");
@@ -149,11 +163,9 @@ pub fn register(lua: &Lua, pob_dir: &Path, user_dir: &Path) -> mlua::Result<()> 
         })?,
     )?;
 
-    // PoB appends "Path of Building/" to the user path, so it needs a trailing slash
-    let mut user = user_dir.to_string_lossy().into_owned();
-    if !user.ends_with('/') {
-        user.push('/');
-    }
+    // without a trailing slash, as SimpleGraphic and the classic runtime answer: PoB appends
+    // "/Path of Building/" itself (Main.lua:94)
+    let user = user_dir.to_string_lossy().trim_end_matches('/').to_owned();
     let pob = pob_dir.to_string_lossy().into_owned();
     g.set(
         "GetUserPath",
@@ -467,7 +479,7 @@ mod tests {
         let lua = lua();
         assert_eq!(
             lua.load("return GetUserPath()").eval::<String>().unwrap(),
-            "/user/"
+            "/user"
         );
         assert_eq!(
             lua.load("return GetScriptPath()").eval::<String>().unwrap(),
@@ -608,6 +620,26 @@ mod tests {
         fs::create_dir_all(builds.join("again")).unwrap();
         assert!(!set_builds_root(&lua, Some(&user)));
         assert_eq!(remove(&lua, &builds.join("again")), (None, refused));
+    }
+
+    #[test]
+    fn a_user_folder_made_after_start_is_still_protected() {
+        // a first run starts on a user folder nobody has made yet; PoB's MakeDir makes it
+        let tmp = TempDir::new("rmfresh");
+        let (user, pob) = (tmp.0.join("fresh/user"), tmp.0.join("pob"));
+        fs::create_dir_all(&pob).unwrap();
+        let lua = lua();
+        register(&lua, &pob, &user).unwrap();
+        let builds = user.join("Path of Building/Builds");
+        fs::create_dir_all(builds.join("victim")).unwrap();
+        for bad in [&user, &tmp.0.join("fresh")] {
+            assert!(!set_builds_root(&lua, Some(bad)), "{bad:?}");
+        }
+        assert_eq!(
+            remove(&lua, &builds.join("victim")),
+            (None, Some("refused: outside the builds folder".to_string()))
+        );
+        assert!(set_builds_root(&lua, Some(&builds)));
     }
 
     #[test]

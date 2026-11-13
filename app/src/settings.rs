@@ -384,7 +384,7 @@ pub fn save(path: &Path, s: &AppSettings) -> Result<()> {
 /// What the first-run screen has to settle (R15).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FirstRun {
-    /// The classic app's folder exists: ask whose builds to use
+    /// The classic app is installed and its folder exists: ask whose builds to use
     Ask { classic: PathBuf },
     /// Nothing to ask: today's default folder, and no file is written
     UseDefault,
@@ -401,7 +401,13 @@ pub fn first_run(
         return None;
     }
     let classic = Game::Poe1.default_user_dir(data_dir);
-    Some(if classic.is_dir() {
+    // The default folder is the classic app's path, so a default run makes it too. Only the
+    // classic app installs PoB's scripts beside it (its `script_dir`, src/installer.rs), so that
+    // is what says the folder may hold builds of another app.
+    let installed = classic
+        .parent()
+        .is_some_and(|dir| dir.join("Launch.lua").is_file());
+    Some(if installed && classic.is_dir() {
         FirstRun::Ask { classic }
     } else {
         FirstRun::UseDefault
@@ -833,6 +839,10 @@ mod tests {
         assert_eq!(first_run(None, &data, false), Some(FirstRun::UseDefault));
         let classic = Game::Poe1.default_user_dir(&data);
         std::fs::create_dir_all(&classic).unwrap();
+        // the folder alone may be one an earlier default run made
+        assert_eq!(first_run(None, &data, false), Some(FirstRun::UseDefault));
+        // the classic app installs PoB's scripts beside its user folder (src/installer.rs)
+        std::fs::write(classic.parent().unwrap().join("Launch.lua"), "").unwrap();
         assert_eq!(
             first_run(None, &data, false),
             Some(FirstRun::Ask { classic })
@@ -840,6 +850,20 @@ mod tests {
         // a file, or the env var, settles it
         assert_eq!(first_run(Some(&AppSettings::default()), &data, false), None);
         assert_eq!(first_run(None, &data, true), None);
+    }
+
+    #[test]
+    fn a_default_run_is_not_asked_about_on_the_next_start() {
+        let data = temp("firstrun-again");
+        assert_eq!(first_run(None, &data, false), Some(FirstRun::UseDefault));
+        // the default folder is the classic app's path: the engine (PoB's MakeDir) makes it,
+        // with PoB's own folders and the first quit's Settings.xml below
+        let user = Game::Poe1.default_user_dir(&data);
+        let pob = user.join("Path of Building");
+        std::fs::create_dir_all(pob.join("Builds")).unwrap();
+        std::fs::write(pob.join("Settings.xml"), "<PathOfBuilding/>").unwrap();
+        // no auto-pob.toml was written, and the next start must not ask about our own folder
+        assert_eq!(first_run(None, &data, false), Some(FirstRun::UseDefault));
     }
 
     #[test]

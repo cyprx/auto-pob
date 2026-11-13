@@ -104,6 +104,17 @@ function glue.settle_startup()
 		m:ClosePopup()
 	end
 	local build = pob.build
+	-- An older auto-pob's GetUserPath ended in a slash, so the build its exit save recorded is
+	-- `<user>//Path of Building/...`; PoB cuts the folder out by the length of today's
+	-- `buildPath` (Build.lua:65), which would leave it one character off ("/sub/")
+	local recorded = m.mode == "BUILD" and build.dbFileName
+	if recorded and recorded:find("//", 1, true) then
+		local folded = recorded:gsub("/+", "/")
+		if folded:sub(1, #m.buildPath) == m.buildPath and build.buildName then
+			build.dbFileName = folded
+			build.dbFileSubPath = folded:sub(#m.buildPath + 1, -#build.buildName - 5)
+		end
+	end
 	if m.mode == "BUILD" and conversion and build.targetVersion == nil then
 		local convert = { build.dbFileName or false, build.buildName, false, true }
 		build.treeTab = nil

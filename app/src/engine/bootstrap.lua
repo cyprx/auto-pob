@@ -65,8 +65,17 @@ end
 function SetDPIScaleOverridePercent(scale) end
 function SetClearColor(r, g, b, a) end
 function SetDrawLayer(layer, subLayer) end
+-- SimpleGraphic's layer starts at 0; nothing is drawn here
+function GetDrawLayer()
+	return 0
+end
 function SetViewport(x, y, width, height) end
 function SetDrawColor(r, g, b, a) end
+-- Tooltip:Draw saves the colour before a line's background (Tooltip.lua:609) and sets it back;
+-- SetDrawColor draws nothing here, so white is as good as any
+function GetDrawColor()
+	return 1, 1, 1, 1
+end
 function DrawImage(imgHandle, left, top, width, height, tcLeft, tcTop, tcRight, tcBottom) end
 function DrawImageQuad(imageHandle, x1, y1, x2, y2, x3, y3, x4, y4, s1, t1, s2, t2, s3, t3, s4, t4) end
 function DrawString(left, top, align, height, font, text) end

@@ -57,6 +57,8 @@ pub struct TopBarState {
     typed_in_auto: bool,
     /// "New Loadout" was chosen: the name being typed
     new_loadout: Option<String>,
+    /// The name was edited since the window opened: PoB's Save starts disabled (Build.lua:344)
+    new_loadout_edited: bool,
     /// "Help >>" was chosen in the loadouts list
     help: bool,
 }
@@ -332,6 +334,7 @@ fn loadouts(
                         if r.clicked() {
                             // PoB's box opens on "New Loadout" (Build.lua:318)
                             state.new_loadout = Some("New Loadout".to_owned());
+                            state.new_loadout_edited = false;
                         }
                         r
                     }
@@ -382,11 +385,20 @@ fn loadouts(
     }
 }
 
-/// "New Loadout"'s name popup ("Set Name"): Save needs a name with a visible character
+/// Whether PoB's name box would hold a visible character after its default filter: under
+/// LuaJIT `main.unicode` is off, so `EditControl` drops every byte but ASCII letters, digits,
+/// punctuation and spaces (`[^%w%p ]`, EditControl.lua:46), and Save asks for `%S`
+fn pob_name_is_visible(name: &str) -> bool {
+    name.chars().any(|c| c.is_ascii_graphic())
+}
+
+/// "New Loadout"'s name popup ("Set Name"): Save waits for an edit, then needs a name with a
+/// visible character PoB's box keeps (Build.lua:319-344)
 fn new_loadout_dialog(ctx: &egui::Context, state: &mut TopBarState, commands: &mut Vec<Command>) {
     let Some(name) = &mut state.new_loadout else {
         return;
     };
+    let edited = &mut state.new_loadout_edited;
     let mut close = false;
     egui::Window::new("Set Name")
         .collapsible(false)
@@ -396,6 +408,7 @@ fn new_loadout_dialog(ctx: &egui::Context, state: &mut TopBarState, commands: &m
             ui.label("Enter name for this loadout:");
             let field = ui.add(egui::TextEdit::singleline(name).char_limit(100));
             note(ui, "new_loadout_name", field.rect);
+            *edited |= field.changed();
             // the window opens on its box, as PoB's does
             if ui.memory(|m| m.focused().is_none()) {
                 field.request_focus();
@@ -405,7 +418,7 @@ fn new_loadout_dialog(ctx: &egui::Context, state: &mut TopBarState, commands: &m
                 close = true;
             }
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            let valid = !name.trim().is_empty();
+            let valid = *edited && pob_name_is_visible(name);
             ui.horizontal(|ui| {
                 let save = ui.add_enabled(valid, egui::Button::new("Save"));
                 note(ui, "new_loadout_save", save.rect);
@@ -692,8 +705,13 @@ mod tests {
         h.open("loadouts");
         h.click("loadout_4");
         assert_eq!(h.state.new_loadout.as_deref(), Some("New Loadout"));
-        // Save as it opened takes PoB's default name
+        // PoB's Save starts disabled, on its default name too (Build.lua:344)
         let sent = h.click("new_loadout_save");
+        assert!(sent.is_empty(), "{sent:?}");
+        assert!(h.state.has_dialog());
+        // any edit enables it, even one back to the default name
+        let mut sent = h.retype("New Loadout");
+        sent.extend(h.click("new_loadout_save"));
         assert_eq!(sent, ["NewLoadout { name: \"New Loadout\" }"]);
         // Esc cancels
         h.open("loadouts");
@@ -701,6 +719,35 @@ mod tests {
         let sent = h.key(Key::Escape);
         assert!(sent.is_empty(), "{sent:?}");
         assert!(!h.state.has_dialog());
+    }
+
+    #[test]
+    fn a_new_loadout_name_pob_filters_to_nothing_keeps_save_disabled() {
+        let mut h = Harness::new(view());
+        h.open("loadouts");
+        h.click("loadout_4");
+        // PoB's box drops every non-ASCII byte under LuaJIT, so these leave it blank
+        for name in ["日本語", "Ωμέγα", "  ä  "] {
+            let mut sent = h.retype(name);
+            sent.extend(h.click("new_loadout_save"));
+            assert!(sent.is_empty(), "{name}: {sent:?}");
+            assert!(h.state.has_dialog(), "{name}");
+        }
+        // one ASCII character is enough; the engine's box drops the rest, as PoB's does
+        let mut sent = h.retype("日本 a");
+        sent.extend(h.click("new_loadout_save"));
+        assert_eq!(sent, ["NewLoadout { name: \"日本 a\" }"]);
+        assert!(!h.state.has_dialog());
+    }
+
+    #[test]
+    fn pob_name_visibility_follows_its_edit_filter() {
+        assert!(pob_name_is_visible("a"));
+        assert!(pob_name_is_visible(" - "));
+        assert!(!pob_name_is_visible(""));
+        assert!(!pob_name_is_visible(" \t "));
+        assert!(!pob_name_is_visible("日本"));
+        assert!(!pob_name_is_visible("\u{a0}é"));
     }
 
     #[test]

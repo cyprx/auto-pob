@@ -48,9 +48,9 @@ auto-pob
 ```
 
 On the first run it downloads the pinned Path of Building release (about 600 MB) into its data
-folder. If it finds a classic Rusty Path of Building folder and no `auto-pob.toml`, it asks
-whether to keep your builds and `Settings.xml` there or in another folder; otherwise it uses the
-default. Its own settings live in
+folder. If it finds an installed classic Rusty Path of Building with its folder and no
+`auto-pob.toml`, it asks whether to keep your builds and `Settings.xml` there or in another
+folder; otherwise it uses the default. Its own settings live in
 `auto-pob.toml` (PoB's stay in `Settings.xml`). Environment variables: `AUTO_POB_POB_DIR` (use
 an existing PoB folder), `AUTO_POB_USER_DIR` (builds and settings folder), `AUTO_POB_CONFIG`
 (settings file) and `AUTO_POB_UPDATE_CHECK=1` (release check). The full list and the

@@ -3917,3 +3917,75 @@ fn a_long_comparison_paste_is_quick() {
         start.elapsed()
     );
 }
+
+/// Undo and redo are each tab's own (PoB keeps an undo list per tab): an edit in one tab, then
+/// edits in others, then that tab's undo takes back its own edit only; redo puts it back;
+/// a save in between keeps the undo lists, and a reload shows what was saved
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn undo_and_redo_stay_in_their_tab() {
+    let _guard = lock();
+    let mut s = Session::start("undo-tabs");
+    let path = s.open_fixture("attack", &fixture_xml("attack"));
+    let label = |s: &mut Session| s.backend.skills_view().unwrap().groups[0].label.clone();
+    let allocated = |s: &mut Session| s.backend.tree_state_view().unwrap().allocated.len();
+    let items = |s: &mut Session| s.backend.items_view().unwrap().items.len();
+    let (label0, tree0, items0) = (label(&mut s), allocated(&mut s), items(&mut s));
+    assert!(tree0 > 1 && items0 > 0);
+
+    s.run(Command::SetGroupLabel {
+        group: 0,
+        text: "Edited".into(),
+    })
+    .unwrap();
+    s.run(Command::ResetTree).unwrap();
+    let id = s.backend.items_view().unwrap().items[0].id;
+    s.run(Command::DeleteItem {
+        id,
+        confirmed: true,
+    })
+    .unwrap();
+    let tree1 = allocated(&mut s);
+    assert!(tree1 < tree0);
+    assert_eq!(items(&mut s), items0 - 1);
+
+    // the Skills undo takes back the label only
+    s.run(Command::Undo(Tab::Skills)).unwrap();
+    assert_eq!(label(&mut s), label0);
+    assert_eq!(allocated(&mut s), tree1, "the Skills undo touched the tree");
+    assert_eq!(
+        items(&mut s),
+        items0 - 1,
+        "the Skills undo touched the items"
+    );
+    // the Items undo, then the Tree undo, each their own
+    s.run(Command::Undo(Tab::Items)).unwrap();
+    assert_eq!(items(&mut s), items0);
+    assert_eq!(allocated(&mut s), tree1, "the Items undo touched the tree");
+    s.run(Command::Undo(Tab::Tree)).unwrap();
+    assert_eq!(allocated(&mut s), tree0);
+    assert_eq!(label(&mut s), label0);
+    // redo in another order
+    s.run(Command::Redo(Tab::Tree)).unwrap();
+    s.run(Command::Redo(Tab::Skills)).unwrap();
+    assert_eq!(label(&mut s), "Edited");
+    assert_eq!(allocated(&mut s), tree1);
+    assert_eq!(
+        items(&mut s),
+        items0,
+        "a redo of another tab redid the item delete"
+    );
+    assert!(s.backend.build_view().unwrap().unsaved);
+
+    // a save keeps each tab's undo, and a reload shows what was saved
+    s.run(Command::Save).unwrap();
+    assert!(!s.backend.build_view().unwrap().unsaved);
+    s.run(Command::Undo(Tab::Skills)).unwrap();
+    assert_eq!(label(&mut s), label0, "the save dropped the Skills undo");
+    s.run(Command::Redo(Tab::Skills)).unwrap();
+    s.run(Command::Save).unwrap();
+    s.run(Command::OpenBuild { path }).unwrap();
+    assert_eq!(label(&mut s), "Edited");
+    assert_eq!(allocated(&mut s), tree1);
+    assert_eq!(items(&mut s), items0);
+}

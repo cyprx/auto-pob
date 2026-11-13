@@ -5247,6 +5247,146 @@ mod tests {
         assert!(ctx.text_edit_focused(), "the search lost the keyboard");
     }
 
+    /// Every kind of box whose edit waits for Enter or a blur, made to hold an edit: the box
+    /// clicked and typed into, with the build saved to a file. Returns the app and the command
+    /// the edit sends.
+    fn pending_in(kind: &str) -> (AutoPobApp, egui::Context, &'static str) {
+        let with_path = |app: &mut AutoPobApp| {
+            app.build = Some(Arc::new(BuildView {
+                path: Some("/b/x.xml".into()),
+                ..(**app.build.as_ref().unwrap()).clone()
+            }));
+        };
+        match kind {
+            "notes" => {
+                let (mut app, ctx) = notes_app();
+                app.notes.type_for_test("my notes", 0.0);
+                (app, ctx, "SetNotes")
+            }
+            "skills" => {
+                let (mut app, ctx) = skills_app();
+                with_path(&mut app);
+                let pos = app.skills.rect("g0_label").center();
+                click_at(&mut app, &ctx, pos);
+                frame(&mut app, &ctx, vec![egui::Event::Text("x".into())]);
+                frame(&mut app, &ctx, vec![]);
+                (app, ctx, "SetGroupLabel")
+            }
+            "sidebar" => {
+                let (app, ctx, _) = stages_app();
+                (app, ctx, "SetMainSkillCount")
+            }
+            "top_bar" => {
+                let (mut app, ctx) = notes_app();
+                frame(&mut app, &ctx, vec![]);
+                type_level(&mut app, &ctx, "75");
+                (app, ctx, "SetCharacterLevel")
+            }
+            "calcs" => {
+                let (mut app, ctx) = notes_app();
+                let mut view = crate::engine::views::CalcsView::default();
+                view.selector.stages = Some("1".into());
+                app.calcs.on_snapshot(&Snapshot::Calcs(Arc::new(view)));
+                app.tab = BuildTab::Calcs;
+                frame(&mut app, &ctx, vec![]);
+                frame(&mut app, &ctx, vec![]);
+                let pos = app.calcs.rects.map["stages"].center();
+                click_at(&mut app, &ctx, pos);
+                frame(&mut app, &ctx, vec![egui::Event::Text("3".into())]);
+                (app, ctx, "SetCalcsCount")
+            }
+            "config" => {
+                let (mut app, ctx) = config_app(sample_config());
+                with_path(&mut app);
+                click(&mut app, &ctx, "mod_text:1");
+                type_text(&mut app, &ctx, "+5 life");
+                (app, ctx, "SetCustomModText")
+            }
+            other => panic!("no box kind {other}"),
+        }
+    }
+
+    const PENDING_KINDS: [&str; 6] = ["notes", "skills", "sidebar", "top_bar", "calcs", "config"];
+
+    /// Save with an edit still being typed in any kind of box: the edit goes out first, once
+    #[test]
+    fn every_pending_box_goes_out_before_a_save() {
+        for kind in PENDING_KINDS {
+            let (mut app, ctx, edit) = pending_in(kind);
+            assert!(app.current_unsaved(), "{kind}: not unsaved");
+            let before = app.sent_full.len();
+            frame(&mut app, &ctx, ctrl(egui::Key::S));
+            for _ in 0..3 {
+                frame(&mut app, &ctx, vec![]);
+            }
+            let sent = sent_since(&app, before);
+            let at = |name: &str| sent.iter().position(|c| c.starts_with(name));
+            let (Some(e), Some(save)) = (at(edit), at("Save")) else {
+                panic!("{kind}: {sent:?}");
+            };
+            assert!(e < save, "{kind}: {sent:?}");
+            assert_eq!(
+                sent.iter().filter(|c| c.starts_with(edit)).count(),
+                1,
+                "{kind}: {sent:?}"
+            );
+        }
+    }
+
+    /// Leaving, closing or opening another build with an edit being typed asks first; Don't
+    /// Save sends nothing of it, even after the box's blur
+    #[test]
+    fn every_pending_box_asks_before_leaving_and_dont_save_drops_it() {
+        for leave in [
+            Pending::BackToList,
+            Pending::Close,
+            Pending::Open("/b/other.xml".into()),
+            Pending::New,
+        ] {
+            for kind in PENDING_KINDS {
+                let (mut app, ctx, edit) = pending_in(kind);
+                let before = app.sent_full.len();
+                app.request(leave.clone());
+                frame(&mut app, &ctx, vec![]);
+                assert_eq!(app.prompt, Some(leave.clone()), "{kind}: no question");
+                app.answer_prompt(leave.clone(), PromptChoice::Discard);
+                for _ in 0..3 {
+                    frame(&mut app, &ctx, vec![]);
+                }
+                let sent = sent_since(&app, before);
+                assert!(
+                    !sent.iter().any(|c| c.starts_with(edit)),
+                    "{kind} {leave:?}: {sent:?}"
+                );
+            }
+        }
+    }
+
+    /// Save then open another build ("reload"): the edit, then the save, then the open
+    #[test]
+    fn every_pending_box_is_saved_before_another_build_opens() {
+        for kind in PENDING_KINDS {
+            let (mut app, ctx, edit) = pending_in(kind);
+            let before = app.sent_full.len();
+            let open = Pending::Open("/b/x.xml".into());
+            app.request(open.clone());
+            frame(&mut app, &ctx, vec![]);
+            assert_eq!(app.prompt, Some(open.clone()), "{kind}: no question");
+            app.answer_prompt(open, PromptChoice::Save);
+            pump_until(&mut app, &ctx, "the open", |a| {
+                a.sent_full[before..]
+                    .iter()
+                    .any(|c| c.starts_with("OpenBuild"))
+            });
+            let sent = sent_since(&app, before);
+            let at = |name: &str| sent.iter().position(|c| c.starts_with(name));
+            let (Some(e), Some(save), Some(o)) = (at(edit), at("Save"), at("OpenBuild")) else {
+                panic!("{kind}: {sent:?}");
+            };
+            assert!(e < save && save < o, "{kind}: {sent:?}");
+        }
+    }
+
     #[test]
     fn calcs_and_sidebar_counts_do_not_share_ids() {
         let (app, _ctx) = notes_app();

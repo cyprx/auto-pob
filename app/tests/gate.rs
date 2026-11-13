@@ -4180,6 +4180,39 @@ fn a_private_use_character_round_trips_beside_bytes_that_are_not_utf8() {
     assert!(s.builds_dir().join("y\u{F7E9}.xml").exists());
 }
 
+/// A build file named with a real character in the escapes' range (U+F7E9), in a process
+/// that never showed an escape: the build view gives its name and path as they are, and Save
+/// As with the name its box opens on writes that same file, not a new one
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_build_named_in_the_escapes_range_saves_as_itself() {
+    let _guard = lock();
+    let mut s = Session::start("pua-name");
+    let builds = s.builds_dir();
+    fs::create_dir_all(&builds).unwrap();
+    let named = builds.join("x\u{F7E9}.xml");
+    fs::copy(fixture_xml("attack"), &named).unwrap();
+    s.run(Command::OpenBuild {
+        path: named.clone(),
+    })
+    .expect("open");
+    let view = s.backend.build_view().unwrap();
+    assert_eq!(view.name, "x\u{F7E9}");
+    assert_eq!(view.save_as_name, "x\u{F7E9}");
+    assert_eq!(view.path.as_deref(), Some(named.as_path()));
+    s.run(Command::SaveAs {
+        folder: String::new(),
+        name: view.save_as_name.clone(),
+        overwrite: true,
+    })
+    .expect("save as");
+    let files: Vec<String> = fs::read_dir(&builds)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(files, ["x\u{F7E9}.xml"], "Save As wrote another file");
+}
+
 /// A build code PoB can't load raises in Build:Init (here a gem level that isn't a number:
 /// CalcTools.lua:46). PoB reuses one build object, and its next Init ran SyncLoadouts against
 /// the half-loaded tabs (Build.lua:601-604, 859), so every later open, import or new build

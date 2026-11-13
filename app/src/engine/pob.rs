@@ -2593,7 +2593,25 @@ impl Backend for PobBackend {
     }
 
     fn build_view(&mut self) -> Result<BuildView> {
-        self.view("build_view", ())
+        let mut view: BuildView = self.view("build_view", ())?;
+        // the build's name, path and folder are its file's: names, never escaped, as the build
+        // list's are, so Save As sends back the name the file has (`call_path`)
+        let unescape = |text: &mut String| {
+            if let Some(name) = super::bytes_text::unescape_utf8(text) {
+                *text = name;
+            }
+        };
+        unescape(&mut view.name);
+        unescape(&mut view.save_as_name);
+        if let Some(tooltip) = &mut view.name_tooltip {
+            unescape(tooltip);
+        }
+        if let Some(path) = &view.path
+            && let Some(name) = super::bytes_text::unescape_utf8(&path.to_string_lossy())
+        {
+            view.path = Some(PathBuf::from(name));
+        }
+        Ok(view)
     }
 
     fn build_list_view(&mut self) -> Result<BuildListView> {

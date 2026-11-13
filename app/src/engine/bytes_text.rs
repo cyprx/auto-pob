@@ -48,6 +48,25 @@ pub fn escapes() -> impl Iterator<Item = (char, u8)> {
     (0x80..=0xFFu8).map(|b| (escape(b), b))
 }
 
+/// `text` with its escapes turned back into the bytes, when that is UTF-8: a name (a file's)
+/// that a view escaped because it holds a real character in the escapes' range. `None` when
+/// there is nothing to undo or the bytes aren't UTF-8.
+pub fn unescape_utf8(text: &str) -> Option<String> {
+    if !text.chars().any(is_escape) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(text.len());
+    for c in text.chars() {
+        if is_escape(c) {
+            out.push((c as u32 - FIRST + 0x80) as u8);
+        } else {
+            let mut buf = [0u8; 4];
+            out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 /// `text` with each escape as its byte's Windows-1252 character: for text leaving the app
 /// (the OS clipboard), where the escapes mean nothing
 pub fn for_display(text: &str) -> Cow<'_, str> {

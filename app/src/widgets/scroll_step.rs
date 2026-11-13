@@ -149,6 +149,19 @@ pub fn tab_popup_open(ctx: &egui::Context) -> bool {
             .is_some_and(|pass| pass + 1 >= now)
 }
 
+/// Whether `id` is the search of one of Build's dropped lists, noted this frame or the last
+pub fn is_build_search(ctx: &egui::Context, id: egui::Id) -> bool {
+    let now = ctx.cumulative_pass_nr();
+    ctx.data(|d| {
+        d.get_temp::<Vec<(u64, egui::Id)>>(build_searches_id())
+            .is_some_and(|notes| {
+                notes
+                    .iter()
+                    .any(|(pass, search)| pass + 1 >= now && *search == id)
+            })
+    })
+}
+
 /// Whether one of Build's dropdowns was dropped last frame; forgets the notes
 pub fn take_build_dropped(ctx: &egui::Context) -> bool {
     let now = ctx.cumulative_pass_nr();

@@ -505,10 +505,10 @@ impl AutoPobApp {
             command,
             Command::SelectLoadout { .. } | Command::NewLoadout { .. }
         ) {
-            // only a box that held an edit for the sets before lets go: the dropped list's
-            // own search keeps the keyboard, as PoB's list stays the selected control
-            // (DropDownControl.lua:422-436)
-            self.release_focus = self.edits_pending();
+            // whatever has the keyboard lets go and shows the new sets' text, edit or not,
+            // except a dropped list of Build's: it stays the selected control and its search
+            // keeps the keyboard (DropDownControl.lua:422-436)
+            self.release_focus = true;
             self.flush_edits();
         }
         if let Command::OpenPopup(kind) = &command {
@@ -596,16 +596,6 @@ impl AutoPobApp {
     /// True while the engine hasn't caught up with what we sent.
     fn behind(&self) -> bool {
         self.last_sent > self.last_snapshot
-    }
-
-    /// An edit is still being typed in one of the build's boxes
-    fn edits_pending(&self) -> bool {
-        self.notes.has_pending()
-            || self.skills.has_pending()
-            || self.sidebar.has_pending()
-            || self.top_bar.has_pending()
-            || self.calcs.has_pending()
-            || self.config_ui.has_pending()
     }
 
     fn current_unsaved(&self) -> bool {
@@ -1627,12 +1617,11 @@ impl AutoPobApp {
             return;
         };
 
-        if std::mem::take(&mut self.release_focus) {
-            ui.ctx().memory_mut(|m| {
-                if let Some(id) = m.focused() {
-                    m.surrender_focus(id);
-                }
-            });
+        if std::mem::take(&mut self.release_focus)
+            && let Some(id) = ui.ctx().memory(|m| m.focused())
+            && !crate::widgets::scroll_step::is_build_search(ui.ctx(), id)
+        {
+            ui.ctx().memory_mut(|m| m.surrender_focus(id));
         }
         // Shortcuts. Nothing fires under a modal. While a text field has focus, Ctrl+Z and
         // Ctrl+Y are left unconsumed for the field's own undo; Ctrl+S still saves.
@@ -5396,6 +5385,103 @@ mod tests {
             };
             assert!(e < save && save < o, "{kind}: {sent:?}");
         }
+    }
+
+    fn loadouts_app(app: &mut AutoPobApp, ctx: &egui::Context) {
+        let mut build = (**app.build.as_ref().unwrap()).clone();
+        build.loadouts = [
+            "^7^7Loadouts:",
+            "Leveling",
+            "Mapping",
+            "Mapping 2",
+            "^7^7-----",
+            "^7^7New Loadout",
+        ]
+        .map(String::from)
+        .to_vec();
+        build.loadout_selected = Some(1);
+        app.build = Some(Arc::new(build));
+        frame(app, ctx, vec![]);
+    }
+
+    /// A box with the keyboard and no edit at a loadout switch lets go too: it would keep the
+    /// sets before's text, and the next key would write it into the new sets
+    #[test]
+    fn a_box_without_an_edit_lets_go_at_a_loadout_switch() {
+        let (mut app, ctx) = skills_app();
+        loadouts_app(&mut app, &ctx);
+        let pos = app.skills.rect("g0_label").center();
+        click_at(&mut app, &ctx, pos);
+        assert!(ctx.text_edit_focused());
+        let at = top_rect(&ctx, "loadouts").center();
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(at)]);
+        let wheel = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::Vec2::new(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let before = app.sent_full.len();
+        frame(&mut app, &ctx, vec![wheel]);
+        frame(&mut app, &ctx, vec![]);
+        assert!(
+            sent_since(&app, before)
+                .iter()
+                .any(|c| c.starts_with("SelectLoadout")),
+            "no switch"
+        );
+        // the new sets' view
+        let mut view = crate::ui::skills::tests::sample();
+        view.groups[0].label = "NewSetLabel".into();
+        app.on_event(Event::Snapshot {
+            seq: app.last_sent,
+            snapshot: Snapshot::Skills(Arc::new(view)),
+        });
+        frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![egui::Event::Text("y".into())]);
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::Enter, egui::Modifiers::NONE),
+        );
+        frame(&mut app, &ctx, vec![]);
+        let sent = sent_since(&app, before);
+        assert!(
+            !sent.iter().any(|c| c.starts_with("SetGroupLabel")),
+            "the old set's text went to the new set: {sent:?}"
+        );
+    }
+
+    /// A Notes edit still waiting out its pause doesn't take the keyboard from the dropped
+    /// loadout list's search: what has the keyboard decides, not what is pending
+    #[test]
+    fn a_loadout_stepped_in_the_searched_list_keeps_it_with_notes_pending() {
+        let (mut app, ctx) = notes_app();
+        loadouts_app(&mut app, &ctx);
+        let now = ctx.input(|i| i.time);
+        app.notes.type_for_test("my notes", now);
+        let pos = top_rect(&ctx, "loadouts").center();
+        click_at(&mut app, &ctx, pos);
+        frame(&mut app, &ctx, vec![]);
+        assert!(ctx.text_edit_focused(), "the search has no keyboard");
+        frame(&mut app, &ctx, vec![egui::Event::Text("ma".into())]);
+        assert!(app.notes.has_pending(), "the notes edit went out already");
+        let before = app.sent_full.len();
+        frame(
+            &mut app,
+            &ctx,
+            key_with(egui::Key::ArrowDown, egui::Modifiers::NONE),
+        );
+        for _ in 0..2 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        let sent = sent_since(&app, before);
+        assert!(
+            sent.iter().any(|c| c.starts_with("SelectLoadout")),
+            "{sent:?}"
+        );
+        assert!(ctx.text_edit_focused(), "the search lost the keyboard");
     }
 
     #[test]

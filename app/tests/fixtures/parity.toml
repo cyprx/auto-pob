@@ -3538,11 +3538,10 @@ ported = "app/src/ui/tree/canvas.rs right-click (tattoos, jewel jump, mastery); 
 ported = "app/src/ui/tree/keys.rs Up selects the previous tree unless the tree selector is hovered or open"
 
 [keys."tree.WHEELDOWN"]
-ported = "app/src/ui/tree/canvas.rs scroll zoom"
+ported = "app/src/ui/tree/canvas.rs wheel_notches: one of PoB's 1.2 zoom steps a notch, three with Shift held (PassiveTreeView.lua:229-233)"
 
 [keys."tree.WHEELUP"]
-ported = "app/src/ui/tree/canvas.rs scroll zoom"
-note = "PoB zooms 3 steps with Shift held; see NF-17"
+ported = "app/src/ui/tree/canvas.rs wheel_notches: one of PoB's 1.2 zoom steps a notch, three with Shift held (PassiveTreeView.lua:229-233)"
 
 [keys."tree.y"]
 ported = "app/src/ui/app.rs Ctrl+Y redo"

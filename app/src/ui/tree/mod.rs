@@ -107,6 +107,8 @@ impl Derived {
 #[derive(Default)]
 pub struct TreeTab {
     pub(super) camera: Camera,
+    /// Wheel travel short of a whole notch, for a trackpad's small scrolls
+    pub(super) wheel_rest: f32,
     /// Fit the whole tree into the view on the next frame
     pub(super) needs_fit: bool,
     /// Where the canvas was drawn last
@@ -1004,6 +1006,37 @@ mod tests {
         h.tab.needs_fit = false;
         h.frame(vec![Event::PointerMoved(Pos2::new(400.0, 300.0))]);
         assert_eq!(h.tab.hover, None);
+    }
+
+    /// PoB zooms one 1.2 step a wheel notch and three with Shift held
+    /// (PassiveTreeView.lua:229-233), around the pointer
+    #[test]
+    fn the_wheel_zooms_pobs_steps_and_shift_three() {
+        let (l, s) = sample();
+        let mut h = Harness::new(l, s);
+        h.frame(vec![Event::PointerMoved(Pos2::new(400.0, 300.0))]);
+        let wheel = |shift: bool| Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            source: egui::MouseWheelSource::Wheel,
+            delta: Vec2::new(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: if shift {
+                egui::Modifiers::SHIFT
+            } else {
+                egui::Modifiers::NONE
+            },
+        };
+        let start = h.tab.camera.zoom;
+        h.frame(vec![wheel(false)]);
+        let one = h.tab.camera.zoom;
+        assert!((one / start - 1.2).abs() < 1e-3, "{}", one / start);
+        h.frame(vec![wheel(true)]);
+        let three = h.tab.camera.zoom;
+        assert!(
+            (three / one - 1.2f32.powi(3)).abs() < 1e-3,
+            "{}",
+            three / one
+        );
     }
 
     #[test]

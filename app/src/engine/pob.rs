@@ -2799,6 +2799,11 @@ impl Backend for PobBackend {
                 (view, buildpaths::folder_tree(&root, true).0)
             }
         };
+        // the list's own folder is held in the spelling of the views; it follows a change
+        if escaped != self.list_escaped {
+            let bytes = Self::name_bytes(&self.folder, self.list_escaped);
+            self.folder = buildpaths::spell(&bytes, escaped);
+        }
         self.list_escaped = escaped;
         view.tree = tree;
         view.root = PathBuf::from(root);

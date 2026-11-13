@@ -1953,3 +1953,54 @@ fn a_folder_named_with_bytes_that_arent_utf8_works_as_in_pob() {
     t.outcome(None, &result);
     same_files(&t, "delete folder");
 }
+
+/// The list's own folder keeps its spelling when the escaped spelling turns on or off
+/// (review I1): a folder named with a real private-use character, entered from a plain list,
+/// holds a name that isn't UTF-8, so its listing is escaped. Every later listing, and a New
+/// Folder in it, still reach that folder.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn the_list_folder_keeps_its_spelling_when_the_escapes_turn_on() {
+    use std::os::unix::ffi::OsStrExt;
+    let _guard = lock();
+    let mut s = super::Session::start("list-folder-respell");
+    let builds = s.builds_dir();
+    let inner = builds.join("x\u{F780}");
+    fs::create_dir_all(&inner).unwrap();
+    fs::copy(
+        super::fixture_xml("attack"),
+        inner.join(std::ffi::OsStr::from_bytes(b"caf\xE9.xml")),
+    )
+    .unwrap();
+    let list = |s: &mut super::Session, folder: &str| {
+        s.run(Command::ListBuilds {
+            folder: folder.into(),
+        })
+        .expect("list");
+        s.backend.build_list_view().expect("the list view")
+    };
+    let root = list(&mut s, "");
+    let entry = root
+        .entries
+        .iter()
+        .find(|e| e.is_folder)
+        .expect("the folder");
+    assert_eq!(entry.name, "x\u{F780}", "a plain list");
+    let folder = format!("{}{}/", entry.folder, entry.name);
+    let names = |view: &BuildListView| {
+        view.entries
+            .iter()
+            .map(|e| e.name.clone())
+            .collect::<Vec<_>>()
+    };
+    let first = list(&mut s, &folder);
+    assert_eq!(names(&first), ["caf\u{F7E9}"]);
+    // the next view of the same folder, as after any edit to the list
+    let second = s.backend.build_list_view().expect("the list view");
+    assert_eq!(names(&second), ["caf\u{F7E9}"], "the folder was lost");
+    s.run(Command::NewFolder {
+        name: "made".into(),
+    })
+    .expect("a new folder in it");
+    assert!(inner.join("made").is_dir());
+}

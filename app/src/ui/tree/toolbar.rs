@@ -660,7 +660,9 @@ impl Toolbar {
         {
             self.custom_depth = Some(depth.to_string());
         }
-        ui.add_enabled_ui(state.heatmap.is_some(), |ui| {
+        // PoB's depth dropdown is always there, the heat map on or off (TreeTab.lua:202-235);
+        // only P's map with no stat chosen can't take a depth here without losing its stat
+        ui.add_enabled_ui(state.heatmap.is_some() || !state.heatmap_shown, |ui| {
             let shown = match (&self.custom_depth, state.max_depth) {
                 (Some(_), _) => "Custom".to_owned(),
                 (None, Some(d)) => format!("Within {d}"),

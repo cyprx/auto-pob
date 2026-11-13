@@ -1590,6 +1590,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_depth_takes_a_pick_with_the_heat_map_off() {
+        // TreeTab.lua:202-235: the depth dropdown works whether the map shows or not
+        let mut h = heat_harness();
+        let mut state = (*h.tab.state.clone().unwrap()).clone();
+        state.heatmap = None;
+        h.tab.on_snapshot(&Snapshot::Tree(Arc::new(state)));
+        h.frame(vec![]);
+        press(&mut h, "heat_depth");
+        let out = press(&mut h, "depth:10");
+        assert_eq!(
+            debug(&out.commands),
+            ["SetHeatmap { stat: None, max_depth: Some(10) }"]
+        );
+    }
+
     fn wheel(y: f32) -> Event {
         Event::MouseWheel {
             unit: egui::MouseWheelUnit::Line,

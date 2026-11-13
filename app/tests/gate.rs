@@ -102,6 +102,24 @@ fn pob_dir() -> PathBuf {
         .expect("AUTO_POB_POB_DIR doesn't exist")
 }
 
+/// The pinned `Data/TimelessJewelData`, by file: size and modification time. PoB caches an
+/// inflated LUT there as a `.bin` (DataJewelFileLoader.lua:84-90), and upstream's wrapper,
+/// whose `NewFileSearch` finds nothing, rewrites it on every load: a gate that loads a timeless
+/// jewel runs on a farm (`timeless::farm`) and checks this is the same after it.
+fn pinned_luts() -> std::collections::BTreeMap<String, (u64, std::time::SystemTime)> {
+    fs::read_dir(pob_dir().join("Data/TimelessJewelData"))
+        .unwrap()
+        .map(|e| {
+            let e = e.unwrap();
+            let meta = fs::symlink_metadata(e.path()).unwrap();
+            (
+                e.file_name().to_string_lossy().to_string(),
+                (meta.len(), meta.modified().unwrap()),
+            )
+        })
+        .collect()
+}
+
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
@@ -288,14 +306,18 @@ impl Drop for Session {
 
 impl Session {
     fn start(test: &str) -> Session {
+        Session::start_on(test, &pob_dir())
+    }
+
+    /// `start` on another PoB folder, such as a `timeless::farm`
+    fn start_on(test: &str, pob: &Path) -> Session {
         let user =
             std::env::temp_dir().join(format!("auto-pob-gate-{test}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&user);
         // an empty canned web: a request a test did not mean to make fails with
         // `no canned response` instead of reaching the internet
         let net = net_harness::canned(&net_harness::canned_web());
-        let backend =
-            PobBackend::start_with(Game::Poe1, &pob_dir(), &user, net).expect("starting PoB");
+        let backend = PobBackend::start_with(Game::Poe1, pob, &user, net).expect("starting PoB");
         Session { backend, user }
     }
 
@@ -3498,11 +3520,16 @@ fn socket_jewel(s: &mut Session, pick: &str, text: &str) -> usize {
 }
 
 /// Jewels that change the tree's reach or its nodes: the paths and dependants follow them.
+/// The timeless jewel's LUT is cached next to PoB's data, so the test runs on a farm and
+/// leaves the pinned folder's LUTs as they were.
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn tree_paths_follow_jewels() {
     let _guard = lock();
-    let mut s = attack_session("tree-paths-jewels");
+    let pinned_before = pinned_luts();
+    let pob = timeless::farm("paths");
+    let mut s = Session::start_on("tree-paths-jewels", &pob);
+    s.open_fixture("attack", &fixtures_dir().join("attack.xml"));
     let check = |s: &mut Session, what: &str| {
         let state = s.backend.tree_state_view().unwrap();
         let (paths, depends) = paths_from_scratch(s);
@@ -3558,6 +3585,17 @@ fn tree_paths_follow_jewels() {
          Passives in radius are Conquered by the Karui\nCorrupted",
     );
     check(&mut s, "timeless jewel");
+    assert!(
+        pob.join("Data/TimelessJewelData/LethalPride.bin").is_file(),
+        "the jewel read no LUT in the farm"
+    );
+    assert_eq!(
+        pinned_luts(),
+        pinned_before,
+        "the pinned TimelessJewelData changed"
+    );
+    drop(s);
+    let _ = fs::remove_dir_all(&pob);
 }
 
 /// A tree switch between two identical searches matches the new tree's nodes, not the old

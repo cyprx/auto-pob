@@ -7,7 +7,7 @@
 //! so those files land in it, never in the pinned folder. Serial (`gate-serial.txt`).
 
 use super::net_harness::{canned, canned_web, net_user};
-use super::{fixture_xml, lock, pob_dir};
+use super::{fixture_xml, lock, pinned_luts, pob_dir};
 use auto_pob::engine::pob::PobBackend;
 use auto_pob::engine::upstream::{load_xml, upstream_lua};
 use auto_pob::engine::{
@@ -63,22 +63,6 @@ pub(crate) fn farm(test: &str) -> PathBuf {
         }
     }
     farm
-}
-
-/// The pinned `Data/TimelessJewelData`, by file: size and modification time. The test must
-/// leave it as it found it.
-fn pinned_luts() -> BTreeMap<String, (u64, std::time::SystemTime)> {
-    fs::read_dir(pob_dir().join("Data/TimelessJewelData"))
-        .unwrap()
-        .map(|e| {
-            let e = e.unwrap();
-            let meta = fs::symlink_metadata(e.path()).unwrap();
-            (
-                e.file_name().to_string_lossy().to_string(),
-                (meta.len(), meta.modified().unwrap()),
-            )
-        })
-        .collect()
 }
 
 /// Upstream's side, written apart from the glue: PoB's own opener, the realm picked and the

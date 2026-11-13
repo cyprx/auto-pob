@@ -414,9 +414,10 @@ pub trait Backend {
     fn account_view(&mut self) -> anyhow::Result<AccountView>;
     /// The Compare tab; `None` with no comparison loaded (R4)
     fn compare_view(&mut self) -> anyhow::Result<Option<CompareView>>;
-    /// Whether a recalculation sends the Compare view: not while the UI hides the Compare tab
-    /// (`SetCompareShown`), when the backend remembers to send it once the tab shows again.
-    fn compare_follows_calculation(&mut self) -> bool {
+    /// Whether the UI shows the Compare tab (`SetCompareShown`); a recalculation sends the
+    /// Compare view only then. Showing the tab is answered with a fresh one, so nothing is
+    /// owed while it is hidden.
+    fn compare_shown(&self) -> bool {
         true
     }
     /// The builds in `folder` below the Builds folder; reads the disk only, changes nothing
@@ -795,7 +796,7 @@ fn recalculate_if_asked(
     // Draw restarts an open list on a new output revision (R14)
     affected.item_db = true;
     // the Summary diffs the comparison against this build's stats (R4), when it is on screen
-    if backend.compare_follows_calculation() {
+    if backend.compare_shown() {
         affected.compare = true;
     }
 }

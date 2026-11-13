@@ -63,8 +63,6 @@ pub struct PobBackend {
     released_lua_bytes: usize,
     /// The UI hides the Compare tab (`SetCompareShown`): a recalculation leaves its view out
     compare_hidden: bool,
-    /// A recalculation left the Compare view out; it is sent when the tab shows again
-    compare_stale: bool,
     /// The UI shows the build list: it asked for a listing since it last opened or imported
     /// a build, or no build was loaded at start. The exit save then records PoB's LIST mode,
     /// as PoB's would after its CloseBuild (Build.lua:953-956), not the build left behind it.
@@ -247,7 +245,6 @@ impl PobBackend {
             options_lost: false,
             released_lua_bytes: 0,
             compare_hidden: false,
-            compare_stale: false,
             on_list,
             net,
             timeless_job: false,
@@ -3146,12 +3143,10 @@ impl Backend for PobBackend {
     }
 
     fn compare_view(&mut self) -> Result<Option<CompareView>> {
-        self.compare_stale = false;
         self.view("compare_view", ())
     }
 
-    fn compare_follows_calculation(&mut self) -> bool {
-        self.compare_stale |= self.compare_hidden;
+    fn compare_shown(&self) -> bool {
         !self.compare_hidden
     }
 

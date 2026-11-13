@@ -113,10 +113,9 @@ pub struct Fake {
     pub network_recalc: bool,
     /// How long `shutdown` takes, as PoB's exit save of `Settings.xml` does
     pub shutdown_delay: std::time::Duration,
-    /// `SetCompareShown { on: false }` holds the Compare view back from recalculations, and
-    /// `compare_stale` says one was, as PobBackend does
+    /// `SetCompareShown { on: false }` holds the Compare view back from recalculations, as
+    /// PobBackend does
     compare_hidden: bool,
-    compare_stale: bool,
     /// What `compare_view` answers; `None` is "no comparison loaded"
     pub compare: Option<CompareView>,
     /// How long `compare_view` takes
@@ -155,7 +154,6 @@ impl Fake {
                 network_recalc: false,
                 shutdown_delay: std::time::Duration::ZERO,
                 compare_hidden: false,
-                compare_stale: false,
                 compare: None,
                 compare_delay: std::time::Duration::ZERO,
             },
@@ -750,14 +748,12 @@ impl Backend for Fake {
     }
 
     fn compare_view(&mut self) -> anyhow::Result<Option<CompareView>> {
-        self.compare_stale = false;
         self.log.lock().unwrap().compare_views += 1;
         std::thread::sleep(self.compare_delay);
         Ok(self.compare.clone())
     }
 
-    fn compare_follows_calculation(&mut self) -> bool {
-        self.compare_stale |= self.compare_hidden;
+    fn compare_shown(&self) -> bool {
         !self.compare_hidden
     }
 

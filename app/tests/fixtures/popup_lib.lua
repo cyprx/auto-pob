@@ -155,7 +155,7 @@ function popupDump()
 			name = name, kind = kind, label = text(control:GetProperty("label")),
 			pos = { x - px, y - py }, size = { w or 0, h or 0 },
 			shown = control:IsShown() and true or false, enabled = control:IsEnabled() and true or false,
-			choices = {}, selected = 0, value = 0, checked = false, text = "",
+			choices = {}, selected = 0, value = 0, checked = false, text = "", ascii_only = false,
 			hover_tooltip = kind ~= "List" and control.tooltipFunc ~= nil, rows = {},
 		}
 		local tip = control:GetProperty("tooltipText")
@@ -172,6 +172,8 @@ function popupDump()
 			entry.checked = control.state and true or false
 		elseif kind == "Edit" then
 			entry.text = control.buf
+			entry.ascii_only = control.filter == "^%w%p "
+			entry.limit = control.limit
 		elseif kind == "List" then
 			for i, item in ipairs(control.list) do
 				entry.rows[i] = { key = rowKey(item, i), label = text(control:GetRowValue(1, i, item)) }

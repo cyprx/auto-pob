@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct BuildView {
     pub name: String,
+    /// What Save As's name box opens with (Build.lua:1400)
+    #[serde(default)]
+    pub save_as_name: String,
     #[serde(default)]
     pub path: Option<PathBuf>,
     pub class: String,
@@ -236,6 +239,21 @@ pub struct CustomModGroup {
 pub struct ConfigSet {
     pub id: u32,
     pub title: String,
+    /// The set has no title (a build never saved: ConfigTab.lua:133), so PoB's rename box
+    /// opens empty
+    #[serde(default)]
+    pub untitled: bool,
+}
+
+impl ConfigSet {
+    /// What PoB's rename box opens with: the title as the set has it, empty when it has none
+    pub fn name_box_text(&self) -> String {
+        if self.untitled {
+            String::new()
+        } else {
+            self.title.clone()
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -584,9 +602,24 @@ pub struct JewelSocket {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SpecEntry {
+    /// "Default" for a tree with no title
     pub title: String,
+    /// The tree has no title: PoB's rename box opens empty (PassiveSpecListControl.lua:49)
+    #[serde(default)]
+    pub untitled: bool,
     pub version: String,
     pub points: u32,
+}
+
+impl SpecEntry {
+    /// What PoB's rename box opens with: the title as the file has it, empty when it has none
+    pub fn name_box_text(&self) -> String {
+        if self.untitled {
+            String::new()
+        } else {
+            self.title.clone()
+        }
+    }
 }
 
 /// The build's notes, and the colour buttons PoB's notes tab offers.
@@ -719,6 +752,20 @@ pub struct SkillSetEntry {
     pub id: u32,
     /// PoB shows "Default" for a set with no title
     pub title: String,
+    /// The set has no title: PoB's rename box opens empty (SkillSetListControl.lua:56)
+    #[serde(default)]
+    pub untitled: bool,
+}
+
+impl SkillSetEntry {
+    /// What PoB's rename box opens with: the title as the file has it, empty when it has none
+    pub fn name_box_text(&self) -> String {
+        if self.untitled {
+            String::new()
+        } else {
+            self.title.clone()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -961,6 +1008,20 @@ pub struct ItemSetEntry {
     pub id: u32,
     /// "Default" for a set with no title
     pub title: String,
+    /// The set has no title: PoB's rename box opens empty (ItemSetListControl.lua:47)
+    #[serde(default)]
+    pub untitled: bool,
+}
+
+impl ItemSetEntry {
+    /// What PoB's rename box opens with: the title as the file has it, empty when it has none
+    pub fn name_box_text(&self) -> String {
+        if self.untitled {
+            String::new()
+        } else {
+            self.title.clone()
+        }
+    }
 }
 
 /// One of the selector's dropdowns. Labels keep PoB's colour codes.
@@ -1180,6 +1241,8 @@ mod tests {
                 divisions: None,
                 checked: false,
                 text: String::new(),
+                ascii_only: false,
+                limit: None,
                 tooltip_text: None,
                 hover_tooltip: false,
                 rows: vec![],
@@ -1350,6 +1413,7 @@ mod tests {
             sets: vec![ConfigSet {
                 id: 1,
                 title: "Default".into(),
+                untitled: false,
             }],
             active_set: 1,
             custom_mods: vec![CustomModGroup {
@@ -1750,6 +1814,13 @@ pub struct PopupControl {
     /// Check, Edit
     pub checked: bool,
     pub text: String,
+    /// Edit: the box has `EditControl`'s own filter, so it keeps only ASCII letters, digits,
+    /// punctuation and spaces (EditControl.lua:46)
+    #[serde(default)]
+    pub ascii_only: bool,
+    /// Edit: the most bytes the box takes
+    #[serde(default)]
+    pub limit: Option<usize>,
     /// PoB's static `tooltipText`
     pub tooltip_text: Option<String>,
     /// The control builds a tooltip on hover (ask with `ControlTooltip`)

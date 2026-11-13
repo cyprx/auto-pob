@@ -5,6 +5,7 @@ use super::{Rects, TreeOutput};
 use crate::engine::{Command, PopupKind, TreeState};
 use crate::theme;
 use crate::ui::items::list::reorder_rows;
+use crate::ui::name_box::{self, Filter};
 use crate::widgets::pob_text;
 use eframe::egui;
 
@@ -27,6 +28,8 @@ enum Dialog {
     RenameSpec {
         index: usize,
         title: String,
+        /// typed into: PoB's Save waits for it (PassiveSpecListControl.lua:50-52)
+        edited: bool,
     },
     DeleteSpec(usize),
     Reset,
@@ -301,7 +304,8 @@ impl Toolbar {
             {
                 self.dialog = Some(Dialog::RenameSpec {
                     index: state.active_spec,
-                    title: spec.title.clone(),
+                    title: spec.name_box_text(),
+                    edited: false,
                 });
             }
             let delete = ui.add_enabled(state.specs.len() > 1, egui::Button::new("Delete"));
@@ -334,7 +338,7 @@ impl Toolbar {
             {
                 self.dialog = Some(Dialog::CopySpec {
                     index: state.active_spec,
-                    title: spec.title.clone(),
+                    title: spec.name_box_text(),
                     edited: false,
                 });
             }
@@ -873,7 +877,8 @@ impl Toolbar {
             if f2 {
                 next = Some(Dialog::RenameSpec {
                     index: selected,
-                    title: state.specs[selected].title.clone(),
+                    title: state.specs[selected].name_box_text(),
+                    edited: false,
                 });
             } else if delete && n > 1 {
                 next = Some(Dialog::DeleteSpec(selected));
@@ -931,7 +936,7 @@ impl Toolbar {
                         if button(ui, rects, "spec_manager_copy", "Copy", true) {
                             next = Some(Dialog::CopySpec {
                                 index: selected,
-                                title: spec.title.clone(),
+                                title: spec.name_box_text(),
                                 edited: false,
                             });
                         }
@@ -942,7 +947,8 @@ impl Toolbar {
                         if button(ui, rects, "spec_manager_rename", "Rename", true) {
                             next = Some(Dialog::RenameSpec {
                                 index: selected,
-                                title: spec.title.clone(),
+                                title: spec.name_box_text(),
+                                edited: false,
                             });
                         }
                         if button(ui, rects, "spec_manager_new", "New", true) {
@@ -992,34 +998,48 @@ impl Toolbar {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| match dialog {
                 Dialog::NewSpec(name) => {
-                    let field = ui.add(egui::TextEdit::singleline(name).hint_text("Title"));
+                    let (field, _) =
+                        name_box::edit(ui, name, Filter::Plain, name_box::NAME_LIMIT, |t| {
+                            t.hint_text("Title")
+                        });
                     rects.note(&field, || "spec_new_name".into());
                     let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     ui.horizontal(|ui| {
-                        let valid = !name.trim().is_empty();
+                        let valid = name_box::has_visible(name);
                         if (button(ui, rects, "spec_new_ok", "Add", valid) || (enter && valid))
                             && valid
                         {
                             commands.push(Command::NewSpec {
-                                title: name.trim().to_owned(),
+                                title: name.clone(),
                             });
                             close = true;
                         }
                         close |= ui.button("Cancel").clicked();
                     });
                 }
-                Dialog::RenameSpec { index, title } => {
-                    let field = ui.add(egui::TextEdit::singleline(title));
+                Dialog::RenameSpec {
+                    index,
+                    title,
+                    edited,
+                } => {
+                    let (field, changed) =
+                        name_box::edit(ui, title, Filter::Plain, name_box::NAME_LIMIT, |t| t);
+                    rects.note(&field, || "spec_rename_name".into());
+                    // PoB's name popup opens with its box focused
+                    if !*edited {
+                        field.request_focus();
+                    }
+                    *edited |= changed;
                     let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     ui.horizontal(|ui| {
-                        let valid = !title.trim().is_empty();
+                        let valid = *edited && name_box::has_visible(title);
                         if (button(ui, rects, "spec_rename_ok", "Rename", valid)
                             || (enter && valid))
                             && valid
                         {
                             commands.push(Command::RenameSpec {
                                 index: *index,
-                                title: title.trim().to_owned(),
+                                title: title.clone(),
                             });
                             close = true;
                         }
@@ -1062,17 +1082,19 @@ impl Toolbar {
                 }
                 Dialog::Import { title, url } => {
                     ui.label("Adds the link's tree as a new tree.");
-                    ui.add(egui::TextEdit::singleline(title).hint_text("Title"));
-                    ui.add(
-                        egui::TextEdit::singleline(url)
-                            .hint_text("Tree link")
-                            .desired_width(400.0),
-                    );
+                    // both boxes take EditControl's own filter (TreeTab.lua:743-752), and the
+                    // title has no limit
+                    name_box::edit(ui, title, Filter::Plain, usize::MAX, |t| {
+                        t.hint_text("Title")
+                    });
+                    name_box::edit(ui, url, Filter::Plain, usize::MAX, |t| {
+                        t.hint_text("Tree link").desired_width(400.0)
+                    });
                     ui.horizontal(|ui| {
-                        let valid = !title.trim().is_empty() && !url.trim().is_empty();
+                        let valid = name_box::has_visible(title) && name_box::has_visible(url);
                         if button(ui, rects, "import_ok", "Import", valid) {
                             commands.push(Command::ImportTreeLink {
-                                title: title.trim().to_owned(),
+                                title: title.clone(),
                                 url: url.trim().to_owned(),
                             });
                             close = true;
@@ -1086,21 +1108,22 @@ impl Toolbar {
                     edited,
                 } => {
                     ui.label("Enter name for this passive tree:");
-                    let field = ui.add(egui::TextEdit::singleline(title));
+                    let (field, changed) =
+                        name_box::edit(ui, title, Filter::Plain, name_box::NAME_LIMIT, |t| t);
                     // PoB's name popup opens with its box focused
                     if !*edited {
                         field.request_focus();
                     }
-                    *edited |= field.changed();
+                    *edited |= changed;
                     let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     ui.horizontal(|ui| {
-                        let valid = *edited && !title.trim().is_empty();
+                        let valid = *edited && name_box::has_visible(title);
                         if (button(ui, rects, "spec_copy_ok", "Save", valid) || (enter && valid))
                             && valid
                         {
                             commands.push(Command::CopySpec {
                                 index: *index,
-                                title: title.trim().to_owned(),
+                                title: title.clone(),
                             });
                             close = true;
                         }

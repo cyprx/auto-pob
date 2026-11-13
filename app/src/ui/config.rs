@@ -4,11 +4,14 @@
 //! commands. While the engine is behind (spec 6.3) a field keeps what the user typed or
 //! picked, and goes back to showing the snapshot once the engine has caught up.
 
-use crate::engine::views::{ConfigKind, ConfigOption, ConfigSection, ConfigView, CustomModGroup};
+use crate::engine::views::{
+    ConfigKind, ConfigOption, ConfigSection, ConfigSet, ConfigView, CustomModGroup,
+};
 use crate::engine::{Command, ConfigValue, HoverTarget, PopupKind};
 use crate::theme;
 use crate::ui::hover::HoverTip;
 use crate::ui::items::list::reorder_rows;
+use crate::ui::name_box::{self, Filter};
 use crate::widgets::{pob_text, tooltip_ui};
 use eframe::egui;
 use std::collections::HashMap;
@@ -92,9 +95,11 @@ fn value_text(value: Option<&serde_json::Value>) -> String {
 /// An in-progress edit of a config set's title.
 enum SetEdit {
     New(String),
+    /// `edited` once it was typed into, as PoB's Save stays disabled until then too
     Rename {
         id: u32,
         title: String,
+        edited: bool,
     },
     /// PoB's manager Copy: the copy's name (NF-4); `edited` once it was typed into, as PoB's
     /// Save stays disabled until then (ConfigSetListControl.lua:44-46)
@@ -271,7 +276,7 @@ impl ConfigUi {
                     id: view.sets[i].id,
                 });
             }
-            self.set_buttons(ui, view, active.map(|s| s.title.as_str()), commands);
+            self.set_buttons(ui, view, active.map(ConfigSet::name_box_text), commands);
             ui.separator();
             let search = ui.add(
                 egui::TextEdit::singleline(&mut self.search)
@@ -293,7 +298,7 @@ impl ConfigUi {
         &mut self,
         ui: &mut egui::Ui,
         view: &ConfigView,
-        active_title: Option<&str>,
+        active_title: Option<String>,
         commands: &mut Vec<Command>,
     ) {
         if let Some(id) = self.confirm_delete {
@@ -318,31 +323,36 @@ impl ConfigUi {
             return;
         }
         if let Some(edit) = &mut self.set_edit {
+            // PoB's name box: `EditControl`'s own filter, 100 bytes, and a Save that waits for
+            // an edit and a visible character (ConfigSetListControl.lua:43-69)
             let (title, edited) = match edit {
-                SetEdit::New(t) | SetEdit::Rename { title: t, .. } => (t, None),
-                SetEdit::Copy {
+                SetEdit::New(t) => (t, None),
+                SetEdit::Rename {
+                    title: t, edited, ..
+                }
+                | SetEdit::Copy {
                     title: t, edited, ..
                 } => (t, Some(edited)),
             };
-            let field = ui.add(
-                egui::TextEdit::singleline(title)
-                    .hint_text("Set name")
-                    .desired_width(140.0),
-            );
+            let (field, changed) =
+                name_box::edit(ui, title, Filter::Plain, name_box::NAME_LIMIT, |t| {
+                    t.hint_text("Set name").desired_width(140.0)
+                });
             field.request_focus();
             let submit = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let typed = match edited {
                 Some(edited) => {
-                    *edited |= field.changed();
+                    *edited |= changed;
                     *edited
                 }
                 None => true,
             };
-            let valid = typed && !title.trim().is_empty();
+            let valid = typed && name_box::has_visible(title);
             let ok = ui.add_enabled(valid, theme::primary_button("OK"));
             let cancel = ui.button("Cancel");
             if (ok.clicked() || submit) && valid {
-                let title = title.trim().to_owned();
+                // PoB saves the box as it stands
+                let title = title.clone();
                 commands.push(match edit {
                     SetEdit::New(_) => Command::NewConfigSet { title },
                     SetEdit::Rename { id, .. } => Command::RenameConfigSet { id: *id, title },
@@ -367,7 +377,8 @@ impl ConfigUi {
         if ui.button("Rename").clicked() {
             self.set_edit = Some(SetEdit::Rename {
                 id: view.active_set,
-                title: active_title.unwrap_or_default().to_owned(),
+                title: active_title.unwrap_or_default(),
+                edited: false,
             });
         }
         // the last set can't be deleted
@@ -389,7 +400,7 @@ impl ConfigUi {
                 .sets
                 .iter()
                 .find(|s| s.id == id)
-                .map_or(String::new(), |s| s.title.clone());
+                .map_or(String::new(), |s| s.name_box_text());
             self.set_edit = Some(SetEdit::Copy {
                 id,
                 title,
@@ -442,7 +453,8 @@ impl ConfigUi {
                 if f2 {
                     self.set_edit = Some(SetEdit::Rename {
                         id: set.id,
-                        title: set.title.clone(),
+                        title: set.name_box_text(),
+                        edited: false,
                     });
                 } else if delete && len > 1 {
                     self.confirm_delete = Some(set.id);
@@ -704,6 +716,7 @@ impl ConfigUi {
                     &hint,
                     SendOn::Change,
                     behind,
+                    None,
                 );
                 self.note(format!("field:{var}"), &response);
                 if let Some(text) = text {
@@ -749,12 +762,15 @@ impl ConfigUi {
         hint: &str,
         send_on: SendOn,
         behind: bool,
+        filter: Option<Filter>,
     ) -> (egui::Response, Option<String>) {
         let mut text = self
             .drafts
             .get(&key)
             .cloned()
             .unwrap_or_else(|| current.to_owned());
+        let before = text.clone();
+        let pasted = name_box::pasted(ui);
         let edit = match style {
             FieldStyle::Single { width } => {
                 egui::TextEdit::singleline(&mut text).desired_width(width)
@@ -765,6 +781,12 @@ impl ConfigUi {
                 .min_size(egui::vec2(0.0, self.box_height(&key))),
         };
         let response = ui.add(edit.hint_text(hint));
+        if response.changed()
+            && let Some(filter) = filter
+        {
+            // the box's own filter, for what an edit inserts
+            text = name_box::spliced(&before, &text, filter, usize::MAX, pasted);
+        }
         if matches!(style, FieldStyle::Multi { .. }) {
             // PoB's custom-modifier box has a size grip (ConfigTab.lua:70: 80 high, 40 to 600)
             let mut height = self.box_height(&key);
@@ -859,6 +881,7 @@ impl ConfigUi {
                 "Group title",
                 SendOn::Blur,
                 behind,
+                Some(Filter::Plain),
             );
             self.note(format!("mod_title:{i}"), &response);
             if let Some(title) = title {
@@ -897,6 +920,7 @@ impl ConfigUi {
             "One modifier per line, e.g. +10% to all Elemental Resistances",
             SendOn::Blur,
             behind,
+            None,
         );
         self.note(format!("mod_text:{i}"), &response);
         if let Some(text) = text {
@@ -1014,10 +1038,12 @@ mod tests {
                     ConfigSet {
                         id: 1,
                         title: "First".into(),
+                        untitled: false,
                     },
                     ConfigSet {
                         id: 2,
                         title: "Second".into(),
+                        untitled: false,
                     },
                 ],
                 active_set: 1,
@@ -1215,6 +1241,79 @@ mod tests {
         key(&mut h, egui::Key::F2);
         h.frame(vec![]);
         assert!(matches!(h.ui.set_edit, Some(SetEdit::Rename { id: 1, .. })));
+    }
+
+    /// A set's name box is PoB's (ConfigSetListControl.lua:43-69): Save waits for an edit, the
+    /// box drops what `EditControl`'s filter rejects, and the name is saved as it stands
+    #[test]
+    fn a_set_name_follows_pobs_box() {
+        let mut h = Harness::new();
+        h.click("set_order");
+        h.frame(vec![]);
+        h.click("order_row:1");
+        key(&mut h, egui::Key::F2);
+        h.frame(vec![]);
+        // as it opened, Save is off
+        assert!(h.click("set_ok").is_empty());
+        assert!(h.ui.set_edit.is_some());
+        // empties the box: over a selection PoB refuses a text with a character it drops
+        let select_all = |h: &mut Harness| {
+            h.frame(vec![Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            }]);
+            key(h, egui::Key::Backspace);
+        };
+        // PoB's box under LuaJIT drops every non-ASCII byte: nothing is left to save
+        for name in ["\u{65e5}\u{672c}", "\u{3a9}\u{3bc}"] {
+            select_all(&mut h);
+            h.frame(vec![Event::Text(name.into())]);
+            h.frame(vec![]);
+            assert!(h.click("set_ok").is_empty(), "{name}");
+            assert!(h.ui.set_edit.is_some(), "{name}");
+        }
+        // a character a key adds is kept, the rest dropped, and nothing is trimmed
+        select_all(&mut h);
+        h.frame(vec![Event::Text("\u{65e5}\u{672c} a ".into())]);
+        h.frame(vec![]);
+        assert_eq!(
+            debug(&h.click("set_ok")),
+            ["RenameConfigSet { id: 2, title: \" a \" }"]
+        );
+        // 100 bytes at most
+        h.frame(vec![]);
+        h.frame(vec![]);
+        key(&mut h, egui::Key::F2);
+        h.frame(vec![]);
+        select_all(&mut h);
+        h.frame(vec![Event::Text("x".repeat(130))]);
+        h.frame(vec![Event::Text("x".repeat(100))]);
+        h.frame(vec![Event::Text("y".into())]);
+        h.frame(vec![]);
+        let Some(SetEdit::Rename { title, .. }) = &h.ui.set_edit else {
+            panic!("no name box");
+        };
+        assert_eq!(title.len(), 100);
+    }
+
+    /// A set with no title (a build never saved: ConfigTab.lua:133) opens PoB's rename box empty
+    #[test]
+    fn renaming_an_untitled_config_set_starts_empty() {
+        let mut h = Harness::new();
+        h.view.sets[0].untitled = true;
+        h.click("set_order");
+        h.frame(vec![]);
+        h.click("order_row:0");
+        key(&mut h, egui::Key::F2);
+        h.frame(vec![]);
+        h.frame(vec![Event::Text("x".into())]);
+        assert_eq!(
+            debug(&h.click("set_ok")),
+            ["RenameConfigSet { id: 1, title: \"x\" }"]
+        );
     }
 
     /// PoB's Copy belongs to the manager's list: its selected row counts only while the

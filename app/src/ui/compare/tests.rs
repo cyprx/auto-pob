@@ -21,6 +21,8 @@ fn control(name: &str, kind: PopupControlKind) -> PopupControl {
         divisions: None,
         checked: false,
         text: String::new(),
+        ascii_only: false,
+        limit: None,
         tooltip_text: None,
         hover_tooltip: false,
         rows: vec![],
@@ -816,10 +818,12 @@ fn config_view_copies_filters_and_switches_our_set() {
             ConfigSet {
                 id: 1,
                 title: "Default".into(),
+                untitled: false,
             },
             ConfigSet {
                 id: 2,
                 title: "Boss".into(),
+                untitled: false,
             },
         ],
         active_set: 1,
@@ -1040,11 +1044,13 @@ fn items_view_offers_our_tree_set() {
             title: "Default".into(),
             version: "3_27".into(),
             points: 10,
+            untitled: false,
         },
         crate::engine::views::SpecEntry {
             title: "Late".into(),
             version: "3_27".into(),
             points: 90,
+            untitled: false,
         },
     ];
     h.ui.on_snapshot(&Snapshot::Tree(Arc::new(state)));

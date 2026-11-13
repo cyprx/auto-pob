@@ -44,10 +44,12 @@ fn view(groups: Vec<SocketGroupView>) -> SkillsView {
             SkillSetEntry {
                 id: 1,
                 title: "Main".into(),
+                untitled: false,
             },
             SkillSetEntry {
                 id: 2,
                 title: "Alt".into(),
+                untitled: false,
             },
         ],
         active_set: 1,
@@ -340,6 +342,12 @@ fn copying_a_set_prefills_its_title() {
     h.frame(vec![]);
     h.click("sets_row_1");
     h.click("sets_copy");
+    // PoB's Save waits for an edit, even on the prefilled name
+    let o = h.click("sets_save");
+    assert!(o.commands.is_empty(), "{:?}", o.commands);
+    h.click("sets_name");
+    h.frame_key(Key::A, Modifiers::COMMAND);
+    h.type_text("Alt");
     let o = h.click("sets_save");
     assert_eq!(
         debug(&o.commands),
@@ -727,6 +735,9 @@ fn f2_renames_the_selected_set() {
     h.click("sets_row_1");
     h.press(Key::F2);
     h.frame(vec![]);
+    h.click("sets_name");
+    h.frame_key(Key::A, Modifiers::COMMAND);
+    h.type_text("Alt");
     let o = h.click("sets_save");
     assert_eq!(
         debug(&o.commands),
@@ -849,4 +860,80 @@ fn gem_enabled_and_count_hovers_name_their_box() {
             "{key}"
         );
     }
+}
+
+/// A set's name box is PoB's (SkillSetListControl.lua:53-78): its filter drops every non-ASCII
+/// byte, Save needs a visible character after an edit, and the name is saved as it stands
+#[test]
+fn a_skill_set_name_follows_pobs_box() {
+    let mut h = Harness::new(sample());
+    h.click("manage");
+    h.frame(vec![]);
+    h.click("sets_new");
+    for name in ["\u{65e5}\u{672c}", "\u{3a9}\u{3bc}"] {
+        h.click("sets_name");
+        h.frame_key(Key::A, Modifiers::COMMAND);
+        h.type_text(name);
+        let o = h.click("sets_save");
+        assert!(o.commands.is_empty(), "{name}: {:?}", o.commands);
+    }
+    h.click("sets_name");
+    h.frame_key(Key::A, Modifiers::COMMAND);
+    h.type_text("\u{65e5}\u{672c} a ");
+    h.frame(vec![]);
+    assert_eq!(h.ui.sets.naming_text(), Some(" a "));
+    let o = h.click("sets_save");
+    assert_eq!(debug(&o.commands), ["NewSkillSet { title: \" a \" }"]);
+    // 100 bytes at most
+    h.frame(vec![]);
+    h.click("sets_new");
+    h.click("sets_name");
+    // typed key by key it stops at the limit; pasted it is refused whole
+    h.type_text(&"x".repeat(130));
+    h.frame(vec![]);
+    assert_eq!(h.ui.sets.naming_text().map(str::len), Some(100));
+    h.frame_key(Key::A, Modifiers::COMMAND);
+    h.frame_key(Key::Backspace, Modifiers::NONE);
+    h.frame(vec![Event::Paste("x".repeat(101))]);
+    h.frame(vec![]);
+    assert_eq!(h.ui.sets.naming_text(), Some(""), "refused whole");
+}
+
+/// PoB opens the rename box on the set's own title: a set with none opens it empty
+#[test]
+fn renaming_an_untitled_skill_set_starts_empty() {
+    let mut view = sample();
+    view.sets[0].untitled = true;
+    let mut h = Harness::new(view);
+    h.click("manage");
+    h.frame(vec![]);
+    h.click("sets_row_0");
+    h.click("sets_rename");
+    assert_eq!(h.ui.sets.naming_text(), Some(""));
+    // a titled one opens on its title
+    let mut h = Harness::new(sample());
+    h.click("manage");
+    h.frame(vec![]);
+    h.click("sets_row_1");
+    h.click("sets_rename");
+    assert_eq!(h.ui.sets.naming_text(), Some("Alt"));
+}
+
+/// PoB's socket group label box takes 50 bytes at most (SkillsTab.lua:161)
+#[test]
+fn a_group_label_takes_fifty_characters() {
+    let mut h = Harness::new(sample());
+    h.click("g0_label");
+    h.frame_key(Key::A, Modifiers::COMMAND);
+    h.frame_key(Key::Backspace, Modifiers::NONE);
+    h.type_text(&"x".repeat(50));
+    h.type_text("y");
+    let o = h.press(Key::Enter);
+    assert_eq!(
+        debug(&o.commands),
+        [format!(
+            "SetGroupLabel {{ group: 0, text: \"{}\" }}",
+            "x".repeat(50)
+        )]
+    );
 }

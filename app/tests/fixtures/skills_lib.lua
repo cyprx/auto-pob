@@ -82,7 +82,7 @@ function skillsDump()
 		can_undo = tab.undo[2] ~= nil, can_redo = tab.redo[1] ~= nil,
 	}
 	for i, id in ipairs(tab.skillSetOrderList) do
-		out.sets[i] = { id = id, title = tab.skillSets[id].title or "Default" }
+		out.sets[i] = { id = id, title = tab.skillSets[id].title or "Default", untitled = tab.skillSets[id].title == nil }
 	end
 	for i, choice in ipairs(c.groupSlot.list) do
 		out.slot_choices[i] = { label = choice.label, slot = choice.slotName }

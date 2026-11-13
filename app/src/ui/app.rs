@@ -18,6 +18,7 @@ use crate::ui::folder_picker::{FolderPicker, PickerOutput};
 use crate::ui::help::{self, HelpStart, HelpUi};
 use crate::ui::import::{Confirm, ImportOutput, ImportUi, Plan};
 use crate::ui::items::{ItemsOutput, ItemsUi};
+use crate::ui::name_box::{self, Filter};
 use crate::ui::notes::NotesUi;
 use crate::ui::options::{self, OptionsUi};
 use crate::ui::popup::{self, PopupWindow};
@@ -40,6 +41,21 @@ pub type HelpDownload = Box<dyn Fn() -> std::sync::mpsc::Receiver<Result<(), Str
 enum Screen {
     List,
     Build,
+}
+
+/// Whether PoB's Save As would be on: a visible name, and no build of that name in the folder
+/// (Build.lua:1384-1396)
+fn save_as_is_open(list: Option<&BuildListView>, dialog: &SaveAsDialog) -> bool {
+    if !name_box::has_visible(&dialog.name) {
+        return false;
+    }
+    list.is_none_or(|list| {
+        !list
+            .root
+            .join(&dialog.folder)
+            .join(format!("{}.xml", dialog.name))
+            .exists()
+    })
 }
 
 /// The Save as dialog.
@@ -993,10 +1009,12 @@ impl AutoPobApp {
     }
 
     fn open_save_as(&mut self, then: Option<Pending>) {
+        // PoB's box opens on the build's name with the characters it forbids turned into "-"
+        // (Build.lua:1400)
         let name = self
             .build
             .as_ref()
-            .map(|b| b.name.clone())
+            .map(|b| b.save_as_name.clone())
             .unwrap_or_default();
         self.save_as = Some(SaveAsDialog {
             folder: self.list_folder(),
@@ -1018,7 +1036,7 @@ impl AutoPobApp {
         dialog.confirm_overwrite = false;
         let command = Command::SaveAs {
             folder: dialog.folder.clone(),
-            name: dialog.name.trim().to_owned(),
+            name: dialog.name.clone(),
             overwrite,
         };
         let then = dialog.then.clone();
@@ -2079,8 +2097,15 @@ impl AutoPobApp {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.add_enabled_ui(!dialog.waiting, |ui| {
-                    let name = ui
-                        .add(egui::TextEdit::singleline(&mut dialog.name).hint_text("Build name"));
+                    // PoB's box drops `\/:*?"<>|` and control characters, 100 bytes at most
+                    let (name, _) = name_box::edit(
+                        ui,
+                        &mut dialog.name,
+                        Filter::Path,
+                        name_box::NAME_LIMIT,
+                        |t| t.hint_text("Build name"),
+                    );
+                    crate::ui::import::mark(ui, "save_as_name", &name);
                     if name.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         submit = true;
                     }
@@ -2105,11 +2130,10 @@ impl AutoPobApp {
                         });
                     } else {
                         ui.horizontal(|ui| {
-                            let valid = !dialog.name.trim().is_empty();
-                            if ui
-                                .add_enabled(valid, theme::primary_button("Save"))
-                                .clicked()
-                            {
+                            let valid = save_as_is_open(list.as_deref(), dialog);
+                            let save = ui.add_enabled(valid, theme::primary_button("Save"));
+                            crate::ui::import::mark(ui, "save_as_save", &save);
+                            if save.clicked() {
                                 submit = true;
                             }
                             if ui.button("Cancel").clicked() {
@@ -2130,7 +2154,7 @@ impl AutoPobApp {
             self.save_as = None;
         } else if overwrite {
             self.send_save_as(true);
-        } else if submit && !dialog.name.trim().is_empty() {
+        } else if submit && save_as_is_open(list.as_deref(), dialog) {
             self.send_save_as(false);
         }
     }
@@ -2400,6 +2424,7 @@ mod tests {
         fn build_view(&mut self) -> anyhow::Result<BuildView> {
             Ok(BuildView {
                 name: "Fake build".into(),
+                save_as_name: "Fake build".into(),
                 path: self.path.clone(),
                 class: "Witch".into(),
                 ascendancy: Some("Necromancer".into()),
@@ -2923,6 +2948,111 @@ mod tests {
         assert!(app.sent_full.iter().all(|c| !c.starts_with("SaveAs")));
     }
 
+    /// Save As's Save is off while a build of that name is in the folder (Build.lua:1384-1396)
+    #[test]
+    fn save_as_is_off_while_a_build_of_that_name_exists() {
+        let dir = crate::test_dir::TestDir::new("saveas-exists");
+        std::fs::write(dir.join("mine.xml"), "").unwrap();
+        let (mut app, ctx) = started();
+        deliver(
+            &mut app,
+            Snapshot::BuildList(Arc::new(BuildListView {
+                root: dir.to_path_buf(),
+                ..BuildListView::default()
+            })),
+        );
+        app.open_save_as(None);
+        frame(&mut app, &ctx, vec![]);
+        app.save_as.as_mut().unwrap().name = "mine".into();
+        let before = app.sent_full.len();
+        click_mark(&mut app, &ctx, "save_as_save");
+        assert_eq!(sent_since(&app, before), [] as [&str; 0]);
+        app.save_as.as_mut().unwrap().name = "other".into();
+        click_mark(&mut app, &ctx, "save_as_save");
+        assert_eq!(
+            sent_since(&app, before),
+            [r#"SaveAs { folder: "", name: "other", overwrite: false }"#]
+        );
+    }
+
+    /// Save As opens on the name the engine gives it (Build.lua:1400)
+    #[test]
+    fn save_as_opens_on_the_engines_name() {
+        let (mut app, _ctx) = items_app_typing();
+        let mut view = (**app.build.as_ref().unwrap()).clone();
+        view.save_as_name = "Acct - Char".into();
+        app.build = Some(Arc::new(view));
+        app.open_save_as(None);
+        assert_eq!(app.save_as.as_ref().unwrap().name, "Acct - Char");
+    }
+
+    /// Save As's name box is PoB's (Build.lua:1399-1400): it drops `\/:*?"<>|` and control
+    /// characters but not other text, and what is left is saved as it stands
+    #[test]
+    fn save_as_names_follow_pobs_box() {
+        let (mut app, ctx) = started();
+        deliver(&mut app, picker_list());
+        app.open_save_as(None);
+        frame(&mut app, &ctx, vec![]);
+        app.save_as.as_mut().unwrap().name.clear();
+        click_mark(&mut app, &ctx, "save_as_name");
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text("a/b:c*d?\"<>|  ".into())],
+        );
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.save_as.as_ref().unwrap().name, "abcd  ");
+        // only spaces: Save is off
+        let clear = || {
+            vec![
+                egui::Event::Key {
+                    key: egui::Key::A,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND,
+                },
+                egui::Event::Key {
+                    key: egui::Key::Backspace,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        click_mark(&mut app, &ctx, "save_as_name");
+        frame(&mut app, &ctx, clear());
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text(" /\u{65e5} ".into())],
+        );
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.save_as.as_ref().unwrap().name, " \u{65e5} ");
+        frame(&mut app, &ctx, clear());
+        frame(&mut app, &ctx, vec![egui::Event::Text("/ :".into())]);
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        click_mark(&mut app, &ctx, "save_as_save");
+        assert_eq!(sent_since(&app, before), [] as [&str; 0]);
+        // a name PoB keeps is saved as it stands
+        click_mark(&mut app, &ctx, "save_as_name");
+        frame(&mut app, &ctx, clear());
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text("\u{65e5}\u{672c} x ".into())],
+        );
+        frame(&mut app, &ctx, vec![]);
+        click_mark(&mut app, &ctx, "save_as_save");
+        assert_eq!(
+            sent_since(&app, before),
+            ["SaveAs { folder: \"\", name: \"\u{65e5}\u{672c} x \", overwrite: false }"]
+        );
+    }
+
     #[test]
     fn save_as_picks_a_folder_makes_one_and_deletes_an_empty_one() {
         let (mut app, ctx) = started();
@@ -3376,10 +3506,12 @@ mod tests {
                 ConfigSet {
                     id: 1,
                     title: "Default".into(),
+                    untitled: false,
                 },
                 ConfigSet {
                     id: 2,
                     title: "Mapping".into(),
+                    untitled: false,
                 },
             ],
             active_set: 1,
@@ -3591,6 +3723,24 @@ mod tests {
         assert_eq!(
             sent_since(&app, before),
             ["RemoveCustomModGroup { group: 0 }"]
+        );
+    }
+
+    /// A custom modifier group's title box has `EditControl`'s own filter (ConfigTab.lua:35)
+    #[test]
+    fn a_custom_mod_title_drops_what_pobs_box_drops() {
+        let (mut app, ctx) = config_app(sample_config());
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "mod_title:0");
+        type_text(&mut app, &ctx, "\u{65e5}\u{672c}x\u{e9}");
+        click(&mut app, &ctx, "mod_text:0");
+        let sent = sent_since(&app, before);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(
+            sent[0].starts_with("SetCustomModTitle { group: 0, title: \"")
+                && sent[0].ends_with("x\" }")
+                && sent[0].is_ascii(),
+            "{sent:?}"
         );
     }
 
@@ -5108,6 +5258,8 @@ mod tests {
             divisions: None,
             checked: false,
             text: String::new(),
+            ascii_only: false,
+            limit: None,
             tooltip_text: None,
             hover_tooltip: false,
             rows: vec![],

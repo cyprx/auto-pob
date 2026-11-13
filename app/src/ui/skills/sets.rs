@@ -4,6 +4,7 @@ use super::{SkillsOutput, SkillsUi};
 use crate::engine::Command;
 use crate::engine::views::{SkillSetEntry, SkillsView};
 use crate::ui::items::list::reorder_rows;
+use crate::ui::name_box::{self, Filter};
 use eframe::egui::{self, Color32};
 
 /// What a dragged set row carries: its position
@@ -22,7 +23,7 @@ pub(super) struct State {
     open: bool,
     /// The row the manager's buttons act on
     selected: Option<u32>,
-    naming: Option<(Naming, String)>,
+    naming: Option<(Naming, String, bool)>,
     confirm_delete: Option<u32>,
 }
 
@@ -33,6 +34,12 @@ impl State {
 
     pub(super) fn close(&mut self) {
         *self = State::default();
+    }
+
+    /// The typed name of the set being named
+    #[cfg(test)]
+    pub(super) fn naming_text(&self) -> Option<&str> {
+        self.naming.as_ref().map(|(_, text, _)| text.as_str())
     }
 }
 
@@ -194,7 +201,7 @@ impl SkillsUi {
                         let new = ui.button("New");
                         self.rects.note(&new, || "sets_new".into());
                         if new.clicked() {
-                            self.sets.naming = Some((Naming::New, String::new()));
+                            self.sets.naming = Some((Naming::New, String::new(), false));
                         }
                         ui.add_enabled_ui(sel.is_some(), |ui| {
                             let rename = ui.button("Rename");
@@ -208,11 +215,11 @@ impl SkillsUi {
                             if let Some(set) = sel {
                                 if rename.clicked() || f2 {
                                     let t = title_text(set);
-                                    self.sets.naming = Some((Naming::Rename(set.id), t));
+                                    self.sets.naming = Some((Naming::Rename(set.id), t, false));
                                 }
                                 if copy.clicked() {
                                     let t = title_text(set);
-                                    self.sets.naming = Some((Naming::Copy(set.id), t));
+                                    self.sets.naming = Some((Naming::Copy(set.id), t, false));
                                 }
                             }
                         });
@@ -231,12 +238,18 @@ impl SkillsUi {
                         }
                     });
                 });
-                if let Some((kind, text)) = &mut self.sets.naming {
+                if let Some((kind, text, edited)) = &mut self.sets.naming {
                     ui.separator();
                     ui.label("Enter name for this skill set:");
-                    let edit = ui.add(egui::TextEdit::singleline(text).desired_width(240.0));
+                    // PoB's name box: its filter, 100 bytes, and a Save that waits for an edit
+                    // and a visible character (SkillSetListControl.lua:53-78)
+                    let (edit, changed) =
+                        name_box::edit(ui, text, Filter::Plain, name_box::NAME_LIMIT, |t| {
+                            t.desired_width(240.0)
+                        });
                     self.rects.note(&edit, || "sets_name".into());
-                    let blank = text.trim().is_empty();
+                    *edited |= changed;
+                    let blank = !*edited || !name_box::has_visible(text);
                     let mut done = None;
                     ui.horizontal(|ui| {
                         let save = ui.add_enabled(!blank, egui::Button::new("Save"));
@@ -291,5 +304,5 @@ impl SkillsUi {
 
 /// The title a rename or copy starts from.
 fn title_text(set: &SkillSetEntry) -> String {
-    set.title.clone()
+    set.name_box_text()
 }

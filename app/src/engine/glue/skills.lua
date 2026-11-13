@@ -127,7 +127,8 @@ function glue.skills_view()
 		can_redo = tab.redo[1] ~= nil,
 	}
 	for i, id in ipairs(tab.skillSetOrderList) do
-		view.sets[i] = { id = id, title = tab.skillSets[id].title or "Default" }
+		local title = tab.skillSets[id].title
+		view.sets[i] = { id = id, title = title or "Default", untitled = title == nil }
 	end
 	for i, choice in ipairs(c.groupSlot.list) do
 		view.slot_choices[i] = { label = choice.label, slot = choice.slotName }

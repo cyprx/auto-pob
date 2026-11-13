@@ -1,5 +1,6 @@
 //! The build screen's top bar and tab strip.
 
+use super::name_box::{self, Filter};
 use super::tree::TreeTab;
 use crate::engine::Command;
 use crate::engine::views::{BuildView, is_loadout_marker};
@@ -385,13 +386,6 @@ fn loadouts(
     }
 }
 
-/// Whether PoB's name box would hold a visible character after its default filter: under
-/// LuaJIT `main.unicode` is off, so `EditControl` drops every byte but ASCII letters, digits,
-/// punctuation and spaces (`[^%w%p ]`, EditControl.lua:46), and Save asks for `%S`
-fn pob_name_is_visible(name: &str) -> bool {
-    name.chars().any(|c| c.is_ascii_graphic())
-}
-
 /// "New Loadout"'s name popup ("Set Name"): Save waits for an edit, then needs a name with a
 /// visible character PoB's box keeps (Build.lua:319-344)
 fn new_loadout_dialog(ctx: &egui::Context, state: &mut TopBarState, commands: &mut Vec<Command>) {
@@ -406,9 +400,11 @@ fn new_loadout_dialog(ctx: &egui::Context, state: &mut TopBarState, commands: &m
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
             ui.label("Enter name for this loadout:");
-            let field = ui.add(egui::TextEdit::singleline(name).char_limit(100));
+            // the box drops what PoB's drops, and takes 100 bytes (Build.lua:319)
+            let (field, changed) =
+                name_box::edit(ui, name, Filter::Plain, name_box::NAME_LIMIT, |t| t);
             note(ui, "new_loadout_name", field.rect);
-            *edited |= field.changed();
+            *edited |= changed;
             // the window opens on its box, as PoB's does
             if ui.memory(|m| m.focused().is_none()) {
                 field.request_focus();
@@ -418,7 +414,7 @@ fn new_loadout_dialog(ctx: &egui::Context, state: &mut TopBarState, commands: &m
                 close = true;
             }
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            let valid = *edited && pob_name_is_visible(name);
+            let valid = *edited && name_box::has_visible(name);
             ui.horizontal(|ui| {
                 let save = ui.add_enabled(valid, egui::Button::new("Save"));
                 note(ui, "new_loadout_save", save.rect);
@@ -726,28 +722,49 @@ mod tests {
         let mut h = Harness::new(view());
         h.open("loadouts");
         h.click("loadout_4");
-        // PoB's box drops every non-ASCII byte under LuaJIT, so these leave it blank
-        for name in ["日本語", "Ωμέγα", "  ä  "] {
+        // PoB's box drops every non-ASCII byte under LuaJIT; over a selection it refuses a
+        // text with one, so the name stays as it opened and is not edited
+        for name in ["\u{65e5}\u{672c}\u{8a9e}", "\u{3a9}\u{3bc}"] {
             let mut sent = h.retype(name);
             sent.extend(h.click("new_loadout_save"));
             assert!(sent.is_empty(), "{name}: {sent:?}");
-            assert!(h.state.has_dialog(), "{name}");
+            assert_eq!(
+                h.state.new_loadout.as_deref(),
+                Some("New Loadout"),
+                "{name}"
+            );
         }
-        // one ASCII character is enough; the engine's box drops the rest, as PoB's does
-        let mut sent = h.retype("日本 a");
+        // emptied, nothing is left to save
+        h.retype("");
+        h.frame(vec![Event::Key {
+            key: Key::Backspace,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }]);
+        assert!(h.click("new_loadout_save").is_empty());
+        // typed in, the box keeps what PoB's does and Save sends it untrimmed
+        h.click("new_loadout_name");
+        let mut sent = h.frame(vec![Event::Text("\u{65e5}\u{672c} a ".into())]);
+        assert_eq!(h.state.new_loadout.as_deref(), Some(" a "));
         sent.extend(h.click("new_loadout_save"));
-        assert_eq!(sent, ["NewLoadout { name: \"日本 a\" }"]);
+        assert_eq!(sent, ["NewLoadout { name: \" a \" }"]);
         assert!(!h.state.has_dialog());
-    }
-
-    #[test]
-    fn pob_name_visibility_follows_its_edit_filter() {
-        assert!(pob_name_is_visible("a"));
-        assert!(pob_name_is_visible(" - "));
-        assert!(!pob_name_is_visible(""));
-        assert!(!pob_name_is_visible(" \t "));
-        assert!(!pob_name_is_visible("日本"));
-        assert!(!pob_name_is_visible("\u{a0}é"));
+        // 100 bytes at most; what would pass it is refused
+        h.open("loadouts");
+        h.click("loadout_4");
+        h.retype("");
+        h.frame(vec![Event::Key {
+            key: Key::Backspace,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }]);
+        h.frame(vec![Event::Text("x".repeat(100))]);
+        h.frame(vec![Event::Text("y".into())]);
+        assert_eq!(h.state.new_loadout.as_deref().map(str::len), Some(100));
     }
 
     #[test]

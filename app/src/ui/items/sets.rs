@@ -5,6 +5,7 @@ use super::shared::released_over;
 use super::{ItemsOutput, ItemsUi};
 use crate::engine::Command;
 use crate::engine::views::{ItemSetEntry, ItemsView};
+use crate::ui::name_box::{self, Filter};
 use crate::widgets::pob_text;
 use eframe::egui::{self, Color32};
 
@@ -21,7 +22,7 @@ pub(super) struct State {
     open: bool,
     /// The row the manager's buttons act on
     pub(super) selected: Option<u32>,
-    naming: Option<(Naming, String)>,
+    naming: Option<(Naming, String, bool)>,
     confirm_delete: Option<u32>,
     /// The shared set row the shared buttons act on (NF-2)
     shared_selected: Option<usize>,
@@ -46,6 +47,12 @@ impl State {
         self.shared_naming
             .as_ref()
             .map(|(_, text, _)| text.as_str())
+    }
+
+    /// The typed name of the set being named
+    #[cfg(test)]
+    pub(super) fn naming_text(&self) -> Option<&str> {
+        self.naming.as_ref().map(|(_, text, _)| text.as_str())
     }
 
     pub(super) fn close(&mut self) {
@@ -248,7 +255,7 @@ impl ItemsUi {
                         let new = ui.button("New");
                         self.rects.note(&new, || "sets_new".into());
                         if new.clicked() {
-                            self.sets.naming = Some((Naming::New, String::new()));
+                            self.sets.naming = Some((Naming::New, String::new(), false));
                         }
                         ui.add_enabled_ui(sel.is_some(), |ui| {
                             let rename = ui.button("Rename");
@@ -260,11 +267,11 @@ impl ItemsUi {
                             if let Some(set) = sel {
                                 if rename.clicked() || f2 {
                                     self.sets.naming =
-                                        Some((Naming::Rename(set.id), set.title.clone()));
+                                        Some((Naming::Rename(set.id), set.name_box_text(), false));
                                 }
                                 if copy.clicked() {
                                     self.sets.naming =
-                                        Some((Naming::Copy(set.id), set.title.clone()));
+                                        Some((Naming::Copy(set.id), set.name_box_text(), false));
                                 }
                             }
                         });
@@ -281,12 +288,21 @@ impl ItemsUi {
                     });
                 });
                 self.shared_sets(ui, view, blocked, out);
-                if let Some((kind, text)) = &mut self.sets.naming {
+                if let Some((kind, text, edited)) = &mut self.sets.naming {
                     ui.separator();
                     ui.label("Enter name for this item set:");
-                    let edit = ui.add(egui::TextEdit::singleline(text).desired_width(240.0));
+                    // PoB's name box: its filter, 100 bytes, and a Save that waits for an edit
+                    // and a visible character (ItemSetListControl.lua:44-69)
+                    let (edit, changed) = name_box::edit(
+                        ui,
+                        text,
+                        Filter::Plain,
+                        name_box::NAME_LIMIT,
+                        |t| t.desired_width(240.0),
+                    );
                     self.rects.note(&edit, || "sets_name".into());
-                    let blank = text.trim().is_empty();
+                    *edited |= changed;
+                    let blank = !*edited || !name_box::has_visible(text);
                     let mut done = None;
                     ui.horizontal(|ui| {
                         let save = ui.add_enabled(!blank, egui::Button::new("Save"));
@@ -456,10 +472,13 @@ impl ItemsUi {
         if let Some((index, text, edited)) = &mut self.sets.shared_naming {
             ui.separator();
             ui.label("Enter name for this item set:");
-            let edit = ui.add(egui::TextEdit::singleline(text).desired_width(240.0));
+            let (edit, changed) =
+                name_box::edit(ui, text, Filter::Plain, name_box::NAME_LIMIT, |t| {
+                    t.desired_width(240.0)
+                });
             self.rects.note(&edit, || "shared_sets_name".into());
-            *edited |= edit.changed();
-            let blank = text.trim().is_empty();
+            *edited |= changed;
+            let blank = !name_box::has_visible(text);
             let mut done = None;
             ui.horizontal(|ui| {
                 let save = ui.add_enabled(*edited && !blank, egui::Button::new("Save"));

@@ -730,6 +730,8 @@ local function control_view(name, control, kind, popup_x, popup_y)
 		view.checked = control.state and true or false
 	elseif kind == "Edit" then
 		view.text = control.buf or ""
+		view.ascii_only = control.filter == "^%w%p "
+		view.limit = control.limit
 	elseif kind == "List" then
 		glue.list_sync(control)
 		-- the rows as two flat lists: a table per row made the Mod Browser's 6188 rows cost
@@ -831,7 +833,8 @@ function glue.set_control(control, control_kind, kind, value, label)
 			glue.press_check(control, value)
 		end
 	elseif kind == "text" and control_kind == "Edit" then
-		glue.paste_into(control, value)
+		-- the box's text as the user typed it, key by key
+		glue.paste_into(control, value, true)
 	elseif (kind == "row" or kind == "row_double" or kind == "row_shift") and control_kind == "List" then
 		-- a click on the row (ListControl.lua:338-372): a double click is PoB's second click, and
 		-- Shift is held for a range pick (`OverrideSelectIndex`, which then takes the click)

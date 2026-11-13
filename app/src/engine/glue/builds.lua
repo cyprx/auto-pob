@@ -183,8 +183,15 @@ function glue.build_view()
 	if sel and loadouts[sel] and not loadout_marker(loadouts[sel]) then
 		loadout_selected = sel - 1
 	end
+	-- Save As opens its name box on this (Build.lua:1400): the name a character import set, for a
+	-- build never saved; else the build's name with the characters the box forbids made "-"
+	local save_as_name = not build.dbFileName and main_module().predefinedBuildName
+	if not save_as_name then
+		save_as_name = (build.buildName or build.dbFileName or ""):gsub('[\\/:%*%?"<>|%c]', "-")
+	end
 	return {
 		name = build.buildName or "",
+		save_as_name = save_as_name,
 		path = build.dbFileName or nil,
 		class = spec.curClassName or "",
 		ascendancy = ascendancy,
@@ -323,7 +330,8 @@ function glue.save()
 end
 
 function glue.save_as(subPath, name, overwrite)
-	if name == "" or name:find("[/\\]") then
+	-- Save As's name box drops these characters and Save needs a visible one (Build.lua:1399)
+	if not name:match("%S") or name:find('[\\/:%*%?"<>|%c]') then
 		error("that isn't a valid build name", 0)
 	end
 	if subPath:find("%.%.") or subPath:sub(1, 1) == "/" then

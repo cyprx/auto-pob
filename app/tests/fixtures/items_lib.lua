@@ -103,7 +103,7 @@ function itemsDump()
 	end
 
 	for i, id in ipairs(t.itemSetOrderList) do
-		out.sets[i] = { id = id, title = t.itemSets[id].title or "Default" }
+		out.sets[i] = { id = id, title = t.itemSets[id].title or "Default", untitled = t.itemSets[id].title == nil }
 	end
 	return out
 end

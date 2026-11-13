@@ -1084,12 +1084,10 @@ impl ConfigUi {
         } else if self.field_focus.as_deref() == Some(key.as_str()) {
             self.field_focus = None;
         }
-        // judged once the engine caught up: while it is behind the field shows its draft, and
-        // the views that come are of edits still in flight
-        if !response.has_focus()
-            && !behind
-            && self.undo.entry(key.clone()).or_default().follow(current)
-        {
+        // judged at once, behind or not: a view of an edit still in flight is one of the
+        // echoes to come, and anything else starts the undo over before the box can take
+        // the keyboard again
+        if !response.has_focus() && self.undo.entry(key.clone()).or_default().follow(current) {
             crate::widgets::edit_box::forget_undo(ui.ctx(), response.id);
         }
         crate::widgets::url_click::open_on_ctrl_click(ui, &response, &text);

@@ -378,44 +378,8 @@ local function compare_state(build)
 	return compare_colours(build, compareSpec), compareSpec and tab.activeCompareSpec - 1 or nil
 end
 
--- The words PassiveTreeView:Draw splits the search text into (PassiveTreeView.lua:783-798).
-local function search_words(search)
-	search = search:lower()
-	local words = {}
-	for matchstring in search:gmatch('"([^"]*)"') do
-		words[#words + 1] = matchstring
-		search = search:gsub('"' .. matchstring:gsub("([%(%)])", "%%%1") .. '"', "")
-	end
-	for matchstring in search:gmatch("(%S*)") do
-		if matchstring:match("%S") ~= nil then
-			words[#words + 1] = matchstring
-		end
-	end
-	return words
-end
-
--- A build file can hold a search PoB can't read (`set_tree_search`): PoB's Draw would raise
--- at every frame, so the build wouldn't open. The viewer's Load blanks such a search. Installed
--- once, before a build is entered (`enter_build`).
-function glue.guard_tree_search()
-	local class = common.classes.PassiveTreeView
-	if not class then
-		LoadModule("Classes/PassiveTreeView")
-		class = common.classes.PassiveTreeView
-	end
-	if class.autoPobGuarded then
-		return
-	end
-	class.autoPobGuarded = true
-	local load = class.Load
-	class.Load = function(self, ...)
-		load(self, ...)
-		if not pcall(search_words, self.searchStr) then
-			self.searchStr = ""
-			self.searchStrSaved = ""
-		end
-	end
-end
+-- The words PassiveTreeView:Draw splits the search text into (bootstrap.lua)
+local search_words = AutoPobSearchWords
 
 -- Ids of the nodes the viewer would highlight for its search text: Draw caches
 -- `DoesNodeMatchSearchParams` for every node when the text changes (PassiveTreeView.lua:780-802).

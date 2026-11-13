@@ -27,6 +27,8 @@ mod calcs;
 mod compare;
 #[path = "gate/crafting.rs"]
 mod crafting;
+#[path = "gate/fresh.rs"]
+mod fresh;
 #[path = "gate/item_db.rs"]
 mod item_db;
 #[path = "gate/items.rs"]

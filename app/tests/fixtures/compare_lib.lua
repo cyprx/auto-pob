@@ -269,8 +269,8 @@ function itemsExpandedFrame()
 				end
 				local lines = {}
 				local outer = DrawString
-				DrawString = function(_, _, _, _, _, text)
-					lines[#lines + 1] = text
+				DrawString = function(_, lineY, _, _, _, text)
+					lines[#lines + 1] = { text = text, y = lineY - y }
 				end
 				local ok, result = pcall(draw, self, item, x, y, width, other, measure)
 				DrawString = outer

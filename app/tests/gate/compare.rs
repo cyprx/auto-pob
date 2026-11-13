@@ -5,8 +5,8 @@ use super::net_harness::{NetSession, canned, canned_web, net_session};
 use super::{assert_sidebar, fixture_xml, fixtures_dir, golden, lock, pob_dir};
 use auto_pob::engine::upstream::{load_xml, upstream_lua};
 use auto_pob::engine::{
-    Backend, Command, CompareColour, CompareConfigRow, CompareItemRow, CompareRow, CompareSkillRow,
-    CompareSource, CompareView, ConfigValue, PopupInput,
+    Backend, CardLine, Command, CompareColour, CompareConfigRow, CompareItemRow, CompareRow,
+    CompareSkillRow, CompareSource, CompareView, ConfigValue, PopupInput,
 };
 use mlua::LuaSerdeExt;
 use std::collections::BTreeMap;
@@ -1494,8 +1494,8 @@ fn compare_views_and_copies_match_pob() {
     };
     expand(&mut s, true);
     let rows = view(&mut s).items;
-    let cards: Vec<Vec<String>> = up.json("return itemsExpandedFrame()");
-    let ours_cards: Vec<Vec<String>> = rows
+    let cards: Vec<Vec<CardLine>> = up.json("return itemsExpandedFrame()");
+    let ours_cards: Vec<Vec<CardLine>> = rows
         .iter()
         .flat_map(|r| [r.ours_card.clone(), r.theirs_card.clone()])
         .collect();
@@ -1506,7 +1506,8 @@ fn compare_views_and_copies_match_pob() {
     );
     let marked = |mark: &str| {
         ours_cards.iter().flatten().any(|l| {
-            l.starts_with(&format!("^x33FF77{mark}")) || l.starts_with(&format!("^xDD0022{mark}"))
+            l.text.starts_with(&format!("^x33FF77{mark}"))
+                || l.text.starts_with(&format!("^xDD0022{mark}"))
         })
     };
     assert!(marked("+ "), "no mod only on one side: {ours_cards:?}");

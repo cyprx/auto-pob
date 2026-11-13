@@ -5,7 +5,7 @@
 
 use super::{CompareOutput, CompareUi};
 use crate::engine::ItemTooltipQuery;
-use crate::engine::views::{CompareItemRow, CompareView};
+use crate::engine::views::{CardLine, CompareItemRow, CompareView};
 use crate::engine::{BuySource, Command, PopupKind};
 use crate::widgets::pob_text;
 use eframe::egui;
@@ -64,7 +64,8 @@ pub(super) fn show(
                         if row.ours_unallocated {
                             label.push_str(UNALLOCATED);
                         }
-                        let r = ui.label(pob_text(&label, 14.0, default));
+                        // PoB draws it at 16 px (CompareTab.lua:3822)
+                        let r = ui.label(pob_text(&label, 16.0, default));
                         tab.rects.note(&r, || format!("label:{}", row.slot));
                         ui.label(pob_text(diff_label(row), 14.0, default));
                         buttons(ui, tab, row, out, default);
@@ -124,20 +125,35 @@ fn ours_name(tab: &CompareUi, row: &CompareItemRow, id: u32) -> (String, String)
     }
 }
 
-/// One side's card: PoB's lines in order, the name at PoB's larger size; "(empty)" for no item
+/// One side's card: PoB's lines in order, the name at PoB's larger size, with PoB's 2 px
+/// gaps after the base's figures and between mod sections; "(empty)" for no item
 fn card(
     ui: &mut egui::Ui,
     tab: &mut CompareUi,
-    lines: &[String],
+    lines: &[CardLine],
     key: &str,
     default: egui::Color32,
 ) {
-    let empty = matches!(lines, [only] if only == "^8(empty)");
+    let empty = matches!(lines, [only] if only.text == "^8(empty)");
     let r = ui
         .vertical(|ui| {
+            let mut last: Option<(f32, f32)> = None;
             for (i, line) in lines.iter().enumerate() {
-                let size = if i == 0 && !empty { 16.0 } else { 14.0 };
-                ui.label(pob_text(line, size, default));
+                let name = i == 0 && !empty;
+                // what PoB adds beyond a line's own step (18 px for the name, 16 for a line)
+                if let Some((y, step)) = last {
+                    let gap = line.y - y - step;
+                    if gap > 0.0 {
+                        ui.add_space(gap);
+                    }
+                }
+                last = Some((line.y, if name { 18.0 } else { 16.0 }));
+                let r = ui.label(pob_text(
+                    &line.text,
+                    if name { 16.0 } else { 14.0 },
+                    default,
+                ));
+                tab.rects.note(&r, || format!("{key}:{i}"));
             }
         })
         .response;

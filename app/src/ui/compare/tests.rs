@@ -880,18 +880,28 @@ fn expanded_mode_draws_pobs_cards_with_their_marks() {
         .find(|c| c.name == EXPANDED_CHECK)
         .unwrap()
         .checked = true;
-    view.items[0].ours_card = vec![
-        "^xAF6025Doom Loop".into(),
-        "^x7F7F7FArmour: ^x8888FF500".into(),
-        "^x33FF77+ ^x8888FF+40 to maximum Life".into(),
-        "^x33FF77> ^x8888FF+30% to Fire Resistance".into(),
-    ];
-    view.items[0].theirs_card = vec![
-        "^xAF6025Tabula Rasa".into(),
-        "^xDD0022< ^x8888FF+20% to Fire Resistance".into(),
-        "^xDD0022Corrupted".into(),
-    ];
-    view.items[2].theirs_card = vec!["^8(empty)".into()];
+    let card = |lines: &[(&str, f32)]| -> Vec<crate::engine::views::CardLine> {
+        lines
+            .iter()
+            .map(|(text, y)| crate::engine::views::CardLine {
+                text: (*text).into(),
+                y: *y,
+            })
+            .collect()
+    };
+    // PoB's places: the name 18 px, a line 16, 2 px after the figures and after a section
+    view.items[0].ours_card = card(&[
+        ("^xAF6025Doom Loop", 0.0),
+        ("^x7F7F7FArmour: ^x8888FF500", 18.0),
+        ("^x33FF77+ ^x8888FF+40 to maximum Life", 36.0),
+        ("^x33FF77> ^x8888FF+30% to Fire Resistance", 52.0),
+    ]);
+    view.items[0].theirs_card = card(&[
+        ("^xAF6025Tabula Rasa", 0.0),
+        ("^xDD0022< ^x8888FF+20% to Fire Resistance", 18.0),
+        ("^xDD0022Corrupted", 36.0),
+    ]);
+    view.items[2].theirs_card = card(&[("^8(empty)", 0.0)]);
     h.ui.on_snapshot(&Snapshot::Compare(Some(Arc::new(view))));
     for _ in 0..3 {
         let out = h.frame(vec![]);
@@ -921,6 +931,16 @@ fn expanded_mode_draws_pobs_cards_with_their_marks() {
             .map(|s| s.format.font_id.size)
     };
     assert_eq!(size("Doom Loop"), Some(16.0));
+    // PoB's slot line is 16 px too
+    assert_eq!(size("Body Armour:"), Some(16.0));
+    // PoB's 2 px after the figures, none between two lines of one section
+    let line = |i: usize| h.ui.rect(&format!("card:ours:Body Armour:{i}"));
+    let after_figures = line(2).min.y - line(1).max.y;
+    let in_section = line(3).min.y - line(2).max.y;
+    assert!(
+        (after_figures - in_section - 2.0).abs() < 0.01,
+        "{after_figures} vs {in_section}"
+    );
     assert_eq!(size("+ +40 to maximum Life"), Some(14.0));
     // the mod after PoB's mark keeps its own colour
     let line = h

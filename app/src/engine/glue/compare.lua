@@ -434,8 +434,9 @@ local function item_card(tab, item, other_mods)
 	local lines = {}
 	local draw_string = DrawString
 	DrawString = function(x, y, align, height, font, text)
-		lines[#lines + 1] = text
+		lines[#lines + 1] = { text = text, y = y }
 	end
+	-- drawn from y = 0, so each line's y is its place in the card
 	local ok, err = pcall(tab.DrawItemExpanded, tab, item, 0, 0, 0, other_mods)
 	DrawString = draw_string
 	if not ok then

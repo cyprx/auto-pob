@@ -1208,8 +1208,20 @@ mod tests {
                     ours_name: Some("Doom Loop".into()),
                     ours_colour: "^xFFFF77".into(),
                     theirs_colour: "^xAF6025".into(),
-                    ours_card: vec!["^xAF6025Doom Loop".into(), "^x33FF77+ +10 to Life".into()],
-                    theirs_card: vec!["^8(empty)".into()],
+                    ours_card: vec![
+                        CardLine {
+                            text: "^xAF6025Doom Loop".into(),
+                            y: 0.0,
+                        },
+                        CardLine {
+                            text: "^x33FF77+ +10 to Life".into(),
+                            y: 18.0,
+                        },
+                    ],
+                    theirs_card: vec![CardLine {
+                        text: "^8(empty)".into(),
+                        y: 0.0,
+                    }],
                 },
                 CompareItemRow {
                     slot: "Ring 2".into(),
@@ -1268,8 +1280,9 @@ mod tests {
                   diff_label = "^xFFFF77(different)", ours_unallocated = false,
                   theirs_unallocated = true, ours_name = "Doom Loop", ours_colour = "^xFFFF77",
                   theirs_colour = "^xAF6025",
-                  ours_card = { "^xAF6025Doom Loop", "^x33FF77+ +10 to Life" },
-                  theirs_card = { "^8(empty)" } },
+                  ours_card = { { text = "^xAF6025Doom Loop", y = 0 },
+                    { text = "^x33FF77+ +10 to Life", y = 18 } },
+                  theirs_card = { { text = "^8(empty)", y = 0 } } },
                 { slot = "Ring 2", label = "Ring 2", differ = false, can_copy = false,
                   can_equip = false, diff_label = "^8(both empty)", ours_unallocated = false,
                   theirs_unallocated = false, ours_colour = "^7", theirs_colour = "^7" },
@@ -1625,14 +1638,23 @@ pub struct CompareItemRow {
     pub ours_colour: String,
     #[serde(default)]
     pub theirs_colour: String,
-    /// PoB's expanded-mode card of each side (`DrawItemExpanded`), one string per line drawn,
+    /// PoB's expanded-mode card of each side (`DrawItemExpanded`), one entry per line drawn,
     /// colour codes kept: the name, the base's figures, the mods marked against the other
     /// side's ("+ " only on this side, "> " a higher value, "< " a lower one), Corrupted and
     /// the like; "(empty)" for no item. Empty while expanded mode is off.
     #[serde(default)]
-    pub ours_card: Vec<String>,
+    pub ours_card: Vec<CardLine>,
     #[serde(default)]
-    pub theirs_card: Vec<String>,
+    pub theirs_card: Vec<CardLine>,
+}
+
+/// One line of an expanded-mode item card
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CardLine {
+    pub text: String,
+    /// Where PoB draws it, from the card's top: the name takes 18 px and a line 16, and PoB
+    /// leaves 2 px after the base's figures and after each section of mods
+    pub y: f32,
 }
 
 /// One pair of socket groups of the Compare tab's Skills view, matched as PoB's view matches

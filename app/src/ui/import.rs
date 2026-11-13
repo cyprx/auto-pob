@@ -135,6 +135,11 @@ pub struct ImportUi {
     /// PoB's once-per-tab fetch of the remembered realm's characters was tried
     /// (`TryFetchCharacterList`)
     auto_fetched: bool,
+    /// The tab is showing (`leave` says when it stops)
+    shown: bool,
+    /// The tab was entered with its button, not Ctrl+I: PoB's try may go once the account is
+    /// known (Build.lua:435-437; Ctrl+I, Build.lua:1159, doesn't try)
+    fetch_on_entry: bool,
 }
 
 impl Default for ImportUi {
@@ -179,6 +184,8 @@ impl Default for ImportUi {
             realm_seen: false,
             list_seen: None,
             auto_fetched: false,
+            shown: false,
+            fetch_on_entry: false,
         }
     }
 }
@@ -416,6 +423,8 @@ impl ImportUi {
 
     /// The tab is not showing: an answer that was to be copied is no longer wanted.
     pub fn leave(&mut self) -> Option<Command> {
+        self.shown = false;
+        self.fetch_on_entry = false;
         self.await_code = false;
         self.copy_ready = None;
         self.flush()
@@ -445,6 +454,10 @@ impl ImportUi {
                 out.commands.push(Command::ExportShareCode);
             }
         }
+        if !self.shown {
+            self.shown = true;
+            self.fetch_on_entry = !self.focus_code;
+        }
         self.try_fetch(&mut out);
         egui::ScrollArea::vertical().show(ui, |ui| {
             self.account_panel(ui, now_epoch, &mut out);
@@ -460,12 +473,13 @@ impl ImportUi {
     /// (not Ctrl+I, Build.lua:437, 1159) presses Fetch once for the remembered realm. Signed
     /// out, the press does nothing but the try is spent, as PoB's.
     fn try_fetch(&mut self, out: &mut ImportOutput) {
-        if self.auto_fetched || self.focus_code || self.modal {
+        if self.auto_fetched || !self.fetch_on_entry || self.modal {
             return;
         }
         let Some(account) = self.account.clone() else {
             return;
         };
+        self.fetch_on_entry = false;
         let oauth = &account.oauth;
         if !oauth.remembered_realm {
             return;
@@ -791,7 +805,7 @@ impl ImportUi {
             PublicStage::Fetching | PublicStage::Importing => {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label(&public.status);
+                    Self::status_lines(ui, &public.status, &public.status_coded, None);
                 });
             }
             PublicStage::SelectCharacter => {
@@ -1036,7 +1050,8 @@ impl ImportUi {
                 .desired_rows(3)
                 .desired_width(f32::INFINITY),
         );
-        let entered = entered && r.has_focus();
+        // a question open over the tab takes Enter itself
+        let entered = entered && r.has_focus() && !self.modal;
         mark(ui, "code_box", &r);
         crate::widgets::url_click::open_on_ctrl_click(ui, &r, &self.code);
         if std::mem::take(&mut self.focus_code) {
@@ -1976,6 +1991,12 @@ pub(crate) mod tests {
             ["ImportFromUrl { url: \"https://pobb.in/abc\", mode: Comparison }"]
         );
         assert!(!h.ui.code.contains('\n'), "Enter is no new line");
+        // with a question open (PoB's erase question) Enter is the question's
+        h.log.clear();
+        h.ui.set_modal(true);
+        h.frame(vec![enter()]);
+        assert!(h.log.is_empty() && h.confirms.is_empty(), "{:?}", h.log);
+        h.ui.set_modal(false);
         // typed and not judged: the text goes now, the import on PoB's verdict
         h.log.clear();
         h.frame(vec![egui::Event::Text("x".into())]);
@@ -2683,8 +2704,14 @@ pub(crate) mod tests {
         let mut h = Harness::new();
         h.account(fetchable(Realm::Pc));
         h.ui.focus_code();
-        h.frame(vec![]);
+        for _ in 0..3 {
+            h.frame(vec![]);
+        }
         assert!(h.log.is_empty(), "{:?}", h.log);
+        // a later visit with the tab's button tries
+        assert!(h.ui.leave().is_none());
+        h.frame(vec![]);
+        assert_eq!(h.log, ["ListCharacters { realm: Pc }"]);
         // no remembered realm: nothing
         let mut h = Harness::new();
         let mut view = fetchable(Realm::Pc);

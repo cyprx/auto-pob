@@ -1552,6 +1552,36 @@ fn compare_views_and_copies_match_pob() {
     assert_eq!(our_config_input(&s), up.config_input());
     same_summary(&mut s, &up, "our config box");
     same_views(&mut s, &up, "our config box");
+    // PoB's box callbacks set buildFlag only: the unsaved mark is upstream's
+    let up_unsaved: bool = up.eval("return build.unsaved and true or false");
+    assert_eq!(s.backend.build_view().unwrap().unsaved, up_unsaved);
+    // their dropdown: a pick, then back
+    let pick = view(&mut s)
+        .config
+        .iter()
+        .find_map(|r| {
+            let c = r.theirs_control.as_ref()?;
+            (c.kind == PopupControlKind::Dropdown && c.choices.len() > 1)
+                .then(|| (c.name.clone(), c.selected, c.choices.clone()))
+        })
+        .expect("a dropdown row");
+    let (drop, was_at, choices) = pick;
+    for index in [(was_at + 1) % choices.len(), was_at] {
+        run(
+            &mut s,
+            Command::SetCompareControl {
+                name: drop.clone(),
+                value: PopupInput::Choice {
+                    index,
+                    label: choices[index].clone(),
+                },
+            },
+        )
+        .unwrap();
+        up.call::<()>("pressConfigBox", (drop.as_str(), "choice", index + 1));
+        same_summary(&mut s, &up, "their config dropdown");
+        same_views(&mut s, &up, "their config dropdown");
+    }
     // both back as they were: PoB's boxes add no undo state, so the Config undo below goes
     // back past them
     run(

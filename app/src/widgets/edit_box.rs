@@ -140,7 +140,7 @@ impl UndoWatch {
             Some(_) => {}
         }
         self.view = Some(current.to_owned());
-        match self.echoes.iter().position(|e| e == current) {
+        match self.echoes.iter().position(|e| same_echo(e, current)) {
             Some(i) => {
                 self.echoes.drain(..=i);
                 false
@@ -150,6 +150,18 @@ impl UndoWatch {
                 true
             }
         }
+    }
+}
+
+/// Whether the view's `shown` is the echo of `sent`, as the engine may have normalised it:
+/// the same text, the same text trimmed, or the same number ("05" and "5", "1.50" and "1.5")
+fn same_echo(sent: &str, shown: &str) -> bool {
+    if sent == shown || sent.trim() == shown.trim() {
+        return true;
+    }
+    match (sent.trim().parse::<f64>(), shown.trim().parse::<f64>()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
     }
 }
 
@@ -717,6 +729,24 @@ mod tests {
         undo_keys(&mut h);
         assert_eq!(h.a.text, "Ax");
         assert!(h.click_away().is_empty());
+    }
+
+    /// An echo the engine normalised ("05" comes back as "5") is still the box's own: PoB
+    /// doesn't `SetText` its box then, so its undo stays (review M7)
+    #[test]
+    fn a_normalised_echo_keeps_the_undo() {
+        let mut h = Harness::new("");
+        h.focus();
+        h.type_text("05");
+        h.time += 2.0;
+        h.frame(vec![]);
+        assert_eq!(h.click_away(), ["05"]);
+        h.current = "5".into();
+        h.frame(vec![]);
+        assert_eq!(h.a.text, "5");
+        h.focus();
+        undo_keys(&mut h);
+        assert_eq!(h.a.text, "");
     }
 
     #[test]

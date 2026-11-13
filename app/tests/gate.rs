@@ -3779,6 +3779,15 @@ fn a_private_use_character_round_trips_beside_bytes_that_are_not_utf8() {
         "the character isn't escaped"
     );
     s.backend.notes_view().expect("notes view");
+    // an error that echoes text with such a byte shows it escaped too, not as U+FFFD
+    let error = s
+        .run(Command::SetGroupSlot {
+            group: 0,
+            slot: Some("Caf\u{F7E9}".into()),
+        })
+        .expect_err("no such slot")
+        .to_string();
+    assert_eq!(error, "unknown slot Caf\u{F7E9}");
     s.run(Command::SetGroupLabel {
         group: 0,
         text: format!("{label}!"),

@@ -248,13 +248,36 @@ impl PobBackend {
         } else {
             args.into_lua_multi(&self.lua).map_err(|e| anyhow!("{e}"))?
         };
-        function.call(args).map_err(|e| match e {
-            // errors raised with `error(message, 0)` arrive as the bare message
-            mlua::Error::RuntimeError(message) => {
-                anyhow!("{}", message.lines().next().unwrap_or_default())
+        // through Lua's own pcall, so an error message comes back as PoB's bytes: one that
+        // echoes a build's text keeps its bytes that aren't UTF-8, escaped like the views
+        let pcall: mlua::Function = self
+            .lua
+            .globals()
+            .get("pcall")
+            .map_err(|e| anyhow!("{e}"))?;
+        let mut args = args;
+        args.push_front(mlua::Value::Function(function));
+        let mut results: mlua::MultiValue = pcall.call(args).map_err(|e| anyhow!("{e}"))?;
+        match results.pop_front() {
+            Some(mlua::Value::Boolean(true)) => {
+                R::from_lua_multi(results, &self.lua).map_err(|e| anyhow!("{e}"))
             }
-            other => anyhow!("{other}"),
-        })
+            _ => Err(match results.pop_front() {
+                // errors raised with `error(message, 0)` arrive as the bare message
+                Some(mlua::Value::String(message)) => {
+                    let message = super::bytes_text::decode(&message.as_bytes()).into_owned();
+                    anyhow!("{}", message.lines().next().unwrap_or_default())
+                }
+                Some(mlua::Value::Error(e)) => match *e {
+                    mlua::Error::RuntimeError(message) => {
+                        anyhow!("{}", message.lines().next().unwrap_or_default())
+                    }
+                    other => anyhow!("{other}"),
+                },
+                Some(other) => anyhow!("{}", other.to_string().unwrap_or_default()),
+                None => anyhow!("the call failed"),
+            }),
+        }
     }
 
     /// A glue function's string, any bytes that aren't UTF-8 escaped (`bytes_text`): PoB's

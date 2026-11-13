@@ -931,6 +931,9 @@ impl ConfigUi {
         };
         let response = ui.add(edit.hint_text(hint));
         crate::widgets::url_click::open_on_ctrl_click(ui, &response, &text);
+        if matches!(style, FieldStyle::Multi { .. }) {
+            crate::widgets::edit_box::page_keys(ui, &response, &text);
+        }
         let mut changed = response.changed();
         if changed && let Some(accept) = accept {
             // the box's own filter and limit, for what an edit inserts

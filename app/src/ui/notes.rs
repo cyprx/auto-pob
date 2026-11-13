@@ -235,6 +235,7 @@ impl NotesUi {
                         .desired_rows(rows);
                     let response = ui.add(edit);
                     crate::widgets::url_click::open_on_ctrl_click(ui, &response, &self.text);
+                    crate::widgets::edit_box::page_keys(ui, &response, &self.text);
                     if response.changed() {
                         self.touch(now);
                     }
@@ -537,6 +538,30 @@ mod tests {
         ctx.memory_mut(|m| m.surrender_focus(ui.edit_id));
         run_events(&mut ui, &ctx, 0.5, vec![key(egui::Key::Plus)]);
         assert_eq!(ui.line_height, NOTES_LINE_HEIGHT);
+    }
+
+    #[test]
+    fn page_down_moves_the_caret_a_page_of_lines() {
+        // EditControl.lua:598-606: PageUp/PageDown in a multi-line box
+        let ctx = egui::Context::default();
+        let mut ui = NotesUi {
+            text: (0..200).map(|n| format!("line {n}\n")).collect(),
+            ..NotesUi::default()
+        };
+        run_events(&mut ui, &ctx, 0.0, vec![]);
+        ctx.memory_mut(|m| m.request_focus(ui.edit_id));
+        run_events(&mut ui, &ctx, 0.1, vec![]);
+        let caret = |ctx: &egui::Context, id| {
+            egui::TextEdit::load_state(ctx, id)
+                .and_then(|s| s.cursor.char_range())
+                .map_or(0, |r| r.primary.index.0)
+        };
+        let end = caret(&ctx, ui.edit_id);
+        run_events(&mut ui, &ctx, 0.2, vec![key(egui::Key::PageUp)]);
+        let up = caret(&ctx, ui.edit_id);
+        assert!(up + 20 < end, "the caret moved {end} -> {up}");
+        run_events(&mut ui, &ctx, 0.3, vec![key(egui::Key::PageDown)]);
+        assert_eq!(caret(&ctx, ui.edit_id), end);
     }
 
     #[test]

@@ -378,6 +378,18 @@ local function compare_state(build)
 	return compare_colours(build, compareSpec), compareSpec and tab.activeCompareSpec - 1 or nil
 end
 
+-- The spec the drawn tree is compared with: the comparison's in the Compare tab's overlay
+-- (CompareTab.lua:3392), none side by side, else the Tree tab's (TreeTab.lua:445)
+local function viewed_compare_spec(build)
+	local compare = build.compareTab
+	local entry = compare and compare.compareViewMode == "TREE" and compare:GetActiveCompare()
+	if entry then
+		return compare.treeOverlayMode and entry.spec or nil
+	end
+	local tab = build.treeTab
+	return tab.isComparing and tab.specList[tab.activeCompareSpec] or nil
+end
+
 -- The words PassiveTreeView:Draw splits the search text into (bootstrap.lua)
 local search_words = AutoPobSearchWords
 
@@ -1038,8 +1050,9 @@ function glue.node_tooltip(id, trace)
 		viewer.tracePath = nodes
 		viewer.traceMode = true
 	end
-	-- as TreeTab:Draw sets it (TreeTab.lua:445)
-	viewer.compareSpec = tab.isComparing and tab.specList[tab.activeCompareSpec] or nil
+	-- as TreeTab:Draw sets it (TreeTab.lua:445), or the Compare tab's overlay
+	-- (CompareTab.lua:3392)
+	viewer.compareSpec = viewed_compare_spec(build)
 	local ok, err = pcall(viewer.AddNodeTooltip, viewer, tooltip, node, build)
 	viewer.tracePath, viewer.compareSpec, viewer.traceMode = tracePath, compareSpec, traceMode
 	if not ok then

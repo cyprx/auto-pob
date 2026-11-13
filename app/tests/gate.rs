@@ -4476,3 +4476,23 @@ fn a_search_pob_cant_read_is_refused_and_the_tree_keeps_working() {
         s.backend.tree_state_view().expect(text);
     }
 }
+
+/// A build file saved with a search PoB can't read (main could save one before the search
+/// was refused): PoB's Draw raised at every frame, so the build didn't open. It opens with
+/// the search blank.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn a_build_saved_with_a_search_pob_cant_read_opens() {
+    let _guard = lock();
+    let mut s = Session::start("saved-bad-search");
+    let xml = fs::read_to_string(fixture_xml("attack"))
+        .unwrap()
+        .replace("searchStr=\"\"", "searchStr=\"&quot;[x&quot;\"");
+    let path = s.builds_dir().join("bad.xml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, xml).unwrap();
+    s.run(Command::OpenBuild { path }).expect("open");
+    let state = s.backend.tree_state_view().expect("tree view");
+    assert_eq!(state.search, "");
+    assert!(!s.backend.build_view().unwrap().unsaved);
+}

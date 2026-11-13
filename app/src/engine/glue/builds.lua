@@ -100,6 +100,7 @@ glue.popup_text = popup_text
 -- wrapper in net.lua sees to both); one made for another game version leaves PoB's "Game
 -- Version" window open as a session, with a new build behind it.
 local function enter_build(...)
+	glue.guard_tree_search()
 	local m = main_module()
 	local popups = m.popups
 	local depth = #popups

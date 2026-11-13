@@ -3995,8 +3995,16 @@ mod tests {
         click(&mut app, &ctx, "set_delete");
         assert!(app.config_ui.rects.contains_key("set_delete_yes"));
         app.request(Pending::New);
+        // the request runs on the next frame: until then the old build is still "entered",
+        // so waiting for `entering` to clear must start once it is set
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.entering.is_some(), "the new build wasn't requested");
+        // the new build's first snapshot clears `entering`; its Config view (no sets) may come
+        // in a later frame, and would replace the view set below
         pump_until(&mut app, &ctx, "another build", |a| {
-            a.screen == Screen::Build && a.entering.is_none()
+            a.screen == Screen::Build
+                && a.entering.is_none()
+                && a.config.as_ref().is_some_and(|c| c.sets.is_empty())
         });
         app.config = Some(Arc::new(sample_config()));
         app.tab = BuildTab::Config;

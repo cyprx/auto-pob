@@ -100,6 +100,9 @@ pub struct NotesUi {
     /// The editor's text size, PoB's line height: its zoom is the notes' alone and isn't
     /// saved (controller ruling on notes zoom)
     pub(crate) line_height: u32,
+    /// The engine put text in (another build, an import): the editor's undo starts over at
+    /// the next draw, as PoB's `SetText` resets it (EditControl.lua:103)
+    reset_undo: bool,
 }
 
 impl Default for NotesUi {
@@ -114,6 +117,9 @@ impl Default for NotesUi {
             #[cfg(test)]
             button_rects: Vec::new(),
             line_height: NOTES_LINE_HEIGHT,
+            // the editor's id is the same for every build: what the last build left in its
+            // undo goes
+            reset_undo: true,
         }
     }
 }
@@ -151,8 +157,16 @@ impl NotesUi {
         // The user's newer typing wins, and so does text sent after the view was taken. Comparing
         // seqs, unlike comparing the text, needs no copy of the engine's filtering and cannot
         // stall if a SetNotes fails and is never echoed.
-        if self.dirty_since.is_none() && seq >= self.sent_seq {
+        if self.dirty_since.is_none() && seq >= self.sent_seq && self.text != view.text {
+            // the echo of our own edit, less what the box's filter drops ("\r", control
+            // characters), keeps the undo
+            let echo = self
+                .text
+                .chars()
+                .filter(|&c| !c.is_ascii_control() || c == '\t' || c == '\n')
+                .eq(view.text.chars());
             self.text.clone_from(&view.text);
+            self.reset_undo |= !echo;
         }
     }
 
@@ -223,6 +237,12 @@ impl NotesUi {
             egui::ScrollArea::vertical()
                 .auto_shrink(false)
                 .show(ui, |ui| {
+                    if std::mem::take(&mut self.reset_undo)
+                        && let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), self.edit_id)
+                    {
+                        state.clear_undoer();
+                        state.store(ui.ctx(), self.edit_id);
+                    }
                     let rows = (ui.available_height()
                         / ui.text_style_height(&egui::TextStyle::Body))
                     .max(4.0) as usize;
@@ -453,6 +473,56 @@ mod tests {
         assert!(run_events(&mut ui, &ctx, 1.3, vec![]).is_none());
         let sent = run_events(&mut ui, &ctx, 1.5, vec![]);
         assert!(matches!(sent, Some(Command::SetNotes { ref text }) if text == "hi"));
+    }
+
+    /// Ctrl+Z never brings back text the engine replaced: another build's notes, or the
+    /// notes before an import. PoB's `SetText` resets the box's undo (EditControl.lua:103).
+    #[test]
+    fn undo_stops_at_text_the_engine_put_in() {
+        let ctx = egui::Context::default();
+        let view = |text: &str| NotesView {
+            text: text.to_owned(),
+            colours: Vec::new(),
+        };
+        let undo = || {
+            vec![egui::Event::Key {
+                key: egui::Key::Z,
+                physical_key: Some(egui::Key::Z),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            }]
+        };
+        for build_change in [true, false] {
+            let mut ui = NotesUi::default();
+            ui.on_view(&view("build A"), 1);
+            run_events(&mut ui, &ctx, 0.0, vec![]);
+            ctx.memory_mut(|m| m.request_focus(ui.edit_id));
+            run_events(&mut ui, &ctx, 0.1, vec![]);
+            // typed far apart, so the undoer keeps each
+            run_events(&mut ui, &ctx, 1.0, vec![egui::Event::Text(" x".into())]);
+            run_events(&mut ui, &ctx, 3.0, vec![egui::Event::Text("y".into())]);
+            run_events(&mut ui, &ctx, 5.0, vec![]);
+            assert_eq!(ui.text, "build A xy");
+            ui.flush();
+            ui.sent(2);
+            if build_change {
+                ui.reset();
+            }
+            ui.on_view(&view("build B"), 3);
+            run_events(&mut ui, &ctx, 6.0, vec![]);
+            ctx.memory_mut(|m| m.request_focus(ui.edit_id));
+            run_events(&mut ui, &ctx, 6.1, vec![]);
+            for t in 0..3 {
+                run_events(&mut ui, &ctx, 8.0 + f64::from(t), undo());
+            }
+            assert_eq!(ui.text, "build B", "build change {build_change}");
+            // what is typed after can still be undone
+            run_events(&mut ui, &ctx, 12.0, vec![egui::Event::Text("!".into())]);
+            run_events(&mut ui, &ctx, 14.0, vec![]);
+            run_events(&mut ui, &ctx, 15.0, undo());
+            assert_eq!(ui.text, "build B", "build change {build_change}");
+        }
     }
 
     #[test]

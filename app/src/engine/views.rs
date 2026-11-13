@@ -2065,7 +2065,7 @@ pub struct ShareView {
     /// The sites Share uploads to, in PoB's dropdown order
     #[serde(default)]
     pub sites: Vec<SiteRef>,
-    /// The site chosen last in this build, if any
+    /// The site PoB's drop-down shows: the one chosen last, else PoB's default (Pastebin)
     #[serde(default)]
     pub last_site: Option<String>,
     /// The link the last Share made, until the code box changes
@@ -2149,6 +2149,18 @@ pub struct OAuthView {
     /// A fetch or import runs (`oauthLoading`)
     #[serde(default)]
     pub busy: bool,
+    /// The league drop-down's selection: PoB's last league, else its first; `None` for "Any"
+    /// or no list (ImportTab.lua:121-131)
+    #[serde(default)]
+    pub league_selected: Option<String>,
+    /// The character drop-down's selection: the last character imported, else the first
+    /// (ImportTab.lua:1085-1093)
+    #[serde(default)]
+    pub character_selected: Option<String>,
+    /// PoB remembers a realm (`main.lastRealm`): opening the tab fetches its list once
+    /// (`TryFetchCharacterList`, ImportTab.lua:734-739, Build.lua:437)
+    #[serde(default)]
+    pub remembered_realm: bool,
 }
 
 impl Default for OAuthView {
@@ -2166,6 +2178,9 @@ impl Default for OAuthView {
             error: None,
             retry_at: None,
             busy: false,
+            league_selected: None,
+            character_selected: None,
+            remembered_realm: false,
         }
     }
 }
@@ -2199,6 +2214,13 @@ pub struct PublicView {
     /// The account PoB's history dropdown has selected, if any
     #[serde(default)]
     pub history_selected: Option<String>,
+    /// The league drop-down's selection while a list shows: the last league used (or its
+    /// Standard league), else the first; `None` for "All" (ImportTab.lua:991-1013)
+    #[serde(default)]
+    pub league_selected: Option<String>,
+    /// The character drop-down's selection: the last character imported, else the first
+    #[serde(default)]
+    pub character_selected: Option<String>,
 }
 
 /// What PoB's account name box allows (ImportTab.lua:367-404): whether its "Missing
@@ -2229,6 +2251,8 @@ impl Default for PublicView {
             missing_discriminator: String::new(),
             bandit_note: String::new(),
             history_selected: None,
+            league_selected: None,
+            character_selected: None,
         }
     }
 }
@@ -2250,6 +2274,9 @@ pub struct CharacterEntry {
     pub class: String,
     pub level: u32,
     pub league: String,
+    /// PoB's colour code for the class in the entry's detail (`BuildCharacterList`)
+    #[serde(default)]
+    pub colour: String,
 }
 
 /// PoB's help (`help.txt`) as its About window shows it (`main:OpenAboutPopup`,

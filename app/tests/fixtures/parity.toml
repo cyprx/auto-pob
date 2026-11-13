@@ -1025,14 +1025,14 @@ note = "part of config.setSelect"
 ported = "app/src/ui/config.rs Show all"
 
 [controls."import.accountRealm"]
-ported = "app/src/ui/import.rs sign-in import"
+ported = "app/src/ui/import.rs sign-in import realm combo: starts on PoB's remembered realm (OAuthView.realm), PoB's labels PC/Xbox/Sony"
 
 [controls."import.accountRealm.scrollBar"]
 ported = "app/src/ui/import.rs sign-in import"
 note = "part of import.accountRealm"
 
 [controls."import.accountRealmFetchButton"]
-ported = "app/src/ui/import.rs sign-in import"
+ported = "app/src/ui/import.rs sign-in import Fetch; opening the tab with its button fetches the remembered realm's list once, as TryFetchCharacterList (OAuthView.remembered_realm)"
 
 [controls."import.authenticateButton"]
 ported = "app/src/ui/import.rs sign-in import"
@@ -1044,28 +1044,28 @@ ported = "app/src/ui/import.rs sign-in import"
 ported = "app/src/ui/import.rs sign-in import"
 
 [controls."import.charImportItems"]
-ported = "app/src/ui/import.rs sign-in import"
+ported = "app/src/ui/import.rs 'Items and Skills' part of Import (one Import for both parts, D-054)"
 
 [controls."import.charImportItemsClearItems"]
-ported = "app/src/ui/import.rs sign-in import"
+ported = "app/src/ui/import.rs 'Delete equipment' box with PoB's tip, on by default"
 
 [controls."import.charImportItemsClearSkills"]
-ported = "app/src/ui/import.rs sign-in import"
+ported = "app/src/ui/import.rs 'Delete skills' box with PoB's tip, on by default"
 
 [controls."import.charImportItemsIgnoreWeaponSwap"]
-ported = "app/src/ui/import.rs sign-in import"
+ported = "app/src/ui/import.rs 'Ignore weapon swap' box with PoB's tip, off by default"
 
 [controls."import.charImportStatusLabel"]
-ported = "app/src/ui/import.rs sign-in import"
+ported = "app/src/ui/import.rs sign-in import: PoB's 'Character import status: ' line"
 
 [controls."import.charImportTree"]
-ported = "app/src/ui/import.rs sign-in import"
+ported = "app/src/ui/import.rs 'Passive Tree and Jewels' part of Import (one Import for both parts, D-054), PoB's overwrite question"
 
 [controls."import.charImportTreeClearJewels"]
-ported = "app/src/ui/import.rs sign-in import"
+ported = "app/src/ui/import.rs 'Delete jewels' box with PoB's tip, on by default"
 
 [controls."import.charSelect"]
-ported = "app/src/ui/import.rs sign-in import"
+ported = "app/src/ui/import.rs sign-in import character list: PoB's entries (name, class colour, grey lvl, league with no league picked), starting on PoB's pick (OAuthView.character_selected)"
 
 [controls."import.charSelect.scrollBar"]
 ported = "app/src/ui/import.rs sign-in import"
@@ -1075,7 +1075,7 @@ note = "part of import.charSelect"
 ported = "app/src/ui/import.rs sign-in import"
 
 [controls."import.charSelectLeague"]
-ported = "app/src/ui/import.rs sign-in import"
+ported = "app/src/ui/import.rs sign-in import league combo, starting on PoB's pick (OAuthView.league_selected)"
 
 [controls."import.charSelectLeague.scrollBar"]
 ported = "app/src/ui/import.rs sign-in import"
@@ -1089,7 +1089,7 @@ ruled_out = "D-003"
 note = "party export"
 
 [controls."import.exportFrom"]
-ported = "app/src/ui/import.rs build sharing"
+ported = "app/src/ui/import.rs Share site combo, starting on PoB's drop-down pick (ShareView.last_site: the site chosen last, else Pastebin)"
 
 [controls."import.exportFrom.scrollBar"]
 ported = "app/src/ui/import.rs build sharing"
@@ -1122,13 +1122,13 @@ ported = "app/src/ui/import.rs build sharing"
 note = "part of import.generateCodeOut"
 
 [controls."import.importCodeGo"]
-ported = "app/src/ui/import.rs build sharing"
+ported = "app/src/ui/import.rs Import, 'Retrieving paste..' while PoB fetches the paste"
 
 [controls."import.importCodeHeader"]
 ported = "app/src/ui/import.rs build sharing"
 
 [controls."import.importCodeIn"]
-ported = "app/src/ui/import.rs build sharing"
+ported = "app/src/ui/import.rs code box: Enter imports a valid text (enterFunc), on text not judged yet once PoB's verdict comes"
 
 [controls."import.importCodeIn.buttonClear"]
 ported = "app/src/ui/import.rs code box: its x empties it (widgets/edit_box.rs clear_button)"
@@ -1143,20 +1143,20 @@ ported = "app/src/ui/import.rs build sharing"
 note = "part of import.importCodeIn"
 
 [controls."import.importCodeMode"]
-ported = "app/src/ui/import.rs build sharing"
+ported = "app/src/ui/import.rs mode choice in PoB's order, starting on 'Import to this build' for a build with a file, enabled with a valid text"
 
 [controls."import.importCodeMode.scrollBar"]
 ported = "app/src/ui/import.rs build sharing"
 note = "part of import.importCodeMode"
 
 [controls."import.importCodeState"]
-ported = "app/src/ui/import.rs build sharing"
+ported = "app/src/ui/import.rs PoB's verdict in its POSITIVE / NEGATIVE colour"
 
 [controls."import.logoutApiButton"]
 ported = "app/src/ui/import.rs sign-in import"
 
 [controls."import.oauthErrorLabel"]
-ported = "app/src/ui/import.rs sign-in import"
+ported = "app/src/ui/import.rs sign-in import: PoB's 'Error: ' line in its NEGATIVE colour"
 
 [controls."import.sectionBuild"]
 ported = "app/src/ui/import.rs build sharing"
@@ -1190,7 +1190,7 @@ ported = "app/src/ui/import.rs import by account name"
 note = "part of import.siteAccountName"
 
 [controls."import.siteAccountNameGo"]
-ported = "app/src/ui/import.rs import by account name"
+ported = "app/src/ui/import.rs import by account name Start: enabled on %S[#-]dddd$ (account_name_state), PoB's 'Missing discriminator e.g. NAME#1234' tip"
 
 [controls."import.siteAccountNameHeader"]
 ported = "app/src/ui/import.rs import by account name"
@@ -1203,7 +1203,7 @@ ported = "app/src/ui/import.rs"
 note = "hint only; egui text boxes take non-ASCII text"
 
 [controls."import.siteAccountRealm"]
-ported = "app/src/ui/import.rs import by account name"
+ported = "app/src/ui/import.rs import by account name: the realm combo, starting on PoB's remembered realm, PoB's labels PC/Xbox/Sony"
 
 [controls."import.siteAccountRealm.scrollBar"]
 ported = "app/src/ui/import.rs import by account name"
@@ -1219,28 +1219,28 @@ ported = "app/src/ui/import.rs import by account name"
 ported = "app/src/ui/import.rs import by account name"
 
 [controls."import.siteCharImportItems"]
-ported = "app/src/ui/import.rs import by account name"
+ported = "app/src/ui/import.rs 'Items and Skills' part of Import (one Import for both parts, D-054)"
 
 [controls."import.siteCharImportItemsClearItems"]
-ported = "app/src/ui/import.rs import by account name"
+ported = "app/src/ui/import.rs 'Delete equipment' box with PoB's tip, on by default"
 
 [controls."import.siteCharImportItemsClearSkills"]
-ported = "app/src/ui/import.rs import by account name"
+ported = "app/src/ui/import.rs 'Delete skills' box with PoB's tip, on by default"
 
 [controls."import.siteCharImportItemsIgnoreWeaponSwap"]
-ported = "app/src/ui/import.rs import by account name"
+ported = "app/src/ui/import.rs 'Ignore weapon swap' box with PoB's tip, off by default"
 
 [controls."import.siteCharImportStatusLabel"]
-ported = "app/src/ui/import.rs import by account name"
+ported = "app/src/ui/import.rs import by account name: PoB's 'Character import status: ' line"
 
 [controls."import.siteCharImportTree"]
-ported = "app/src/ui/import.rs import by account name"
+ported = "app/src/ui/import.rs 'Passive Tree and Jewels' part of Import (one Import for both parts, D-054), PoB's overwrite question"
 
 [controls."import.siteCharImportTreeClearJewels"]
-ported = "app/src/ui/import.rs import by account name"
+ported = "app/src/ui/import.rs 'Delete jewels' box with PoB's tip, on by default"
 
 [controls."import.siteCharSelect"]
-ported = "app/src/ui/import.rs import by account name"
+ported = "app/src/ui/import.rs import by account name character list: PoB's entries, starting on PoB's pick (PublicView.character_selected)"
 
 [controls."import.siteCharSelect.scrollBar"]
 ported = "app/src/ui/import.rs import by account name"
@@ -1250,7 +1250,7 @@ note = "part of import.siteCharSelect"
 ported = "app/src/ui/import.rs import by account name"
 
 [controls."import.siteCharSelectLeague"]
-ported = "app/src/ui/import.rs import by account name"
+ported = "app/src/ui/import.rs import by account name league combo, starting on PoB's pick (PublicView.league_selected)"
 
 [controls."import.siteCharSelectLeague.scrollBar"]
 ported = "app/src/ui/import.rs import by account name"

@@ -52,7 +52,9 @@ function glue.share_view()
 	for _, site in ipairs(controls.exportFrom.list) do
 		sites[#sites + 1] = { id = site.id, label = site.label }
 	end
-	local last_site = tab.exportWebsiteSelected or pob.main.main.lastExportWebsite
+	-- the drop-down's own pick: the site chosen last, else PoB's "Pastebin" (ImportTab.lua:540)
+	local picked = controls.exportFrom:GetSelValue()
+	local last_site = picked and picked.id
 	local known = false
 	for _, site in ipairs(sites) do
 		known = known or site.id == last_site
@@ -374,6 +376,32 @@ local STAGES = {
 
 local REALMS = { PC = "Pc", XBOX = "Xbox", SONY = "Sony" }
 
+-- `list`'s characters of realm `code` as PoB's `BuildCharacterList` lists them for "Any" (its
+-- realm filter and its sort), each with the class colour its entry's detail starts with
+local function character_entries(tab, code, list)
+	local scratch = { list = {} }
+	tab:BuildCharacterList(code, nil, list or {}, scratch)
+	local out = {}
+	for _, entry in ipairs(scratch.list) do
+		local char = entry.char
+		local detail = entry.detail or ""
+		out[#out + 1] = {
+			name = tostring(char.name or "?"),
+			class = tostring(char.class or "?"),
+			level = math.floor(tonumber(char.level) or 0),
+			league = tostring(char.league or "?"),
+			colour = detail:match("^(%^x%x%x%x%x%x%x)") or detail:match("^(%^%d)") or "",
+		}
+	end
+	return out
+end
+
+-- The label of a character drop-down's selection
+local function selected_name(select)
+	local entry = select:GetSelValue()
+	return type(entry) == "table" and entry.label or nil
+end
+
 -- PoB's sign-in, as its section shows it (R18, R21). The status is the label's own text: the
 -- label function is called first, as Draw does, since it clears an expired login timer and a
 -- passed rate limit. No token is read here, only whether there is one.
@@ -406,19 +434,18 @@ local function oauth_view(tab)
 		view.leagues[#view.leagues + 1] = tostring(league)
 	end
 	-- every character of the realm, as `BuildCharacterList` filters and sorts them for "Any"
-	for _, char in ipairs(list or {}) do
-		if char.realm == code then
-			view.characters[#view.characters + 1] = {
-				name = tostring(char.name or "?"),
-				class = tostring(char.class or "?"),
-				level = math.floor(tonumber(char.level) or 0),
-				league = tostring(char.league or "?"),
-			}
+	view.characters = character_entries(tab, code, list)
+	-- PoB's own picks: the last league used, else the first, and the last character imported,
+	-- else the first (ImportTab.lua:121-131, 1085-1093); "Any" is no league
+	if list then
+		local league = controls.charSelectLeague:GetSelValue()
+		if league ~= nil and league ~= "Any" then
+			view.league_selected = tostring(league)
 		end
+		view.character_selected = selected_name(controls.charSelect)
 	end
-	table.sort(view.characters, function(a, b)
-		return a.name:lower() < b.name:lower()
-	end)
+	-- PoB fetches the remembered realm's list when its tab is opened (ImportTab.lua:734-739)
+	view.remembered_realm = main().lastRealm ~= nil
 	return view
 end
 
@@ -450,19 +477,11 @@ function glue.account_view()
 			public.leagues[#public.leagues + 1] = entry.label
 		end
 		local code = controls.siteAccountRealm:GetSelValue().realmCode
-		for _, char in ipairs(tab.lastCharList or {}) do
-			if char.realm == code then
-				public.characters[#public.characters + 1] = {
-					name = tostring(char.name or "?"),
-					class = tostring(char.class or "?"),
-					level = math.floor(tonumber(char.level) or 0),
-					league = tostring(char.league or "?"),
-				}
-			end
-		end
-		table.sort(public.characters, function(a, b)
-			return a.name:lower() < b.name:lower()
-		end)
+		public.characters = character_entries(tab, code, tab.lastCharList)
+		-- PoB's own picks (ImportTab.lua:991-1013, 1085-1093); "All" is no league
+		local league = controls.siteCharSelectLeague:GetSelValue()
+		public.league_selected = type(league) == "table" and league.league or nil
+		public.character_selected = selected_name(controls.siteCharSelect)
 	end
 	return view
 end

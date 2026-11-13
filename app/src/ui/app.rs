@@ -6310,6 +6310,7 @@ mod tests {
             ..(**app.build.as_ref().unwrap()).clone()
         }));
         let before = app.sent_full.len();
+        click_mark(&mut app, &ctx, "mode:new");
         click_mark(&mut app, &ctx, "import_code");
         assert_eq!(
             app.prompt,
@@ -6381,6 +6382,7 @@ mod tests {
                     class: "Witch".into(),
                     level: 90,
                     league: "Standard".into(),
+                    colour: String::new(),
                 }],
                 ..OAuthView::default()
             },

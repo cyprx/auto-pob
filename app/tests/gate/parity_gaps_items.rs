@@ -462,6 +462,137 @@ fn mod_browser_matches_pob() {
 
 // ---- The Items tab's tree dropdown (specSelect) ----
 
+/// Ctrl+V while one of the tab's boxes has the keyboard: PoB's Items and Skills tabs read it
+/// before their controls and try the text as an item or a socket group, quietly
+/// (ItemsTab.lua:1454, SkillsTab.lua:628). The quiet tries change what upstream's own paste
+/// changes and nothing on text that is neither; the loud commands still refuse such text.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn quiet_pastes_match_pob() {
+    let _guard = lock();
+    let xml = fixtures_dir().join("attack.xml");
+    let mut s = Session::start("quiet-pastes");
+    s.open_fixture("attack", &xml);
+    let up = super::upstream_lua(&super::pob_dir()).expect("starting upstream PoB");
+    super::load_xml(&up, &std::fs::read_to_string(&xml).unwrap(), "attack").unwrap();
+    let up_eval = |code: &str| -> mlua::Value {
+        up.load(code)
+            .eval()
+            .unwrap_or_else(|e| panic!("{code}: {e}"))
+    };
+    let groups = |s: &mut Session| s.backend.skills_view().unwrap().groups.len();
+    let junk = "just some typed words";
+
+    // neither an item nor gems: nothing changes, and no error
+    let before = (display(&mut s), groups(&mut s));
+    let affected = s
+        .run(Command::TryPasteItem { text: junk.into() })
+        .expect("a quiet item paste errored");
+    assert!(!affected.display_item && !affected.build, "{affected:?}");
+    s.run(Command::TryPasteSocketGroup { text: junk.into() })
+        .expect("a quiet group paste errored");
+    assert_eq!((display(&mut s), groups(&mut s)), before);
+    let theirs = up_eval(&format!(
+        r#"local tab = build.itemsTab
+        local skills = build.skillsTab
+        local n = #skills.socketGroupList
+        tab:CreateDisplayItemFromRaw({junk:?}, true)
+        skills:PasteSocketGroup({junk:?})
+        return tab.displayItem == nil and #skills.socketGroupList == n"#
+    ));
+    assert_eq!(theirs, mlua::Value::Boolean(true));
+    // the loud commands still refuse that text
+    assert!(s.run(Command::PasteItem { text: junk.into() }).is_err());
+    assert!(
+        s.run(Command::PasteSocketGroup { text: junk.into() })
+            .is_err()
+    );
+
+    // an item and a group go in as upstream's own paste puts them
+    let ring = "Rarity: RARE\nDoom Loop\nIron Ring\nImplicits: 0\n+30 to maximum Life";
+    let gems = "Label: Pasted\r\nBoneshatter 20/0  1\r\nRuthless Support 20/0  1\r\n";
+    let affected = s.run(Command::TryPasteItem { text: ring.into() }).unwrap();
+    assert!(affected.display_item, "{affected:?}");
+    let count = groups(&mut s);
+    s.run(Command::TryPasteSocketGroup { text: gems.into() })
+        .unwrap();
+    let ours = display(&mut s).expect("no display item");
+    let skills = s.backend.skills_view().unwrap();
+    assert_eq!(skills.groups.len(), count + 1);
+    let last = skills.groups.last().unwrap();
+    let theirs: (String, String, String, String) = up
+        .load(format!(
+            r#"local tab = build.itemsTab
+            local skills = build.skillsTab
+            tab:CreateDisplayItemFromRaw({ring:?}, true)
+            skills:PasteSocketGroup({gems:?})
+            local group = skills.socketGroupList[#skills.socketGroupList]
+            return tab.displayItem.name, tab.displayItem.baseName, group.label,
+                group.gemList[1].nameSpec .. "," .. group.gemList[2].nameSpec"#
+        ))
+        .eval()
+        .unwrap();
+    let names: Vec<&str> = last.gems.iter().map(|g| g.name_spec.as_str()).collect();
+    assert_eq!(
+        (
+            ours.name.clone(),
+            ours.base.clone(),
+            last.label.clone(),
+            names.join(",")
+        ),
+        theirs
+    );
+}
+
+/// The Items view reads the shared set rows through one kept `SharedItemSetListControl`, as it
+/// keeps the build's set list, instead of building a new one on every view; a new build's tab
+/// gets its own
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn items_views_keep_one_shared_set_list() {
+    let _guard = lock();
+    let xml = fixtures_dir().join("attack.xml");
+    let mut s = Session::start("items-shared-set-list");
+    s.open_fixture("attack", &xml);
+    let count = |s: &Session| -> u32 {
+        s.backend
+            .lua
+            .load("return __shared_set_lists or 0")
+            .eval()
+            .unwrap()
+    };
+    s.backend
+        .lua
+        .load(
+            r#"
+            local made = new
+            __shared_set_lists = 0
+            new = function(class, ...)
+                if class == "SharedItemSetListControl" then
+                    __shared_set_lists = __shared_set_lists + 1
+                end
+                return made(class, ...)
+            end
+            "#,
+        )
+        .exec()
+        .unwrap();
+    let first = s.backend.items_view().unwrap();
+    for _ in 0..3 {
+        assert_eq!(s.backend.items_view().unwrap(), first);
+    }
+    assert!(count(&s) <= 1, "{} set lists for four views", count(&s));
+    let before = count(&s);
+    s.run(Command::NewBuild).unwrap();
+    s.backend.items_view().unwrap();
+    s.backend.items_view().unwrap();
+    assert_eq!(
+        count(&s),
+        before + 1,
+        "a new build's tab didn't get its own list"
+    );
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn items_tree_dropdown_matches_pob() {

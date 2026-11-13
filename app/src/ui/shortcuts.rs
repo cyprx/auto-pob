@@ -134,10 +134,13 @@ pub fn right_click_pasted(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<u64>(right_paste_id())) == Some(ctx.cumulative_pass_nr())
 }
 
-/// The text Ctrl+V pastes this frame, for the Items and Skills tabs, which read it only while
-/// no text box has the keyboard (a box keeps its own paste, so neither a right-click's paste
-/// nor a top bar box can reach here)
+/// The text Ctrl+V pastes this frame, for the Items and Skills tabs, which read it before
+/// their controls, so also while one of their boxes has the keyboard (ItemsTab.lua:1454,
+/// SkillsTab.lua:628). A right-click's paste into a box is no Ctrl+V: none.
 pub fn ctrl_v_text(ui: &egui::Ui) -> Option<String> {
+    if right_click_pasted(ui.ctx()) {
+        return None;
+    }
     ui.input(|i| {
         i.events.iter().find_map(|e| match e {
             Event::Paste(text) => Some(text.clone()),

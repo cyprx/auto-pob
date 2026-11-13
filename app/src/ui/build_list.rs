@@ -493,6 +493,11 @@ impl BuildListUi {
                     .desired_width(480.0),
             );
             mark(ui, "search", &edit);
+            crate::widgets::edit_box::select_all_on_double_click(
+                ui.ctx(),
+                &edit,
+                &self.filter_text,
+            );
             if edit.changed() {
                 clean_search(&before, &mut self.filter_text, pasted);
                 self.filter_edit = Some(now);
@@ -1024,6 +1029,7 @@ fn name_edit(
             .id(id),
     );
     mark(ui, "name_edit", &edit);
+    crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &edit, text);
     if *focus {
         edit.request_focus();
         *focus = false;

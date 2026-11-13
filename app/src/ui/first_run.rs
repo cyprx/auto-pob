@@ -73,6 +73,11 @@ impl FirstRunScreen {
                                 .desired_width(360.0),
                         );
                         crate::ui::import::mark(ui, "first_run_path", &edit);
+                        crate::widgets::edit_box::select_all_on_double_click(
+                            ui.ctx(),
+                            &edit,
+                            &self.text,
+                        );
                         let enter =
                             edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         let usable = !self.text.trim().is_empty();

@@ -943,7 +943,7 @@ ported = "app/src/ui/config.rs remove custom mod group; audit 2: a red X that re
 ported = "app/src/ui/config.rs custom group enable box with PoB's what-if hover (HoverTooltip CustomModEnabled, NF-10)"
 
 [controls."config.#CustomModBlockControl.textEdit"]
-ported = "app/src/ui/config.rs custom mod group text"
+ported = "app/src/ui/config.rs custom mod group text; unselected, each line in PoB's inactiveText colour, MAGIC for a line parseMod reads whole, else UNSUPPORTED (CustomModGroup.line_colours from glue config.lua; gate custom_mod_groups_match_pob, test custom_mod_lines_take_pobs_colours_while_unselected)"
 
 [controls."config.#CustomModBlockControl.titleEdit"]
 ported = "app/src/ui/config.rs custom mod group title"
@@ -957,7 +957,7 @@ ported = "app/src/ui/config.rs dropdowns"
 note = "part of config.#DropDownControl"
 
 [controls."config.#EditControl"]
-ported = "app/src/ui/config.rs edit boxes with PoB's tooltipFunc on hover (HoverTooltip ConfigOption, R22); number boxes take PoB's filter and 10-character limit (ConfigTab.lua:273), and the integer ones step on + and -, Up, Down and the wheel from their value or placeholder (config.rs Accept, step_number)"
+ported = "app/src/ui/config.rs edit boxes with PoB's tooltipFunc on hover (HoverTooltip ConfigOption, R22); number boxes take PoB's filter and 10-character limit (ConfigTab.lua:273), and the integer ones step on + and -, Up, Down and the wheel from their value or placeholder (config.rs Accept, step_number); the value sent is PoB's tonumber(buf): no number ('-' alone) clears, a count of 0 is stored (parse_number_input; gate config_number_text_matches_pob)"
 note = "PoB adds no what-if comparison to number inputs (ConfigTab.lua:719-721)"
 
 [controls."config.#EditControl.buttonDown"]
@@ -2487,7 +2487,7 @@ ported = "app/src/ui/skills/picker.rs gem picker"
 note = "part of skills.gemSlot#Name"
 
 [controls."skills.gemSlot#Quality"]
-ported = "app/src/ui/skills/group.rs Quality box with PoB's what-if hover tooltip (HoverTooltip, R22); a %D box (widgets/edit_box.rs EditBoxOptions::number): + and - buttons, Up/Down and the wheel step it (EditControl.lua:64-75, 680-700)"
+ported = "app/src/ui/skills/group.rs Quality box with PoB's what-if hover tooltip (HoverTooltip, R22); a %D box (widgets/edit_box.rs EditBoxOptions::number): + and - buttons, Up/Down and the wheel step it (EditControl.lua:64-75, 680-700); a gem that fits its socket borders it in the gem's colour (borderFunc, SkillsTab.lua:852-859; test a_matching_socket_borders_the_quality_box)"
 
 [controls."skills.gemSlot#Quality.buttonDown"]
 ported = "app/src/ui/skills/group.rs Quality box"
@@ -2891,7 +2891,7 @@ ported = "app/src/ui/skills/groups.rs confirm"
 ported = "app/src/ui/tree/toolbar.rs confirm; audit 2: PoB's text"
 
 [popups."Edit Item Text"]
-ported = "app/src/ui/items/text_window.rs"
+ported = "app/src/ui/items/text_window.rs; its box filters as you type, as PoB's '^%C\\t\\n' box with sanitiseText as its paste filter (name_box::spliced_with, sanitise_text; test the_text_window_filters_as_you_type)"
 
 [popups."Enchant Item"]
 ported = "app/src/ui/popup.rs session (SP5b)"
@@ -3249,7 +3249,7 @@ ported = "app/src/ui"
 note = "egui TextEdit editing; Enter and Esc as in our shared EditBox"
 
 [keys."EditControl.LEFTBUTTON"]
-ported = "app/src/ui egui TextEdit editing; app/src/widgets/url_click.rs: Ctrl+click on a box that holds a link (EditControl.lua:485-486), at the shared EditBox, the name boxes, the Import code box, Notes and the Config fields"
+ported = "app/src/ui egui TextEdit editing; app/src/widgets/edit_box.rs select_all_on_double_click: a double click selects a single-line box's whole text (EditControl.lua:455-483) at every PoB single-line box (test a_double_click_selects_the_whole_single_line); app/src/widgets/url_click.rs: Ctrl+click on a box that holds a link (EditControl.lua:485-486), at the shared EditBox, the name boxes, the Import code box, Notes and the Config fields"
 note = "egui TextEdit editing; Enter and Esc as in our shared EditBox. Deliberate safety deviation (review I3): PoB opens the whole text for any scheme; ours opens only the first http(s) URL in it, alone, and webbrowser is built hardened (http(s) only)"
 
 [keys."EditControl.PAGEDOWN"]
@@ -3345,7 +3345,7 @@ ported = "app/src/ui/items/slots.rs E over a slot holding an item sends EditItem
 ported = "app/src/ui/items/slots.rs Ctrl+F opens the item database on PoB's unique or rare search (items/db.rs focus_search)"
 
 [keys."items.v"]
-ported = "app/src/ui/items/mod.rs Ctrl+V paste outside a text field (PoB also tries a box's paste, silently; the engine reports a non-item as an error, so a box keeps its paste)"
+ported = "app/src/ui/items/mod.rs Ctrl+V: PasteItem, or while one of the tab's boxes has the keyboard (which pastes too) the quiet TryPasteItem, as PoB reads it before its controls (ItemsTab.lua:1454); gate quiet_pastes_match_pob"
 
 [keys."items.y"]
 ported = "app/src/ui/app.rs Ctrl+Y redo"
@@ -3459,7 +3459,7 @@ ported = "app/src/ui/skills/groups.rs right-click menu; Ctrl+right-click sends S
 ported = "app/src/ui/skills/keys.rs F1 over a socket group opens its first gem's poewiki page"
 
 [keys."skills.v"]
-ported = "app/src/ui/skills/mod.rs Ctrl+V paste outside a text field (PoB also tries a box's paste, silently; the engine reports a text with no gems as an error, so a box keeps its paste)"
+ported = "app/src/ui/skills/mod.rs Ctrl+V: PasteSocketGroup, or while one of the tab's boxes has the keyboard (which pastes too) the quiet TryPasteSocketGroup, as PoB reads it before its controls (SkillsTab.lua:628); gate quiet_pastes_match_pob"
 
 [keys."skills.y"]
 ported = "app/src/ui/app.rs Ctrl+Y redo"
@@ -3471,24 +3471,20 @@ ported = "app/src/ui/app.rs Ctrl+Z undo"
 ported = "app/src/ui/skills/sets.rs F2 renames the selected set"
 
 [keys."SliderControl.DOWN"]
-ported = "app/src/ui"
-note = "egui's own widget behaviour"
+ported = "app/src/widgets/scroll_step.rs slider_keys + slider_step at every slider: steps it down 0.05, 0.25 with Shift, 0.01 with Ctrl, while it has the keyboard or, with no control selected, is pointed at (SliderControl.lua:164-180); test a_focused_slider_steps_by_pobs_steps_on_every_arrow"
 
 [keys."SliderControl.LEFT"]
-ported = "app/src/ui"
-note = "egui's own widget behaviour"
+ported = "app/src/widgets/scroll_step.rs slider_keys + slider_step at every slider: steps it down 0.05, 0.25 with Shift, 0.01 with Ctrl, while it has the keyboard or, with no control selected, is pointed at (SliderControl.lua:164-180); test a_focused_slider_steps_by_pobs_steps_on_every_arrow"
 
 [keys."SliderControl.LEFTBUTTON"]
 ported = "app/src/ui"
 note = "egui's own widget behaviour"
 
 [keys."SliderControl.RIGHT"]
-ported = "app/src/ui"
-note = "egui's own widget behaviour"
+ported = "app/src/widgets/scroll_step.rs slider_keys + slider_step at every slider: steps it up 0.05, 0.25 with Shift, 0.01 with Ctrl, while it has the keyboard or, with no control selected, is pointed at (SliderControl.lua:164-180); test a_focused_slider_steps_by_pobs_steps_on_every_arrow"
 
 [keys."SliderControl.UP"]
-ported = "app/src/ui"
-note = "egui's own widget behaviour"
+ported = "app/src/widgets/scroll_step.rs slider_keys + slider_step at every slider: steps it up 0.05, 0.25 with Shift, 0.01 with Ctrl, while it has the keyboard or, with no control selected, is pointed at (SliderControl.lua:164-180); test a_focused_slider_steps_by_pobs_steps_on_every_arrow"
 
 [keys."SliderControl.WHEELDOWN"]
 ported = "app/src/widgets/scroll_step.rs slider_step at every slider: 0.05 a notch, 0.25 with Shift, 0.01 with Ctrl, reversed by PoB's Invert slider scroll direction (SliderControl.lua:164-171)"

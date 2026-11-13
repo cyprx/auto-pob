@@ -387,6 +387,7 @@ impl CalcsUi {
         if response.changed() {
             *buf = crate::ui::name_box::spliced_by(&before, buf, |c| !c.is_control(), 100, pasted);
         }
+        crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &response, buf);
         self.rects.note(&response, || "search".into());
         if std::mem::take(&mut self.focus_search) {
             response.request_focus();

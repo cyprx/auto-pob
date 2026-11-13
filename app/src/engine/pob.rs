@@ -1690,6 +1690,18 @@ impl PobBackend {
                 self.call::<_, ()>("skills_paste", text)?;
                 Ok(skills_changed())
             }
+            Command::TryPasteSocketGroup { text } => {
+                if self.call::<_, bool>("skills_try_paste", text)? {
+                    Ok(skills_changed())
+                } else {
+                    // nothing changed; the view goes out again so the tab stops waiting for
+                    // a new group to select
+                    Ok(Affected {
+                        skills: true,
+                        ..Affected::default()
+                    })
+                }
+            }
             Command::SetGroupLabel { group, text } => {
                 self.call::<_, ()>("skills_set_label", (group + 1, text))?;
                 Ok(skills_changed())
@@ -1905,6 +1917,13 @@ impl PobBackend {
             Command::PasteItem { text } => {
                 self.call::<_, ()>("display_paste", text)?;
                 Ok(display_changed())
+            }
+            Command::TryPasteItem { text } => {
+                if self.call::<_, bool>("display_try_paste", text)? {
+                    Ok(display_changed())
+                } else {
+                    Ok(Affected::default())
+                }
             }
             Command::EditItem { id } => {
                 self.call::<_, ()>("display_edit", id)?;
@@ -2225,6 +2244,8 @@ impl Backend for PobBackend {
         // a structural command ends the search only when it went through (R13); one that
         // failed changed nothing, and a changed group table ends the search on its own
         let ends = ends_gem_search(&command);
+        // a quiet paste ends it only when it added a group
+        let tries_group = matches!(command, Command::TryPasteSocketGroup { .. });
         let closes = matches!(command, Command::CloseGemSearch);
         let ends_popup = ends_popup_session(&command);
         let ends_db = ends_item_db(&command);
@@ -2265,6 +2286,7 @@ impl Backend for PobBackend {
         if let Some(cancelled) = cancelled {
             affected.merge(cancelled);
         }
+        let ends = ends || (tries_group && affected.build);
         if leaves {
             affected.merge(self.left_build()?);
             return Ok(affected);

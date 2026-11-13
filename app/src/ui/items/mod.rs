@@ -43,6 +43,11 @@ pub struct ItemsUi {
     view: Option<Arc<ItemsView>>,
     /// The selected item's id
     selected: Option<u32>,
+    /// A row of the item list had the keyboard as the list was last drawn: the list is PoB's
+    /// selected control
+    list_row_focused: bool,
+    /// One of the tab's boxes had the keyboard as the frame began: a slot's tooltip blanks
+    tab_box_selected: bool,
     /// An item in use the user asked to delete, with PoB's question
     confirm_delete: Option<(u32, String)>,
     confirm_delete_all: bool,
@@ -354,9 +359,21 @@ impl ItemsUi {
         // scope. A repeated pass keeps the first pass's answer.
         if ui.ctx().current_pass_index() == 0 {
             let ctx = ui.ctx();
+            // a selected list takes the press too: the item list (a row with the keyboard) or
+            // the database list (ListControl:OnKeyDown, ControlHost.lua:4-8); the shared list
+            // shows only without a display item, so it never has mod lines beside it
             self.display.control_selected = ctx.text_edit_focused()
                 || egui::Popup::is_any_open(ctx)
-                || crate::widgets::scroll_step::control_selected_at_start(ctx);
+                || crate::widgets::scroll_step::control_selected_at_start(ctx)
+                || self.list_row_focused
+                || self.db.list_focus;
+            self.tab_box_selected =
+                ctx.text_edit_focused() && !crate::widgets::scroll_step::build_box_typing(ctx);
+        }
+        // a selected database list takes the keys before a slider pointed at (ControlHost.lua:
+        // 56-73); it holds its selection apart from egui's focus
+        if self.db.list_focus && !(self.has_dialog() || self.modal) {
+            crate::widgets::scroll_step::note_list_selected(ui.ctx());
         }
         self.shortcuts(ui, &view, &mut out);
 
@@ -430,21 +447,24 @@ impl ItemsUi {
         out
     }
 
-    /// Ctrl+V (outside a text field), Ctrl+D. The tab reads Ctrl+D before its controls, so it
-    /// acts while a box of its own has the keyboard too (ItemsTab.lua:1481)
+    /// Ctrl+V, Ctrl+D. The tab reads them before its controls, so they act while a box of its
+    /// own has the keyboard too (ItemsTab.lua:1454, 1481)
     fn shortcuts(&mut self, ui: &egui::Ui, view: &ItemsView, out: &mut ItemsOutput) {
         if self.has_dialog() || self.modal {
             return;
         }
-        // PoB also tries a box's paste as an item, silently when it isn't one; the engine
-        // reports that as an error, so a box's paste stays its own
-        if !ui.ctx().text_edit_focused()
-            && let Some(text) = crate::ui::shortcuts::ctrl_v_text(ui)
-        {
-            out.commands.push(Command::PasteItem { text });
-        }
+        // Build's boxes take every key before the tab sees it (Build.lua:1230)
         if crate::widgets::scroll_step::build_box_typing(ui.ctx()) {
             return;
+        }
+        // PoB reads Ctrl+V before its controls (ItemsTab.lua:1454): while one of the tab's
+        // boxes has the keyboard the box pastes too, and the tab's try is a quiet one
+        if let Some(text) = crate::ui::shortcuts::ctrl_v_text(ui) {
+            out.commands.push(if ui.ctx().text_edit_focused() {
+                Command::TryPasteItem { text }
+            } else {
+                Command::PasteItem { text }
+            });
         }
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::D)) {
             out.commands.push(Command::SetShowStatDifferences {

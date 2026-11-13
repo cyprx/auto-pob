@@ -642,3 +642,59 @@ fn the_db_keys_scroll_the_selection_into_view() {
         "the last row is not drawn"
     );
 }
+
+/// The selected control takes the arrows before a slider under the pointer: with the database
+/// list selected, Down moves its selection and leaves the range slider alone (ControlHost.lua:
+/// 56-73); with nothing selected, the slider steps
+#[test]
+fn a_selected_db_list_takes_the_arrows_before_a_hovered_slider() {
+    let mut h = Harness::new(sample());
+    h.show_display(parity_tests::stacked_view());
+    h.open_db();
+    h.settle();
+    h.click("db_row_0");
+    let at = h.ui.rect("stacked_slider_0").center();
+    h.frame(vec![Event::PointerMoved(at)]);
+    let sent = h.key(Key::ArrowDown, Modifiers::NONE).commands;
+    assert!(
+        !sent
+            .iter()
+            .any(|c| matches!(c, Command::SetRangeLine { .. })),
+        "{sent:?}"
+    );
+    assert_eq!(h.ui.db.selected.as_deref(), Some("Tabula Rasa"));
+    // a click on the slider's row leaves the list: the slider steps again
+    h.click("stacked_line_0");
+    h.frame(vec![Event::PointerMoved(at)]);
+    let sent = h.key(Key::ArrowDown, Modifiers::NONE).commands;
+    assert!(
+        sent.iter()
+            .any(|c| matches!(c, Command::SetRangeLine { line: 0, .. })),
+        "{sent:?}"
+    );
+}
+
+/// The Edit / Create box filters as PoB's: typed control characters other than a tab or a line
+/// break are dropped, and a paste goes through sanitiseText, loses its "\r" and has every other
+/// high byte as "?" (ItemsTab.lua:2617-2624, EditControl.lua:527-536)
+#[test]
+fn the_text_window_filters_as_you_type() {
+    let mut h = Harness::new(sample());
+    h.settle();
+    h.click("create");
+    h.frame(vec![]);
+    h.click("text_edit");
+    h.frame(vec![Event::Text("Iron\u{7} Ring".into())]);
+    h.frame(vec![Event::Paste(
+        "\r\n+10\u{2013}20 to <b>Life</b> \u{65e5}".into(),
+    )]);
+    h.frame(vec![]);
+    let text =
+        h.ui.display
+            .text_window
+            .as_ref()
+            .expect("the window closed")
+            .text
+            .clone();
+    assert_eq!(text, "Iron Ring\n+10-20 to Life ?-?");
+}

@@ -210,6 +210,7 @@ impl CompareUi {
     ) {
         ui.label("Paste a build code or URL to import as comparison:");
         let r = ui.add(egui::TextEdit::singleline(text).desired_width(450.0));
+        crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &r, text);
         self.rects.note(&r, || "dialog_text".into());
         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let (field, _) = name_box::edit(ui, name, Filter::Plain, name_box::NAME_LIMIT, |t| {

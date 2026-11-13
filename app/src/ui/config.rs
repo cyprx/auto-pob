@@ -24,45 +24,48 @@ const HIDDEN_OPACITY: f32 = 0.45;
 /// What a number field holds.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum NumberInput {
-    /// Nothing typed: clears the option
+    /// Nothing typed, or text that is no number: clears the option
     Empty,
     Valid(f64),
-    /// Not a number of this kind; nothing is sent
+    /// A number this field doesn't send; nothing is sent
     Invalid,
 }
 
-/// Parses what the user typed into a count, integer or float field. No exponents.
-pub fn parse_number_input(text: &str, kind: ConfigKind, allow_zero: bool) -> NumberInput {
+/// Parses what the user typed into a count, integer or float field as PoB does: its box sets
+/// the option to `tonumber(buf)` (ConfigTab.lua:273-280), so text that is no number, such as
+/// "-" alone, clears it, and a count of 0 is stored. The box's filter leaves digits, "-" and
+/// "." only, so no exponents. A negative count is not sent: the countAllowZero box steps no
+/// lower than 0 (controller ruling, review I4).
+pub fn parse_number_input(text: &str, kind: ConfigKind, _allow_zero: bool) -> NumberInput {
     let text = text.trim();
     if text.is_empty() {
         return NumberInput::Empty;
     }
     let (negative, body) = match text.strip_prefix('-') {
-        Some(rest) if kind != ConfigKind::Count => (true, rest),
-        _ => (false, text),
+        Some(rest) => (true, rest),
+        None => (false, text),
     };
     let digits_only = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    let well_formed = match kind {
-        ConfigKind::Float => match body.split_once('.') {
-            None => digits_only(body),
-            Some((int, frac)) => {
-                (digits_only(int) || int.is_empty())
-                    && (digits_only(frac) || frac.is_empty())
-                    && !(int.is_empty() && frac.is_empty())
-            }
-        },
-        _ => digits_only(body),
+    // Lua's number syntax, as far as the filter lets it be typed
+    let well_formed = match body.split_once('.') {
+        None => digits_only(body),
+        Some((int, frac)) => {
+            (digits_only(int) || int.is_empty())
+                && (digits_only(frac) || frac.is_empty())
+                && !(int.is_empty() && frac.is_empty())
+        }
     };
-    if !well_formed {
-        return NumberInput::Invalid;
-    }
-    let Ok(value) = body.parse::<f64>() else {
-        return NumberInput::Invalid;
+    // tonumber gives nil: PoB's option is cleared
+    let Some(value) = well_formed.then(|| body.parse::<f64>().ok()).flatten() else {
+        return NumberInput::Empty;
     };
-    if kind == ConfigKind::Count && value == 0.0 && !allow_zero {
-        return NumberInput::Invalid;
+    let value = if negative { -value } else { value };
+    match kind {
+        // the engine takes whole numbers only for these; PoB's filter has no "." for them
+        ConfigKind::Count | ConfigKind::Integer if value.fract() != 0.0 => NumberInput::Invalid,
+        ConfigKind::Count if value < 0.0 => NumberInput::Invalid,
+        _ => NumberInput::Valid(value),
     }
-    NumberInput::Valid(if negative { -value } else { value })
 }
 
 /// Whether the option's label matches `query` as PoB's search does (ConfigTab.lua:172-183):
@@ -254,9 +257,35 @@ enum SendOn {
 }
 
 #[derive(Clone, Copy)]
-enum FieldStyle {
-    Single { width: f32 },
-    Multi { rows: usize },
+enum FieldStyle<'a> {
+    Single {
+        width: f32,
+    },
+    /// `colours`: PoB's colour code for each line of the view's text while the box isn't
+    /// selected (the custom modifier box's `inactiveText`, ConfigTab.lua:78-86)
+    Multi {
+        rows: usize,
+        colours: &'a [String],
+    },
+}
+
+/// PoB's unselected custom modifier box: each line of `text` in its colour code, a line past
+/// the codes in `default` (ConfigTab.lua:78-86)
+fn coloured_lines(
+    text: &str,
+    colours: &[String],
+    font: egui::FontId,
+    default: egui::Color32,
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    for (i, line) in text.split_inclusive('\n').enumerate() {
+        let colour = colours.get(i).map_or(default, |code| {
+            crate::widgets::pob_text::pob_colour(code, default)
+        });
+        job.append(line, 0.0, egui::TextFormat::simple(font.clone(), colour));
+    }
+    job.keep_trailing_whitespace = true;
+    job
 }
 
 #[derive(Default)]
@@ -278,6 +307,9 @@ pub struct ConfigUi {
     pub focus_search: bool,
     /// The custom-modifier boxes' heights, as their grips left them
     heights: HashMap<String, f32>,
+    /// The field that had the keyboard last frame: PoB colours a custom modifier box's lines
+    /// only while it isn't selected
+    field_focus: Option<String>,
     /// Where widgets were drawn last frame, so tests can click them
     #[cfg(test)]
     pub(crate) rects: HashMap<String, egui::Rect>,
@@ -421,6 +453,7 @@ impl ConfigUi {
                     .desired_width(160.0),
             );
             self.note("search".into(), &search);
+            crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &search, &self.search);
             // PoB's box drops control characters and takes 100 bytes (ConfigTab.lua:165)
             if search.changed() {
                 self.search =
@@ -910,7 +943,7 @@ impl ConfigUi {
         ui: &mut egui::Ui,
         key: String,
         current: &str,
-        style: FieldStyle,
+        style: FieldStyle<'_>,
         hint: &str,
         send_on: SendOn,
         behind: bool,
@@ -927,13 +960,45 @@ impl ConfigUi {
             FieldStyle::Single { width } => {
                 egui::TextEdit::singleline(&mut text).desired_width(width)
             }
-            FieldStyle::Multi { rows } => egui::TextEdit::multiline(&mut text)
+            FieldStyle::Multi { rows, .. } => egui::TextEdit::multiline(&mut text)
                 .desired_rows(rows)
                 .desired_width(f32::INFINITY)
                 .min_size(egui::vec2(0.0, self.box_height(&key))),
         };
+        // unselected and showing the view's text, a custom modifier box colours each line as
+        // PoB reads it
+        let colours = match style {
+            FieldStyle::Multi { colours, .. }
+                if !colours.is_empty()
+                    && before == current
+                    && self.field_focus.as_deref() != Some(key.as_str()) =>
+            {
+                Some(colours)
+            }
+            _ => None,
+        };
+        let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+            let font = egui::FontSelection::default().resolve(ui.style());
+            let default = ui.visuals().text_color();
+            let mut job = coloured_lines(buf.as_str(), colours.unwrap_or(&[]), font, default);
+            job.wrap.max_width = wrap_width;
+            ui.fonts_mut(|f| f.layout_job(job))
+        };
+        let edit = if colours.is_some() {
+            edit.layouter(&mut layouter)
+        } else {
+            edit
+        };
         let response = ui.add(edit.hint_text(hint));
+        if response.has_focus() {
+            self.field_focus = Some(key.clone());
+        } else if self.field_focus.as_deref() == Some(key.as_str()) {
+            self.field_focus = None;
+        }
         crate::widgets::url_click::open_on_ctrl_click(ui, &response, &text);
+        if matches!(style, FieldStyle::Single { .. }) {
+            crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &response, &text);
+        }
         if matches!(style, FieldStyle::Multi { .. }) {
             crate::widgets::edit_box::page_keys(ui, &response, &text);
         }
@@ -1087,7 +1152,10 @@ impl ConfigUi {
             ui,
             format!("mod_text:{i}"),
             &group.text,
-            FieldStyle::Multi { rows: 4 },
+            FieldStyle::Multi {
+                rows: 4,
+                colours: &group.line_colours,
+            },
             "One modifier per line, e.g. +10% to all Elemental Resistances",
             SendOn::Blur,
             behind,
@@ -1133,6 +1201,42 @@ mod tests {
         }
     }
 
+    /// While it isn't selected, the custom modifier box shows each line in PoB's colour for it:
+    /// MAGIC for a line PoB reads as a modifier, UNSUPPORTED for one it can't
+    /// (ConfigTab.lua:78-86); selected, it is plain text
+    #[test]
+    fn custom_mod_lines_take_pobs_colours_while_unselected() {
+        let mut h = Harness::new();
+        let text = "+5 to Strength\nnot a mod";
+        h.view.custom_mods[0].text = text.into();
+        h.view.custom_mods[0].line_colours = vec!["^x8888FF".into(), "^xF05050".into()];
+        h.frame(vec![]);
+        let magic = egui::Color32::from_rgb(0x88, 0x88, 0xFF);
+        let unsupported = egui::Color32::from_rgb(0xF0, 0x50, 0x50);
+        assert_eq!(
+            h.text_colours(text),
+            [
+                ("+5 to Strength\n".to_owned(), magic),
+                ("not a mod".to_owned(), unsupported)
+            ]
+        );
+        // an empty box, as every new build has, draws through the colours too
+        h.view.custom_mods[0].text = String::new();
+        h.view.custom_mods[0].line_colours = vec!["^xF05050".into()];
+        h.frame(vec![]);
+        h.frame(vec![]);
+        h.view.custom_mods[0].text = text.into();
+        h.view.custom_mods[0].line_colours = vec!["^x8888FF".into(), "^xF05050".into()];
+        h.frame(vec![]);
+        h.click("mod_text:0");
+        let runs = h.text_colours(text);
+        assert!(!runs.is_empty(), "the box wasn't drawn");
+        assert!(
+            runs.iter().all(|(_, c)| *c != magic && *c != unsupported),
+            "{runs:?}"
+        );
+    }
+
     #[test]
     fn parse_number_input_cases() {
         use NumberInput::*;
@@ -1142,9 +1246,14 @@ mod tests {
             parse_number_input(" 12 ", ConfigKind::Count, false),
             Valid(12.0)
         );
-        assert_eq!(parse_number_input("0", ConfigKind::Count, false), Invalid);
+        // PoB stores tonumber(buf): a count of 0 is a value, allowed to be zero or not
+        assert_eq!(
+            parse_number_input("0", ConfigKind::Count, false),
+            Valid(0.0)
+        );
         assert_eq!(parse_number_input("0", ConfigKind::Count, true), Valid(0.0));
         assert_eq!(parse_number_input("-5", ConfigKind::Count, false), Invalid);
+        assert_eq!(parse_number_input("-5", ConfigKind::Count, true), Invalid);
         assert_eq!(
             parse_number_input("-5", ConfigKind::Integer, false),
             Valid(-5.0)
@@ -1161,14 +1270,24 @@ mod tests {
             parse_number_input("-3.5", ConfigKind::Float, false),
             Valid(-3.5)
         );
-        assert_eq!(parse_number_input("1e9", ConfigKind::Float, false), Invalid);
         assert_eq!(
-            parse_number_input("1.2.3", ConfigKind::Float, false),
-            Invalid
+            parse_number_input("5.", ConfigKind::Float, false),
+            Valid(5.0)
         );
-        assert_eq!(parse_number_input("-", ConfigKind::Integer, false), Invalid);
-        assert_eq!(parse_number_input(".", ConfigKind::Float, false), Invalid);
-        assert_eq!(parse_number_input("12a", ConfigKind::Count, false), Invalid);
+        assert_eq!(
+            parse_number_input(".5", ConfigKind::Float, false),
+            Valid(0.5)
+        );
+        // tonumber gives nil for these: PoB's option is cleared
+        for text in ["-", ".", "1e9", "1.2.3", "12a", "5-", "--5"] {
+            for kind in [ConfigKind::Integer, ConfigKind::Float, ConfigKind::Count] {
+                assert_eq!(
+                    parse_number_input(text, kind, true),
+                    Empty,
+                    "{text} {kind:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1237,6 +1356,7 @@ mod tests {
                     title: "Default".into(),
                     enabled: true,
                     text: "+5 to Strength".into(),
+                    line_colours: vec![],
                 }],
                 sections: vec![ConfigSection {
                     name: "General".into(),
@@ -1274,6 +1394,37 @@ mod tests {
             });
             output.drop_without_applying_deltas();
             out
+        }
+
+        /// One frame; the colours of the drawn text whose whole text is `text`, a run each
+        fn text_colours(&mut self, text: &str) -> Vec<(String, egui::Color32)> {
+            self.time += 0.06;
+            let input = RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    Pos2::ZERO,
+                    egui::vec2(1200.0, 800.0),
+                )),
+                time: Some(self.time),
+                ..RawInput::default()
+            };
+            let view = self.view.clone();
+            let output = self.ctx.run_ui(input, |ui| {
+                self.ui.show(ui, &view, false);
+            });
+            let mut runs = vec![];
+            for clipped in &output.shapes {
+                if let egui::Shape::Text(t) = &clipped.shape
+                    && t.galley.job.text == text
+                {
+                    for section in &t.galley.job.sections {
+                        let range = section.byte_range.start.0..section.byte_range.end.0;
+                        let part = t.galley.job.text[range].to_owned();
+                        runs.push((part, section.format.color));
+                    }
+                }
+            }
+            output.drop_without_applying_deltas();
+            runs
         }
 
         fn pos(&self, key: &str) -> Pos2 {
@@ -1361,6 +1512,35 @@ mod tests {
         assert_eq!(
             debug(&sent),
             ["SetConfig { var: \"n\", value: Number(1234567890.0) }"]
+        );
+    }
+
+    /// PoB's number box sets its option to tonumber(buf) (ConfigTab.lua:273-280): a count of
+    /// "0" is stored, and "-" alone, no number, clears the option
+    #[test]
+    fn a_count_of_0_is_sent_and_a_lone_minus_clears() {
+        let mut h = with_number(ConfigKind::Count, Some(2.0), None);
+        h.click("field:n");
+        h.frame(vec![Event::Key {
+            key: egui::Key::Backspace,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }]);
+        let sent = h.frame(vec![Event::Text("0".into())]);
+        assert_eq!(
+            debug(&sent),
+            ["SetConfig { var: \"n\", value: Number(0.0) }"]
+        );
+        let mut h = with_number(ConfigKind::Integer, None, None);
+        h.click("field:n");
+        let sent = h.frame(vec![Event::Text("-".into())]);
+        assert_eq!(debug(&sent), ["SetConfig { var: \"n\", value: Clear }"]);
+        let sent = h.frame(vec![Event::Text("5".into())]);
+        assert_eq!(
+            debug(&sent),
+            ["SetConfig { var: \"n\", value: Number(-5.0) }"]
         );
     }
 

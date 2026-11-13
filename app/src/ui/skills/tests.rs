@@ -99,6 +99,20 @@ struct Harness {
     ctx: egui::Context,
     time: f64,
     copied: Vec<String>,
+    /// The outlined rectangles the last frame drew, with their stroke colour
+    strokes: Vec<(Rect, egui::Color32)>,
+}
+
+fn rect_strokes(shape: &egui::Shape, out: &mut Vec<(Rect, egui::Color32)>) {
+    match shape {
+        egui::Shape::Rect(r) if r.stroke.width > 0.0 => out.push((r.rect, r.stroke.color)),
+        egui::Shape::Vec(shapes) => {
+            for s in shapes {
+                rect_strokes(s, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn debug(commands: &[Command]) -> Vec<String> {
@@ -114,6 +128,7 @@ impl Harness {
             ctx: egui::Context::default(),
             time: 1.0,
             copied: Vec::new(),
+            strokes: Vec::new(),
         };
         h.frame(vec![]);
         h
@@ -145,6 +160,10 @@ impl Harness {
                     _ => None,
                 }),
         );
+        self.strokes.clear();
+        for clipped in &output.shapes {
+            rect_strokes(&clipped.shape, &mut self.strokes);
+        }
         output.drop_without_applying_deltas();
         out
     }
@@ -376,6 +395,38 @@ fn copy_reply_reaches_clipboard_only_when_asked() {
     assert_eq!(h.copied.len(), 1, "one copy per ask");
 }
 
+/// A gem that fits its socket borders its Quality box in the gem's colour, enabled or not;
+/// the name box keeps its own border (SkillsTab.lua:852-859)
+#[test]
+fn a_matching_socket_borders_the_quality_box() {
+    let mut fits = gem("Boneshatter");
+    fits.matches_socket = true;
+    fits.enabled = false;
+    let mut h = Harness::new(view(vec![group("Boneshatter", vec![fits, gem("Melee")])]));
+    h.frame(vec![]);
+    let green = egui::Color32::from_rgb(0x33, 0xFF, 0x77);
+    let quality = h.ui.rect("g0_s0_quality");
+    let name = h.ui.rect("gem_0_name");
+    let near = |a: Rect, b: Rect| (a.center() - b.center()).length() < 2.0;
+    assert!(
+        h.strokes
+            .iter()
+            .any(|(r, c)| *c == green && near(*r, quality)),
+        "no border in the gem's colour on its Quality box: {:?}",
+        h.strokes
+    );
+    assert!(
+        !h.strokes.iter().any(|(r, c)| *c == green && near(*r, name)),
+        "the name box has the socket border"
+    );
+    let other = h.ui.rect("g0_s1_quality");
+    assert!(
+        !h.strokes
+            .iter()
+            .any(|(r, c)| *c == green && near(*r, other))
+    );
+}
+
 #[test]
 fn paste_event_sends_paste_outside_text_fields() {
     let mut h = Harness::new(sample());
@@ -384,11 +435,18 @@ fn paste_event_sends_paste_outside_text_fields() {
         debug(&o.commands),
         ["PasteSocketGroup { text: \"Label: p\" }"]
     );
-    // a box with the keyboard takes the paste (the engine would report a text with no gems
-    // as an error)
+    // PoB's tab reads Ctrl+V before its controls (SkillsTab.lua:628): with a box of the tab
+    // holding the keyboard, the box pastes and the tab tries the text quietly
     h.click("g0_label");
     let o = h.frame(vec![Event::Paste("Label: q".into())]);
-    assert!(o.commands.is_empty(), "the text field takes the paste");
+    assert_eq!(
+        debug(&o.commands),
+        ["TryPasteSocketGroup { text: \"Label: q\" }"]
+    );
+    // a right-click's paste into the box is no Ctrl+V
+    crate::ui::shortcuts::mark_right_click_paste(&h.ctx);
+    let o = h.frame(vec![Event::Paste("Label: r".into())]);
+    assert!(o.commands.is_empty(), "{:?}", o.commands);
 }
 
 #[test]

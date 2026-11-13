@@ -181,6 +181,7 @@ impl EditBox {
         }
         let response = ui.add(edit);
         crate::widgets::url_click::open_on_ctrl_click(ui, &response, &self.text);
+        select_all_on_double_click(ui.ctx(), &response, &self.text);
         self.refused = false;
         if let Some(before) = before
             && response.changed()
@@ -341,6 +342,26 @@ impl<K: Hash + Eq + Clone> EditBoxes<K> {
     #[cfg(test)]
     pub fn text(&self, key: &K) -> Option<&str> {
         self.boxes.get(key).map(|b| b.text.as_str())
+    }
+}
+
+/// PoB's single-line box selects its whole text on a double click, the caret at its end
+/// (EditControl.lua:455-483: `sel = 1, caret = #buf + 1` without `lineHeight`); egui selects a
+/// word. Call after drawing the box `response` holding `text`. A multi-line box keeps egui's
+/// word, as PoB's selects one there too.
+pub fn select_all_on_double_click(ctx: &egui::Context, response: &egui::Response, text: &str) {
+    if !response.double_clicked() {
+        return;
+    }
+    if let Some(mut state) = egui::TextEdit::load_state(ctx, response.id) {
+        let end = egui::text::CCursor::new(text.chars().count());
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(0),
+                end,
+            )));
+        state.store(ctx, response.id);
     }
 }
 
@@ -832,5 +853,38 @@ mod tests {
         assert!(!boxes.has_pending());
         let (_, ended) = frame(&mut boxes, vec![], false);
         assert!(ended.is_empty(), "returned once: {ended:?}");
+    }
+
+    /// A double click in a single-line box selects its whole text, the caret at its end, as
+    /// PoB's EditControl (EditControl.lua:455-483); egui alone selects the word clicked
+    #[test]
+    fn a_double_click_selects_the_whole_single_line() {
+        let mut h = Harness::new("alpha beta gamma");
+        let pos = egui::pos2(h.a_rect.left() + 8.0, h.a_rect.center().y);
+        let button = |pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        for events in [
+            vec![Event::PointerMoved(pos)],
+            vec![button(true)],
+            vec![button(false)],
+            vec![button(true)],
+            vec![button(false)],
+            vec![],
+        ] {
+            h.frame(events);
+        }
+        let range = egui::TextEdit::load_state(&h.ctx, h.id)
+            .and_then(|s| s.cursor.char_range())
+            .expect("no selection");
+        let at = |n: usize| egui::text::CCursor::new(n).index;
+        assert_eq!(
+            (range.secondary.index, range.primary.index),
+            (at(0), at(16)),
+            "{range:?}"
+        );
     }
 }

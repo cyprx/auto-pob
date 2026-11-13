@@ -2316,6 +2316,11 @@ impl eframe::App for AutoPobApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.show(ui);
     }
+
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // a wheel notch a control took last frame scrolls nothing behind it
+        crate::widgets::scroll_step::end_taken_wheel(ctx, raw_input);
+    }
 }
 
 #[cfg(test)]
@@ -3644,11 +3649,13 @@ mod tests {
                     title: "First".into(),
                     enabled: true,
                     text: "+1 to all".into(),
+                    line_colours: vec![],
                 },
                 CustomModGroup {
                     title: "Second".into(),
                     enabled: false,
                     text: String::new(),
+                    line_colours: vec![],
                 },
             ],
             sections: vec![

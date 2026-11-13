@@ -730,6 +730,7 @@ impl PopupWindow {
                 if let Some(d) = c.divisions.filter(|d| *d > 0) {
                     widget = widget.step_by(1.0 / f64::from(d));
                 }
+                crate::widgets::scroll_step::slider_keys(ui);
                 let slider = ui.add_enabled(c.enabled, widget);
                 self.rects.note(&slider, || name.to_owned());
                 // the wheel and the arrows move it, to its divisions (SliderControl.lua:164-180)

@@ -242,12 +242,18 @@ end
 
 -- Ctrl+V on the tab (SkillsTab.lua:667). Paste() is empty headless, so `testInput` is the text
 function glue.skills_paste(text)
+	if not glue.skills_try_paste(text) then
+		error("the text has no gems", 0)
+	end
+end
+
+-- Ctrl+V as PoB's tab reads it while one of its boxes has the keyboard (SkillsTab.lua:628):
+-- the same try, quiet when the text has no gems. Whether a group came of it.
+function glue.skills_try_paste(text)
 	local tab = skills_tab()
 	local before = #tab.socketGroupList
 	tab:PasteSocketGroup(text)
-	if #tab.socketGroupList == before then
-		error("the text has no gems", 0)
-	end
+	return #tab.socketGroupList ~= before
 end
 
 function glue.skills_set_label(index, text)

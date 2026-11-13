@@ -114,6 +114,25 @@ local function option_view(tab, varData, control)
 	return view
 end
 
+-- The colour PoB's custom modifier box shows each line of `text` in while it isn't selected:
+-- its own `inactiveText` (ConfigTab.lua:78-86), MAGIC for a line modLib.parseMod reads whole,
+-- else UNSUPPORTED. One code a line of the text; PoB's extra empty line at the end is left out.
+local function custom_mod_line_colours(block, text)
+	local colours = {}
+	local edit = block and block.controls.textEdit
+	if not (edit and edit.inactiveText) then
+		return colours
+	end
+	local lines = select(2, text:gsub("\n", "")) + 1
+	for line in edit.inactiveText(text):gmatch("([^\n]*)\n") do
+		if #colours == lines then
+			break
+		end
+		colours[#colours + 1] = line:match("^(%^x%x%x%x%x%x%x)") or line:match("^(%^%d)") or ""
+	end
+	return colours
+end
+
 function glue.config_view()
 	local tab = config_tab()
 	local sections = {}
@@ -134,11 +153,14 @@ function glue.config_view()
 		if #section.options > 0 then filled[#filled + 1] = section end
 	end
 	local groups = {}
-	for _, block in ipairs(tab.configSets[tab.activeConfigSetId].customModsList or {}) do
+	local blocks = tab.customModsBlockControls or {}
+	for i, block in ipairs(tab.configSets[tab.activeConfigSetId].customModsList or {}) do
+		local text = block.text or ""
 		groups[#groups + 1] = {
 			title = block.title or "Default",
 			enabled = block.enabled ~= false,
-			text = block.text or "",
+			text = text,
+			line_colours = custom_mod_line_colours(blocks[i], text),
 		}
 	end
 	return {

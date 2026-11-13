@@ -1203,6 +1203,85 @@ fn config_sets_round_trip() {
     assert!(format!("{err:#}").contains("no config set"), "{err:#}");
 }
 
+/// PoB's number boxes set their option to `tonumber(buf)` (ConfigTab.lua:273-280): a count of
+/// "0" is stored, and "-" alone clears the option. What our Config tab sends for that text
+/// leaves the build as upstream's own box does.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn config_number_text_matches_pob() {
+    use auto_pob::engine::ConfigValue;
+    use auto_pob::ui::config::{NumberInput, parse_number_input};
+    let _guard = lock();
+    let mut s = Session::start("config-number-text");
+    let (_, xml) = fixtures().into_iter().find(|(n, _)| n == "attack").unwrap();
+    s.open_fixture("attack", &xml);
+    let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
+    load_xml(&lua, &attack_xml(), "attack").unwrap();
+    let kind_of = |s: &mut Session, var: &str| {
+        s.config()
+            .sections
+            .iter()
+            .flat_map(|section| section.options.iter())
+            .find(|o| o.var == var)
+            .map(|o| (o.kind, o.allow_zero))
+            .unwrap_or_else(|| panic!("no option {var}"))
+    };
+    let input = |code: &str| format!("local v = build.configTab.input.{code} return v");
+    for (var, texts) in [
+        ("overrideEmptyRedSockets", ["3", "0"]),
+        ("enemyRadius", ["5", "-"]),
+    ] {
+        let (kind, allow_zero) = kind_of(&mut s, var);
+        for text in texts {
+            // what our box sends for the text
+            let value = match parse_number_input(text, kind, allow_zero) {
+                NumberInput::Empty => ConfigValue::Clear,
+                NumberInput::Valid(n) => ConfigValue::Number(n),
+                NumberInput::Invalid => panic!("{var} {text:?}: nothing sent"),
+            };
+            s.run(Command::SetConfig {
+                var: var.into(),
+                value,
+            })
+            .unwrap();
+            lua.load(format!(
+                r#"build.configTab.varControls.{var}:SetText({text:?}, true)
+                runCallback("OnFrame")"#
+            ))
+            .exec()
+            .unwrap();
+            let ours: Option<f64> = s
+                .backend
+                .lua
+                .load(format!(
+                    "local v = pob.build.configTab.input.{var} return v"
+                ))
+                .eval()
+                .unwrap();
+            let theirs: Option<f64> = lua.load(input(var)).eval().unwrap();
+            assert_eq!(ours, theirs, "{var} {text:?}");
+        }
+    }
+    // the stored 0 shows as 0, and the cleared option shows nothing
+    let shown = |s: &mut Session, var: &str| {
+        s.config()
+            .sections
+            .iter()
+            .flat_map(|section| section.options.iter())
+            .find(|o| o.var == var)
+            .unwrap()
+            .value
+            .clone()
+    };
+    assert_eq!(
+        shown(&mut s, "overrideEmptyRedSockets"),
+        Some(serde_json::json!(0))
+    );
+    assert_eq!(shown(&mut s, "enemyRadius"), None);
+    let theirs = golden_of(&lua, Game::Poe1.pob_version()).unwrap();
+    assert_view_matches("attack", "stat", &s.stats().stats, &theirs.stats);
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn custom_mods_change_stats() {
@@ -1280,16 +1359,21 @@ fn custom_mod_groups_match_pob() {
     .unwrap();
     let ours = s.stats();
     assert_ne!(ours, one);
+    // PoB's box shows a line it reads whole as a modifier in MAGIC, else UNSUPPORTED
+    // (ConfigTab.lua:78-86)
     let groups = vec![
         CustomModGroup {
             title: "Default".into(),
             enabled: false,
             text: "+100 to maximum Life".into(),
+            line_colours: vec!["^x8888FF".into()],
         },
         CustomModGroup {
             title: "Speed".into(),
             enabled: true,
             text: "+10% increased Attack Speed".into(),
+            // PoB's parseMod leaves the "+" over on this one: UNSUPPORTED
+            line_colours: vec!["^xF05050".into()],
         },
     ];
     assert_eq!(s.config().custom_mods, groups);
@@ -1315,6 +1399,37 @@ fn custom_mod_groups_match_pob() {
     .unwrap();
     let theirs = golden_of(&lua, Game::Poe1.pob_version()).unwrap();
     assert_view_matches("attack", "stat", &ours.stats, &theirs.stats);
+
+    // each line's colour is the one upstream's unselected box shows it in: its inactiveText,
+    // without the empty line PoB adds after a last line with no line break
+    let mixed = "+10 to Strength\nnot a modifier\n\n5% increased Attack Speed\n";
+    let mut s2 = Session::start("custom-colours");
+    s2.open_fixture("attack", &xml);
+    s2.run(Command::SetCustomModText {
+        group: 0,
+        text: mixed.into(),
+    })
+    .unwrap();
+    let ours_colours = s2.config().custom_mods[0].line_colours.clone();
+    let mut theirs_colours: Vec<String> = lua
+        .load(format!(
+            r#"local edit = build.configTab.customModsBlockControls[1].controls.textEdit
+            local out = {{}}
+            for line in edit.inactiveText({mixed:?}):gmatch("([^\n]*)\n") do
+                out[#out + 1] = line:match("^(%^x%x%x%x%x%x%x)")
+            end
+            return out"#
+        ))
+        .eval()
+        .unwrap();
+    theirs_colours.truncate(mixed.split('\n').count());
+    assert_eq!(ours_colours, theirs_colours);
+    assert_eq!(
+        ours_colours,
+        ["^x8888FF", "^xF05050", "^xF05050", "^x8888FF", "^xF05050"],
+        "a line each of the text"
+    );
+    drop(s2);
 
     // they survive saving and reopening
     s.run(Command::Save).unwrap();

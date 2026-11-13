@@ -388,15 +388,24 @@ fn ctrl_v_outside_text_sends_paste_item() {
 }
 
 #[test]
-fn ctrl_v_in_a_text_field_does_not_but_ctrl_d_does() {
+fn ctrl_v_and_ctrl_d_act_while_a_text_field_types() {
     let mut h = Harness::new(sample());
     h.field = Some(String::new());
     h.frame(vec![]);
     h.frame(vec![]);
     assert!(h.ctx.text_edit_focused(), "the field has focus");
-    // the field takes the paste (the engine would report a non-item text as an error)
+    // the field pastes, and the tab, which reads Ctrl+V before its controls, tries the text
+    // as an item, quietly (ItemsTab.lua:1454)
     let o = h.frame(vec![Event::Paste("Rarity: Rare".into())]);
-    assert!(o.commands.is_empty(), "the field takes the paste");
+    assert_eq!(
+        debug(&o.commands),
+        ["TryPasteItem { text: \"Rarity: Rare\" }"]
+    );
+    assert_eq!(
+        h.field.as_deref(),
+        Some("Rarity: Rare"),
+        "the field pasted too"
+    );
     // the tab reads Ctrl+D before its controls (ItemsTab.lua:1481)
     let o = h.key(Key::D, Modifiers::COMMAND);
     assert_eq!(debug(&o.commands), ["SetShowStatDifferences { on: true }"]);
@@ -559,6 +568,34 @@ fn hovering_a_dropdown_entry_asks_with_the_slot() {
             "ItemTooltip(ItemTooltipQuery { id: 1, slot: Some(\"Ring 1\"), theirs: false, shift: false, shared: None })"
         ]
     );
+}
+
+/// A closed slot's tooltip blanks while another control of the tab is selected, a list
+/// excepted (ItemSlotControl.lua:47-52)
+#[test]
+fn a_slot_tooltip_blanks_while_a_box_has_the_keyboard() {
+    let asked = |h: &mut Harness| {
+        let pos = h.ui.rect("slot_combo_Body Armour").center();
+        h.frame(vec![Event::PointerMoved(pos)]);
+        let mut queries = h.frame(vec![]).queries;
+        queries.extend(h.frame(vec![]).queries);
+        debug(&queries)
+            .iter()
+            .any(|q| q.contains("slot: Some(\"Body Armour\")"))
+    };
+    let mut h = Harness::new(sample());
+    h.field = Some(String::new());
+    h.frame(vec![]);
+    h.frame(vec![]);
+    assert!(h.ctx.text_edit_focused());
+    assert!(
+        !asked(&mut h),
+        "the tooltip showed while a box had the keyboard"
+    );
+    // a selected list doesn't blank it
+    let mut h = Harness::new(sample());
+    h.click("row_1");
+    assert!(asked(&mut h), "a selected list blanked the tooltip");
 }
 
 #[test]
@@ -1051,6 +1088,29 @@ fn a_press_that_closes_a_dropdown_toggles_no_mod_line() {
         debug(&o.commands),
         ["ToggleModLine { line: ModLineRef { list: Explicit, index: 1 } }"]
     );
+}
+
+/// The press that leaves a selected list goes to the list in PoB (ListControl:OnKeyDown,
+/// ControlHost.lua:4-8): the item list's or the database's, the mod line stays as it is
+#[test]
+fn a_press_that_leaves_a_selected_list_toggles_no_mod_line() {
+    let toggled = |o: &ItemsOutput| {
+        debug(&o.commands)
+            .iter()
+            .any(|c| c.starts_with("ToggleModLine"))
+    };
+    for row in ["row_1", "db_row_0"] {
+        let mut h = Harness::new(sample());
+        h.show_display(display_view());
+        h.open_db();
+        h.settle();
+        h.click(row);
+        let o = h.click("tip_line_0");
+        assert!(!toggled(&o), "{row}: {:?}", o.commands);
+        // the next press is the line's
+        let o = h.click("tip_line_0");
+        assert!(toggled(&o), "{row}: {:?}", o.commands);
+    }
 }
 
 #[test]

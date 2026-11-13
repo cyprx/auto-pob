@@ -157,6 +157,7 @@ pub(super) fn show(
                 pasted,
             );
         }
+        crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &search, &tab.config_filter);
         tab.rects.note(&search, || "config_search".into());
         // its "x" empties it (CompareTab's configSearchEdit is clearable)
         if let Some(x) = crate::widgets::edit_box::clear_button(ui, &mut tab.config_filter) {

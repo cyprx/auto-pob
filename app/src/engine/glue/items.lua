@@ -735,13 +735,19 @@ end
 -- Ctrl+V's body (ItemsTab.lua:1454-1458). PoB ignores text with no item base; that is an error
 -- here, and the display item stays as it was.
 function glue.display_paste(text)
+	if not glue.display_try_paste(text) then
+		error("PoB couldn't read that item", 0)
+	end
+end
+
+-- Ctrl+V as PoB's tab reads it while one of its boxes has the keyboard (ItemsTab.lua:1454):
+-- the same try, quiet when the text is no item. Whether an item came of it.
+function glue.display_try_paste(text)
 	local tab = items_tab()
 	local before = tab.displayItem
 	tab:CreateDisplayItemFromRaw(text, true)
 	-- every item PoB displays is a new object
-	if tab.displayItem == before then
-		error("PoB couldn't read that item", 0)
-	end
+	return tab.displayItem ~= before
 end
 
 -- The list's double click (ItemListControl:OnSelClick)

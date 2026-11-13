@@ -216,6 +216,11 @@ impl TreeTab {
         self.toolbar.power_theme = theme;
     }
 
+    /// The engine's running requests, by label
+    pub fn on_requests(&mut self, pending: &[&str]) {
+        self.toolbar.on_requests(pending);
+    }
+
     /// An answer to a hover question (the tree selector's tooltip)
     pub fn on_hover(&mut self, view: &std::sync::Arc<crate::engine::views::HoverTooltipView>) {
         self.toolbar.spec_tip.on_view(view);
@@ -1588,6 +1593,28 @@ mod tests {
             debug(&out.commands),
             ["SetHeatmap { stat: Some(\"Life\"), max_depth: Some(7) }"]
         );
+    }
+
+    #[test]
+    fn a_failed_shrink_ends_with_its_request() {
+        // TreeTab.lua:820-826: the button says Done after a failure too (PoB's message is the
+        // request's notice)
+        let mut h = heat_harness();
+        press(&mut h, "link_menu");
+        let out = press(&mut h, "link_export");
+        assert_eq!(debug(&out.queries), ["ExportTreeLink"]);
+        h.tab
+            .on_snapshot(&Snapshot::TreeLink(Arc::new("https://x.test/tree".into())));
+        h.frame(vec![]);
+        let out = press(&mut h, "export_shrink");
+        assert_eq!(debug(&out.commands), ["ShrinkTreeLink"]);
+        h.tab.on_requests(&["Shrinking tree link"]);
+        h.tab.on_requests(&[]);
+        h.frame(vec![]);
+        assert!(press(&mut h, "export_shrink").commands.is_empty());
+        assert!(h.tab.has_dialog());
+        press(&mut h, "export_done");
+        assert!(!h.tab.has_dialog());
     }
 
     #[test]

@@ -811,6 +811,8 @@ impl AutoPobApp {
     }
 
     fn on_requests(&mut self, view: &RequestsView) {
+        let pending: Vec<&str> = view.pending.iter().map(|r| r.label.as_str()).collect();
+        self.tree.on_requests(&pending);
         self.requests = RequestsView {
             pending: view.pending.clone(),
             finished: Vec::new(),
@@ -2720,7 +2722,7 @@ mod tests {
         }
 
         fn short_tree_link_view(&mut self) -> anyhow::Result<Option<String>> {
-            Ok(None)
+            Ok(Some("http://poeurl.com/gAtE".into()))
         }
 
         fn share_view(&mut self) -> anyhow::Result<crate::engine::ShareView> {
@@ -4461,6 +4463,30 @@ mod tests {
         assert!(!app.behind());
         assert_eq!(sent_since(&app, before), Vec::<&str>::new());
         pump_until(&mut app, &ctx, "link", |a| a.tree.link.is_some());
+    }
+
+    #[test]
+    fn export_tree_shows_the_link_and_shrinks_it() {
+        // TreeTab.lua:812-839: PoB's Export Tree popup, its PoEURL shrink a request
+        let (mut app, ctx) = tree_app();
+        click(&mut app, &ctx, "link_menu");
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "link_export");
+        pump_until(&mut app, &ctx, "link", |a| a.tree.link.is_some());
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "export_shrink");
+        assert_eq!(sent_since(&app, before), ["ShrinkTreeLink"]);
+        pump_until(&mut app, &ctx, "short link", |a| {
+            a.tree.link.as_deref().map(String::as_str) == Some("http://poeurl.com/gAtE")
+        });
+        frame(&mut app, &ctx, vec![]);
+        // the button says Done and takes no second press
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "export_shrink");
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        click(&mut app, &ctx, "export_done");
+        assert!(!app.tree.has_dialog());
     }
 
     #[test]

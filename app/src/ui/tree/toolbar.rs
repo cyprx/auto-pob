@@ -34,6 +34,12 @@ enum Dialog {
     DeleteSpec(usize),
     /// PoB's "Reset Tree/Tattoos": Reset Tree or Remove All Tattoos, which can't be undone
     Reset,
+    /// PoB's "Export Tree" popup (TreeTab.lua:812-839): the link, Shrink with PoEURL, Copy
+    Export {
+        /// The link shown, once it is here
+        link: String,
+        shrink: Shrink,
+    },
     Import {
         title: String,
         url: String,
@@ -63,6 +69,22 @@ const SEARCH_TIP: &str = "Uses Lua pattern matching for complex searches.\nPrefi
 
 /// The depth dropdown's tooltip (TreeTab.lua:263)
 const DEPTH_TIP: &str = "Limit of Node distance to search (lower = faster)";
+
+/// The Export popup's "Shrink with PoEURL" button (TreeTab.lua:818-831)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Shrink {
+    /// Not pressed yet
+    Idle,
+    /// Pressed; its request isn't listed yet
+    Asked,
+    /// Its request is running
+    Running,
+    /// The request ended, with the short link or PoB's failure message
+    Done,
+}
+
+/// The label of the shrink request, as the engine lists it
+const SHRINK_REQUEST: &str = "Shrinking tree link";
 
 /// What a dragged tree row carries: its position
 struct SpecDrag(usize);
@@ -176,6 +198,19 @@ impl Toolbar {
         }
     }
 
+    /// The engine's running requests: the Export popup's shrink is done when its request
+    /// has come and gone, PoB's failure message being the notice
+    pub(super) fn on_requests(&mut self, pending: &[&str]) {
+        if let Some(Dialog::Export { shrink, .. }) = &mut self.dialog {
+            let running = pending.contains(&SHRINK_REQUEST);
+            *shrink = match (*shrink, running) {
+                (Shrink::Asked, true) => Shrink::Running,
+                (Shrink::Running, false) => Shrink::Done,
+                (other, _) => other,
+            };
+        }
+    }
+
     /// A link snapshot arrived.
     pub(super) fn link_arrived(&mut self) {
         self.link_fresh = true;
@@ -196,6 +231,20 @@ impl Toolbar {
         {
             ui.ctx().copy_text(link.to_owned());
             self.copy_pending = false;
+        }
+        // the Export popup shows the link once it is here; a short one ends the shrink
+        if let Some(Dialog::Export {
+            link: shown,
+            shrink,
+        }) = &mut self.dialog
+            && self.link_fresh
+            && let Some(link) = link
+            && shown != link
+        {
+            if link.starts_with("http://poeurl.com/") {
+                *shrink = Shrink::Done;
+            }
+            *shown = link.to_owned();
         }
         let commands = &mut out.commands;
         ui.horizontal_wrapped(|ui| {
@@ -803,6 +852,17 @@ impl Toolbar {
                     url: String::new(),
                 });
             }
+            // PoB's Export Tree popup, with its PoEURL shrink
+            let export = ui.button("Export Tree…");
+            rects.note(&export, || "link_export".into());
+            if export.clicked() {
+                self.dialog = Some(Dialog::Export {
+                    link: String::new(),
+                    shrink: Shrink::Idle,
+                });
+                self.link_fresh = false;
+                queries.push(Command::ExportTreeLink);
+            }
             let copy = ui.button("Copy link");
             rects.note(&copy, || "link_copy".into());
             if copy.clicked() {
@@ -1054,6 +1114,7 @@ impl Toolbar {
             Dialog::DeleteSpec(_) => "Delete Tree",
             Dialog::Reset => "Reset Tree/Tattoos",
             Dialog::Import { .. } => "Import tree link",
+            Dialog::Export { .. } => "Export Tree",
             Dialog::CopySpec { .. } => "Copy Tree",
             Dialog::ConvertVersion { .. } => "Convert to Version",
             Dialog::ClassChange { .. } => "Class Change",
@@ -1142,6 +1203,33 @@ impl Toolbar {
                         let cancel = ui.button("Cancel");
                         rects.note(&cancel, || "reset_no".into());
                         close |= cancel.clicked();
+                    });
+                }
+                Dialog::Export { link, shrink } => {
+                    ui.label("Passive tree link:");
+                    let mut shown = link.as_str();
+                    ui.add(egui::TextEdit::singleline(&mut shown).desired_width(350.0));
+                    ui.horizontal(|ui| {
+                        let label = match shrink {
+                            Shrink::Idle => "Shrink with PoEURL",
+                            Shrink::Asked | Shrink::Running => "Shrinking...",
+                            Shrink::Done => "Done",
+                        };
+                        let ready = !link.is_empty();
+                        if button(
+                            ui,
+                            rects,
+                            "export_shrink",
+                            label,
+                            ready && *shrink == Shrink::Idle,
+                        ) {
+                            *shrink = Shrink::Asked;
+                            commands.push(Command::ShrinkTreeLink);
+                        }
+                        if button(ui, rects, "export_copy", "Copy", ready) {
+                            ui.ctx().copy_text(link.clone());
+                        }
+                        close |= button(ui, rects, "export_done", "Done", true);
                     });
                 }
                 Dialog::Import { title, url } => {

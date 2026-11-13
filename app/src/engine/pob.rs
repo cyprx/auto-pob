@@ -2742,8 +2742,11 @@ impl Backend for PobBackend {
             }
         };
         unescape(&mut view.name);
+        // escapes that stay stand for bytes that aren't UTF-8; a name whose escapes were
+        // undone holds real characters of that range, which go as they are
+        self.save_as_escaped = view.save_as_name.chars().any(super::bytes_text::is_escape)
+            && super::bytes_text::unescape_utf8(&view.save_as_name).is_none();
         unescape(&mut view.save_as_name);
-        self.save_as_escaped = view.save_as_name.chars().any(super::bytes_text::is_escape);
         if let Some(tooltip) = &mut view.name_tooltip {
             unescape(tooltip);
         }

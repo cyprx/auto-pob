@@ -435,6 +435,77 @@ fn upload_sheets(
         .collect()
 }
 
+/// PoB's small view of a jewel socket's place in the tree (ItemSlotHelper.DrawViewer): the
+/// tree at zoom 17 of a view `rect.min_side()` across, centred on `node`, with a faint
+/// crosshair. Drawn in plain shapes: connections, and nodes in the allocated colour or grey.
+pub fn paint_socket_viewer(
+    painter: &egui::Painter,
+    rect: Rect,
+    layout: &TreeLayout,
+    allocated: &HashSet<u32>,
+    node: u32,
+) {
+    let Some(centre) = layout.nodes.iter().find(|n| n.id == node).map(|n| n.pos) else {
+        return;
+    };
+    // PassiveTree.lua:93: the tree's size is its smaller extent, and 10% more
+    let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+    for n in &layout.nodes {
+        for k in 0..2 {
+            lo[k] = lo[k].min(n.pos[k]);
+            hi[k] = hi[k].max(n.pos[k]);
+        }
+    }
+    let size = ((hi[0] - lo[0]).min(hi[1] - lo[1]) * 1.1).max(1.0);
+    // PassiveTreeView.lua:271 with ItemSlotHelper's zoom of 17
+    let zoom = rect.width().min(rect.height()) / size * 17.0;
+    let to_screen = |p: [f32; 2]| rect.center() + (Vec2::from(p) - Vec2::from(centre)) * zoom;
+    let painter = painter.with_clip_rect(rect);
+    painter.rect_filled(rect.expand(1.0), 0.0, Color32::WHITE);
+    painter.rect_filled(rect, 0.0, theme::BACKGROUND);
+    let visible = rect.expand(40.0);
+    for &(a, b) in &layout.edges {
+        let (na, nb) = (&layout.nodes[a], &layout.nodes[b]);
+        let (pa, pb) = (to_screen(na.pos), to_screen(nb.pos));
+        if !visible.contains(pa) && !visible.contains(pb) {
+            continue;
+        }
+        let on = allocated.contains(&na.id) && allocated.contains(&nb.id);
+        let stroke = Stroke::new(
+            (6.0 * zoom).clamp(1.0, 4.0),
+            if on { ALLOCATED } else { EDGE },
+        );
+        match arc_center(na, nb) {
+            Some(c) => painter.line(arc_points(c, na.pos, nb.pos, zoom, to_screen), stroke),
+            None => painter.line_segment([pa, pb], stroke),
+        };
+    }
+    for n in &layout.nodes {
+        let pos = to_screen(n.pos);
+        if !visible.contains(pos) {
+            continue;
+        }
+        let colour = if allocated.contains(&n.id) {
+            ALLOCATED
+        } else {
+            kind_color(&n.kind)
+        };
+        painter.circle_filled(pos, (node_radius(&n.kind) * zoom).max(1.5), colour);
+    }
+    // the crosshair (ItemSlotHelper.lua:33-35)
+    let faint = Color32::from_white_alpha(51);
+    painter.rect_filled(
+        Rect::from_center_size(rect.center(), Vec2::new(2.0, rect.height())),
+        0.0,
+        faint,
+    );
+    painter.rect_filled(
+        Rect::from_center_size(rect.center(), Vec2::new(rect.width(), 2.0)),
+        0.0,
+        faint,
+    );
+}
+
 /// If both nodes sit on the same orbit of the same group, PoB connects them with an arc
 /// around the group's centre.
 fn arc_center(a: &TreeNode, b: &TreeNode) -> Option<[f32; 2]> {

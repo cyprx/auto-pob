@@ -39,6 +39,10 @@ pub struct CraftingState {
     affix_sliders: HashMap<usize, f64>,
     /// The cluster node count slider's value, as 0..=1
     cluster_slider: Option<f64>,
+    /// The node count slider's own value as the wheel and the arrows left it: PoB's slider
+    /// keeps its unrounded value, so small steps add up to the next count (SliderControl.lua:
+    /// 45-53, ItemsTab.lua:711-716)
+    cluster_raw: Option<f64>,
     tip: HoverTip,
     queries: Vec<Command>,
     pub(crate) rects: Rects,
@@ -54,6 +58,7 @@ impl CraftingState {
     /// There is no item (any more) to craft.
     pub(super) fn on_gone(&mut self) {
         self.on_view();
+        self.cluster_raw = None;
         self.tip.reset();
     }
 
@@ -80,8 +85,56 @@ pub fn craft_button(ui: &mut egui::Ui, state: &mut CraftingState) -> Vec<Command
     }
 }
 
-/// Draws the sections for the displayed item; returns the commands. The windows' buttons
-/// follow `view.popups`, which holds exactly the buttons PoB shows and enables.
+/// Whether a window's button sits in PoB's "Add modifier" row (the custom section) rather
+/// than the enchant row (ItemsTab.lua:460-541, 985-1004)
+fn in_custom_section(kind: &PopupKind) -> bool {
+    matches!(kind, PopupKind::AddModifier | PopupKind::AddCrucible)
+}
+
+/// One row of the windows' buttons, those `pick` takes, in PoB's order. They follow
+/// `view.popups`, which holds exactly the buttons PoB shows and enables.
+fn openers(
+    ui: &mut egui::Ui,
+    view: &DisplayItemView,
+    state: &mut CraftingState,
+    pick: fn(&PopupKind) -> bool,
+    out: &mut Vec<Command>,
+) {
+    let openers: Vec<(&PopupKind, String)> = view
+        .popups
+        .iter()
+        .filter(|kind| pick(kind))
+        .filter_map(|kind| opener_label(kind).map(|label| (kind, label)))
+        .collect();
+    if openers.is_empty() {
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        for (kind, label) in openers {
+            let button = ui.button(&label);
+            state.rects.note(&button, || format!("open_{label}"));
+            if button.clicked() {
+                out.push(Command::OpenPopup(kind.clone()));
+            }
+        }
+    });
+}
+
+/// PoB's enchant section: Change Enchantment, Anoint, Corrupt and Add Implicit, right after
+/// the sockets (ItemsTab.lua:460-541)
+pub fn enchant_buttons(
+    ui: &mut egui::Ui,
+    view: &DisplayItemView,
+    state: &mut CraftingState,
+) -> Vec<Command> {
+    let mut out = Vec::new();
+    openers(ui, view, state, |k| !in_custom_section(k), &mut out);
+    out
+}
+
+/// Draws the crafting sections after the catalyst, in PoB's order: the cluster jewel, the
+/// modifier sorting, the affixes, then the custom section (its buttons and Remove rows);
+/// returns the commands.
 pub fn show(
     ui: &mut egui::Ui,
     view: &DisplayItemView,
@@ -89,21 +142,9 @@ pub fn show(
     _busy: bool,
 ) -> Vec<Command> {
     let mut out = Vec::new();
-    let openers: Vec<(&PopupKind, String)> = view
-        .popups
-        .iter()
-        .filter_map(|kind| opener_label(kind).map(|label| (kind, label)))
-        .collect();
-    if !openers.is_empty() {
-        ui.horizontal_wrapped(|ui| {
-            for (kind, label) in openers {
-                let button = ui.button(&label);
-                state.rects.note(&button, || format!("open_{label}"));
-                if button.clicked() {
-                    out.push(Command::OpenPopup(kind.clone()));
-                }
-            }
-        });
+    // the cluster jewel section comes before the sorting (ItemsTab.lua:697-716)
+    if let Some(cluster) = &view.cluster {
+        cluster_rows(ui, cluster, state, &mut out);
     }
 
     if let Some(sort) = &view.crafting_sort {
@@ -120,9 +161,8 @@ pub fn show(
     for affix in &view.affixes {
         affix_row(ui, affix, state, &mut out);
     }
-    if let Some(cluster) = &view.cluster {
-        cluster_rows(ui, cluster, state, &mut out);
-    }
+    // the custom section: "Add modifier..." and "Add Crucible mod...", then the Remove rows
+    openers(ui, view, state, in_custom_section, &mut out);
     custom_mods(ui, view, state, &mut out);
 
     let now = ui.input(|i| i.time);
@@ -276,18 +316,25 @@ fn cluster_rows(
                 .step_by(if span > 0 { 1.0 / f64::from(span) } else { 0.0 }),
         );
         state.rects.note(&slider, || "cluster_count".into());
-        // the wheel and the arrows move it, to its steps (SliderControl.lua:164-180)
+        // the wheel and the arrows move PoB's unrounded value; the count is that value rounded
+        // (SliderControl.lua:164-180, ItemsTab.lua:711-716)
+        let raw = state
+            .cluster_raw
+            .filter(|r| count_of(*r) == cluster.count)
+            .unwrap_or(current);
         if span > 0
-            && let Some(to) = crate::widgets::scroll_step::slider_step(ui, &slider, value)
+            && let Some(to) = crate::widgets::scroll_step::slider_step(ui, &slider, raw)
         {
-            let to = (to * f64::from(span)).round() / f64::from(span);
-            state.cluster_slider = Some(to);
-            out.push(Command::SetClusterNodeCount {
-                count: count_of(to),
-            });
+            state.cluster_raw = Some(to);
+            let count = count_of(to);
+            if count != cluster.count {
+                state.cluster_slider = Some(f64::from(count - cluster.min) / f64::from(span));
+                out.push(Command::SetClusterNodeCount { count });
+            }
         }
         if slider.dragged() || slider.changed() {
             state.cluster_slider = Some(value);
+            state.cluster_raw = Some(value);
         }
         ui.label(count_of(value).to_string());
         if slider.drag_stopped() || (slider.changed() && !slider.is_pointer_button_down_on()) {
@@ -308,7 +355,6 @@ fn custom_mods(
         return;
     }
     let default = ui.visuals().text_color();
-    ui.separator();
     for (index, line) in view.custom_mods.iter().enumerate() {
         ui.horizontal_wrapped(|ui| {
             let remove = ui.small_button("Remove");
@@ -316,7 +362,8 @@ fn custom_mods(
             if remove.clicked() {
                 out.push(Command::RemoveCustomMod { index });
             }
-            ui.weak(format!("{}:", line.kind));
+            // PoB's label is white: " ^7Crafted:" (ItemsTab.lua:2362)
+            ui.label(pob_text(&format!("^7{}:", line.kind), 14.0, default));
             ui.label(pob_text(&line.line, 14.0, default));
         });
     }

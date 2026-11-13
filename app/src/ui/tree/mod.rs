@@ -104,6 +104,14 @@ impl Derived {
     }
 }
 
+/// What the Items tab's jewel socket viewer draws: the tree and what is allocated
+/// (ItemSlotHelper.DrawViewer)
+#[derive(Clone)]
+pub struct SocketScene {
+    pub layout: Arc<TreeLayout>,
+    pub allocated: Arc<HashSet<u32>>,
+}
+
 #[derive(Default)]
 pub struct TreeTab {
     pub(super) camera: Camera,
@@ -152,6 +160,13 @@ pub struct TreeTab {
 }
 
 impl TreeTab {
+    /// The tree as the Items tab's socket viewer shows it, once a layout is here
+    pub fn socket_scene(&self) -> Option<SocketScene> {
+        Some(SocketScene {
+            layout: self.layout.clone()?,
+            allocated: Arc::new(self.derived.allocated.clone()),
+        })
+    }
     /// Forgets the build's state, as for another build. Uploaded textures stay.
     ///
     /// The layout stays: the engine resends it only when its content changes, and a new

@@ -53,6 +53,10 @@ pub struct DbState {
     list_focus: bool,
     /// The row whose copy text was asked for (Ctrl+C, ItemDBControl.lua:368-370)
     pub(super) copy_asked: Option<String>,
+    /// The rows' scroll offset and view height last frame, and the row a key moved the
+    /// selection to, to scroll into view (DropDownControl/ListControl ScrollSelIntoView)
+    rows_view: (f32, f32),
+    scroll_to: Option<usize>,
 }
 
 fn default_query(db: ItemDb) -> ItemDbQuery {
@@ -87,6 +91,8 @@ impl Default for DbState {
             hovered_wiki: None,
             list_focus: false,
             copy_asked: None,
+            rows_view: (0.0, 0.0),
+            scroll_to: None,
         }
     }
 }
@@ -170,6 +176,7 @@ impl DbState {
 
     /// Leaving the tab closes the engine's database; the panel stays as it is for the return.
     pub fn leave(&mut self) -> Option<Command> {
+        self.list_focus = false;
         if !std::mem::take(&mut self.open_sent) {
             return None;
         }
@@ -294,7 +301,8 @@ fn body(
     ui.horizontal(|ui| {
         for (db, label, key) in [
             (ItemDb::Uniques, "Uniques", "db_uniques"),
-            (ItemDb::Rares, "Rares", "db_rares"),
+            // PoB's names (ItemsTab.lua:274)
+            (ItemDb::Rares, "Rare Templates", "db_rares"),
         ] {
             let on = state.query.db == db;
             let toggle = ui.selectable_label(on, label);
@@ -356,6 +364,8 @@ fn body(
         hint: Some("Search"),
         byte_limit: Some(SEARCH_LIMIT),
         filter: Some(|c| !c.is_control()),
+        // Esc leaves the box and keeps what was typed (EditControl.lua:505)
+        keep_on_escape: true,
         ..EditBoxOptions::default()
     };
     ui.horizontal(|ui| {
@@ -474,81 +484,92 @@ fn rows(ui: &mut egui::Ui, view: &ItemDbView, state: &mut DbState, out: &mut Ite
     let default = ui.visuals().text_color();
     let db = state.query.db;
     let mut row_clicked = false;
-    egui::ScrollArea::vertical()
+    let mut area = egui::ScrollArea::vertical()
         .id_salt("items_db_rows")
-        .auto_shrink(false)
-        .show_rows(ui, ROW_HEIGHT, view.rows.len(), |ui, range| {
-            for i in range {
-                let row = &view.rows[i];
-                let selected = state.selected.as_deref() == Some(&row.name);
-                let response = ui
-                    .horizontal(|ui| {
-                        ui.set_min_height(ROW_HEIGHT);
-                        ui.style_mut().interaction.selectable_labels = false;
-                        ui.label(pob_text(&row.label, 14.0, default));
-                        ui.weak(&row.base);
-                        if let Some(v) = row.sort_value {
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| ui.weak(format!("{v:.1}")),
-                            );
-                        }
-                    })
-                    .response
-                    .interact(egui::Sense::click_and_drag());
-                // PoB's drag of a row onto a slot (R23)
-                response.dnd_set_drag_payload(DbDrag {
+        .auto_shrink(false);
+    // a row the keys selected comes into view, scrolling as little as it takes
+    if let Some(i) = state.scroll_to.take() {
+        let step = ROW_HEIGHT + ui.spacing().item_spacing.y;
+        let (offset, height) = state.rows_view;
+        let (top, bottom) = (i as f32 * step, (i + 1) as f32 * step);
+        if top < offset {
+            area = area.vertical_scroll_offset(top);
+        } else if bottom > offset + height {
+            area = area.vertical_scroll_offset(bottom - height);
+        }
+    }
+    let shown = area.show_rows(ui, ROW_HEIGHT, view.rows.len(), |ui, range| {
+        for i in range {
+            let row = &view.rows[i];
+            let selected = state.selected.as_deref() == Some(&row.name);
+            let response = ui
+                .horizontal(|ui| {
+                    ui.set_min_height(ROW_HEIGHT);
+                    ui.style_mut().interaction.selectable_labels = false;
+                    ui.label(pob_text(&row.label, 14.0, default));
+                    ui.weak(&row.base);
+                    if let Some(v) = row.sort_value {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.weak(format!("{v:.1}"))
+                        });
+                    }
+                })
+                .response
+                .interact(egui::Sense::click_and_drag());
+            // PoB's drag of a row onto a slot (R23)
+            response.dnd_set_drag_payload(DbDrag {
+                db,
+                name: row.name.clone(),
+            });
+            if selected {
+                ui.painter().rect_filled(
+                    response.rect,
+                    2.0,
+                    ui.visuals().selection.bg_fill.gamma_multiply(0.4),
+                );
+            }
+            state.rects.note(&response, || format!("db_row_{i}"));
+            let ctrl = ui.input(|inp| inp.modifiers.ctrl || inp.modifiers.command);
+            let shift = ui.input(|inp| inp.modifiers.shift);
+            if response.double_clicked() && !ctrl {
+                // PoB's double click: shows the item on the display panel (R15)
+                state.selected = Some(row.name.clone());
+                out.commands.push(Command::ViewDbItem {
                     db,
                     name: row.name.clone(),
                 });
-                if selected {
-                    ui.painter().rect_filled(
-                        response.rect,
-                        2.0,
-                        ui.visuals().selection.bg_fill.gamma_multiply(0.4),
-                    );
-                }
-                state.rects.note(&response, || format!("db_row_{i}"));
-                let ctrl = ui.input(|inp| inp.modifiers.ctrl || inp.modifiers.command);
-                let shift = ui.input(|inp| inp.modifiers.shift);
-                if response.double_clicked() && !ctrl {
-                    // PoB's double click: shows the item on the display panel (R15)
-                    state.selected = Some(row.name.clone());
-                    out.commands.push(Command::ViewDbItem {
+            } else if response.clicked() {
+                row_clicked = true;
+                state.selected = Some(row.name.clone());
+                // PoB's Ctrl+click adds the item and equips it (R15), Ctrl+Shift+click
+                // into the second slot (R23)
+                // (the second click of a double click is the same gesture: once)
+                if ctrl && !response.double_clicked() {
+                    out.commands.push(Command::AddDbItem {
                         db,
                         name: row.name.clone(),
-                    });
-                } else if response.clicked() {
-                    row_clicked = true;
-                    state.selected = Some(row.name.clone());
-                    // PoB's Ctrl+click adds the item and equips it (R15), Ctrl+Shift+click
-                    // into the second slot (R23)
-                    // (the second click of a double click is the same gesture: once)
-                    if ctrl && !response.double_clicked() {
-                        out.commands.push(Command::AddDbItem {
-                            db,
-                            name: row.name.clone(),
-                            second_slot: shift,
-                        });
-                    }
-                }
-                if response.hovered() {
-                    state.hovered_wiki = Some(match db {
-                        ItemDb::Uniques => row.name.clone(),
-                        ItemDb::Rares => row.base.clone(),
+                        second_slot: shift,
                     });
                 }
-                state.tip.note(
-                    &response,
-                    ControlTooltipQuery::DbItem {
-                        db,
-                        name: row.name.clone(),
-                        // Shift held asks for PoB's child tooltips (R34)
-                        shift,
-                    },
-                );
             }
-        });
+            if response.hovered() {
+                state.hovered_wiki = Some(match db {
+                    ItemDb::Uniques => row.name.clone(),
+                    ItemDb::Rares => row.base.clone(),
+                });
+            }
+            state.tip.note(
+                &response,
+                ControlTooltipQuery::DbItem {
+                    db,
+                    name: row.name.clone(),
+                    // Shift held asks for PoB's child tooltips (R34)
+                    shift,
+                },
+            );
+        }
+    });
+    state.rows_view = (shown.state.clamped_offset().y, shown.inner_rect.height());
     // a click on a row makes the list the selected control; a click elsewhere, or a text box
     // taking the keyboard, ends that
     if row_clicked {
@@ -566,6 +587,8 @@ fn rows(ui: &mut egui::Ui, view: &ItemDbView, state: &mut DbState, out: &mut Ite
         .and_then(|name| view.rows.iter().position(|r| &r.name == name));
     if let Some(i) = ui.input_mut(|inp| crate::ui::shortcuts::list_key(inp, view.rows.len(), at)) {
         state.selected = Some(view.rows[i].name.clone());
+        state.scroll_to = Some(i);
+        ui.ctx().request_repaint();
     }
     // Ctrl+C copies the selected row's text, as PoB's OnSelCopy (ItemDBControl.lua:368-370)
     if let Some(name) = state.selected.clone()

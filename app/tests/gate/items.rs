@@ -8,8 +8,8 @@ use super::items_harness::{
 };
 use super::{Session, fixtures, lock, lua_value, snapshot_dir};
 use auto_pob::engine::{
-    Backend, Command, DisplayItemView, ItemTooltipLine, ItemTooltipQuery, ItemsView, ModLineList,
-    ModLineRef, SlotKind, SocketColour, Tab,
+    Backend, Command, ControlTooltipQuery, DisplayItemView, ItemTooltipLine, ItemTooltipQuery,
+    ItemsView, ModLineList, ModLineRef, SlotKind, SocketColour, Tab,
 };
 use mlua::LuaSerdeExt;
 use std::collections::BTreeMap;
@@ -2140,4 +2140,105 @@ fn range_dropdown_matches_pob() {
         .unwrap();
     compare(&mut s, "slider again");
     assert_ne!(display(&mut s), before);
+}
+
+/// The Edit / Create popup's Save tooltip, which also says whether Save is enabled: ours for a
+/// rarity and a text equals PoB's own popup's (ItemsTab.lua:2626-2652), item or no item shown
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn item_text_tooltip_matches_pob() {
+    let _guard = lock();
+    let (mut s, lua) = gear_sessions("items-text-tooltip");
+    let texts = [
+        (
+            2,
+            "Doom Loop\nIron Ring\nImplicits: 0\n+30 to maximum Life".to_owned(),
+        ),
+        (0, "Iron Ring".to_owned()),
+        (3, "hello".to_owned()),
+        (2, String::new()),
+        (2, RING.to_owned()),
+    ];
+    let mut invalid = 0;
+    for shown in [false, true] {
+        if shown {
+            s.run(Command::PasteItem { text: RING.into() }).unwrap();
+            lua.load(format!(
+                "build.itemsTab:CreateDisplayItemFromRaw({RING:?}, true)"
+            ))
+            .exec()
+            .unwrap();
+        }
+        for (rarity, text) in &texts {
+            let view = s
+                .backend
+                .control_tooltip_view(&ControlTooltipQuery::ItemText {
+                    rarity: *rarity,
+                    text: text.clone(),
+                })
+                .unwrap()
+                .expect("the Save tooltip");
+            let theirs = upstream_tooltip(
+                &lua,
+                &format!(
+                    "local t = build.itemsTab; t:EditDisplayItemText(); \
+                     local p = main.popups[1]; p.controls.rarity:SetSel({}); \
+                     p.controls.edit:SetText({text:?}); local tt = new('Tooltip'); \
+                     p.controls.save.tooltipFunc(tt); main:ClosePopup(); \
+                     return tooltipDump(tt)",
+                    rarity + 1
+                ),
+            )
+            .expect("upstream's Save tooltip");
+            assert_same(
+                &json_of(&view.tooltip),
+                &theirs,
+                &format!("Save tooltip for {text:?}, item shown {shown}"),
+            );
+            invalid += usize::from(matches!(
+                view.tooltip.lines.first(),
+                Some(ItemTooltipLine::Line { text, .. }) if text == "The item is invalid."
+            ));
+        }
+        assert_eq!(open_popups(&s), 0, "a popup was left open");
+    }
+    assert_eq!(
+        invalid, 4,
+        "\"hello\" and the empty text are invalid, twice"
+    );
+}
+
+/// A socket's link box is there only while PoB shows it: not before an abyssal socket in the
+/// middle of the sockets (ItemsTab.lua:446-448)
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn socket_links_follow_pobs_link_boxes() {
+    let _guard = lock();
+    let (mut s, lua) = gear_sessions("display-socket-links");
+    let text = "Rarity: RARE\nGrim Grip\nIron Gauntlets\nSockets: R-A-G\nImplicits: 0\n+10 to maximum Life";
+    lua.globals().set("text", text).unwrap();
+    lua.load("act.paste(text)").exec().unwrap();
+    s.run(Command::PasteItem { text: text.into() }).unwrap();
+    let mut theirs = strip_nulls(lua_value(&lua, "return displayDump()"));
+    let ours = display(&mut s).expect("displayed");
+    let mut ours_json = json_of(&ours);
+    // a hidden socket's colour isn't drawn: the recorder reads its dropdown, which has no
+    // abyssal "A", ours the item
+    for side in [&mut ours_json, &mut theirs] {
+        for socket in side["sockets"].as_array_mut().unwrap() {
+            if socket["shown"] == false {
+                socket.as_object_mut().unwrap().remove("colour");
+            }
+        }
+    }
+    assert_same(&ours_json, &theirs, "R-A-G");
+    let hidden: bool = lua_value(
+        &s.backend.lua,
+        "local c = pob.build.itemsTab.controls return not c.displayItemLink1:IsShown()",
+    );
+    assert!(
+        hidden,
+        "PoB shows the first link box: not the case this test is for"
+    );
+    assert_eq!(ours.sockets[0].linked, None, "{:?}", ours.sockets);
 }

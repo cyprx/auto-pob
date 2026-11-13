@@ -69,6 +69,18 @@ fn title(set: &ItemSetEntry) -> &str {
     }
 }
 
+/// PoB's tooltip for an item set: a "Slot: Item" line per equipped slot; none when it is empty
+fn set_tooltip(response: &egui::Response, set: &ItemSetEntry, default: Color32) {
+    if set.lines.is_empty() {
+        return;
+    }
+    response.clone().on_hover_ui(|ui| {
+        for line in &set.lines {
+            ui.label(pob_text(line, 14.0, default));
+        }
+    });
+}
+
 struct SetDrag(usize);
 
 /// A shared set row being dragged: within its list, or onto the build's sets
@@ -78,7 +90,8 @@ impl ItemsUi {
     /// The row above the tab: `Set: [name v] [Manage...]  Weapons: [I] [II]`.
     pub(super) fn set_bar(&mut self, ui: &mut egui::Ui, view: &ItemsView, out: &mut ItemsOutput) {
         ui.horizontal(|ui| {
-            ui.label("Set:");
+            // PoB's labels (ItemsTab.lua:112, 254)
+            ui.label("Item set:");
             let current = view
                 .sets
                 .iter()
@@ -95,6 +108,8 @@ impl ItemsUi {
                                 title(set),
                             );
                             self.rects.note(&item, || format!("set_item_{i}"));
+                            // an entry's tooltip lists the set's items (ItemsTab.lua:106-111)
+                            set_tooltip(&item, set, ui.visuals().text_color());
                             if item.clicked() && set.id != view.active_set {
                                 out.commands.push(Command::SelectItemSet { id: set.id });
                             }
@@ -124,17 +139,31 @@ impl ItemsUi {
                 self.sets.open = true;
                 self.sets.selected = Some(view.active_set);
             }
-            ui.separator();
-            ui.label("Weapons:");
-            for (second, text) in [(false, "I"), (true, "II")] {
-                let on = view.second_weapon_set == second;
-                let button = ui.selectable_label(on, text);
-                self.rects.note(&button, || format!("weapons_{text}"));
-                // PoB locks the current set's button
-                if button.clicked() && !on {
-                    out.commands.push(Command::SelectWeaponSet { second });
+        });
+    }
+
+    /// The slot column's header: "Equipped items:" and, at its right, the weapon set buttons
+    /// (ItemsTab.lua:217-254)
+    pub(super) fn slot_header(
+        &mut self,
+        ui: &mut egui::Ui,
+        view: &ItemsView,
+        out: &mut ItemsOutput,
+    ) {
+        ui.horizontal(|ui| {
+            ui.label("Equipped items:");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                for (second, text) in [(true, "II"), (false, "I")] {
+                    let on = view.second_weapon_set == second;
+                    let button = ui.selectable_label(on, text);
+                    self.rects.note(&button, || format!("weapons_{text}"));
+                    // PoB locks the current set's button
+                    if button.clicked() && !on {
+                        out.commands.push(Command::SelectWeaponSet { second });
+                    }
                 }
-            }
+                ui.label("Weapon Set:");
+            });
         });
     }
 
@@ -166,7 +195,8 @@ impl ItemsUi {
                 open = false;
             }
         }
-        egui::Window::new("Item sets")
+        let mut done_clicked = false;
+        egui::Window::new("Manage Item Sets")
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -206,11 +236,10 @@ impl ItemsUi {
                         |p: &SetDrag| p.0,
                         |ui, i| {
                             let set = &view.sets[i];
-                            let label = if set.id == view.active_set {
-                                format!("{} (active)", title(set))
-                            } else {
-                                title(set).to_owned()
-                            };
+                            // PoB's row: "  ^9(Current)" after the active set's title
+                            // (ItemSetListControl.lua:79-83)
+                            let row = if set.row.is_empty() { title(set) } else { &set.row };
+                            let label = pob_text(row, 14.0, ui.visuals().text_color());
                             let fill = if selected == Some(set.id) {
                                 ui.visuals().selection.bg_fill
                             } else {
@@ -225,6 +254,8 @@ impl ItemsUi {
                     for (i, row) in rows.rows.iter().enumerate() {
                         let set = &view.sets[i];
                         self.rects.note(row, || format!("sets_row_{i}"));
+                        // the row's tooltip lists the set's items (ItemSetListControl.lua:86-90)
+                        set_tooltip(row, set, ui.visuals().text_color());
                         if row.clicked() {
                             self.sets.selected = Some(set.id);
                             // the build list becomes the selected control
@@ -303,7 +334,12 @@ impl ItemsUi {
                     self.rects.note(&edit, || "sets_name".into());
                     *edited |= changed;
                     let blank = !*edited || !name_box::has_visible(text);
-                    let mut done = None;
+                    // Enter presses an enabled Save, as PoB's popup's enter control
+                    // (ItemSetListControl.lua:70)
+                    let mut done = (!blank
+                        && edit.lost_focus()
+                        && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                    .then_some(true);
                     ui.horizontal(|ui| {
                         let save = ui.add_enabled(!blank, egui::Button::new("Save"));
                         self.rects.note(&save, || "sets_save".into());
@@ -349,9 +385,22 @@ impl ItemsUi {
                         }
                     });
                 }
+                // PoB's "Done" closes the window (ItemsTab.lua:2512-2514)
+                ui.separator();
+                let done = ui.add_enabled(
+                    self.sets.naming.is_none()
+                        && self.sets.confirm_delete.is_none()
+                        && self.sets.shared_naming.is_none()
+                        && self.sets.confirm_shared_delete.is_none(),
+                    egui::Button::new("Done"),
+                );
+                self.rects.note(&done, || "sets_done".into());
+                if done.clicked() {
+                    done_clicked = true;
+                }
             });
         crate::widgets::escape::note(ctx, window);
-        if !open {
+        if !open || done_clicked {
             self.sets.close();
         }
     }
@@ -479,7 +528,12 @@ impl ItemsUi {
             self.rects.note(&edit, || "shared_sets_name".into());
             *edited |= changed;
             let blank = !name_box::has_visible(text);
-            let mut done = None;
+            // Enter presses an enabled Save (SharedItemSetListControl.lua:41)
+            let mut done = (*edited
+                && !blank
+                && edit.lost_focus()
+                && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+            .then_some(true);
             ui.horizontal(|ui| {
                 let save = ui.add_enabled(*edited && !blank, egui::Button::new("Save"));
                 self.rects.note(&save, || "shared_sets_save".into());

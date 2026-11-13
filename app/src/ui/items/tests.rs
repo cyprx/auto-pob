@@ -83,11 +83,13 @@ pub(crate) fn sample() -> ItemsView {
                 id: 1,
                 title: "Default".into(),
                 untitled: false,
+                ..ItemSetEntry::default()
             },
             ItemSetEntry {
                 id: 2,
                 title: "Alt".into(),
                 untitled: false,
+                ..ItemSetEntry::default()
             },
         ],
         active_set: 1,
@@ -107,6 +109,17 @@ struct Harness {
     busy: bool,
     /// The keys held down
     modifiers: Modifiers,
+    /// The texts the last frame drew
+    drawn: Vec<String>,
+}
+
+/// The texts a shape draws
+fn drawn_texts(shape: &egui::epaint::Shape, out: &mut Vec<String>) {
+    match shape {
+        egui::epaint::Shape::Text(t) => out.push(t.galley.text().to_owned()),
+        egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| drawn_texts(s, out)),
+        _ => {}
+    }
 }
 
 fn debug(commands: &[Command]) -> Vec<String> {
@@ -126,6 +139,7 @@ impl Harness {
             field: None,
             busy: false,
             modifiers: Modifiers::NONE,
+            drawn: Vec::new(),
         };
         h.frame(vec![]);
         h
@@ -164,6 +178,10 @@ impl Harness {
                     _ => None,
                 }),
         );
+        self.drawn.clear();
+        for clipped in &output.shapes {
+            drawn_texts(&clipped.shape, &mut self.drawn);
+        }
         output.drop_without_applying_deltas();
         out
     }
@@ -446,13 +464,11 @@ fn delete_prompts_are_pobs_three_texts() {
 #[test]
 fn delete_unused_does_not_ask_and_delete_all_does() {
     let mut h = Harness::new(sample());
-    h.click("menu");
-    let o = h.click("menu_delete_unused");
+    let o = h.click("delete_unused");
     assert_eq!(debug(&o.commands), ["DeleteUnusedItems"]);
     assert!(!h.ui.has_dialog());
 
-    h.click("menu");
-    let o = h.click("menu_delete_all");
+    let o = h.click("delete_all");
     assert!(o.commands.is_empty(), "Delete all asks first");
     assert!(h.ui.has_dialog());
     let o = h.click("confirm_delete_all");
@@ -1578,10 +1594,8 @@ fn delete_all_and_unused_follow_the_shown_list() {
     let mut view = sample();
     view.listed.clear();
     let mut h = Harness::new(view);
-    h.click("menu");
-    assert!(h.click("menu_delete_unused").commands.is_empty());
-    h.click("menu");
-    h.click("menu_delete_all");
+    assert!(h.click("delete_unused").commands.is_empty());
+    h.click("delete_all");
     assert!(
         !h.ui.has_dialog(),
         "Delete all is disabled for an empty list"

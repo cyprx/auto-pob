@@ -1246,6 +1246,13 @@ pub enum ControlTooltipQuery {
         slot: usize,
         at: u16,
     },
+    /// The Edit / Create popup's Save for this rarity (0 Normal ... 4 Relic) and text: the
+    /// item's tooltip, or PoB's "The item is invalid." lines while Save is disabled
+    /// (ItemsTab.lua:2626-2652)
+    ItemText {
+        rarity: usize,
+        text: String,
+    },
     DbItem {
         db: ItemDb,
         name: String,

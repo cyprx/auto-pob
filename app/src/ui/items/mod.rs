@@ -84,12 +84,16 @@ pub struct ItemsUi {
     shared_selected: Option<usize>,
     /// A shared item the user asked to delete, until PoB's question is answered
     confirm_shared_delete: Option<usize>,
+    /// The tree for the jewel socket viewer (ItemSlotHelper.DrawViewer), from the Tree tab
+    socket_scene: Option<crate::ui::tree::SocketScene>,
 }
 
 impl ItemsUi {
     /// Forgets the build's state, as for another build.
     pub fn reset(&mut self) {
+        let scene = self.socket_scene.take();
         *self = Self::default();
+        self.socket_scene = scene;
     }
 
     /// The undo and redo buttons' enablement.
@@ -97,6 +101,11 @@ impl ItemsUi {
         self.view
             .as_ref()
             .map_or((false, false), |v| (v.can_undo, v.can_redo))
+    }
+
+    /// The tree the jewel slots' socket viewer shows, as the Tree tab has it
+    pub fn set_socket_scene(&mut self, scene: Option<crate::ui::tree::SocketScene>) {
+        self.socket_scene = scene;
     }
 
     pub fn set_modal(&mut self, modal: bool) {
@@ -243,7 +252,7 @@ impl ItemsUi {
                 if display.is_none() || old != new {
                     self.display.on_gone();
                 }
-                self.display.on_view();
+                self.display.on_view(display.as_deref());
                 self.display_view = display.clone();
                 self.display_id = display.as_ref().and_then(|d| d.id);
                 if self.cancelled != self.display_id {
@@ -256,6 +265,7 @@ impl ItemsUi {
                 self.check_orphan();
             }
             Snapshot::ControlTooltip(view) => {
+                self.display.on_control_tooltip(view);
                 self.display.crafting.on_snapshot(snapshot);
                 self.db.on_tooltip(view);
             }
@@ -379,6 +389,7 @@ impl ItemsUi {
         self.dialogs(&ctx, &mut out);
         self.shared_dialog(&ctx, &view, &mut out);
         out.commands.extend(self.display.text_window(&ctx));
+        out.queries.append(&mut self.display.queries);
         self.sets_window(&ctx, &view, &mut out);
 
         // the hover timer restarts when the pointer moves to something else

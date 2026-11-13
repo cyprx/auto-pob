@@ -107,6 +107,22 @@ pub fn forget_undo(ctx: &egui::Context, id: egui::Id) {
     }
 }
 
+/// Starts the undo of text box `id` over when the box wasn't drawn the pass before: a box
+/// that comes up again (a popup's name box opened once more) is a new `EditControl` in PoB,
+/// with no undo of its own. Call it each pass the box is drawn.
+pub fn forget_undo_if_new(ctx: &egui::Context, id: egui::Id) {
+    let pass = ctx.cumulative_pass_nr();
+    let key = id.with("pob_box_drawn_pass");
+    let last: Option<u64> = ctx.data_mut(|d| {
+        let last = d.get_temp(key);
+        d.insert_temp(key, pass);
+        last
+    });
+    if last.is_none_or(|last| last + 1 < pass) {
+        forget_undo(ctx, id);
+    }
+}
+
 /// What a box's undo goes by (PoB's `SetText` resets its box's undo, EditControl.lua:103):
 /// the view's text the box last followed, and the texts it sent whose echo hasn't come yet.
 /// Other text from the view starts the undo over; an echo of the box's own edit doesn't.

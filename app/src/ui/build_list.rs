@@ -1034,6 +1034,8 @@ fn name_edit(
     );
     mark(ui, "name_edit", &edit);
     crate::widgets::edit_box::select_all_on_double_click(ui.ctx(), &edit, text);
+    // a new box, as each of PoB's popups makes: no undo from the last one
+    crate::widgets::edit_box::forget_undo_if_new(ui.ctx(), id);
     if *focus {
         edit.request_focus();
         *focus = false;
@@ -1397,6 +1399,38 @@ mod tests {
             panic!("no name box");
         };
         assert_eq!(text, "axb");
+    }
+
+    /// Each Rename box is a new `EditControl` in PoB, with no undo of its own: Ctrl+Z in the
+    /// next box doesn't bring back what was typed into the last one (a Save would then
+    /// rename this build to it)
+    #[test]
+    fn a_name_box_has_no_undo_from_the_last_one() {
+        let mut h = H::new(view(""));
+        h.select(1);
+        h.key(Key::F2, Modifiers::NONE);
+        h.focus = false;
+        h.frame(vec![]);
+        h.click("name_edit");
+        h.time += 2.0;
+        h.text("-typed");
+        h.time += 2.0;
+        h.frame(vec![]);
+        h.click("name_cancel");
+        assert_eq!(h.ui.dialog, None);
+        h.select(2);
+        h.key(Key::F2, Modifiers::NONE);
+        h.focus = false;
+        h.frame(vec![]);
+        h.click("name_edit");
+        for _ in 0..3 {
+            h.time += 2.0;
+            h.key(Key::Z, Modifiers::COMMAND);
+        }
+        let Some(Dialog::Name { text, .. }) = &h.ui.dialog else {
+            panic!("no name box");
+        };
+        assert_eq!(text, "two");
     }
 
     #[test]

@@ -9,7 +9,10 @@
 //! The mapping is a bijection: a string that legitimately holds one of these characters
 //! has the character's own UTF-8 bytes escaped too when it is decoded. Text coming back is
 //! only turned into bytes once some text was decoded with an escape (`seen`), so a build with
-//! no such bytes sends its private-use characters as they are.
+//! no such bytes sends its private-use characters as they are. The flag is process-wide and
+//! never resets: once a build showed escapes, a private-use character in this range typed or
+//! pasted later goes to PoB as a byte. Paths and file names are never escaped nor encoded
+//! (`Pob::call_path`, the build list).
 
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};

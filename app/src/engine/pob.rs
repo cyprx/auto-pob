@@ -234,11 +234,27 @@ impl PobBackend {
 
     /// Calls `glue.<name>(args)`, keeping only the error message.
     fn call<A: IntoLuaMulti, R: FromLuaMulti>(&self, name: &str, args: A) -> Result<R> {
+        self.call_with(name, args, true)
+    }
+
+    /// `call` for a command about files (open, save as, the build list's renames, moves and
+    /// folders): its strings are paths and file names, never a build's text, so they go as
+    /// they are, escape range included
+    fn call_path<A: IntoLuaMulti, R: FromLuaMulti>(&self, name: &str, args: A) -> Result<R> {
+        self.call_with(name, args, false)
+    }
+
+    fn call_with<A: IntoLuaMulti, R: FromLuaMulti>(
+        &self,
+        name: &str,
+        args: A,
+        encode: bool,
+    ) -> Result<R> {
         let glue: mlua::Table = self.lua.globals().get("glue").map_err(|e| anyhow!("{e}"))?;
         let function: mlua::Function = glue.get(name).map_err(|e| anyhow!("{e}"))?;
         // text the views showed with escapes for bytes that aren't UTF-8 goes back as those
         // bytes (`bytes_text`)
-        let args = if super::bytes_text::seen() {
+        let args = if encode && super::bytes_text::seen() {
             let values = args.into_lua_multi(&self.lua).map_err(|e| anyhow!("{e}"))?;
             values
                 .into_iter()
@@ -1084,13 +1100,13 @@ impl PobBackend {
             Command::RenameBuild { path, name } => {
                 let path = self.build_entry(&path, false)?;
                 buildpaths::name_free(&path, &name, true)?;
-                self.call::<_, ()>("rename_build", (path, name))?;
+                self.call_path::<_, ()>("rename_build", (path, name))?;
                 Ok(list_changed())
             }
             Command::CopyBuild { path, name } => {
                 let path = self.build_entry(&path, true)?;
                 buildpaths::name_free(&path, &name, false)?;
-                self.call::<_, ()>("copy_build", (path, name))?;
+                self.call_path::<_, ()>("copy_build", (path, name))?;
                 Ok(list_changed())
             }
             Command::DeleteBuild { path, kind } => {
@@ -1115,7 +1131,7 @@ impl PobBackend {
                 if !as_asked {
                     anyhow::bail!("the folder changed; look again");
                 }
-                self.call::<_, ()>("delete_build", (path.clone(), kind_name))?;
+                self.call_path::<_, ()>("delete_build", (path.clone(), kind_name))?;
                 // PoB ignores what its delete answers: look at the file system
                 if std::fs::symlink_metadata(&path).is_ok() {
                     anyhow::bail!("couldn't delete that build");
@@ -1127,7 +1143,7 @@ impl PobBackend {
                 let path = self.build_entry(&path, true)?;
                 let folder = buildpaths::folder(&root, &folder, true, true)?;
                 buildpaths::move_target_free(&path, &root, &folder)?;
-                self.call::<_, ()>("move_build", (path, folder))?;
+                self.call_path::<_, ()>("move_build", (path, folder))?;
                 Ok(list_changed())
             }
             Command::CopyBuildTo { path, folder } => {
@@ -1135,17 +1151,17 @@ impl PobBackend {
                 let path = self.build_entry(&path, true)?;
                 let folder = buildpaths::folder(&root, &folder, true, true)?;
                 buildpaths::move_target_free(&path, &root, &folder)?;
-                self.call::<_, ()>("copy_build_to", (path, folder))?;
+                self.call_path::<_, ()>("copy_build_to", (path, folder))?;
                 Ok(list_changed())
             }
             Command::NewFolder { name } => {
                 let folder = buildpaths::folder(&self.build_root()?, &self.folder, true, true)?;
-                self.call::<_, ()>("new_folder", (folder, name))?;
+                self.call_path::<_, ()>("new_folder", (folder, name))?;
                 Ok(list_changed())
             }
             Command::NewFolderIn { folder, name } => {
                 let folder = buildpaths::folder(&self.build_root()?, &folder, true, true)?;
-                self.call::<_, ()>("new_folder", (folder, name))?;
+                self.call_path::<_, ()>("new_folder", (folder, name))?;
                 Ok(list_changed())
             }
             Command::SetBuildSort { sort } => {
@@ -1169,7 +1185,7 @@ impl PobBackend {
             Command::OpenBuild { path } => {
                 self.on_list = false;
                 self.reset_heatmap();
-                self.call::<_, ()>("open_build", path.to_string_lossy().into_owned())?;
+                self.call_path::<_, ()>("open_build", path.to_string_lossy().into_owned())?;
                 self.all_views()
             }
             Command::ImportShareCode { code } => {
@@ -1293,7 +1309,7 @@ impl PobBackend {
                 let root: String = self.call("build_root", ())?;
                 let folder = buildpaths::folder(&root, &folder, false, true)?;
                 buildpaths::save_target(&root, &folder, &name)?;
-                self.call::<_, ()>("save_as", (folder, name, overwrite))?;
+                self.call_path::<_, ()>("save_as", (folder, name, overwrite))?;
                 // PoB's save rewrites the notes' `^_` escapes; the Summary's header names the
                 // build (R4)
                 Ok(Affected {
@@ -1576,8 +1592,10 @@ impl PobBackend {
             }
             Command::LoadCompare { source } => {
                 match source {
-                    CompareSource::File(path) => self
-                        .call::<_, ()>("compare_load_file", path.to_string_lossy().into_owned())?,
+                    CompareSource::File(path) => self.call_path::<_, ()>(
+                        "compare_load_file",
+                        path.to_string_lossy().into_owned(),
+                    )?,
                     CompareSource::Code(code) => self.call::<_, ()>("compare_load_code", code)?,
                     CompareSource::Import { text, name } => {
                         // a link is a request, which lands the comparison when it ends
@@ -2472,7 +2490,10 @@ impl Backend for PobBackend {
     }
 
     fn build_list_view(&mut self) -> Result<BuildListView> {
-        let mut view: BuildListView = self.view("list_builds", self.folder.clone())?;
+        // the entries are file names (valid UTF-8, buildpaths): they come and go as they are,
+        // never escaped, as the paths of the commands about them do (`call_path`)
+        let value: mlua::Value = self.call_path("list_builds", self.folder.clone())?;
+        let mut view: BuildListView = self.lua.from_value(value).map_err(|e| anyhow!("{e}"))?;
         // a missing Builds folder was already refused by the listing
         let root = self.build_root()?;
         view.tree = buildpaths::folder_tree(&root);

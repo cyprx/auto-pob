@@ -3800,6 +3800,27 @@ fn a_private_use_character_round_trips_beside_bytes_that_are_not_utf8() {
         saved.windows(needle.len()).any(|w| w == needle),
         "the label changed on save"
     );
+    // file names are no build text: one in the escapes' range lists, opens and saves as
+    // itself after the escapes are in use
+    let named = s.builds_dir().join("x\u{F7E9}.xml");
+    fs::copy(fixture_xml("attack"), &named).unwrap();
+    let list = s.backend.build_list_view().expect("list");
+    assert!(
+        list.entries.iter().any(|e| e.name == "x\u{F7E9}"),
+        "{:?}",
+        list.entries.iter().map(|e| &e.name).collect::<Vec<_>>()
+    );
+    s.run(Command::OpenBuild {
+        path: named.clone(),
+    })
+    .expect("open the build named in the range");
+    s.run(Command::SaveAs {
+        folder: String::new(),
+        name: "y\u{F7E9}".into(),
+        overwrite: false,
+    })
+    .expect("save as a name in the range");
+    assert!(s.builds_dir().join("y\u{F7E9}.xml").exists());
 }
 
 /// A build code PoB can't load raises in Build:Init (here a gem level that isn't a number:

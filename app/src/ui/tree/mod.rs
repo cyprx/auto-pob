@@ -67,7 +67,8 @@ pub struct TreeOutput {
 /// Lookups over [`TreeState`], built once per snapshot rather than once per frame.
 #[derive(Debug, Default)]
 pub(super) struct Derived {
-    pub allocated: HashSet<u32>,
+    /// Shared with the Items tab's socket viewer, which takes it every frame
+    pub allocated: Arc<HashSet<u32>>,
     pub paths: HashMap<u32, Vec<u32>>,
     pub depends: HashMap<u32, Vec<u32>>,
     pub matches: HashSet<u32>,
@@ -86,7 +87,7 @@ impl Derived {
             .filter(|a| a.id != 0)
             .map(|a| a.ascend_id.clone());
         Self {
-            allocated: state.allocated.iter().copied().collect(),
+            allocated: Arc::new(state.allocated.iter().copied().collect()),
             paths: state
                 .paths
                 .iter()
@@ -168,7 +169,7 @@ impl TreeTab {
     pub fn socket_scene(&self) -> Option<SocketScene> {
         Some(SocketScene {
             layout: self.layout.clone()?,
-            allocated: Arc::new(self.derived.allocated.clone()),
+            allocated: Arc::clone(&self.derived.allocated),
         })
     }
     /// Forgets the build's state, as for another build. Uploaded textures stay.
@@ -773,6 +774,16 @@ mod tests {
         let out = h.click_at(pos);
         assert_eq!(debug(&out.commands), ["SetMastery { node: 3, effect: 31 }"]);
         assert_eq!(h.tab.picker, None);
+    }
+
+    /// The socket viewer shares the tree's allocated set: the Items tab asks for it every frame
+    #[test]
+    fn the_socket_scene_shares_the_allocated_set() {
+        let (l, s) = sample();
+        let h = Harness::new(l, s);
+        let (a, b) = (h.tab.socket_scene().unwrap(), h.tab.socket_scene().unwrap());
+        assert!(Arc::ptr_eq(&a.allocated, &b.allocated));
+        assert!(a.allocated.contains(&1));
     }
 
     /// The sample with the mastery 3 allocated with the first effect.

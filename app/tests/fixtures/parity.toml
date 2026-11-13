@@ -666,7 +666,7 @@ ported = "app/src/ui/compare/mod.rs Tree view 'Copy and use' (CopyCompareTree an
 note = "Copy and use (R8)"
 
 [controls."compare.importBtn"]
-ported = "app/src/ui/compare/mod.rs header 'Load build…' menu (LoadCompare, ImportFromUrl Comparison)"
+ported = "app/src/ui/compare/mod.rs header 'Load build…' menu: 'From a saved build…' (LoadCompare File, R5's Import from Folder) and 'From a code or link…', PoB's Import Comparison Build popup (CompareSource::Import, glue compare_import)"
 note = "entries, load and remove (R5)"
 
 [controls."compare.itemsExpandedCheck"]
@@ -2545,7 +2545,7 @@ note = "part of skills.groupLabel"
 ported = "app/src/ui/skills/groups.rs list, drag reorder, menu, Ctrl+C/V, Delete or Backspace, Up/Down/Home/End, Ctrl+click enable and Ctrl+right-click Full DPS"
 
 [controls."skills.groupList.delete"]
-ported = "app/src/ui/skills/groups.rs Delete; audit 2: a Delete button on the selected group; Delete on an item group shows PoB's message (SkillListControl.lua:33-38, 165-166)"
+ported = "app/src/ui/skills/groups.rs Delete button on the selected group; a delete leaves nothing selected, as PoB's selValue = nil, so Delete and the Delete key are off until a group is selected again, and the engine refuses a DeleteSocketGroup whose index now names another group; Delete on an item group shows PoB's message (SkillListControl.lua:33-38, 165-189)"
 
 [controls."skills.groupList.deleteAll"]
 ported = "app/src/ui/skills/groups.rs Delete All; audit 2: PoB's question text"
@@ -2914,7 +2914,7 @@ ported = "app/src/engine/glue/net.lua Build:Init wrapper adopts PoB's window as 
 note = "never the previous build's tabs under the new name; an import's Convert makes an empty build, as upstream's"
 
 [popups."Import Comparison Build"]
-ported = "app/src/ui/compare/mod.rs 'Load build…' menu: from a saved build (R5's Import from Folder) or 'From a code or link…'; audit 2: PoB's popup: code or link, optional Name, Enter imports; a link downloads with or without a file (CompareSource::Import, glue compare_import)"
+ported = "app/src/ui/compare/dialogs.rs import: PoB's popup, a code or link and an optional Name (100 bytes), Enter imports; a code's failure shows in red in it; a link downloads with or without a build file, shows Downloading... until the download ends, closes when the comparison lands, else shows PoB's text in red with the link and Name kept (CompareSource::Import, glue compare_import, CompareTab.lua:1462-1525)"
 note = "R5"
 
 [popups."Import from Folder"]

@@ -1012,6 +1012,29 @@ fn a_press_that_leaves_the_quality_box_toggles_no_mod_line() {
     );
 }
 
+/// A box of Build's (the top bar's, the sidebar's) selected as the frame began takes the press
+/// first too (Build.lua:1230), though it lets go of the keyboard before the tab draws
+#[test]
+fn a_press_that_leaves_a_build_box_toggles_no_mod_line() {
+    use crate::widgets::scroll_step::{FocusScope, set_scope};
+    let mut h = Harness::new(sample());
+    h.show_display(display_view());
+    let typing = FocusScope {
+        typing: true,
+        build_box: true,
+        ..FocusScope::default()
+    };
+    set_scope(&h.ctx, typing);
+    let o = h.click("tip_line_0");
+    assert!(o.commands.is_empty(), "{:?}", o.commands);
+    set_scope(&h.ctx, FocusScope::default());
+    let o = h.click("tip_line_0");
+    assert_eq!(
+        debug(&o.commands),
+        ["ToggleModLine { line: ModLineRef { list: Explicit, index: 1 } }"]
+    );
+}
+
 /// The press that closes a dropped list goes to the list in PoB, as a box's does
 #[test]
 fn a_press_that_closes_a_dropdown_toggles_no_mod_line() {

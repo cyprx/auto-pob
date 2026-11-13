@@ -349,11 +349,14 @@ impl ItemsUi {
         }
         self.hovered_now = None;
         self.hovered_slot = None;
-        // read before anything is drawn: a box gives up the keyboard, and a list closes, while
-        // it draws; a repeated pass keeps the first pass's answer
+        // read before the tab draws: a box gives up the keyboard, and a list closes, while it
+        // draws; a box or list of Build's drawn before the tab is in the app's frame-start
+        // scope. A repeated pass keeps the first pass's answer.
         if ui.ctx().current_pass_index() == 0 {
-            self.display.control_selected =
-                ui.ctx().text_edit_focused() || egui::Popup::is_any_open(ui.ctx());
+            let ctx = ui.ctx();
+            self.display.control_selected = ctx.text_edit_focused()
+                || egui::Popup::is_any_open(ctx)
+                || crate::widgets::scroll_step::control_selected_at_start(ctx);
         }
         self.shortcuts(ui, &view, &mut out);
 

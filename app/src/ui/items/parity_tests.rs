@@ -331,7 +331,7 @@ fn add_mod_opens_the_mod_browser() {
 
 // ---- Shared items (NF-2) ----
 
-fn shared_sample() -> ItemsView {
+pub(super) fn shared_sample() -> ItemsView {
     use crate::engine::views::{SharedItemEntry, SharedSetEntry};
     let entry = |name: &str| SharedItemEntry {
         name: name.into(),

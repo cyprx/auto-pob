@@ -3060,6 +3060,42 @@ fn search_matches_again_after_other_commands() {
     assert_eq!(matches(&mut s).len(), 1);
 }
 
+/// A tree switch between two identical searches matches the new tree's nodes, not the old
+/// tree's results.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn search_matches_again_after_a_tree_switch() {
+    let _guard = lock();
+    let mut s = attack_session("tree-search-switch");
+    let matches = |s: &mut Session| s.backend.tree_state_view().unwrap().search_matches;
+    s.run(Command::CopySpec {
+        index: 0,
+        title: "Copy".into(),
+    })
+    .unwrap();
+    // only the copy has a node that reads as the search
+    s.backend
+        .lua
+        .load(
+            "local spec = pob.build.treeTab.specList[2]
+            assert(spec ~= pob.build.spec, 'the copy is active')
+            for _, n in pairs(spec.nodes[spec.curClass.startNodeId].linked) do
+                if n.type == 'Normal' then n.dn = 'Qzxv' return end
+            end
+            error('no neighbour')",
+        )
+        .exec()
+        .unwrap();
+    s.run(search("qzxv")).unwrap();
+    assert!(matches(&mut s).is_empty());
+    s.run(Command::SelectSpec { index: 1 }).unwrap();
+    s.run(search("qzxv")).unwrap();
+    assert_eq!(matches(&mut s).len(), 1, "the old tree's results");
+    s.run(Command::SelectSpec { index: 0 }).unwrap();
+    s.run(search("qzxv")).unwrap();
+    assert!(matches(&mut s).is_empty(), "the copy's results");
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn jewel_radius_matches_pob() {

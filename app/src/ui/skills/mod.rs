@@ -286,8 +286,9 @@ impl SkillsUi {
         out
     }
 
-    /// A text field that sends on Enter or when it loses focus. While it has focus an
-    /// incoming view doesn't replace what is typed.
+    /// A number field that sends on Enter or when it loses focus. While it has focus an
+    /// incoming view doesn't replace what is typed. Every one is a PoB `%D` box of two
+    /// characters (SkillsTab.lua:140, 349, 815, 837, 967), with its + and - buttons.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn field(
         &mut self,
@@ -299,7 +300,8 @@ impl SkillsUi {
         make: impl Fn(String) -> Command,
         out: &mut Vec<Command>,
     ) -> egui::Response {
-        self.field_limited(ui, key, current, width, None, busy, make, out)
+        let opts = EditBoxOptions::number(width, Some(2));
+        self.field_with(ui, key, current, &opts, busy, make, out)
     }
 
     /// `field` with the most characters PoB's box takes
@@ -320,7 +322,21 @@ impl SkillsUi {
             byte_limit: limit,
             ..EditBoxOptions::default()
         };
-        let (response, sent) = self.boxes.show(ui, key.to_owned(), current, busy, &opts);
+        self.field_with(ui, key, current, &opts, busy, make, out)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn field_with(
+        &mut self,
+        ui: &mut egui::Ui,
+        key: &str,
+        current: &str,
+        opts: &EditBoxOptions,
+        busy: bool,
+        make: impl Fn(String) -> Command,
+        out: &mut Vec<Command>,
+    ) -> egui::Response {
+        let (response, sent) = self.boxes.show(ui, key.to_owned(), current, busy, opts);
         self.rects.note(&response, || key.to_owned());
         match self.boxes.pending_text(&key.to_owned()) {
             Some(text) => {

@@ -22,6 +22,9 @@ pub struct EditBoxOptions {
     /// "?" and is refused whole past the limit, typed keys past it are refused one by one.
     pub filter: Option<fn(char) -> bool>,
     pub hint: Option<&'static str>,
+    /// PoB's integer box (filter `%D`, EditControl.lua:64-75): + and - buttons, and Up, Down
+    /// and the wheel step its number by one, sent at once (EditControl.lua:680-700)
+    pub numeric: bool,
 }
 
 impl Default for EditBoxOptions {
@@ -31,7 +34,33 @@ impl Default for EditBoxOptions {
             byte_limit: None,
             filter: None,
             hint: None,
+            numeric: false,
         }
+    }
+}
+
+impl EditBoxOptions {
+    /// PoB's `%D` box: digits only, at most `limit` of them, with its + and - buttons
+    pub const fn number(width: f32, limit: Option<usize>) -> Self {
+        Self {
+            width,
+            byte_limit: limit,
+            filter: Some(|c| c.is_ascii_digit()),
+            hint: None,
+            numeric: true,
+        }
+    }
+}
+
+/// PoB's step of a `%D` box (EditControl.lua:680-700): up adds one to its number, or makes it
+/// 1; down takes one from a number above 0, or makes it 0
+pub fn stepped(text: &str, up: bool) -> String {
+    let current = text.parse::<u64>().ok();
+    match (current, up) {
+        (Some(n), true) => n.saturating_add(1).to_string(),
+        (None, true) => "1".to_owned(),
+        (Some(n), false) if n > 0 => (n - 1).to_string(),
+        (_, false) => "0".to_owned(),
     }
 }
 
@@ -52,6 +81,44 @@ pub struct EditBox {
 impl EditBox {
     /// Draws the box. Returns the text to send when an edit completes (Enter or blur, changed).
     pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        id: egui::Id,
+        current: &str,
+        busy: bool,
+        opts: &EditBoxOptions,
+    ) -> (egui::Response, Option<String>) {
+        if !opts.numeric {
+            return self.show_box(ui, id, current, busy, opts);
+        }
+        ui.horizontal(|ui| {
+            let (response, mut send) = self.show_box(ui, id, current, busy, opts);
+            let mut step = 0;
+            ui.add_enabled_ui(response.enabled(), |ui| {
+                ui.spacing_mut().item_spacing.x = 1.0;
+                if ui.small_button("+").clicked() {
+                    step += 1;
+                }
+                if ui.small_button("-").clicked() {
+                    step -= 1;
+                }
+            });
+            step += crate::widgets::scroll_step::number_step(ui, &response);
+            if step != 0 {
+                // SetText(..., true): the change function runs at once (EditControl.lua:96-103)
+                for _ in 0..step.unsigned_abs() {
+                    self.text = stepped(&self.text, step > 0);
+                }
+                self.sent.clone_from(&self.text);
+                self.pending = false;
+                send = Some(self.text.clone());
+            }
+            (response, send)
+        })
+        .inner
+    }
+
+    fn show_box(
         &mut self,
         ui: &mut egui::Ui,
         id: egui::Id,
@@ -438,6 +505,57 @@ mod tests {
         assert_eq!(h.a.text, "7");
         h.type_text("89");
         assert_eq!(h.a.text, "78");
+    }
+
+    #[test]
+    fn a_number_steps_as_pobs() {
+        assert_eq!(stepped("41", true), "42");
+        assert_eq!(stepped("", true), "1");
+        assert_eq!(stepped("x", true), "1");
+        assert_eq!(stepped("3", false), "2");
+        // a `%D` box never goes below 0
+        assert_eq!(stepped("0", false), "0");
+        assert_eq!(stepped("", false), "0");
+    }
+
+    /// PoB's `%D` box: its + button, Up and Down while it has the keyboard, and the wheel over
+    /// it step the number and send it at once (EditControl.lua:64-75, 680-700)
+    #[test]
+    fn a_number_box_steps_on_its_button_the_arrows_and_the_wheel() {
+        let mut h = Harness::new("5");
+        h.opts = EditBoxOptions::number(40.0, Some(2));
+        h.frame(vec![]);
+        let plus = egui::Rect::from_center_size(
+            egui::pos2(h.a_rect.right() + 8.0, h.a_rect.center().y),
+            egui::vec2(2.0, 2.0),
+        );
+        assert_eq!(h.click(plus), ["6"]);
+        h.current = "6".into();
+        h.focus();
+        assert_eq!(h.key(Key::ArrowUp), ["7"]);
+        assert_eq!(h.key(Key::ArrowDown), ["6"]);
+        h.click_away();
+        h.current = "6".into();
+        h.frame(vec![Event::PointerMoved(h.a_rect.center())]);
+        let wheel = Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: Vec2::new(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: Modifiers::NONE,
+        };
+        assert_eq!(h.frame(vec![wheel]), ["5"]);
+        // the filter is `%D`
+        h.focus();
+        h.frame(vec![Event::Key {
+            key: Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        }]);
+        h.type_text("a12");
+        assert_eq!(h.a.text, "12");
     }
 
     /// PoB's limit counts bytes (EditControl.lua:148), so a 3-byte character takes three

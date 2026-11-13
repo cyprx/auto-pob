@@ -211,12 +211,7 @@ fn level(
         commands.push(Command::SetLevelMode { auto: !auto });
     }
     ui.label("Level");
-    let opts = EditBoxOptions {
-        width: 36.0,
-        byte_limit: Some(3),
-        filter: Some(|c| c.is_ascii_digit()),
-        hint: None,
-    };
+    let opts = EditBoxOptions::number(36.0, Some(3));
     let id = egui::Id::unique("top_bar_level");
     // a keystroke in Auto is a Manual level in PoB, even one that retypes the shown level;
     // one the `%D` filter or the length limit drops changes nothing (EditControl.lua:140-181)

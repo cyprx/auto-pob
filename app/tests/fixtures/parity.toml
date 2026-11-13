@@ -31,7 +31,7 @@ note = "part of build.buildLoadouts"
 ported = "app/src/ui/build.rs top_bar name with unsaved marker"
 
 [controls."build.characterLevel"]
-ported = "app/src/ui/build.rs top_bar level box (EditBox: Enter or blur sends, Esc reverts; %D filter, 3 characters; a keystroke in Auto is Manual) with PoB's Experience multiplier tooltip"
+ported = "app/src/ui/build.rs top_bar level box (EditBox: Enter or blur sends, Esc reverts; %D filter, 3 characters; a keystroke in Auto is Manual) with PoB's Experience multiplier tooltip; a %D box (widgets/edit_box.rs EditBoxOptions::number): + and - buttons, Up/Down and the wheel step it (EditControl.lua:64-75, 680-700)"
 
 [controls."build.characterLevel.buttonDown"]
 ported = "app/src/ui/build.rs top_bar level box"
@@ -71,7 +71,7 @@ ported = "app/src/ui/sidebar.rs main-skill selector"
 note = "label"
 
 [controls."build.mainSkillMineCount"]
-ported = "app/src/ui/sidebar.rs main-skill selector"
+ported = "app/src/ui/sidebar.rs main-skill selector; a %D box (widgets/edit_box.rs EditBoxOptions::number): + and - buttons, Up/Down and the wheel step it (EditControl.lua:64-75, 680-700)"
 
 [controls."build.mainSkillMineCount.buttonDown"]
 ported = "app/src/ui/sidebar.rs main-skill selector"
@@ -119,7 +119,7 @@ ported = "app/src/ui/sidebar.rs main-skill selector"
 note = "part of build.mainSkillPart"
 
 [controls."build.mainSkillStageCount"]
-ported = "app/src/ui/sidebar.rs main-skill selector"
+ported = "app/src/ui/sidebar.rs main-skill selector; a %D box (widgets/edit_box.rs EditBoxOptions::number): + and - buttons, Up/Down and the wheel step it (EditControl.lua:64-75, 680-700)"
 
 [controls."build.mainSkillStageCount.buttonDown"]
 ported = "app/src/ui/sidebar.rs main-skill selector"
@@ -1503,7 +1503,7 @@ ported = "app/src/ui/items/display.rs catalyst"
 note = "part of items.displayItemCatalyst"
 
 [controls."items.displayItemCatalystQualityEdit"]
-ported = "app/src/ui/items/display.rs catalyst quality"
+ported = "app/src/ui/items/display.rs catalyst quality; a %D box (widgets/edit_box.rs EditBoxOptions::number): + and - buttons, Up/Down and the wheel step it (EditControl.lua:64-75, 680-700)"
 
 [controls."items.displayItemCatalystQualityEdit.buttonDown"]
 ported = "app/src/ui/items/display.rs catalyst quality"
@@ -1579,7 +1579,7 @@ ported = "app/src/ui/items/display.rs Foulborn"
 ported = "app/src/ui/items/display.rs quality"
 
 [controls."items.displayItemQualityEdit"]
-ported = "app/src/ui/items/display.rs quality"
+ported = "app/src/ui/items/display.rs quality; a %D box (widgets/edit_box.rs EditBoxOptions::number): + and - buttons, Up/Down and the wheel step it (EditControl.lua:64-75, 680-700)"
 
 [controls."items.displayItemQualityEdit.buttonDown"]
 ported = "app/src/ui/items/display.rs quality"
@@ -2381,7 +2381,7 @@ note = "part of skills.defaultLevel"
 ported = "app/src/ui/skills/groups.rs gem options"
 
 [controls."skills.defaultQuality"]
-ported = "app/src/ui/skills/groups.rs gem options"
+ported = "app/src/ui/skills/groups.rs gem options; a %D box (widgets/edit_box.rs EditBoxOptions::number): + and - buttons, Up/Down and the wheel step it (EditControl.lua:64-75, 680-700)"
 
 [controls."skills.defaultQuality.buttonDown"]
 ported = "app/src/ui/skills/groups.rs gem options"
@@ -2418,7 +2418,7 @@ ported = "app/src/ui/skills/group.rs gem table"
 ported = "app/src/ui/skills/group.rs gem table"
 
 [controls."skills.gemSlot#Count"]
-ported = "app/src/ui/skills/group.rs Count box with PoB's what-if hover tooltip (HoverTooltip, R22)"
+ported = "app/src/ui/skills/group.rs Count box with PoB's what-if hover tooltip (HoverTooltip, R22); a %D box (widgets/edit_box.rs EditBoxOptions::number): + and - buttons, Up/Down and the wheel step it (EditControl.lua:64-75, 680-700)"
 
 [controls."skills.gemSlot#Count.buttonDown"]
 ported = "app/src/ui/skills/group.rs Count box"
@@ -2452,7 +2452,7 @@ ported = "app/src/ui/skills/group.rs Vaal toggles"
 ported = "app/src/ui/skills/group.rs unknown gems in red"
 
 [controls."skills.gemSlot#Level"]
-ported = "app/src/ui/skills/group.rs gem table"
+ported = "app/src/ui/skills/group.rs gem table; a %D box (widgets/edit_box.rs EditBoxOptions::number): + and - buttons, Up/Down and the wheel step it (EditControl.lua:64-75, 680-700)"
 
 [controls."skills.gemSlot#Level.buttonDown"]
 ported = "app/src/ui/skills/group.rs gem table"
@@ -2486,7 +2486,7 @@ ported = "app/src/ui/skills/picker.rs gem picker"
 note = "part of skills.gemSlot#Name"
 
 [controls."skills.gemSlot#Quality"]
-ported = "app/src/ui/skills/group.rs Quality box with PoB's what-if hover tooltip (HoverTooltip, R22)"
+ported = "app/src/ui/skills/group.rs Quality box with PoB's what-if hover tooltip (HoverTooltip, R22); a %D box (widgets/edit_box.rs EditBoxOptions::number): + and - buttons, Up/Down and the wheel step it (EditControl.lua:64-75, 680-700)"
 
 [controls."skills.gemSlot#Quality.buttonDown"]
 ported = "app/src/ui/skills/group.rs Quality box"
@@ -2505,7 +2505,7 @@ ported = "app/src/ui/skills/group.rs Quality box"
 note = "part of skills.gemSlot#Quality"
 
 [controls."skills.groupCount"]
-ported = "app/src/ui/skills/group.rs count (item groups)"
+ported = "app/src/ui/skills/group.rs count (item groups); a %D box (widgets/edit_box.rs EditBoxOptions::number): + and - buttons, Up/Down and the wheel step it (EditControl.lua:64-75, 680-700)"
 
 [controls."skills.groupCount.buttonDown"]
 ported = "app/src/ui/skills/group.rs count (item groups)"

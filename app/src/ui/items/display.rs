@@ -13,12 +13,7 @@ const QUALITY_DIGITS: usize = 2;
 
 /// PoB's quality boxes take digits only (filter `%D`).
 fn quality_options() -> EditBoxOptions {
-    EditBoxOptions {
-        width: 40.0,
-        byte_limit: Some(QUALITY_DIGITS),
-        filter: Some(|c| c.is_ascii_digit()),
-        hint: None,
-    }
+    EditBoxOptions::number(40.0, Some(QUALITY_DIGITS))
 }
 
 #[derive(Default)]

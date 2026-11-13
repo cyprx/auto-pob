@@ -218,6 +218,39 @@ pub fn dropdown_step_in(
     (to != selected).then_some(to)
 }
 
+const NUMBER_KEYS: [(Key, i32); 2] = [(Key::ArrowUp, -1), (Key::ArrowDown, 1)];
+
+/// A `%D` box drawn as `response`: the steps up (down if negative) the wheel and Up/Down give
+/// it. PoB sends these keys up to the selected control, or with none to the one pointed at
+/// (ControlHost.lua:56-71); the wheel is off with "Disable control scroll interaction"
+/// (EditControl.lua:680-700).
+pub fn number_step(ui: &egui::Ui, response: &egui::Response) -> i32 {
+    if !response.enabled() || behind_window(ui.ctx(), response) {
+        return 0;
+    }
+    if !response.has_focus() && (!response.hovered() || held(ui.ctx())) {
+        return 0;
+    }
+    let (total, wheel, _, _) = ui.input(|i| steps(i, &NUMBER_KEYS));
+    if options(ui.ctx()).disable {
+        // the wheel is left to what is around the box; the keys still step it
+        let keys = total - wheel;
+        if keys != 0 {
+            ui.input_mut(|i| {
+                i.events.retain(|e| {
+                    !matches!(e, Event::Key { key, .. }
+                        if NUMBER_KEYS.iter().any(|(k, _)| k == key))
+                });
+            });
+        }
+        return -keys;
+    }
+    if total != 0 {
+        take(ui, &NUMBER_KEYS);
+    }
+    -total
+}
+
 const SLIDER_KEYS: [(Key, i32); 4] = [
     (Key::ArrowDown, -1),
     (Key::ArrowLeft, -1),

@@ -84,12 +84,8 @@ fn same_numbers(a: &CalcsView, b: &CalcsView) -> bool {
     plain(a) == plain(b)
 }
 
-const COUNT_OPTIONS: EditBoxOptions = EditBoxOptions {
-    width: 50.0,
-    byte_limit: None,
-    filter: None,
-    hint: None,
-};
+/// PoB's count boxes are `%D` boxes with no limit (CalcsTab.lua:70, 79)
+const COUNT_OPTIONS: EditBoxOptions = EditBoxOptions::number(50.0, None);
 
 fn count_command(key: &str, text: String) -> Command {
     Command::SetCalcsCount {

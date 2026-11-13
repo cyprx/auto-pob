@@ -628,8 +628,9 @@ fn a_pending_default_quality_is_not_unsaved_but_still_flushes() {
         debug(&h.ui.flush().into_iter().collect::<Vec<_>>()),
         ["SetSkillOption(DefaultQuality(\"20\"))"]
     );
-    // a gem field still counts
+    // a gem field still counts (its two characters are full: type over them)
     h.click("g0_s0_level");
+    h.frame_key(Key::A, Modifiers::COMMAND);
     h.type_text("1");
     h.frame(vec![]);
     assert!(h.ui.has_pending());

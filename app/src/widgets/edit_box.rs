@@ -344,9 +344,85 @@ impl<K: Hash + Eq + Clone> EditBoxes<K> {
     }
 }
 
+/// PoB's PageUp and PageDown in a multi-line box (EditControl.lua:598-606), which egui's
+/// TextEdit leaves alone: the caret moves up or down the box's height less 18 pixels of lines,
+/// keeping its column, Shift selecting. `response` is the box, drawn this frame from `text`.
+pub fn page_keys(ui: &egui::Ui, response: &egui::Response, text: &str) {
+    if !response.has_focus() {
+        return;
+    }
+    // whatever else is held, as PoB reads the keys
+    let (steps, shift) = ui.input_mut(|i| {
+        let mut steps = 0i64;
+        i.events.retain(|e| match e {
+            egui::Event::Key {
+                key: key @ (egui::Key::PageUp | egui::Key::PageDown),
+                pressed: true,
+                ..
+            } => {
+                steps += if *key == egui::Key::PageDown { 1 } else { -1 };
+                false
+            }
+            _ => true,
+        });
+        (steps, i.modifiers.shift)
+    });
+    if steps == 0 {
+        return;
+    }
+    let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), response.id) else {
+        return;
+    };
+    let line_height = ui.text_style_height(&egui::TextStyle::Body).max(1.0);
+    let height = response.rect.height().min(ui.clip_rect().height());
+    let page = (((height - 18.0) / line_height).floor() as i64).max(1);
+    let (primary, secondary) = match state.cursor.char_range() {
+        Some(r) => (r.primary.index.0, r.secondary.index.0),
+        None => (0, 0),
+    };
+    let to = page_move(text, primary, steps * page);
+    let anchor = if shift { secondary } else { to };
+    state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::two(
+            egui::text::CCursor::new(anchor),
+            egui::text::CCursor::new(to),
+        )));
+    state.store(ui.ctx(), response.id);
+    ui.ctx().request_repaint();
+}
+
+/// The character index `lines` lines below (above, when negative) `at` in `text`, at the same
+/// column or the line's end
+fn page_move(text: &str, at: usize, lines: i64) -> usize {
+    let lengths: Vec<usize> = text.split('\n').map(|l| l.chars().count()).collect();
+    let (mut line, mut column, mut start) = (0usize, at, 0usize);
+    for (n, len) in lengths.iter().enumerate() {
+        if at <= start + len {
+            line = n;
+            column = at - start;
+            break;
+        }
+        start += len + 1;
+    }
+    let target = (line as i64 + lines).clamp(0, lengths.len() as i64 - 1) as usize;
+    let begin: usize = lengths[..target].iter().map(|l| l + 1).sum();
+    begin + column.min(lengths[target])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_page_moves_the_caret_whole_lines_keeping_its_column() {
+        // EditControl.lua:598-606 MoveCaretVertically by the box height
+        let text = "abc\nde\nfghij\nk";
+        assert_eq!(page_move(text, 1, 2), 8, "line 3, column 1");
+        assert_eq!(page_move(text, 9, -1), 6, "line 2 is shorter: its end");
+        assert_eq!(page_move(text, 0, 10), 13, "the last line");
+        assert_eq!(page_move(text, 14, -10), 1, "the first line");
+    }
     use egui::{Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 
     struct Harness {

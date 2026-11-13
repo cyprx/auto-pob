@@ -280,7 +280,9 @@ impl SkillsAction {
     fn command(&self) -> Option<Command> {
         Some(match self.clone() {
             SkillsAction::AddSocketGroup => Command::AddSocketGroup,
-            SkillsAction::DeleteSocketGroup { group } => Command::DeleteSocketGroup { group },
+            SkillsAction::DeleteSocketGroup { group } => {
+                Command::DeleteSocketGroup { group, name: None }
+            }
             SkillsAction::DeleteAllSocketGroups => Command::DeleteAllSocketGroups,
             SkillsAction::MoveSocketGroup { from, to } => Command::MoveSocketGroup { from, to },
             SkillsAction::PasteSocketGroup { text } => Command::PasteSocketGroup { text },
@@ -637,7 +639,11 @@ fn delete_before_main_shifts_main() {
     }
     s.run(Command::SetMainSocketGroup { group: 2 }).unwrap();
     lua.load("act.main_group(2)").exec().unwrap();
-    s.run(Command::DeleteSocketGroup { group: 0 }).unwrap();
+    s.run(Command::DeleteSocketGroup {
+        group: 0,
+        name: None,
+    })
+    .unwrap();
     lua.load("act.delete_group(0)").exec().unwrap();
     s.run(Command::MoveSocketGroup { from: 1, to: 0 }).unwrap();
     lua.load("act.move_group(1, 0)").exec().unwrap();
@@ -714,7 +720,22 @@ fn out_of_range_group_is_an_error() {
     let missing = before.groups.len() + 5;
     let no_group = "no such socket group";
     let commands = [
-        (Command::DeleteSocketGroup { group: missing }, no_group),
+        (
+            Command::DeleteSocketGroup {
+                group: missing,
+                name: None,
+            },
+            no_group,
+        ),
+        // a delete from a stale view: the place holds another group now (SkillListControl's
+        // selValue = nil means PoB never deletes a group it didn't show)
+        (
+            Command::DeleteSocketGroup {
+                group: 0,
+                name: Some(format!("not {}", before.groups[0].name)),
+            },
+            "the socket group list changed",
+        ),
         (
             Command::MoveSocketGroup {
                 from: missing,
@@ -1445,7 +1466,10 @@ fn no_silent_writes_skills() {
     commands.extend([
         Command::Undo(Tab::Skills),
         Command::Redo(Tab::Skills),
-        Command::DeleteSocketGroup { group: 0 },
+        Command::DeleteSocketGroup {
+            group: 0,
+            name: None,
+        },
         Command::DeleteAllSocketGroups,
     ]);
     let mut ran = 0;
@@ -1609,7 +1633,10 @@ fn item_group_refuses_what_pob_hides() {
             "can't be edited",
         ),
         (
-            Command::DeleteSocketGroup { group: item },
+            Command::DeleteSocketGroup {
+                group: item,
+                name: None,
+            },
             "can't be deleted",
         ),
         (
@@ -2629,7 +2656,10 @@ fn failed_structural_command_keeps_the_search() {
     let query = gem_query(0, GemTarget::Slot(3), "fire", GemFilter::All);
     s.run(Command::SearchGems(query.clone())).unwrap();
     for failing in [
-        Command::DeleteSocketGroup { group: 42 },
+        Command::DeleteSocketGroup {
+            group: 42,
+            name: None,
+        },
         Command::MoveSocketGroup { from: 0, to: 42 },
         Command::DeleteGem { group: 0, slot: 42 },
         Command::SelectSkillSet { id: 42 },

@@ -593,6 +593,8 @@ fn mode_name(mode: ImportMode) -> &'static str {
 
 /// The one Compare control that edits this build: the Items view's own item set (R6)
 const PRIMARY_ITEM_SET: &str = "primaryItemSetSelect";
+/// The Compare Config view's boxes for this build's options (`cfg_p_<var>`)
+const PRIMARY_CONFIG: &str = "cfg_p_";
 
 /// A Compare command changed the comparisons; the tree goes too, for the overlay (R7).
 fn compare_changed() -> Affected {
@@ -668,7 +670,7 @@ fn ends_gem_search(command: &Command) -> bool {
 /// then decides by the session's owner (R19): a build-owned one ends only with its build.
 pub(crate) fn ends_popup_session(command: &Command) -> bool {
     if let Command::SetCompareControl { name, .. } = command {
-        return name == PRIMARY_ITEM_SET;
+        return name == PRIMARY_ITEM_SET || name.starts_with(PRIMARY_CONFIG);
     }
     // converting the comparison's tree leaves this build alone
     if let Command::ConvertCompareTree { theirs, .. } = command {
@@ -1456,6 +1458,15 @@ impl PobBackend {
                     CompareSource::File(path) => self
                         .call::<_, ()>("compare_load_file", path.to_string_lossy().into_owned())?,
                     CompareSource::Code(code) => self.call::<_, ()>("compare_load_code", code)?,
+                    CompareSource::Import { text, name } => {
+                        // a link is a request, which lands the comparison when it ends
+                        let request: Option<u64> = self.call("compare_import", (text, name))?;
+                        if request.is_some() {
+                            let mut affected = self.network_affected()?;
+                            affected.merge(compare_changed());
+                            return Ok(affected);
+                        }
+                    }
                 }
                 Ok(compare_changed())
             }
@@ -1469,6 +1480,7 @@ impl PobBackend {
             }
             Command::SetCompareControl { name, value } => {
                 let primary = name == PRIMARY_ITEM_SET;
+                let primary_config = name.starts_with(PRIMARY_CONFIG);
                 match value {
                     PopupInput::Choice { index, label } => {
                         self.call::<_, ()>("compare_set", (name, "choice", index, label))?
@@ -1499,6 +1511,10 @@ impl PobBackend {
                 // PoB's own item set selector, with an Items undo state (CompareTab.lua:781)
                 if primary {
                     affected.merge(self.items_edited()?);
+                }
+                // a Config view box of ours writes this build's option (CompareTab.lua:1131-1160)
+                if primary_config {
+                    affected.merge(config_changed());
                 }
                 Ok(affected)
             }
@@ -1658,8 +1674,8 @@ impl PobBackend {
                 self.call::<_, ()>("skills_add_group", ())?;
                 Ok(skills_changed())
             }
-            Command::DeleteSocketGroup { group } => {
-                self.call::<_, ()>("skills_delete_group", group + 1)?;
+            Command::DeleteSocketGroup { group, name } => {
+                self.call::<_, ()>("skills_delete_group", (group + 1, name))?;
                 Ok(skills_changed())
             }
             Command::DeleteAllSocketGroups => {
@@ -2824,7 +2840,22 @@ impl Backend for PobBackend {
                 self.view("skills_hover", (group + 1, slot + 1, "count"))?
             }
             HoverTarget::ConfigOption { var } => self.view("config_hover", var.clone())?,
+            HoverTarget::CompareEquip { slot } => self.view("compare_equip_hover", slot.clone())?,
             HoverTarget::CustomModEnabled { group } => self.view("custom_mod_hover", group + 1)?,
+            HoverTarget::Dropdown {
+                owner,
+                name,
+                index,
+                entry,
+            } => {
+                let owner = match owner {
+                    crate::engine::DropdownOwner::Build => "build",
+                    crate::engine::DropdownOwner::Tree => "tree",
+                    crate::engine::DropdownOwner::Skills => "skills",
+                };
+                let mode = if *entry { "HOVER" } else { "BODY" };
+                self.view("dropdown_hover", (owner, name.clone(), index + 1, mode))?
+            }
         };
         Ok(lines.map(|lines| HoverTooltipView {
             target: target.clone(),

@@ -114,6 +114,10 @@ pub struct SocketScene {
 
 #[derive(Default)]
 pub struct TreeTab {
+    /// PoB's "Node Power colours" option
+    pub(super) power_theme: overlays::PowerTheme,
+    /// PoB's "Show search circles at viewport edge" is off
+    pub(super) edge_search_off: bool,
     pub(super) camera: Camera,
     /// Wheel travel short of a whole notch, for a trackpad's small scrolls
     pub(super) wheel_rest: f32,
@@ -217,6 +221,34 @@ impl TreeTab {
         self.toolbar
             .class_dialog(ui.ctx(), &mut self.rects, &mut commands);
         commands
+    }
+
+    /// PoB's options the canvas follows: the heat map's colours and whether search matches
+    /// outside the view show at its edge
+    pub fn set_ui_settings(&mut self, theme: overlays::PowerTheme, edge_search: bool) {
+        self.power_theme = theme;
+        self.edge_search_off = !edge_search;
+        self.toolbar.power_theme = theme;
+    }
+
+    /// A command failed (see `Toolbar::on_command_error`)
+    pub fn on_command_error(&mut self) {
+        self.toolbar.on_command_error();
+    }
+
+    /// The engine's running requests, by label
+    pub fn on_requests(&mut self, pending: &[&str]) {
+        self.toolbar.on_requests(pending);
+    }
+
+    /// An answer to a hover question (the tree selector's tooltip)
+    pub fn on_hover(&mut self, view: &std::sync::Arc<crate::engine::views::HoverTooltipView>) {
+        self.toolbar.spec_tip.on_view(view);
+    }
+
+    /// A new calculation: the tree selector's tooltip is asked for again
+    pub fn forget_hover(&mut self) {
+        self.toolbar.spec_tip.forget();
     }
 
     /// Opens PoB's "Manage Passive Trees" window (the Items tab's "Manage...",
@@ -878,20 +910,24 @@ mod tests {
         assert_eq!(debug(&out.commands), ["OpenPopup(TimelessJewel)"]);
     }
 
-    /// PoB can't undo "Remove All Tattoos", so the first click only asks (Review Focus 5).
+    /// PoB's "Reset Tree/Tattoos" asks first: Reset Tree, Remove All Tattoos or Cancel
+    /// (TreeTab.lua:130-154)
     #[test]
-    fn remove_all_tattoos_asks_first() {
+    fn reset_tree_tattoos_asks_first() {
         let (l, s) = sample();
         let mut h = Harness::new(l, s);
-        let out = click_key(&mut h, "remove_tattoos");
+        let out = click_key(&mut h, "reset");
         assert!(out.commands.is_empty(), "{:?}", out.commands);
         assert!(h.tab.has_dialog());
         // Cancel sends nothing and closes the question
-        let out = click_key(&mut h, "remove_tattoos_no");
+        let out = click_key(&mut h, "reset_no");
         assert!(out.commands.is_empty(), "{:?}", out.commands);
         assert!(!h.tab.has_dialog());
-        // asking again and confirming sends the command, once
-        click_key(&mut h, "remove_tattoos");
+        click_key(&mut h, "reset");
+        let out = click_key(&mut h, "reset_yes");
+        assert_eq!(debug(&out.commands), ["ResetTree"]);
+        // asking again and removing the tattoos sends that, once
+        click_key(&mut h, "reset");
         let out = click_key(&mut h, "remove_tattoos_yes");
         assert_eq!(debug(&out.commands), ["RemoveAllTattoos"]);
         assert!(!h.tab.has_dialog());
@@ -1579,6 +1615,109 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_refused_shrink_still_ends_as_done() {
+        // TreeTab.lua:820-826: the button always ends as Done
+        let mut h = heat_harness();
+        press(&mut h, "link_menu");
+        press(&mut h, "link_export");
+        h.tab
+            .on_snapshot(&Snapshot::TreeLink(Arc::new("https://x.test/tree".into())));
+        h.frame(vec![]);
+        press(&mut h, "export_shrink");
+        // the press failed before any request was listed
+        h.tab.on_command_error();
+        h.frame(vec![]);
+        assert!(press(&mut h, "export_shrink").commands.is_empty());
+        assert!(h.tab.has_dialog());
+    }
+
+    #[test]
+    fn a_search_match_off_screen_snaps_to_the_edge() {
+        // PassiveTreeView.lua:1017-1031: with the option on (PoB's default) a match outside
+        // the view shows at its edge; with it off, nowhere
+        let rings = |edge: bool| {
+            let (l, s) = sample();
+            let mut state = (*s).clone();
+            state.search_matches = vec![4];
+            let mut h = Harness::new(l, Arc::new(state));
+            h.tab.set_ui_settings(overlays::PowerTheme::RedBlue, edge);
+            h.frame(vec![]);
+            // node 4 at (600, 600) just off the view's right bottom
+            let rect = h.tab.rect.unwrap();
+            h.tab.camera.zoom = 0.5;
+            h.tab.camera.center =
+                egui::vec2(600.0, 600.0) - (rect.size() / 2.0 + egui::vec2(20.0, 20.0)) / 0.5;
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                time: Some(h.time + 1.0),
+                ..Default::default()
+            };
+            let mut output = h.ctx.run_ui(input, |ui| {
+                h.tab.show(ui, false);
+            });
+            output.textures_delta.clear();
+            let mut found = Vec::new();
+            fn walk(shape: &egui::Shape, out: &mut Vec<Pos2>) {
+                match shape {
+                    egui::Shape::Circle(c) if c.stroke.color == overlays::SEARCH_RING => {
+                        out.push(c.center)
+                    }
+                    egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                    _ => {}
+                }
+            }
+            output
+                .shapes
+                .iter()
+                .for_each(|c| walk(&c.shape, &mut found));
+            (found, rect)
+        };
+        let (found, rect) = rings(true);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(rect.expand(1.0).contains(found[0]), "{found:?} {rect:?}");
+        let (found, rect) = rings(false);
+        assert!(found.iter().all(|p| !rect.contains(*p)), "{found:?}");
+    }
+
+    #[test]
+    fn a_failed_shrink_ends_with_its_request() {
+        // TreeTab.lua:820-826: the button says Done after a failure too (PoB's message is the
+        // request's notice)
+        let mut h = heat_harness();
+        press(&mut h, "link_menu");
+        let out = press(&mut h, "link_export");
+        assert_eq!(debug(&out.queries), ["ExportTreeLink"]);
+        h.tab
+            .on_snapshot(&Snapshot::TreeLink(Arc::new("https://x.test/tree".into())));
+        h.frame(vec![]);
+        let out = press(&mut h, "export_shrink");
+        assert_eq!(debug(&out.commands), ["ShrinkTreeLink"]);
+        h.tab.on_requests(&["Shrinking tree link"]);
+        h.tab.on_requests(&[]);
+        h.frame(vec![]);
+        assert!(press(&mut h, "export_shrink").commands.is_empty());
+        assert!(h.tab.has_dialog());
+        press(&mut h, "export_done");
+        assert!(!h.tab.has_dialog());
+    }
+
+    #[test]
+    fn the_depth_takes_a_pick_with_the_heat_map_off() {
+        // TreeTab.lua:202-235: the depth dropdown works whether the map shows or not
+        let mut h = heat_harness();
+        let mut state = (*h.tab.state.clone().unwrap()).clone();
+        state.heatmap = None;
+        h.tab.on_snapshot(&Snapshot::Tree(Arc::new(state)));
+        h.frame(vec![]);
+        press(&mut h, "heat_depth");
+        let out = press(&mut h, "depth:10");
+        assert_eq!(
+            debug(&out.commands),
+            ["SetHeatmap { stat: None, max_depth: Some(10) }"]
+        );
+    }
+
     fn wheel(y: f32) -> Event {
         Event::MouseWheel {
             unit: egui::MouseWheelUnit::Line,
@@ -1638,6 +1777,18 @@ mod tests {
             debug(&out.commands),
             ["SetHeatmap { stat: Some(\"Life\"), max_depth: Some(16) }"]
         );
+    }
+
+    #[test]
+    fn the_search_box_filters_and_limits_as_pobs() {
+        // TreeTab.lua:211: "%c" and 100 bytes
+        let mut h = heat_harness();
+        press(&mut h, "search");
+        h.frame(vec![Event::Text("a\u{7}b".into())]);
+        h.frame(vec![Event::Text("x".repeat(120))]);
+        let text = h.tab.toolbar.search_for_test();
+        assert!(text.starts_with("abx"), "{text:?}");
+        assert_eq!(text.len(), 100);
     }
 
     #[test]

@@ -35,6 +35,10 @@ pub enum CompareSource {
     File(PathBuf),
     /// A share code
     Code(String),
+    /// PoB's "Import Comparison Build" popup (CompareTab.lua:1462-1525): a code or a build
+    /// site's link, and the name the comparison takes (PoB's "Imported from <site>" or
+    /// "Imported build" when `None`). A link is a request.
+    Import { text: String, name: Option<String> },
 }
 
 /// A platform of PoB's account import (PoB's ids `"PC"`, `"XBOX"`, `"SONY"`).
@@ -390,8 +394,12 @@ pub enum Command {
 
     /// Socket groups are 0-based, in the order of `SkillsView.groups`.
     AddSocketGroup,
+    /// `name` is PoB's `displayLabel` of the group the UI showed at `group`: the engine refuses
+    /// the delete when that place now holds another group (a command from a stale view), so a
+    /// second press never deletes the next group. `None` skips the check.
     DeleteSocketGroup {
         group: usize,
+        name: Option<String>,
     },
     DeleteAllSocketGroups,
     /// `to` is the group's final position.
@@ -1033,6 +1041,26 @@ pub enum HoverTarget {
     ConfigOption { var: String },
     /// A custom modifier group's enable box (0-based): "Disabling/Enabling this group..."
     CustomModEnabled { group: usize },
+    /// A dropdown's `tooltipFunc` (DropDownControl.lua:291-361), by PoB's control name: for
+    /// the closed dropdown (`entry` false, PoB's "BODY" with its selected entry) or for an entry
+    /// of the dropped list (`entry` true, "HOVER"). `index` is the entry's 0-based position.
+    Dropdown {
+        owner: DropdownOwner,
+        name: String,
+        index: usize,
+        entry: bool,
+    },
+    /// A Compare Items row's Equip button: "Equipping this item in <slot> will give you:"
+    CompareEquip { slot: String },
+}
+
+/// Whose controls a [`HoverTarget::Dropdown`] is among
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DropdownOwner {
+    /// Build's own: the top bar and the sidebar
+    Build,
+    Tree,
+    Skills,
 }
 
 #[derive(Debug, Clone, PartialEq)]

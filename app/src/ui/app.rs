@@ -469,9 +469,12 @@ impl AutoPobApp {
         }
     }
 
-    /// What the UI does for PoB's settings: the zoom and the window title (R13).
+    /// What the UI does for PoB's settings: the zoom, the window title and the tree view's
+    /// heat map colours and edge search circles (R13).
     fn apply_ui_settings(&mut self, ctx: &egui::Context) {
         let effects = options::ui_effects(self.options.rows());
+        self.tree
+            .set_ui_settings(effects.power_theme, effects.edge_search);
         if (effects.zoom - self.applied_zoom).abs() > f32::EPSILON {
             ctx.set_zoom_factor(effects.zoom);
             self.applied_zoom = effects.zoom;
@@ -612,6 +615,7 @@ impl AutoPobApp {
             Event::StartupFailed { message } => self.startup_error = Some(message),
             Event::Snapshot { seq, snapshot } => {
                 self.last_snapshot = self.last_snapshot.max(seq);
+                self.compare.import_settled(self.last_snapshot);
                 // The events are in order, so everything from the previous build has arrived
                 // by the new build's first snapshot. Only now is the tree tab's state for the
                 // old build (and any late power events) dropped.
@@ -677,6 +681,9 @@ impl AutoPobApp {
                         // a new calculation: the "what if" answers compared against the old one
                         self.skills.forget_hover();
                         self.config_ui.forget_hover();
+                        self.sidebar.forget_hover();
+                        self.tree.forget_hover();
+                        self.calcs.group_hover.forget();
                         self.stats = Some(view);
                     }
                     Snapshot::Config(view) => {
@@ -685,15 +692,22 @@ impl AutoPobApp {
                         self.config = Some(view);
                     }
                     Snapshot::Calcs(_) => self.calcs.on_snapshot(&snapshot),
+                    Snapshot::GroupTooltip(ref t) => {
+                        // the Skills list, the sidebar and the Calcs selector each ask
+                        self.sidebar.group_hover.on_tooltip(t);
+                        self.calcs.group_hover.on_tooltip(t);
+                        self.skills.on_snapshot(&snapshot);
+                    }
                     Snapshot::Skills(_)
                     | Snapshot::SocketGroupText(_)
-                    | Snapshot::GroupTooltip(_)
                     | Snapshot::GemSearch(_)
                     | Snapshot::GemTooltip(_) => self.skills.on_snapshot(&snapshot),
                     // the Skills and Config tabs each keep the answers to their own hovers
                     Snapshot::HoverTooltip(view) => {
                         self.skills
                             .on_snapshot(&Snapshot::HoverTooltip(view.clone()));
+                        self.sidebar.on_hover(&view);
+                        self.tree.on_hover(&view);
                         self.config_ui.on_hover(&view);
                     }
                     Snapshot::Items(_)
@@ -798,11 +812,20 @@ impl AutoPobApp {
     }
 
     fn on_requests(&mut self, view: &RequestsView) {
+        let pending: Vec<&str> = view.pending.iter().map(|r| r.label.as_str()).collect();
+        self.tree.on_requests(&pending);
         self.requests = RequestsView {
             pending: view.pending.clone(),
             finished: Vec::new(),
         };
         for done in &view.finished {
+            // the Compare tab's Import popup shows its own download's end, as PoB's does
+            if self
+                .compare
+                .import_request_ended(&done.label, done.error.as_deref())
+            {
+                continue;
+            }
             // a cancel is the user's own doing
             if let Some(error) = done.error.as_ref().filter(|_| !done.cancelled) {
                 self.notices.push(format!("{}: {error}", done.label));
@@ -840,6 +863,11 @@ impl AutoPobApp {
         if self.list_move_seq == Some(seq) {
             self.list_move_seq = None;
             self.list_ui.move_refused();
+        }
+        self.tree.on_command_error();
+        // the Compare tab's Import popup shows its own failure, as PoB's does
+        if self.compare.import_failed(seq, &message) {
+            return;
         }
         self.import_ui.on_error(seq);
         if self.import_seq == Some(seq) || self.entering == Some(seq) {
@@ -1645,6 +1673,8 @@ impl AutoPobApp {
         let mut top_commands = Vec::new();
         // the top bar and the sidebar are Build's own controls (Build.lua:1230)
         crate::widgets::scroll_step::set_build_host(ui.ctx(), true);
+        // typed edits not yet sent count: PoB's boxes apply every keystroke
+        let unsaved = self.current_unsaved();
         let top = egui::Panel::top("top_bar").show(ui, |ui| {
             let history = match self.undo_tab() {
                 Some(Tab::Tree) => self.tree.history(),
@@ -1662,6 +1692,7 @@ impl AutoPobApp {
                 &mut self.top_bar,
                 &mut self.tree,
                 behind,
+                unsaved,
             );
             action = out.action.or(action);
             top_commands = out.commands;
@@ -1684,6 +1715,10 @@ impl AutoPobApp {
         crate::widgets::scroll_step::set_build_host(ui.ctx(), false);
         for command in sidebar_commands {
             self.send(command);
+        }
+        // questions never leave the app waiting
+        for query in self.sidebar.take_queries() {
+            self.engine.send(query);
         }
 
         let mut config_commands = Vec::new();
@@ -1773,7 +1808,16 @@ impl AutoPobApp {
             self.compare.close_dialog();
         }
         for command in compare_out.commands {
-            self.send(command);
+            let import = matches!(
+                &command,
+                Command::LoadCompare {
+                    source: crate::engine::CompareSource::Import { .. }
+                }
+            );
+            let seq = self.send(command);
+            if import {
+                self.compare.import_sent(seq);
+            }
         }
         // questions never leave the app waiting
         for query in compare_out.queries {
@@ -1892,6 +1936,9 @@ impl AutoPobApp {
         }
         // only the latest question matters; the others are about cells the pointer has left
         if let Some(query) = calcs_out.queries.pop() {
+            self.engine.send(query);
+        }
+        for query in std::mem::take(&mut self.calcs.group_hover.queries) {
             self.engine.send(query);
         }
         if let Some(id) = calcs_out.focus_node {
@@ -2033,21 +2080,26 @@ impl AutoPobApp {
         let window = egui::Id::unique("app_unsaved");
         let mut choice =
             crate::widgets::escape::escape(ctx, window).then_some(PromptChoice::Cancel);
-        egui::Window::new("Unsaved changes")
+        // PoB's Save Changes popup (Build.lua:1352-1379): "now?" when leaving the build,
+        // "before exiting?" when the window closes
+        let when = if matches!(pending, Pending::Close) {
+            "before exiting?"
+        } else {
+            "now?"
+        };
+        egui::Window::new("Save Changes")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                let name = self
-                    .build
-                    .as_ref()
-                    .map_or("this build", |b| b.name.as_str());
-                ui.label(format!("Save changes to {name}?"));
+                ui.label(format!(
+                    "This build has unsaved changes.\nDo you want to save them {when}"
+                ));
                 ui.horizontal(|ui| {
                     if ui.add(theme::primary_button("Save")).clicked() {
                         choice = Some(PromptChoice::Save);
                     }
-                    if ui.button("Don't save").clicked() {
+                    if ui.button("Don't Save").clicked() {
                         choice = Some(PromptChoice::Discard);
                     }
                     if ui.button("Cancel").clicked() {
@@ -2093,12 +2145,19 @@ impl AutoPobApp {
         let mut cancel = !dialog.waiting && crate::widgets::escape::escape(ctx, window);
         let mut picker_out = None;
         let list = self.list.clone();
-        egui::Window::new("Save as")
+        // PoB's title: "Save As" for a build with a file, else "Save" (Build.lua:1449)
+        let title = if self.build.as_ref().is_some_and(|b| b.path.is_some()) {
+            "Save As"
+        } else {
+            "Save"
+        };
+        egui::Window::new(title)
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.add_enabled_ui(!dialog.waiting, |ui| {
+                    ui.label("Enter new build name:");
                     // PoB's box drops `\/:*?"<>|` and control characters, 100 bytes at most
                     let (name, _) = name_box::edit(
                         ui,
@@ -2687,7 +2746,7 @@ mod tests {
         }
 
         fn short_tree_link_view(&mut self) -> anyhow::Result<Option<String>> {
-            Ok(None)
+            Ok(Some("http://poeurl.com/gAtE".into()))
         }
 
         fn share_view(&mut self) -> anyhow::Result<crate::engine::ShareView> {
@@ -3215,6 +3274,68 @@ mod tests {
         assert_eq!(app.notices, ["couldn't open that build"]);
     }
 
+    /// The texts one frame draws
+    fn drawn_texts(app: &mut AutoPobApp, ctx: &egui::Context) -> Vec<String> {
+        fn walk(shape: &egui::epaint::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::epaint::Shape::Text(t) => out.push(t.galley.text().to_owned()),
+                egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        // a window lays itself out in its first frame and shows in the next
+        frame(app, ctx, vec![]);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show(ui));
+        let mut out = Vec::new();
+        output.shapes.iter().for_each(|c| walk(&c.shape, &mut out));
+        output.textures_delta.clear();
+        out
+    }
+
+    #[test]
+    fn the_save_questions_have_pobs_texts() {
+        // Build.lua:1352-1379 "Save Changes" and :1449 "Save" / "Save As"
+        let (mut app, ctx) = started();
+        app.request(Pending::Open("/b/one.xml".into()));
+        pump_until(&mut app, &ctx, "build", |a| {
+            a.screen == Screen::Build && a.entering.is_none()
+        });
+        app.prompt = Some(Pending::BackToList);
+        let texts = drawn_texts(&mut app, &ctx);
+        assert!(texts.iter().any(|t| t == "Save Changes"), "{texts:?}");
+        assert!(
+            texts
+                .iter()
+                .any(|t| t == "This build has unsaved changes.\nDo you want to save them now?")
+        );
+        assert!(texts.iter().any(|t| t == "Don't Save"));
+        app.prompt = Some(Pending::Close);
+        let texts = drawn_texts(&mut app, &ctx);
+        assert!(
+            texts.iter().any(|t| t
+                == "This build has unsaved changes.\nDo you want to save them before exiting?")
+        );
+        app.prompt = None;
+        // a build with a file: "Save As"
+        app.open_save_as(None);
+        let texts = drawn_texts(&mut app, &ctx);
+        assert!(texts.iter().any(|t| t == "Save As"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "Enter new build name:"));
+        app.save_as = None;
+        // one never saved: "Save"
+        let mut view = (**app.build.as_ref().unwrap()).clone();
+        view.path = None;
+        app.build = Some(Arc::new(view));
+        app.open_save_as(None);
+        let texts = drawn_texts(&mut app, &ctx);
+        assert!(!texts.iter().any(|t| t == "Save As"), "{texts:?}");
+        // the top bar's Save, the title and the dialog's Save
+        assert!(
+            texts.iter().filter(|t| *t == "Save").count() >= 3,
+            "{texts:?}"
+        );
+    }
+
     #[test]
     fn unsaved_changes_prompt_before_leaving() {
         let (mut app, ctx) = started();
@@ -3718,11 +3839,9 @@ mod tests {
             ["SetCustomModText { group: 1, text: \"+5 life\" }"]
         );
 
-        // removing asks first
+        // PoB's X removes the group at once (ConfigTab.lua:23-33)
         let before = app.sent_full.len();
         click(&mut app, &ctx, "mod_remove:0");
-        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
-        click(&mut app, &ctx, "mod_remove_yes:0");
         assert_eq!(
             sent_since(&app, before),
             ["RemoveCustomModGroup { group: 0 }"]
@@ -4368,6 +4487,30 @@ mod tests {
         assert!(!app.behind());
         assert_eq!(sent_since(&app, before), Vec::<&str>::new());
         pump_until(&mut app, &ctx, "link", |a| a.tree.link.is_some());
+    }
+
+    #[test]
+    fn export_tree_shows_the_link_and_shrinks_it() {
+        // TreeTab.lua:812-839: PoB's Export Tree popup, its PoEURL shrink a request
+        let (mut app, ctx) = tree_app();
+        click(&mut app, &ctx, "link_menu");
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "link_export");
+        pump_until(&mut app, &ctx, "link", |a| a.tree.link.is_some());
+        frame(&mut app, &ctx, vec![]);
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "export_shrink");
+        assert_eq!(sent_since(&app, before), ["ShrinkTreeLink"]);
+        pump_until(&mut app, &ctx, "short link", |a| {
+            a.tree.link.as_deref().map(String::as_str) == Some("http://poeurl.com/gAtE")
+        });
+        frame(&mut app, &ctx, vec![]);
+        // the button says Done and takes no second press
+        let before = app.sent_full.len();
+        click(&mut app, &ctx, "export_shrink");
+        assert_eq!(sent_since(&app, before), Vec::<&str>::new());
+        click(&mut app, &ctx, "export_done");
+        assert!(!app.tree.has_dialog());
     }
 
     #[test]
@@ -6312,6 +6455,7 @@ mod tests {
             ..(**app.build.as_ref().unwrap()).clone()
         }));
         let before = app.sent_full.len();
+        click_mark(&mut app, &ctx, "mode:new");
         click_mark(&mut app, &ctx, "import_code");
         assert_eq!(
             app.prompt,
@@ -6383,6 +6527,7 @@ mod tests {
                     class: "Witch".into(),
                     level: 90,
                     league: "Standard".into(),
+                    colour: String::new(),
                 }],
                 ..OAuthView::default()
             },

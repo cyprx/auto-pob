@@ -2,7 +2,7 @@
 //! the timeless jewel search, heat map, the power report toggle and the link menu.
 
 use super::{Rects, TreeOutput};
-use crate::engine::{Command, PopupKind, TreeState};
+use crate::engine::{Command, DropdownOwner, HoverTarget, PopupKind, TreeState};
 use crate::theme;
 use crate::ui::items::list::reorder_rows;
 use crate::ui::name_box::{self, Filter};
@@ -32,9 +32,14 @@ enum Dialog {
         edited: bool,
     },
     DeleteSpec(usize),
+    /// PoB's "Reset Tree/Tattoos": Reset Tree or Remove All Tattoos, which can't be undone
     Reset,
-    /// PoB's "Remove All Tattoos" can't be undone
-    RemoveTattoos,
+    /// PoB's "Export Tree" popup (TreeTab.lua:812-839): the link, Shrink with PoEURL, Copy
+    Export {
+        /// The link shown, once it is here
+        link: String,
+        shrink: Shrink,
+    },
     Import {
         title: String,
         url: String,
@@ -58,6 +63,28 @@ enum Dialog {
         class: String,
     },
 }
+
+/// The search box's tooltip (TreeTab.lua:214)
+const SEARCH_TIP: &str = "Uses Lua pattern matching for complex searches.\nPrefix your search with \"oil:\" to search by anoint recipe.\nTo search for multiple terms: (increased.fire.damage|increased.area.of.effect|etc)";
+
+/// The depth dropdown's tooltip (TreeTab.lua:263)
+const DEPTH_TIP: &str = "Limit of Node distance to search (lower = faster)";
+
+/// The Export popup's "Shrink with PoEURL" button (TreeTab.lua:818-831)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Shrink {
+    /// Not pressed yet
+    Idle,
+    /// Pressed; its request isn't listed yet
+    Asked,
+    /// Its request is running
+    Running,
+    /// The request ended, with the short link or PoB's failure message
+    Done,
+}
+
+/// The label of the shrink request, as the engine lists it
+const SHRINK_REQUEST: &str = "Shrinking tree link";
 
 /// What a dragged tree row carries: its position
 struct SpecDrag(usize);
@@ -87,9 +114,21 @@ pub(super) struct Toolbar {
     /// PoB's "Manage Passive Trees" window (TreeTab.lua:630), while open: its list's selected
     /// row, which Copy, Rename, Delete and F2 act on (NF-3)
     manager: Option<usize>,
+    /// The tree selector's tooltip (TreeTab.lua:51-104)
+    pub(super) spec_tip: crate::ui::hover::HoverTip,
+    /// PoB's "Node Power colours", which the heat map's tooltip names
+    pub(super) power_theme: super::overlays::PowerTheme,
+    /// Its questions, moved to the output when the toolbar is done
+    tip_queries: Vec<Command>,
 }
 
 impl Toolbar {
+    /// The search box's text, for tests
+    #[cfg(test)]
+    pub(super) fn search_for_test(&self) -> &str {
+        &self.search
+    }
+
     /// The Custom depth box's text, for tests
     #[cfg(test)]
     pub(super) fn custom_depth_for_test(&self) -> Option<&str> {
@@ -159,6 +198,29 @@ impl Toolbar {
         }
     }
 
+    /// The engine's running requests: the Export popup's shrink is done when its request
+    /// has come and gone, PoB's failure message being the notice
+    pub(super) fn on_requests(&mut self, pending: &[&str]) {
+        if let Some(Dialog::Export { shrink, .. }) = &mut self.dialog {
+            let running = pending.contains(&SHRINK_REQUEST);
+            *shrink = match (*shrink, running) {
+                (Shrink::Asked, true) => Shrink::Running,
+                (Shrink::Running, false) => Shrink::Done,
+                (other, _) => other,
+            };
+        }
+    }
+
+    /// A command failed: a shrink asked for but never listed as a request (PoB refused the
+    /// press) ends, its button reading Done as PoB's always does (TreeTab.lua:820-826)
+    pub(super) fn on_command_error(&mut self) {
+        if let Some(Dialog::Export { shrink, .. }) = &mut self.dialog
+            && *shrink == Shrink::Asked
+        {
+            *shrink = Shrink::Done;
+        }
+    }
+
     /// A link snapshot arrived.
     pub(super) fn link_arrived(&mut self) {
         self.link_fresh = true;
@@ -180,11 +242,27 @@ impl Toolbar {
             ui.ctx().copy_text(link.to_owned());
             self.copy_pending = false;
         }
+        // the Export popup shows the link once it is here; a short one ends the shrink
+        if let Some(Dialog::Export {
+            link: shown,
+            shrink,
+        }) = &mut self.dialog
+            && self.link_fresh
+            && let Some(link) = link
+            && shown != link
+        {
+            if link.starts_with("http://poeurl.com/") {
+                *shrink = Shrink::Done;
+            }
+            *shown = link.to_owned();
+        }
         let commands = &mut out.commands;
         ui.horizontal_wrapped(|ui| {
             self.specs(ui, state, rects, commands, true);
             ui.separator();
-            let reset = ui.button("Reset").on_hover_text("Reset the passive tree");
+            // PoB's one button asks Reset Tree, Remove All Tattoos or Cancel (TreeTab.lua:
+            // 130-154)
+            let reset = ui.button("Reset Tree/Tattoos");
             rects.note(&reset, || "reset".into());
             if reset.clicked() {
                 self.dialog = Some(Dialog::Reset);
@@ -227,13 +305,6 @@ impl Toolbar {
                     });
                 }
             }
-            let tattoos = ui
-                .button("Remove all tattoos")
-                .on_hover_text("Remove every tattoo from the tree");
-            rects.note(&tattoos, || "remove_tattoos".into());
-            if tattoos.clicked() {
-                self.dialog = Some(Dialog::RemoveTattoos);
-            }
         });
         ui.horizontal_wrapped(|ui| {
             self.search(ui, state, rects, commands);
@@ -251,6 +322,7 @@ impl Toolbar {
             self.link_menu(ui, state, rects, commands, &mut out.queries);
         });
         self.dialogs(ui.ctx(), state, rects, commands);
+        out.queries.append(&mut self.tip_queries);
     }
 
     /// The tree set row. `manage`: the Tree tab's own, with its New, Rename, Delete, Copy and
@@ -264,6 +336,7 @@ impl Toolbar {
         manage: bool,
     ) {
         let active = state.specs.get(state.active_spec);
+        let mut items = Vec::new();
         let combo = crate::widgets::dropdown::Dropdown::from_id_salt("tree_spec")
             .selected_text(active.map_or("", |s| s.title.as_str()))
             .show_ui(ui, |ui| {
@@ -277,9 +350,31 @@ impl Toolbar {
                     if item.clicked() && i != state.active_spec {
                         commands.push(Command::SelectSpec { index: i });
                     }
+                    items.push((i, item));
                 }
             });
         rects.note(&combo.response, || "spec_combo".into());
+        // PoB's tooltip on the selector and its entries: the tree's class, points, sockets and
+        // what switching to it gives (TreeTab.lua:51-104); the Compare tab's has none
+        if manage {
+            let now = ui.input(|i| i.time);
+            let target = |index, entry| HoverTarget::Dropdown {
+                owner: DropdownOwner::Tree,
+                name: "specSelect".into(),
+                index,
+                entry,
+            };
+            for (i, item) in &items {
+                self.spec_tip
+                    .track(item, target(*i, true), now, &mut self.tip_queries);
+            }
+            self.spec_tip.track(
+                &combo.response,
+                target(state.active_spec, false),
+                now,
+                &mut self.tip_queries,
+            );
+        }
         // the wheel and the arrows step it (DropDownControl.lua:476-516)
         if let Some(index) = crate::widgets::scroll_step::combo_step(
             ui,
@@ -517,11 +612,20 @@ impl Toolbar {
                 self.search = state.search.clone();
             }
         }
-        let field = ui.add(
-            egui::TextEdit::singleline(&mut self.search)
-                .hint_text("Search nodes")
-                .desired_width(160.0),
-        );
+        let before = self.search.clone();
+        let pasted = name_box::pasted(ui);
+        let field = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.search)
+                    .hint_text("Search nodes")
+                    .desired_width(160.0),
+            )
+            .on_hover_text(SEARCH_TIP);
+        // PoB's box drops control characters and takes 100 bytes (TreeTab.lua:211)
+        if field.changed() {
+            self.search =
+                name_box::spliced_by(&before, &self.search, |c| !c.is_control(), 100, pasted);
+        }
         rects.note(&field, || "search".into());
         if std::mem::take(&mut self.focus_search) {
             field.request_focus();
@@ -584,7 +688,14 @@ impl Toolbar {
                     }
                 }
             });
-        rects.note(&combo.response, || "heat_stat".into());
+        // PoB's tooltip on its Show Node Power box (TreeTab.lua:282-285)
+        let (offence, defence) = self.power_theme.names();
+        let combo_response = combo.response.clone().on_hover_text(format!(
+            "When enabled, an estimate of the offensive and defensive strength of\neach \
+             unallocated passive is calculated and displayed visually.\nOffensive power shows \
+             as {offence}, defensive power as {defence}."
+        ));
+        rects.note(&combo_response, || "heat_stat".into());
         // its entries: Off, then the stats
         let at = state
             .heatmap
@@ -608,7 +719,9 @@ impl Toolbar {
         {
             self.custom_depth = Some(depth.to_string());
         }
-        ui.add_enabled_ui(state.heatmap.is_some(), |ui| {
+        // PoB's depth dropdown is always there, the heat map on or off (TreeTab.lua:202-235);
+        // only P's map with no stat chosen can't take a depth here without losing its stat
+        ui.add_enabled_ui(state.heatmap.is_some() || !state.heatmap_shown, |ui| {
             let shown = match (&self.custom_depth, state.max_depth) {
                 (Some(_), _) => "Custom".to_owned(),
                 (None, Some(d)) => format!("Within {d}"),
@@ -652,7 +765,8 @@ impl Toolbar {
                             Some(state.max_depth.map(|d| d.to_string()).unwrap_or_default());
                     }
                 });
-            rects.note(&combo.response, || "heat_depth".into());
+            let combo_response = combo.response.clone().on_hover_text(DEPTH_TIP);
+            rects.note(&combo_response, || "heat_depth".into());
             // its entries: All, then the depths, then Custom
             let n = DEPTHS.len() + 2;
             let at = if self.custom_depth.is_some() {
@@ -740,13 +854,24 @@ impl Toolbar {
         queries: &mut Vec<Command>,
     ) {
         let menu = ui.menu_button("Link…", |ui| {
-            let import = ui.button("Import link…");
+            let import = ui.button("Import Tree…");
             rects.note(&import, || "link_import".into());
             if import.clicked() {
                 self.dialog = Some(Dialog::Import {
                     title: String::new(),
                     url: String::new(),
                 });
+            }
+            // PoB's Export Tree popup, with its PoEURL shrink
+            let export = ui.button("Export Tree…");
+            rects.note(&export, || "link_export".into());
+            if export.clicked() {
+                self.dialog = Some(Dialog::Export {
+                    link: String::new(),
+                    shrink: Shrink::Idle,
+                });
+                self.link_fresh = false;
+                queries.push(Command::ExportTreeLink);
             }
             let copy = ui.button("Copy link");
             rects.note(&copy, || "link_copy".into());
@@ -796,21 +921,22 @@ impl Toolbar {
         // Esc cancels it, as every PoB popup (PopupDialog.lua:72-77)
         let window = egui::Id::unique("tree_class_dialog");
         let mut close = crate::widgets::escape::escape(ctx, window);
-        egui::Window::new("Change class")
+        // PoB's question (Build.lua:263)
+        egui::Window::new("Class Change")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.label(format!(
-                    "Some of your points don't connect to {name}. Reset the tree, or keep the \
-                     points that can connect to it?"
+                    "Changing class to {name} will reset your passive tree.\nThis can be \
+                     avoided by connecting one of the {name} starting nodes to your tree."
                 ));
                 ui.horizontal(|ui| {
-                    if button(ui, rects, "class_reset", "Reset tree", true) {
+                    if button(ui, rects, "class_reset", "Continue", true) {
                         commands.push(Command::SelectClass { id, connect: false });
                         close = true;
                     }
-                    if button(ui, rects, "class_connect", "Connect path", true) {
+                    if button(ui, rects, "class_connect", "Connect Path", true) {
                         commands.push(Command::SelectClass { id, connect: true });
                         close = true;
                     }
@@ -995,10 +1121,10 @@ impl Toolbar {
         let title = match dialog {
             Dialog::NewSpec(_) => "New tree",
             Dialog::RenameSpec { .. } => "Rename tree",
-            Dialog::DeleteSpec(_) => "Delete tree",
-            Dialog::Reset => "Reset tree",
-            Dialog::RemoveTattoos => "Remove all tattoos",
-            Dialog::Import { .. } => "Import tree link",
+            Dialog::DeleteSpec(_) => "Delete Tree",
+            Dialog::Reset => "Reset Tree/Tattoos",
+            Dialog::Import { .. } => "Import Tree",
+            Dialog::Export { .. } => "Export Tree",
             Dialog::CopySpec { .. } => "Copy Tree",
             Dialog::ConvertVersion { .. } => "Convert to Version",
             Dialog::ClassChange { .. } => "Class Change",
@@ -1059,7 +1185,8 @@ impl Toolbar {
                 }
                 Dialog::DeleteSpec(index) => {
                     let name = state.specs.get(*index).map_or("", |s| s.title.as_str());
-                    ui.label(format!("Delete the tree {name}?"));
+                    // PoB's question (PassiveSpecListControl.lua:97)
+                    ui.label(format!("Are you sure you want to delete '{name}'?"));
                     ui.horizontal(|ui| {
                         if button(ui, rects, "spec_delete_yes", "Delete", true) {
                             commands.push(Command::DeleteSpec { index: *index });
@@ -1069,37 +1196,60 @@ impl Toolbar {
                     });
                 }
                 Dialog::Reset => {
-                    ui.label("Remove every allocated passive point from this tree?");
+                    // PoB's warning and buttons (TreeTab.lua:132-153)
+                    ui.label(
+                        "Warning: resetting your passive tree or removing all tattoos cannot be \
+                         undone.",
+                    );
                     ui.horizontal(|ui| {
-                        if button(ui, rects, "reset_yes", "Reset", true) {
+                        if button(ui, rects, "reset_yes", "Reset Tree", true) {
                             commands.push(Command::ResetTree);
                             close = true;
                         }
-                        close |= ui.button("Cancel").clicked();
-                    });
-                }
-                Dialog::RemoveTattoos => {
-                    // PoB adds no undo state for this, so the question is the only safeguard
-                    ui.label("Remove every tattoo from this tree? This can't be undone.");
-                    ui.horizontal(|ui| {
-                        if button(ui, rects, "remove_tattoos_yes", "Remove", true) {
+                        if button(ui, rects, "remove_tattoos_yes", "Remove All Tattoos", true) {
                             commands.push(Command::RemoveAllTattoos);
                             close = true;
                         }
                         let cancel = ui.button("Cancel");
-                        rects.note(&cancel, || "remove_tattoos_no".into());
+                        rects.note(&cancel, || "reset_no".into());
                         close |= cancel.clicked();
                     });
                 }
-                Dialog::Import { title, url } => {
-                    ui.label("Adds the link's tree as a new tree.");
-                    // both boxes take EditControl's own filter (TreeTab.lua:743-752), and the
-                    // title has no limit
-                    name_box::edit(ui, title, Filter::Plain, usize::MAX, |t| {
-                        t.hint_text("Title")
+                Dialog::Export { link, shrink } => {
+                    ui.label("Passive tree link:");
+                    let mut shown = link.as_str();
+                    ui.add(egui::TextEdit::singleline(&mut shown).desired_width(350.0));
+                    ui.horizontal(|ui| {
+                        let label = match shrink {
+                            Shrink::Idle => "Shrink with PoEURL",
+                            Shrink::Asked | Shrink::Running => "Shrinking...",
+                            Shrink::Done => "Done",
+                        };
+                        let ready = !link.is_empty();
+                        if button(
+                            ui,
+                            rects,
+                            "export_shrink",
+                            label,
+                            ready && *shrink == Shrink::Idle,
+                        ) {
+                            *shrink = Shrink::Asked;
+                            commands.push(Command::ShrinkTreeLink);
+                        }
+                        if button(ui, rects, "export_copy", "Copy", ready) {
+                            ui.ctx().copy_text(link.clone());
+                        }
+                        close |= button(ui, rects, "export_done", "Done", true);
                     });
+                }
+                Dialog::Import { title, url } => {
+                    // both boxes take EditControl's own filter (TreeTab.lua:743-752), and the
+                    // title has no limit; PoB's labels
+                    ui.label("Enter name for this passive tree:");
+                    name_box::edit(ui, title, Filter::Plain, usize::MAX, |t| t);
+                    ui.label("Enter passive tree link:");
                     name_box::edit(ui, url, Filter::Plain, usize::MAX, |t| {
-                        t.hint_text("Tree link").desired_width(400.0)
+                        t.desired_width(400.0)
                     });
                     ui.horizontal(|ui| {
                         let valid = name_box::has_visible(title) && name_box::has_visible(url);

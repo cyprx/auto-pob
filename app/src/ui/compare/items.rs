@@ -6,7 +6,7 @@
 use super::{CompareOutput, CompareUi};
 use crate::engine::ItemTooltipQuery;
 use crate::engine::views::{CardLine, CompareItemRow, CompareView};
-use crate::engine::{BuySource, Command, PopupKind};
+use crate::engine::{BuySource, Command, HoverTarget, PopupKind};
 use crate::widgets::pob_text;
 use eframe::egui;
 
@@ -94,8 +94,10 @@ pub(super) fn show(
                 .spacing([16.0, 4.0])
                 .show(ui, |ui| {
                     ui.strong("Slot");
-                    ui.strong("This build");
-                    ui.strong(super::plain(&view.headers[1]));
+                    // PoB's column headers: our short build name in its POSITIVE colour, the
+                    // comparison's label in WARNING (CompareTab.lua:1810-1813, 4370-4371, 4922-4925)
+                    ui.label(super::header(&view.headers[0], default));
+                    ui.label(super::header(&view.headers[1], default));
                     ui.label("");
                     ui.label("");
                     ui.end_row();
@@ -254,6 +256,12 @@ fn buttons(
         if row.can_equip {
             let equip = ui.add_enabled(!busy, egui::Button::new("Equip"));
             tab.rects.note(&equip, || format!("equip:{}", row.slot));
+            // PoB's stat comparison of equipping it (CompareTab.lua:3966-4009)
+            let now = ui.input(|i| i.time);
+            let target = HoverTarget::CompareEquip {
+                slot: row.slot.clone(),
+            };
+            tab.equip_tip.track(&equip, target, now, &mut out.queries);
             if equip.clicked() {
                 out.commands.push(Command::CopyCompareItem {
                     slot: row.slot.clone(),

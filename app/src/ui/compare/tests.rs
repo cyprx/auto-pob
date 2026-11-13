@@ -1,6 +1,6 @@
 use super::*;
 use crate::engine::views::{
-    BuildBrowseEntry, BuildBrowseView, BuildView, CompareConfigRow, CompareItemRow, CompareRow,
+    BuildBrowseEntry, BuildBrowseView, CompareConfigRow, CompareItemRow, CompareRow,
     CompareSkillRow, ConfigSet, PopupControlKind,
 };
 use crate::theme;
@@ -170,6 +170,8 @@ pub(crate) fn sample() -> CompareView {
                 ours: "Yes".into(),
                 theirs: "No".into(),
                 common: false,
+                ours_control: None,
+                theirs_control: None,
             },
             CompareConfigRow {
                 var: "enemyIsBoss".into(),
@@ -177,6 +179,8 @@ pub(crate) fn sample() -> CompareView {
                 ours: "None".into(),
                 theirs: "Pinnacle".into(),
                 common: false,
+                ours_control: None,
+                theirs_control: None,
             },
             CompareConfigRow {
                 var: "bandit".into(),
@@ -184,6 +188,8 @@ pub(crate) fn sample() -> CompareView {
                 ours: "Kill all".into(),
                 theirs: "Kill all".into(),
                 common: true,
+                ours_control: None,
+                theirs_control: None,
             },
         ],
         switched: false,
@@ -319,11 +325,18 @@ impl Harness {
 
 #[test]
 fn compare_tab_hidden_until_a_build_is_open() {
-    // no comparison yet: only the load menu, no views, selectors, entries or Remove
+    // no comparison yet: the load menu, and PoB's "Compare with:" drop-down and Remove
+    // disabled (CompareTab.lua:228-282); no views or selectors
     let mut h = Harness::new(None);
     assert!(h.ui.has_rect("load"));
-    for key in ["entries", "remove", "sub:summary", "compareSpecSelect"] {
+    assert!(h.drew("Compare with:"));
+    for key in ["sub:summary", "compareSpecSelect"] {
         assert!(!h.ui.has_rect(key), "{key} drawn without a comparison");
+    }
+    for key in ["entries", "remove"] {
+        let out = h.click(key);
+        assert!(out.commands.is_empty(), "{key} acted without a comparison");
+        assert!(!h.ui.has_rect("entry:0"), "{key} dropped a list");
     }
     assert!(!h.ui.tree_shown());
     // one loaded: every part shows
@@ -439,43 +452,78 @@ fn load_menu_sends_each_source() {
         ["LoadCompare { source: File(\"/b/dot.xml\") }"]
     );
 
-    // a code
+    // PoB's Import popup: a code, a name
     h.click("load");
     h.click("load:code");
     h.click("dialog_text");
     h.type_text("eNrtWk1z");
+    h.click("dialog_name");
+    h.type_text("Mine");
     let out = h.click("dialog_load");
     assert_eq!(
         debug(&out.commands),
-        ["LoadCompare { source: Code(\"eNrtWk1z\") }"]
+        ["LoadCompare { source: Import { text: \"eNrtWk1z\", name: Some(\"Mine\") } }"]
     );
-
-    // a link is PoB's Import tab mode 3, which PoB offers only for a build with a file
-    h.click("load");
-    h.click("load:link");
-    assert!(!h.ui.has_dialog(), "a link without a file");
-    h.ui.on_snapshot(&Snapshot::Build(Arc::new(BuildView {
-        name: "b".into(),
-        path: Some("/b/b.xml".into()),
-        class: "Witch".into(),
-        ascendancy: None,
-        level: 1,
-        unsaved: false,
-        can_undo: false,
-        can_redo: false,
-        ..BuildView::default()
-    })));
+    // the popup waits for the answer: an error shows in it, in red, and it stays
+    assert!(h.ui.has_dialog());
+    h.ui.import_sent(7);
+    assert!(h.ui.import_failed(7, "Invalid build code"));
+    assert!(!h.ui.import_failed(7, "again"), "answered once");
     h.frame(vec![]);
+    assert!(h.ui.has_dialog());
+    assert!(h.ui.rects.map.contains_key("dialog_error"));
+    // pressed again, and answered with no error: it closes
+    h.click("dialog_load");
+    h.ui.import_sent(8);
+    h.ui.import_settled(7);
+    assert!(h.ui.has_dialog(), "an older answer");
+    h.ui.import_settled(8);
+    assert!(!h.ui.has_dialog());
+
+    // a link, with no build file (PoB downloads it in its popup, CompareTab.lua:1488-1503);
+    // Enter in the box imports (CompareTab.lua:1469-1473)
     h.click("load");
-    h.click("load:link");
+    h.click("load:code");
     assert!(h.ui.has_dialog());
     h.click("dialog_text");
     h.type_text("https://pobb.in/abc");
+    let out = h.key(Key::Enter);
+    assert_eq!(
+        debug(&out.commands),
+        ["LoadCompare { source: Import { text: \"https://pobb.in/abc\", name: None } }"]
+    );
+    // the press is answered with the download out: PoB's "Downloading..." until it ends
+    h.ui.import_sent(9);
+    h.ui.import_settled(9);
+    h.frame(vec![]);
+    assert!(h.ui.has_dialog());
+    assert!(h.ui.rects.map.contains_key("dialog_downloading"));
+    assert!(
+        !h.ui
+            .import_request_ended("Fetching build from pobb.in", None),
+        "not its own"
+    );
+    // a failure shows in red in it, the link kept, and Import can be pressed again
+    assert!(h.ui.import_request_ended("Fetching comparison build", Some("Response code: 500")));
+    h.frame(vec![]);
+    assert!(h.ui.has_dialog());
+    assert!(h.ui.rects.map.contains_key("dialog_error"));
     let out = h.click("dialog_load");
     assert_eq!(
         debug(&out.commands),
-        ["ImportFromUrl { url: \"https://pobb.in/abc\", mode: Comparison }"]
+        ["LoadCompare { source: Import { text: \"https://pobb.in/abc\", name: None } }"]
     );
+    // the comparison landed: it closes
+    h.ui.import_sent(10);
+    h.ui.import_settled(10);
+    assert!(h.ui.has_dialog());
+    assert!(h.ui.import_request_ended("Fetching comparison build", None));
+    assert!(!h.ui.has_dialog());
+    // an empty box imports nothing
+    h.click("load");
+    h.click("load:code");
+    let out = h.click("dialog_load");
+    assert!(out.commands.is_empty());
 }
 
 /// A folder the engine can't list (a Builds folder that went) is said in the picker, which
@@ -804,7 +852,7 @@ fn compare_none_resets_the_tab() {
     assert!(!h.ui.has_pending(), "a count for a comparison that is gone");
     assert!(h.ui.config_filter.is_empty());
     h.frame(vec![]);
-    assert!(!h.ui.has_rect("sub:summary") && !h.ui.has_rect("entries"));
+    assert!(!h.ui.has_rect("sub:summary") && !h.ui.has_rect("compareSpecSelect"));
     // the load window the user opened stays
     assert!(h.ui.has_dialog());
     // a new comparison starts on the Summary
@@ -1118,4 +1166,172 @@ fn the_config_search_clears_on_its_x() {
     assert_eq!(h.ui.config_filter, "boss");
     h.click("config_search_clear");
     assert!(h.ui.config_filter.is_empty());
+}
+
+/// PoB's sub-tabs run Summary, Tree, Skills, Items, (Calcs,) Config (CompareTab.lua:197)
+#[test]
+fn the_sub_tabs_are_in_pobs_order() {
+    let h = Harness::new(Some(sample()));
+    let x = |key| h.ui.rect(key).center().x;
+    let order = [
+        "sub:summary",
+        "sub:tree",
+        "sub:skills",
+        "sub:items",
+        "sub:config",
+    ];
+    for pair in order.windows(2) {
+        assert!(x(pair[0]) < x(pair[1]), "{} after {}", pair[0], pair[1]);
+    }
+}
+
+/// PoB's config search is `matchOrPattern` on the escaped text: a substring, `|` between
+/// alternatives, `(...)` groups of alternatives, no trimming (CompareTab.lua:2091-2097)
+#[test]
+fn the_config_search_matches_as_pobs() {
+    let row = |label: &str| CompareConfigRow {
+        var: "x".into(),
+        label: label.into(),
+        ours: String::new(),
+        theirs: String::new(),
+        common: false,
+        ours_control: None,
+        theirs_control: None,
+    };
+    let boss = row("Is the enemy a Boss?");
+    let charges = row("Do you use Power Charges?");
+    for (filter, on_boss, on_charges) in [
+        ("", true, true),
+        ("   ", true, true),
+        ("BOSS", true, false),
+        ("boss|power", true, true),
+        ("enemy a (boss|minion)", true, false),
+        ("(use|have) power", false, true),
+        // no trim: the space must be there
+        ("boss ", false, false),
+        (" boss", true, false),
+        // pattern characters are plain text
+        ("boss?", true, false),
+        ("b.ss", false, false),
+        // an unbalanced bracket is a Lua error, which matches nothing
+        ("(boss", false, false),
+        ("boss)", false, false),
+        ("|", false, false),
+    ] {
+        assert_eq!(
+            config::matches(&boss, filter),
+            on_boss,
+            "{filter:?} on boss"
+        );
+        assert_eq!(
+            config::matches(&charges, filter),
+            on_charges,
+            "{filter:?} on charges"
+        );
+    }
+    // the raw label, colour codes and all, as PoB's (CompareTab.lua:2094)
+    let coded = row("Are you always on Full ^xE05030Life?");
+    assert!(!config::matches(&coded, "full life"));
+    assert!(config::matches(&coded, "e05030"));
+    assert!(config::matches(&coded, "full ^xe05030life"));
+}
+
+/// PoB's box drops control characters and holds 100 bytes (CompareTab.lua:936)
+#[test]
+fn the_config_search_box_takes_pobs_filter_and_limit() {
+    let mut h = Harness::new(Some(sample()));
+    h.click("sub:config");
+    h.click("config_search");
+    h.type_text("a\tb");
+    assert_eq!(h.ui.config_filter, "ab");
+    h.type_text(&"c".repeat(120));
+    assert_eq!(h.ui.config_filter.len(), 100);
+}
+
+/// The Skills, Items and Config views head their columns with our short build name in PoB's
+/// POSITIVE colour and the comparison's label in WARNING (CompareTab.lua:1810-1813, 4370-4371,
+/// 4922-4925)
+#[test]
+fn the_views_head_their_columns_with_both_names_in_pobs_colours() {
+    let mut h = Harness::new(Some(sample()));
+    for tab in ["sub:skills", "sub:items", "sub:config"] {
+        h.click(tab);
+        h.frame(vec![]);
+        let drawn_in = |text: &str, colour: egui::Color32| {
+            h.texts.iter().any(|g| {
+                g.job.text == text && g.job.sections.first().map(|s| s.format.color) == Some(colour)
+            })
+        };
+        assert!(drawn_in("attack", theme::POSITIVE), "{tab}");
+        assert!(
+            drawn_in("dot", egui::Color32::from_rgb(0xFF, 0x99, 0x22)),
+            "{tab}"
+        );
+        assert!(!h.drew("This build"), "{tab}");
+    }
+}
+
+/// The Config view's rows carry PoB's boxes for both builds' values (CompareTab.lua:1127-1223):
+/// a click or typing goes out as the box's own `SetCompareControl`
+#[test]
+fn the_config_rows_are_pobs_boxes_for_both_builds() {
+    let mut view = sample();
+    let mut theirs = control("cfg_c_enemyIsBoss", PopupControlKind::Check);
+    theirs.checked = false;
+    let mut ours = control("cfg_p_enemyIsBoss", PopupControlKind::Edit);
+    ours.text = "2".into();
+    ours.digits = true;
+    view.config[0].theirs_control = Some(theirs);
+    view.config[0].ours_control = Some(ours);
+    let var = view.config[0].var.clone();
+    let mut h = Harness::new(Some(view));
+    h.click("sub:config");
+    assert!(h.ui.has_rect(&format!("config_row:{var}")));
+    let out = h.click("cfg_c_enemyIsBoss");
+    assert_eq!(
+        debug(&out.commands),
+        ["SetCompareControl { name: \"cfg_c_enemyIsBoss\", value: Check(true) }"]
+    );
+    h.click("edit_cfg_p_enemyIsBoss");
+    h.type_text("5");
+    let out = h.key(Key::Enter);
+    assert_eq!(
+        debug(&out.commands),
+        ["SetCompareControl { name: \"cfg_p_enemyIsBoss\", value: Text(\"25\") }"]
+    );
+}
+
+/// Hovering an Equip button asks for PoB's stat comparison of equipping the item, once, and
+/// shows the answer (CompareTab.lua:3966-4009)
+#[test]
+fn hovering_equip_shows_pobs_stat_comparison() {
+    let mut h = Harness::new(Some(sample()));
+    h.click("sub:items");
+    let slot = sample()
+        .items
+        .iter()
+        .find(|r| r.can_equip)
+        .expect("a row with Equip")
+        .slot
+        .clone();
+    let out = h.hover(&format!("equip:{slot}"));
+    let target = crate::engine::HoverTarget::CompareEquip { slot: slot.clone() };
+    assert_eq!(
+        debug(&out.queries),
+        debug(&[Command::HoverTooltip(target.clone())])
+    );
+    h.ui.on_snapshot(&Snapshot::HoverTooltip(Arc::new(
+        crate::engine::views::HoverTooltipView {
+            target,
+            lines: vec![crate::engine::views::TooltipLine::Line {
+                size: 14,
+                text: "^7Equipping this item in Helmet will give you:".into(),
+            }],
+        },
+    )));
+    for _ in 0..5 {
+        let out = h.frame(vec![]);
+        assert!(out.queries.is_empty(), "asked once");
+    }
+    assert!(h.drew("Equipping this item in Helmet will give you:"));
 }

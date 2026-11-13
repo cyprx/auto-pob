@@ -260,6 +260,7 @@ fn undo_on_the_compare_tree_view_is_the_tree_tabs() {
 
 #[test]
 fn a_comparison_pob_refuses_shows_pobs_text() {
+    // CompareTab.lua:1507-1514: a bad code leaves PoB's popup open with its red text
     let (mut app, ctx) = open_build();
     app.tab = BuildTab::Compare;
     frame(&mut app, &ctx, vec![]);
@@ -270,11 +271,66 @@ fn a_comparison_pob_refuses_shows_pobs_text() {
     frame(&mut app, &ctx, vec![Event::Text("bad".into())]);
     click(&mut app, &ctx, "dialog_load");
     settle(&mut app, &ctx);
+    assert!(app.compare.has_dialog(), "the popup closed");
     assert!(
-        app.notices
-            .iter()
-            .any(|n| n == "Failed to import build for comparison."),
-        "{:?}",
-        app.notices
+        app.compare.rects.map.contains_key("dialog_error"),
+        "no error in the popup"
     );
+    assert!(app.notices.is_empty(), "{:?}", app.notices);
+    // a good one closes it
+    click(&mut app, &ctx, "dialog_text");
+    frame(&mut app, &ctx, vec![Event::Text("x".into())]);
+    click(&mut app, &ctx, "dialog_load");
+    settle(&mut app, &ctx);
+    assert!(!app.compare.has_dialog(), "the popup stayed");
+    assert!(app.notices.is_empty(), "{:?}", app.notices);
+}
+
+#[test]
+fn a_link_import_waits_for_its_download_in_the_popup() {
+    // CompareTab.lua:1488-1503: "Downloading..." until the build lands; a failure stays in
+    // the popup in red, not as a notice
+    let (mut app, ctx) = open_build();
+    app.tab = BuildTab::Compare;
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![]);
+    click(&mut app, &ctx, "load");
+    click(&mut app, &ctx, "load:code");
+    click(&mut app, &ctx, "dialog_text");
+    frame(
+        &mut app,
+        &ctx,
+        vec![Event::Text("https://pobb.in/abc".into())],
+    );
+    click(&mut app, &ctx, "dialog_load");
+    settle(&mut app, &ctx);
+    assert!(app.compare.has_dialog(), "closed before the download ended");
+    assert!(app.compare.rects.map.contains_key("dialog_downloading"));
+    let finished = |error: Option<&str>| crate::engine::Event::Snapshot {
+        seq: 0,
+        snapshot: crate::engine::Snapshot::Requests(std::sync::Arc::new(
+            crate::engine::views::RequestsView {
+                pending: vec![],
+                finished: vec![crate::engine::views::FinishedRequest {
+                    id: 1,
+                    label: "Fetching comparison build".into(),
+                    error: error.map(str::to_owned),
+                    cancelled: false,
+                    new_build: false,
+                }],
+            },
+        )),
+    };
+    app.on_event(finished(Some("Response code: 500")));
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![]);
+    assert!(app.compare.has_dialog());
+    assert!(app.compare.rects.map.contains_key("dialog_error"));
+    assert!(app.notices.is_empty(), "{:?}", app.notices);
+    // pressed again, the download lands: it closes
+    click(&mut app, &ctx, "dialog_load");
+    settle(&mut app, &ctx);
+    app.on_event(finished(None));
+    frame(&mut app, &ctx, vec![]);
+    assert!(!app.compare.has_dialog());
 }

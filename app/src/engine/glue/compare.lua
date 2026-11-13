@@ -44,6 +44,9 @@ local CONTROLS = {
 	{ "configToggleBtn", "CONFIG" },
 }
 
+-- The Config view's boxes, rebuilt and synced (defined with the Config rows below)
+local config_controls
+
 -- PoB's config option filter (CompareTab.lua:17)
 local config_visibility = LoadModule("Modules/ConfigVisibility")
 
@@ -184,6 +187,70 @@ function glue.compare_load_code(code)
 	end)
 end
 
+-- PoB's "Import Comparison Build" popup (CompareTab.lua:1462-1525), pressed as the user does:
+-- `text` in its box, `name` (or nothing) in its Name box, then Import. A build site's link is
+-- downloaded in a request the popup belongs to (R11), with or without a build file; returns
+-- its id. A code imports at once (nil). Failures are the popup's own text, or PoB's.
+function glue.compare_import(text, name)
+	local tab = compare_tab()
+	local entries = #tab.compareEntries
+	local function landed()
+		return #tab.compareEntries > entries
+	end
+	tab:OpenImportPopup()
+	local popups = pob.main.main.popups
+	local popup = popups[1]
+	local controls = popup.controls
+	glue.type_into(controls.input, text)
+	glue.type_into(controls.name, name or "")
+	local function state()
+		local label = controls.state:GetProperty("label") or ""
+		return StripEscapes(label)
+	end
+	local link = false
+	for _, site in ipairs(buildSites.websiteList) do
+		if controls.input.buf:match(site.matchURL) then
+			link = true
+		end
+	end
+	if not link then
+		-- a code: PoB imports it and closes the popup, or says why in it
+		glue.in_popups(function()
+			controls.go.onClick()
+		end)
+		if popups[1] == popup then
+			pob.main.main:ClosePopup()
+		end
+		if landed() then
+			glue.compare_landed(true)
+			return nil
+		end
+		local why = state()
+		error(why:match("%S") and why or FAILED, 0)
+	end
+	local id, message = glue.net_begin("Fetching comparison build", {
+		popup = popup,
+		-- the popup still open: its state line says why
+		done = function(req)
+			local why = state()
+			if not landed() and why:match("%S") and why ~= "Downloading..." then
+				req.error = why
+			end
+		end,
+		after = function(req)
+			if landed() then
+				glue.compare_landed()
+			elseif not req.error and not req.last_error then
+				req.error = FAILED
+			end
+		end,
+	}, controls.go.onClick)
+	if not id then
+		error(message or FAILED, 0)
+	end
+	return id
+end
+
 -- ---- Entries ----
 
 local function require_index(tab, index)
@@ -222,6 +289,24 @@ end
 
 function glue.compare_set(name, kind, value, label)
 	local tab = compare_tab()
+	-- a Config view row's box, ours or theirs (CompareTab.lua:1127-1223): its callback writes
+	-- that build's input and flags it, as PoB's does
+	if type(name) == "string" and name:match("^cfg_[pc]_") then
+		local entry = active_entry(tab)
+		in_mode(tab, "CONFIG", function()
+			config_controls(tab, entry)
+			local control = tab.controls[name]
+			if not control then
+				error("no such control", 0)
+			end
+			local _, control_kind = glue.describe_control(name, control)
+			glue.in_popups(function()
+				glue.set_control(control, control_kind, kind, value, label)
+			end)
+		end)
+		sync(tab)
+		return
+	end
 	local mode = MODE_OF[name]
 	if mode == nil then
 		error("no such control", 0)
@@ -536,12 +621,51 @@ end
 -- Configurations" on). Values are PoB's `FormatConfigValue` texts. The sections are the ones
 -- `RebuildConfigControls` keeps, rebuilt when the Config view would rebuild them
 -- (CompareTab.lua:2025-2029). PoB's search box is ours (the UI filters the labels).
-local function config_rows(tab, entry)
+-- PoB's `syncControlValue` (CompareTab.lua:2005-2018, a file local): a row's box shows the
+-- input as it is now
+local function sync_config_control(ctrl, varData, val)
+	if varData.type == "check" then
+		ctrl.state = val or false
+	elseif varData.type == "count" or varData.type == "integer"
+			or varData.type == "countAllowZero" or varData.type == "float" then
+		local text = tostring(val or "")
+		if not ctrl.hasFocus and text ~= ctrl.buf then
+			ctrl:SetText(text)
+		end
+	elseif varData.type == "list" then
+		ctrl:SelByValue(val or (varData.list[1] and varData.list[1].val), "val")
+	end
+end
+
+-- The Config view's own boxes for both builds (`cfg_p_<var>`, `cfg_c_<var>`), rebuilt and
+-- synced as `LayoutConfigView` does before every draw (CompareTab.lua:2021-2039)
+function config_controls(tab, entry)
 	if tab.configCompareId ~= tab.activeCompareIndex or tab.configNeedsRebuild then
 		tab:RebuildConfigControls(entry)
 		tab.configCompareId = tab.activeCompareIndex
 		tab.configNeedsRebuild = false
 	end
+	local pInput = tab.primaryBuild.configTab.input or {}
+	local cInput = entry.configTab.input or {}
+	for var, info in pairs(tab.configControls) do
+		sync_config_control(info.primaryControl, info.varData, pInput[var])
+		sync_config_control(info.compareControl, info.varData, cInput[var])
+	end
+end
+
+-- A row's box as the views show it. PoB shows it while its row is scrolled into view; the UI
+-- scrolls, so it is shown. Its tooltip is the Config tab's static text only.
+local function config_box(name, control)
+	local view = glue.describe_control(name, control)
+	if view then
+		view.shown = true
+		view.hover_tooltip = false
+	end
+	return view
+end
+
+local function config_rows(tab, entry)
+	config_controls(tab, entry)
 	local pInput = tab.primaryBuild.configTab.input or {}
 	local cInput = entry.configTab.input or {}
 	local out = {}
@@ -553,6 +677,8 @@ local function config_rows(tab, entry)
 			ours = tab:FormatConfigValue(varData, pInput[var]),
 			theirs = tab:FormatConfigValue(varData, cInput[var]),
 			common = common,
+			ours_control = config_box("cfg_p_" .. var, tab.controls["cfg_p_" .. var]),
+			theirs_control = config_box("cfg_c_" .. var, tab.controls["cfg_c_" .. var]),
 		}
 	end
 	for _, section in ipairs(tab.configSections) do
@@ -599,6 +725,61 @@ function glue.compare_item_tooltip(slot)
 		end
 	end
 	return nil
+end
+
+-- What hovering an Items row's Equip button shows: PoB's stat comparison of equipping the
+-- comparison's item in this build's slot (CompareTab.lua:3966-4009, drawn inline there, so
+-- followed line by line). Nil where the row has no Equip button.
+function glue.compare_equip_hover(slot)
+	if not slot or not glue.build_loaded() then
+		return nil
+	end
+	local tab = pob.build.compareTab
+	local entry = sync(tab)
+	if not entry then
+		return nil
+	end
+	local found
+	for _, row in ipairs(item_slots(tab, entry)) do
+		if row.slot == slot and row.cItem and not row.missing then
+			found = row
+		end
+	end
+	if not found then
+		return nil
+	end
+	local tooltip = new("Tooltip")
+	local calcFunc, calcBase = tab.calcs.getMiscCalculator(tab.primaryBuild)
+	if calcFunc then
+		local newItem = new("Item", found.cItem.raw)
+		newItem:NormaliseQuality()
+		local pSlot = tab.primaryBuild.itemsTab.slots[slot]
+		local selItem = pSlot and tab.primaryBuild.itemsTab.items[pSlot.selItemId]
+		local override = { repSlotName = slot, repItem = newItem }
+		if pSlot and pSlot.nodeId then
+			local pSpec = tab.primaryBuild.spec
+			if pSpec and pSpec.allocNodes and not pSpec.allocNodes[pSlot.nodeId] then
+				local node = pSpec.nodes[pSlot.nodeId]
+				if node then
+					override.addNodes = { [node] = true }
+				end
+			end
+		end
+		local output = calcFunc(override)
+		local slotLabel = pSlot and pSlot.label or slot
+		local header
+		if selItem then
+			header = string.format("^7Equipping this item in %s will give you:\n(replacing %s%s^7)", slotLabel, colorCodes[selItem.rarity] or "^7", selItem.name)
+		else
+			header = string.format("^7Equipping this item in %s will give you:", slotLabel)
+		end
+		local count = tab.primaryBuild:AddStatComparesToTooltip(tooltip, calcBase, output, header)
+		if count == 0 then
+			tooltip:AddLine(14, header)
+			tooltip:AddLine(14, "^7No changes.")
+		end
+	end
+	return glue.tooltip_lines(tooltip)
 end
 
 -- PoB's Copy and Equip buttons on an Items row (CompareTab.lua:3936-3941)

@@ -353,6 +353,18 @@ local function guarded(req, open, fn, ...)
 	end
 	local outer = current
 	current = req
+	-- PoB's callbacks close "their" popup with main:ClosePopup(), which takes the top one: only
+	-- what this request put on the stack may go, never a popup below it (a session window the
+	-- user opened while the request ran is kept off the stack, and stays so)
+	local mainObject = main()
+	-- the instance's own field, nil when the class method serves: put back as it was
+	local ownClose = rawget(mainObject, "ClosePopup")
+	local closePopup = mainObject.ClosePopup
+	mainObject.ClosePopup = function(self, ...)
+		if #self.popups > depth then
+			return closePopup(self, ...)
+		end
+	end
 	local results
 	local ok, err = in_scope(req, open, function()
 		results = { pcall(fn, unpack(args, 1, args.n)) }
@@ -366,6 +378,7 @@ local function guarded(req, open, fn, ...)
 		end
 	end)
 	current = outer
+	rawset(mainObject, "ClosePopup", ownClose)
 	if not ok then
 		record_error(req, err)
 	end

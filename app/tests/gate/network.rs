@@ -8,9 +8,9 @@ use super::{assert_sidebar, lock, pob_dir, set};
 use auto_pob::engine::pob::PobBackend;
 use auto_pob::engine::upstream::golden_of;
 use auto_pob::engine::{
-    Affected, Backend, BackgroundTask, CharacterEntry, CharacterPart, Command, ConfigValue, Engine,
-    Event, FinishedRequest, ImportMode, OAuthView, PopupKind, PublicStage, PublicView, Realm,
-    RequestsView, Snapshot, send_snapshots,
+    Affected, Backend, BackgroundTask, CharacterEntry, CharacterPart, Command, CompareSource,
+    ConfigValue, Engine, Event, FinishedRequest, ImportMode, OAuthView, PopupInput, PopupKind,
+    PublicStage, PublicView, Realm, RequestsView, Snapshot, send_snapshots,
 };
 use auto_pob::game::Game;
 use pob_runtime::net::Canned;
@@ -604,6 +604,98 @@ fn finish_request(s: &mut super::net_harness::NetSession) -> FinishedRequest {
     view.finished.remove(0)
 }
 
+/// A link request whose popup PoB closes from its callback (the Compare tab's Import popup,
+/// CompareTab.lua:1488-1497; the tree's PoEURL import, TreeTab.lua:763-771, R20) closes that
+/// popup only: a session window the user opened while it ran stays open, its edits kept.
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn link_requests_leave_an_open_session_popup_alone() {
+    let _guard = lock();
+    let attack_url = super::upstream_link("attack");
+    let web = canned_web();
+    let mut s = net_session("session-popup", canned(&web), None);
+    s.open_fixture("attack");
+    let attack_code = s.backend.share_code().expect("share code");
+    let download: String = s.eval(
+        "for _, site in ipairs(buildSites.websiteList) do \
+         if site.id == 'POBBin' then return site.downloadURL end end",
+    );
+    let download = format!(
+        "https://{}",
+        download.replace("%1", "gate").replace("%.", ".")
+    );
+    web.route("GET", &download, Canned::ok(attack_code));
+    web.route(
+        "GET",
+        "http://poeurl.com/gAtE",
+        Canned::status(302, "").header("Location", &attack_url),
+    );
+    let run = |s: &mut super::net_harness::NetSession, command: Command| {
+        s.backend.apply(command, &|_| {}).expect("command");
+    };
+    for (what, command) in [
+        (
+            "compare link",
+            Command::LoadCompare {
+                source: CompareSource::Import {
+                    text: "https://pobb.in/gate".into(),
+                    name: None,
+                },
+            },
+        ),
+        (
+            "tree short link",
+            Command::ImportTreeLink {
+                title: "Short".into(),
+                url: "http://poeurl.com/gAtE".into(),
+            },
+        ),
+    ] {
+        run(&mut s, command);
+        assert_eq!(s.requests().pending.len(), 1, "{what}: the request is out");
+        // the user opens Options while it runs, and edits it
+        run(&mut s, Command::OpenPopup(PopupKind::Options));
+        run(
+            &mut s,
+            Command::SetPopupControl {
+                name: "showAnimations".into(),
+                value: PopupInput::Check(false),
+            },
+        );
+        let open = s.backend.popup_view().unwrap().expect("the Options window");
+        let entry = finish_request(&mut s);
+        assert_eq!(entry.error, None, "{what}");
+        assert_eq!(
+            s.backend.popup_view().unwrap().as_ref(),
+            Some(&open),
+            "{what}: the session window was closed or changed"
+        );
+        assert_eq!(s.eval::<usize>("return #main.popups"), 0, "{what}");
+        run(&mut s, Command::ClosePopup);
+    }
+    // a request's press or callback that closes a popup it never opened takes nothing below
+    // it: a popup already on the stack survives `main:ClosePopup()` run inside the request
+    let kept: bool = s.eval(
+        "local mine = { controls = {} } table.insert(main.popups, 1, mine) \
+         glue.net_begin('closing', {}, function() main:ClosePopup() end) \
+         local kept = main.popups[1] == mine table.remove(main.popups, 1) return kept",
+    );
+    assert!(kept, "a request closed a popup it didn't own");
+    // and the guard leaves main as it found it: its own ClosePopup field, or none
+    let same: bool = s.eval(
+        "local before = rawget(main, 'ClosePopup') \
+         glue.net_begin('closing', {}, function() end) \
+         return rawget(main, 'ClosePopup') == before",
+    );
+    assert!(same, "the guard changed main.ClosePopup");
+    let compare = s.backend.compare_view().unwrap().expect("the comparison");
+    assert_eq!(compare.entries, ["Imported from pobb.in"]);
+    assert!(
+        s.backend.tree_state_view().unwrap().specs.len() > 1,
+        "the tree was added"
+    );
+}
+
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn tree_links_over_network_match_pob() {
@@ -833,6 +925,8 @@ struct UpImport {
     share_label: String,
     #[serde(default)]
     last_site: Option<String>,
+    #[serde(default)]
+    selected_site: Option<String>,
     unsaved: bool,
     #[serde(default)]
     import_link: Option<String>,
@@ -934,6 +1028,10 @@ fn build_sites_match_pob() {
     assert_eq!(sites.len(), 8);
     let sharing: Vec<&SiteInfo> = sites.iter().filter(|site| site.can_share()).collect();
     assert_eq!(sharing.len(), 5);
+    // Share's site drop-down starts where PoB's does (ImportTab.lua:540)
+    let picked = up_dump(&up).selected_site;
+    assert!(picked.is_some());
+    assert_eq!(our_view(&mut s).last_site, picked);
 
     // ---- Routes: every site serves the attack code; the five that take uploads answer them ----
     for site in &sites {
@@ -1383,6 +1481,99 @@ fn build_sites_match_pob() {
         their_entries(&up)
     );
 
+    // ---- The Compare tab's own Import popup (CompareTab.lua:1462-1525): a link downloads in
+    // the popup, named after its site or by the Name box; a code imports at once ----
+    let up_popup = |up: &UpstreamNet, text: &str, name: &str| {
+        up.eval::<()>(&format!(
+            "build.compareTab:OpenImportPopup() local c = main.popups[1].controls \
+             c.input:SetText('{text}') c.name:SetText('{name}') c.go.onClick()"
+        ));
+    };
+    up_popup(&up, sites[0].link(), "");
+    up.pump(Duration::from_secs(15));
+    s.backend
+        .apply(
+            Command::LoadCompare {
+                source: CompareSource::Import {
+                    text: sites[0].link().into(),
+                    name: None,
+                },
+            },
+            &|_| {},
+        )
+        .expect("popup link");
+    let entry = finish_request(&mut s);
+    assert_eq!((entry.error.clone(), entry.new_build), (None, false));
+    let ours = s.backend.compare_view().unwrap().expect("a comparison");
+    assert_eq!(ours.entries, their_entries(&up));
+    assert_eq!(
+        ours.entries.last().map(String::as_str),
+        Some(format!("Imported from {}", sites[0].label).as_str())
+    );
+    up_popup(&up, &attack_code, "Mine");
+    s.backend
+        .apply(
+            Command::LoadCompare {
+                source: CompareSource::Import {
+                    text: attack_code.clone(),
+                    name: Some("Mine".into()),
+                },
+            },
+            &|_| {},
+        )
+        .expect("popup code");
+    let ours = s.backend.compare_view().unwrap().expect("a comparison");
+    assert_eq!(ours.entries, their_entries(&up));
+    assert_eq!(ours.entries.last().map(String::as_str), Some("Mine"));
+    // a code that isn't one: the popup's own text
+    up_popup(&up, "not a code", "");
+    let theirs = up.eval::<String>("return StripEscapes(main.popups[1].controls.state.label())");
+    up.eval::<()>("main:ClosePopup()");
+    let err = s
+        .backend
+        .apply(
+            Command::LoadCompare {
+                source: CompareSource::Import {
+                    text: "not a code".into(),
+                    name: None,
+                },
+            },
+            &|_| {},
+        )
+        .unwrap_err();
+    assert_eq!(format!("{err:#}"), theirs);
+    assert_eq!(theirs, "Invalid build code");
+    s.assert_clean("compare popup");
+    assert_eq!(up.eval::<usize>("return #main.popups"), 0);
+    // a link whose download fails: PoB's popup stays with the site's text, which is the
+    // request's error (the UI shows it in its popup)
+    web.route("GET", &sites[0].download_url(), Canned::status(500, "oops"));
+    up_popup(&up, sites[0].link(), "");
+    up.pump(Duration::from_secs(15));
+    let theirs = up.eval::<String>("return StripEscapes(main.popups[1].controls.state.label())");
+    up.eval::<()>("main:ClosePopup()");
+    s.backend
+        .apply(
+            Command::LoadCompare {
+                source: CompareSource::Import {
+                    text: sites[0].link().into(),
+                    name: None,
+                },
+            },
+            &|_| {},
+        )
+        .expect("popup link");
+    let entry = finish_request(&mut s);
+    assert_eq!(entry.label, "Fetching comparison build");
+    assert_eq!(entry.error.as_deref(), Some(theirs.as_str()));
+    assert!(!theirs.is_empty() && theirs != "Downloading...", "{theirs}");
+    web.route(
+        "GET",
+        &sites[0].download_url(),
+        Canned::ok(attack_code.clone()),
+    );
+    s.assert_clean("failed compare popup link");
+
     // ---- A failure leaves nothing stuck, and the same request then works ----
     let pobbin = sites.iter().find(|site| site.id == "POBBin").unwrap();
     let (get, post) = (pobbin.download_url(), pobbin.post_url.clone().unwrap());
@@ -1723,6 +1914,8 @@ struct UpAccount {
     characters: Vec<CharacterEntry>,
     prompt: bool,
     popups: usize,
+    league_selected: Option<String>,
+    character_selected: Option<String>,
 }
 
 fn up_account(up: &UpstreamNet) -> UpAccount {
@@ -1760,6 +1953,14 @@ fn assert_public_equal(ours: &PublicView, theirs: &UpAccount, what: &str) {
     ) {
         assert_eq!(ours.leagues, theirs.leagues, "{what}: leagues");
         assert_eq!(ours.characters, theirs.characters, "{what}: characters");
+        assert_eq!(
+            ours.league_selected, theirs.league_selected,
+            "{what}: league picked"
+        );
+        assert_eq!(
+            ours.character_selected, theirs.character_selected,
+            "{what}: character picked"
+        );
     }
 }
 
@@ -2473,6 +2674,8 @@ fn accounts(s: &NetSession) -> String {
 struct UpOAuth {
     leagues: Vec<String>,
     characters: Vec<CharacterEntry>,
+    league_selected: Option<String>,
+    character_selected: Option<String>,
 }
 
 fn import_oauth(realm: Realm, league: Option<&str>, name: &str, part: CharacterPart) -> Command {
@@ -2674,6 +2877,16 @@ fn oauth_flow_matches_pob() {
     };
     assert_eq!(signed.characters, theirs.characters);
     assert_eq!(signed.leagues, theirs.leagues);
+    // PoB's own picks after the list came: the first league and its first character
+    assert_eq!(
+        (&signed.league_selected, &signed.character_selected),
+        (&theirs.league_selected, &theirs.character_selected)
+    );
+    assert!(signed.character_selected.is_some(), "PoB picks a character");
+    assert!(
+        signed.characters.iter().all(|c| c.colour.starts_with('^')),
+        "PoB's class colours"
+    );
     let names: Vec<&str> = signed.characters.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, ["alphaGate", "GateOne", "gateThree", "GateTwo"]);
     assert_eq!(

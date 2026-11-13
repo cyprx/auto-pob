@@ -2042,6 +2042,8 @@ fn the_list_folder_keeps_its_spelling_when_the_escapes_turn_on() {
 #[ignore = "needs the pinned PoB install"]
 fn an_escaped_list_view_walks_the_tree_once() {
     use std::os::unix::ffi::OsStrExt;
+    // without the gate-probes feature this fails here, before PoB starts
+    tree_reads();
     let _guard = lock();
     let mut s = super::Session::start("escaped-tree-once");
     let builds = s.builds_dir();

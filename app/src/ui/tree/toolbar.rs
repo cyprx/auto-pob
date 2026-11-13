@@ -844,7 +844,7 @@ impl Toolbar {
         queries: &mut Vec<Command>,
     ) {
         let menu = ui.menu_button("Link…", |ui| {
-            let import = ui.button("Import link…");
+            let import = ui.button("Import Tree…");
             rects.note(&import, || "link_import".into());
             if import.clicked() {
                 self.dialog = Some(Dialog::Import {
@@ -1113,7 +1113,7 @@ impl Toolbar {
             Dialog::RenameSpec { .. } => "Rename tree",
             Dialog::DeleteSpec(_) => "Delete Tree",
             Dialog::Reset => "Reset Tree/Tattoos",
-            Dialog::Import { .. } => "Import tree link",
+            Dialog::Import { .. } => "Import Tree",
             Dialog::Export { .. } => "Export Tree",
             Dialog::CopySpec { .. } => "Copy Tree",
             Dialog::ConvertVersion { .. } => "Convert to Version",
@@ -1233,14 +1233,13 @@ impl Toolbar {
                     });
                 }
                 Dialog::Import { title, url } => {
-                    ui.label("Adds the link's tree as a new tree.");
                     // both boxes take EditControl's own filter (TreeTab.lua:743-752), and the
-                    // title has no limit
-                    name_box::edit(ui, title, Filter::Plain, usize::MAX, |t| {
-                        t.hint_text("Title")
-                    });
+                    // title has no limit; PoB's labels
+                    ui.label("Enter name for this passive tree:");
+                    name_box::edit(ui, title, Filter::Plain, usize::MAX, |t| t);
+                    ui.label("Enter passive tree link:");
                     name_box::edit(ui, url, Filter::Plain, usize::MAX, |t| {
-                        t.hint_text("Tree link").desired_width(400.0)
+                        t.desired_width(400.0)
                     });
                     ui.horizontal(|ui| {
                         let valid = name_box::has_visible(title) && name_box::has_visible(url);

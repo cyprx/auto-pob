@@ -1902,9 +1902,9 @@ fn overlay_node_tooltips_follow_the_comparison() {
             r#"local viewer = build.treeTab.viewer
             viewer.compareSpec = build.compareTab:GetActiveCompare().spec
             local tooltip = glue.tooltip()
-            viewer:AddNodeTooltip(tooltip, build.spec.nodes[{id}], build)
+            local skill = glue.with_skill_recorder(viewer, viewer.AddNodeTooltip, viewer, tooltip, build.spec.nodes[{id}], build)
             viewer.compareSpec = nil
-            return {{ id = {id}, lines = tooltip:lines() }}"#
+            return glue.node_tooltip_data({id}, tooltip, skill)"#
         ));
         let ours = s.backend.node_tooltip_view(id).unwrap();
         assert_eq!(ours.as_ref(), Some(&want), "node {id}");
@@ -1965,7 +1965,7 @@ fn the_overlay_shows_the_comparisons_own_nodes() {
         for _, id in ipairs(ids) do
             local tooltip = glue.tooltip()
             viewer:AddCompareNodeTooltip(tooltip, spec.nodes[id], build)
-            list[#list + 1] = { id = id, lines = tooltip:lines() }
+            list[#list + 1] = glue.node_tooltip_data(id, tooltip)
         end
         viewer.compareSpec = nil
         return list"#,

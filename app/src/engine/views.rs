@@ -388,13 +388,30 @@ pub struct PowerReportRow {
     pub path_dist: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct NodeTooltip {
     pub id: u32,
     pub lines: Vec<TooltipLine>,
     /// The Shift-traced path the tooltip was built with (empty: none)
     #[serde(default)]
     pub trace: Vec<u32>,
+    /// PoB's `tooltipHeader`: which header art the tooltip has (NOTABLE, KEYSTONE, ...)
+    #[serde(default)]
+    pub header: Option<String>,
+    /// The oils of an anointable notable, drawn after its name (`SetRecipe`)
+    #[serde(default)]
+    pub recipe: Vec<String>,
+    /// The tooltip of the skill the node grants, which PoB draws beside it (`skillTooltip`)
+    #[serde(default)]
+    pub skill: Option<SkillTip>,
+}
+
+/// A gem's tooltip beside a node's (PassiveTreeView.lua:1605-1625)
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SkillTip {
+    #[serde(default)]
+    pub header: Option<String>,
+    pub lines: Vec<TooltipLine>,
 }
 
 /// What PoB's group list shows when the mouse is over a socket group (`AddValueTooltip`).

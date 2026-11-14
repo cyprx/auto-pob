@@ -11,7 +11,7 @@ use crate::engine::{
 };
 use crate::theme;
 use crate::widgets::{art, tooltip_ui};
-use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Tooltip, Vec2};
+use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 use std::collections::HashSet;
 
 /// What the user did on the canvas this frame.
@@ -198,18 +198,23 @@ pub fn show(
             .tooltip
             .as_deref()
             .filter(|t| t.id == node.id && t.trace.is_empty() && !t.lines.is_empty());
-        Tooltip::for_widget(&response)
-            .at_pointer()
-            .show(|ui| match reply {
-                Some(t) => tooltip_ui(ui, &t.lines),
-                None => {
-                    ui.strong(if node.name.is_empty() {
-                        &node.kind
-                    } else {
-                        &node.name
-                    });
-                }
-            });
+        // PoB's hover form, beside the node's square (PassiveTreeView.lua:1148-1150)
+        let at = to_screen([node.x, node.y]);
+        let size = (node_radius(&node.kind) * zoom).floor();
+        let corner = Pos2::new((at.x - size).floor(), (at.y - size).floor());
+        let id = egui::Id::NULL.with(("tree-compare-tip", node.id, reply.is_some()));
+        let tip = area_size(ui.ctx(), id);
+        let pos = hover_tooltip_place(corner, size * 2.0, tip.unwrap_or_default(), rect);
+        tooltip_area(ui.ctx(), id, pos, |ui| match reply {
+            Some(t) => tooltip_ui(ui, &t.lines),
+            None => {
+                ui.strong(if node.name.is_empty() {
+                    &node.kind
+                } else {
+                    &node.name
+                });
+            }
+        });
     }
 
     if let Some((id, start)) = tab.pulse {
@@ -304,26 +309,134 @@ pub fn show(
     // a reply is the tooltip for this trace (or for none)
     let reply = tab.tooltip.as_deref().filter(|t| t.trace == tab.trace);
     let body = tooltip_body(node, reply);
-    Tooltip::for_widget(&response)
-        .at_pointer()
-        .show(|ui| match body {
-            // PoB's lines start with the name and hold the stats, and the jewel for a socket
-            TooltipBody::Lines(lines) => tooltip_ui(ui, lines),
-            TooltipBody::Instant => {
-                ui.strong(if node.name.is_empty() {
-                    &node.kind
-                } else {
-                    &node.name
-                });
-                for line in &node.stats {
-                    ui.label(line);
-                }
-                if let Some(jewel) = jewel.filter(|j| !j.name.is_empty()) {
-                    ui.colored_label(overlays::JEWEL_RING, &jewel.name);
-                }
+    let skill = reply
+        .filter(|t| t.id == node.id)
+        .and_then(|t| t.skill.as_ref());
+    // PoB anchors the tooltip at the node's top right, and the granted skill's beside it or
+    // under it (PassiveTreeView.lua:1044-1097); the sizes are the last frame's
+    let has_lines = matches!(body, TooltipBody::Lines(_));
+    let main_id = egui::Id::NULL.with(("tree-tip", node.id, has_lines));
+    let skill_id = egui::Id::NULL.with(("tree-skill-tip", node.id));
+    let main_size = area_size(ui.ctx(), main_id);
+    let skill_size = skill.and_then(|_| area_size(ui.ctx(), skill_id));
+    let size = (node_radius(&node.kind) * zoom).floor();
+    let (main_at, skill_at) = node_tooltip_places(
+        to_screen(node.pos),
+        size,
+        main_size.unwrap_or_default(),
+        skill.map(|_| skill_size.unwrap_or_default()),
+        rect,
+    );
+    if let (Some(skill), Some(at)) = (skill, skill_at) {
+        tooltip_area(ui.ctx(), skill_id, at, |ui| tooltip_ui(ui, &skill.lines));
+    }
+    tooltip_area(ui.ctx(), main_id, main_at, |ui| match body {
+        // PoB's lines start with the name and hold the stats, and the jewel for a socket
+        TooltipBody::Lines(lines) => tooltip_ui(ui, lines),
+        TooltipBody::Instant => {
+            ui.strong(if node.name.is_empty() {
+                &node.kind
+            } else {
+                &node.name
+            });
+            for line in &node.stats {
+                ui.label(line);
             }
-        });
+            if let Some(jewel) = jewel.filter(|j| !j.name.is_empty()) {
+                ui.colored_label(overlays::JEWEL_RING, &jewel.name);
+            }
+        }
+    });
     actions
+}
+
+/// The size a tooltip area had last frame; `None` on its first, which egui draws invisibly to
+/// measure it
+fn area_size(ctx: &egui::Context, id: egui::Id) -> Option<Vec2> {
+    ctx.memory(|m| m.area_rect(id)).map(|r| r.size())
+}
+
+/// A tooltip at `pos`, its top left, above everything and taking no input
+fn tooltip_area(ctx: &egui::Context, id: egui::Id, pos: Pos2, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Area::new(id)
+        .order(egui::Order::Tooltip)
+        .fixed_pos(pos)
+        .interactable(false)
+        .constrain(false)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_max_width(ui.spacing().tooltip_width);
+                add(ui);
+            });
+        });
+}
+
+/// Where PoB draws a node's tooltip and its granted skill's, as top-left corners, for a node
+/// at `node` drawn `size` each side (`node.size * scale`), tooltips of `tip` and `skill` and the
+/// view (PassiveTreeView.lua:1044-1097). A skill wider than half again its height goes under the
+/// node's tooltip, else beside it; both move left and up to stay in the view.
+pub fn node_tooltip_places(
+    node: Pos2,
+    size: f32,
+    tip: Vec2,
+    skill: Option<Vec2>,
+    view: Rect,
+) -> (Pos2, Option<Pos2>) {
+    let skill_size = skill.unwrap_or_default();
+    let fat = skill.is_some() && skill_size.x > skill_size.y * 1.5;
+    let total = if fat {
+        Vec2::new(tip.x.max(skill_size.x), tip.y + skill_size.y)
+    } else {
+        Vec2::new(tip.x + skill_size.x, tip.y.max(skill_size.y))
+    };
+    let node_x = (node.x + size).floor();
+    let node_y = (node.y - size).floor();
+    let (mut x, mut y) = (node_x, node_y);
+    let right = x + total.x - view.left() - view.width();
+    if right > 0.0 {
+        x -= right;
+    }
+    let below = y + total.y - view.top() - view.height();
+    if below > 0.0 {
+        y -= below;
+    }
+    let main = if fat {
+        Pos2::new(
+            node_x.min(view.width() - tip.x + view.left()),
+            y.max(view.top()),
+        )
+    } else {
+        Pos2::new(
+            x.max(view.left()),
+            node_y.min(view.height() - tip.y + view.top()),
+        )
+    };
+    let skill_at = skill.map(|_| {
+        if fat {
+            Pos2::new(x, y + tip.y)
+        } else {
+            Pos2::new(x + tip.x + 5.0, y)
+        }
+    });
+    (main, skill_at)
+}
+
+/// Where PoB's `Tooltip:Draw` puts a tooltip of `tip` for a hovered square at `corner`, `side`
+/// across: right of it, else left, and under it when that overlaps; held up inside the view
+/// (Tooltip.lua's hover form)
+pub fn hover_tooltip_place(corner: Pos2, side: f32, tip: Vec2, view: Rect) -> Pos2 {
+    let mut x = corner.x + side + 5.0;
+    let mut y = corner.y;
+    if x + tip.x > view.right() {
+        x = view.left().max(corner.x - 5.0 - tip.x);
+        if x + tip.x > corner.x {
+            y += side;
+        }
+    }
+    if y + tip.y > view.bottom() {
+        y = view.top().max(corner.y + side - tip.y);
+    }
+    Pos2::new(x, y)
 }
 
 /// What a node tooltip shows.
@@ -810,7 +923,52 @@ mod tests {
                     text: "x".into(),
                 })
                 .collect(),
+            ..Default::default()
         }
+    }
+
+    /// PoB's node tooltip sits at the node's top right; the skill's beside it, or under it when
+    /// wide; both are pushed back into the view (PassiveTreeView.lua:1044-1097)
+    #[test]
+    fn node_tooltips_sit_where_pobs_do() {
+        let view = Rect::from_min_size(Pos2::new(0.0, 30.0), Vec2::new(1000.0, 700.0));
+        let tip = Vec2::new(300.0, 200.0);
+        // alone, with room: at the node's top right
+        let (main, skill) = node_tooltip_places(Pos2::new(100.5, 300.0), 20.0, tip, None, view);
+        assert_eq!((main, skill), (Pos2::new(120.0, 280.0), None));
+        // a tall skill goes beside it, 5 apart
+        let tall = Vec2::new(200.0, 250.0);
+        let (main, skill) =
+            node_tooltip_places(Pos2::new(100.0, 300.0), 20.0, tip, Some(tall), view);
+        assert_eq!(main, Pos2::new(120.0, 280.0));
+        assert_eq!(skill, Some(Pos2::new(425.0, 280.0)));
+        // a wide one under it
+        let wide = Vec2::new(400.0, 100.0);
+        let (main, skill) =
+            node_tooltip_places(Pos2::new(100.0, 300.0), 20.0, tip, Some(wide), view);
+        assert_eq!(main, Pos2::new(120.0, 280.0));
+        assert_eq!(skill, Some(Pos2::new(120.0, 480.0)));
+        // near the right and bottom edges both move in; the node's tooltip keeps its own clamp
+        let (main, skill) =
+            node_tooltip_places(Pos2::new(900.0, 650.0), 20.0, tip, Some(tall), view);
+        // the pair is 500 wide (PoB leaves out the 5 between): 920 + 500 is 420 past the right
+        // edge, and 630 + 250 is 150 past the bottom
+        assert_eq!(skill, Some(Pos2::new(805.0, 480.0)));
+        assert_eq!(main, Pos2::new(500.0, 530.0));
+        // the compare-only tooltip: right of the square, else left of it and under it
+        let corner = Pos2::new(100.0, 100.0);
+        assert_eq!(
+            hover_tooltip_place(corner, 40.0, tip, view),
+            Pos2::new(145.0, 100.0)
+        );
+        assert_eq!(
+            hover_tooltip_place(Pos2::new(900.0, 100.0), 40.0, tip, view),
+            Pos2::new(595.0, 100.0)
+        );
+        assert_eq!(
+            hover_tooltip_place(Pos2::new(100.0, 600.0), 40.0, Vec2::new(950.0, 200.0), view),
+            Pos2::new(0.0, 440.0)
+        );
     }
 
     #[test]

@@ -1081,6 +1081,7 @@ mod tests {
                 id: 2,
                 trace: vec![],
                 lines: vec![],
+                ..Default::default()
             })));
         h.frame(vec![]);
     }
@@ -1116,6 +1117,7 @@ mod tests {
                 id: 70_000,
                 trace: vec![],
                 lines: vec![],
+                ..Default::default()
             })));
         h.frame(vec![]);
         let out = h.click_at(pos);

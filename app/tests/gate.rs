@@ -3760,7 +3760,7 @@ fn compare_only_nodes_match_pob() {
         for _, id in ipairs(ids) do
             local tooltip = glue.tooltip()
             viewer:AddCompareNodeTooltip(tooltip, compareSpec.nodes[id], build)
-            list[#list + 1] = { id = id, lines = tooltip:lines() }
+            list[#list + 1] = glue.node_tooltip_data(id, tooltip)
         end
         return list
         "#,
@@ -3844,18 +3844,39 @@ fn tooltip_matches_pob() {
             ids[#ids + 1] = best
         end
         ids[#ids + 1] = socket_id
+        -- the lowest unallocated node that grants a skill, whose gem tooltip PoB draws beside
+        -- (PassiveTreeView.lua:1605-1625)
+        local skillNode
+        for id, node in pairs(build.spec.nodes) do
+            for _, mod in ipairs(node.modList or {}) do
+                if mod.name == "ExtraSkill" and not node.alloc and (not skillNode or id < skillNode) then
+                    skillNode = id
+                end
+            end
+        end
+        ids[#ids + 1] = skillNode
         local list = {}
+        local viewer = build.treeTab.viewer
         for _, id in ipairs(ids) do
             local node = build.spec.nodes[id]
             assert(id == socket_id or not node.alloc, "node " .. id .. " is allocated")
             local tooltip = glue.tooltip()
-            build.treeTab.viewer:AddNodeTooltip(tooltip, node, build)
-            list[#list + 1] = { id = id, lines = tooltip:lines() }
+            local skill = glue.with_skill_recorder(viewer, viewer.AddNodeTooltip, viewer, tooltip, node, build)
+            list[#list + 1] = glue.node_tooltip_data(id, tooltip, skill)
         end
         return list
         "#,
     );
-    assert_eq!(theirs.len(), 5);
+    assert_eq!(theirs.len(), 6);
+    // a header for each, the oils on the notable, and the granted skill's gem tooltip
+    assert!(theirs.iter().all(|t| t.header.is_some()), "{theirs:?}");
+    assert!(!theirs[1].recipe.is_empty(), "{:?}", theirs[1]);
+    let skill = theirs[5]
+        .skill
+        .as_ref()
+        .expect("the skill node's gem tooltip");
+    assert_eq!(skill.header.as_deref(), Some("GEM"));
+    assert!(skill.lines.len() > 3, "{skill:?}");
     // the jewel is part of the socket's tooltip
     let jewel_lines = &theirs[4].lines;
     assert!(

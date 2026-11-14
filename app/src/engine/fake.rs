@@ -718,6 +718,7 @@ impl Backend for Fake {
                 size: 14,
                 text: format!("node {id}"),
             }],
+            ..Default::default()
         }))
     }
 

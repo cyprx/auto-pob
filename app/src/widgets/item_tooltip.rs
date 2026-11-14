@@ -118,6 +118,14 @@ fn single(
         .show(ui, |ui| {
             if let Some(art) = &header {
                 ui.add_space(art.text_offset);
+                // at least the title's width and 50 across, padding included (Tooltip.lua:
+                // 381-388)
+                if let Some(ItemTooltipLine::Line { size, text, .. }) = tooltip.lines.first() {
+                    let title =
+                        ui.painter()
+                            .layout_job(pob_text(text, *size as f32 * SIZE_SCALE, default));
+                    ui.set_min_width(title.size().x + super::tooltip::HEADER_EXTRA - 12.0);
+                }
                 if titles > 0 {
                     ui.vertical_centered(|ui| {
                         for line in &tooltip.lines[..titles] {

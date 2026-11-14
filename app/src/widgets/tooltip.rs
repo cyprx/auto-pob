@@ -11,6 +11,9 @@ use eframe::egui::{self, Sense, Stroke, Vec2};
 /// PoB font sizes (14 body, 16-20 headings) are drawn at this fraction of their size in points.
 const SIZE_SCALE: f32 = 0.9;
 
+/// How much wider than its title PoB makes a tooltip with header art (Tooltip.lua:381-388)
+pub const HEADER_EXTRA: f32 = 50.0;
+
 /// Draws `lines` top to bottom. Text honours PoB colour codes; separators are a thin rule.
 pub fn tooltip_ui(ui: &mut egui::Ui, lines: &[TooltipLine]) {
     styled_tooltip_ui(ui, lines, &Look::default());
@@ -60,6 +63,16 @@ pub fn styled_tooltip_ui(ui: &mut egui::Ui, lines: &[TooltipLine], look: &Look) 
     let header_slot = ui.painter().add(egui::Shape::Noop);
     if let Some(art) = &header {
         ui.add_space(art.text_offset);
+        // PoB makes a headed tooltip at least its title's width and 50 across, padding included
+        // (Tooltip.lua:381-388)
+        if let Some(TooltipLine::Line { size, text }) = lines.first() {
+            let title = ui
+                .painter()
+                .layout_job(pob_text(text, *size as f32 * SIZE_SCALE, default));
+            let m = ui.style().spacing.menu_margin;
+            let pad = f32::from(m.left) + f32::from(m.right);
+            ui.set_min_width(title.size().x + HEADER_EXTRA - pad);
+        }
     }
     // a gem's first separator is left out with the option on, header art or not
     // (Tooltip.lua:573-585)
@@ -186,5 +199,68 @@ mod tests {
             tooltip_ui(ui, &lines);
         })
         .drop_without_applying_deltas();
+    }
+
+    /// A headed tooltip is at least its title's width and 50 across, as PoB's
+    #[test]
+    fn a_headed_tooltip_is_wider_than_its_title() {
+        let lines = vec![
+            TooltipLine::Line {
+                size: 18,
+                text: "Ab".into(),
+            },
+            TooltipLine::Line {
+                size: 14,
+                text: "x".into(),
+            },
+        ];
+        let ctx = egui::Context::default();
+        let mut widths = (0.0, 0.0, 0.0);
+        ctx.run_ui(Default::default(), |ui| {
+            let title =
+                ui.painter()
+                    .layout_job(pob_text("Ab", 18.0 * SIZE_SCALE, egui::Color32::WHITE));
+            let m = ui.style().spacing.menu_margin;
+            let pad = f32::from(m.left) + f32::from(m.right);
+            let headed = ui
+                .scope(|ui| {
+                    styled_tooltip_ui(
+                        ui,
+                        &lines,
+                        &Look {
+                            header: Some("PASSIVE"),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .response
+                .rect
+                .width();
+            let plain = ui.scope(|ui| tooltip_ui(ui, &lines)).response.rect.width();
+            widths = (headed, plain, title.size().x + HEADER_EXTRA - pad);
+            // an item's too, inside its 6-point margins and 1-point border
+            let item = crate::engine::views::ItemTooltip {
+                header: Some("MAGIC".into()),
+                lines: vec![crate::engine::views::ItemTooltipLine::Line {
+                    size: 18,
+                    text: "Ab".into(),
+                    font: None,
+                    center: true,
+                    background: None,
+                    mod_line: None,
+                }],
+                ..Default::default()
+            };
+            let width = ui
+                .scope(|ui| crate::widgets::item_tooltip_ui(ui, &item))
+                .response
+                .rect
+                .width();
+            assert!(width >= title.size().x + HEADER_EXTRA - 0.5, "item {width}");
+        })
+        .drop_without_applying_deltas();
+        let (headed, plain, floor) = widths;
+        assert!(headed >= floor - 0.5, "{headed} < {floor}");
+        assert!(plain < floor, "{plain}");
     }
 }

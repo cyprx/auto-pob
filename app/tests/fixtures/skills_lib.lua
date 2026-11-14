@@ -31,6 +31,23 @@ local function toggle(control)
 	return { label = control:GetProperty("label"), on = control.state and true or false }
 end
 
+-- The file of a slot icon handle (SkillListControl.lua:9-27, a file local read off GetRowIcon)
+local iconFiles
+local function iconFile(handle)
+	if not iconFiles then
+		iconFiles = {}
+		local fn = common.classes.SkillListControl.GetRowIcon
+		for i = 1, 64 do
+			local name, value = debug.getupvalue(fn, i)
+			if not name then break end
+			if type(value) == "table" and type(value["Weapon 1"]) == "table" then
+				for _, entry in pairs(value) do iconFiles[entry.icon] = entry.path end
+			end
+		end
+	end
+	return handle and iconFiles[handle]
+end
+
 local function groupDump(tab, index, group)
 	tab:SetDisplayGroup(group)
 	local c = tab.controls
@@ -38,6 +55,7 @@ local function groupDump(tab, index, group)
 		label = c.groupLabel.buf,
 		name = group.displayLabel or "",
 		display_label = c.groupList:GetRowValue(1, index, group),
+		icon = iconFile(c.groupList:GetRowIcon(1, index, group)),
 		slot = c.groupSlot:GetSelValue().slotName,
 		enabled = c.groupEnabled.state and true or false,
 		slot_enabled = group.slotEnabled ~= false,

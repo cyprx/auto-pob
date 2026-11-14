@@ -162,6 +162,8 @@ pub(crate) fn sample() -> CompareView {
             ours: vec!["^7Fireball 20/0".into()],
             theirs: vec!["^x33FF77+ Spell Echo".into()],
             differ: true,
+            icon: None,
+            theirs_icon: None,
         }],
         config: vec![
             CompareConfigRow {

@@ -90,6 +90,15 @@ pub fn set_context_root(ctx: &egui::Context, dir: &Path) {
 /// once it is on the GPU. The first ask starts its decoding and returns `None`; a frame is asked
 /// for when it is ready. A file that can't be read stays `None`.
 pub fn image(ctx: &egui::Context, path: &str) -> Option<(TextureId, Vec2)> {
+    image_with(ctx, path, false)
+}
+
+/// `image`, uploaded to repeat past its edges (a tiled background)
+pub fn repeating_image(ctx: &egui::Context, path: &str) -> Option<(TextureId, Vec2)> {
+    image_with(ctx, path, true)
+}
+
+fn image_with(ctx: &egui::Context, path: &str, repeat: bool) -> Option<(TextureId, Vec2)> {
     let shared = cache(ctx);
     let mut cache = shared.lock().unwrap_or_else(|e| e.into_inner());
     let now = ctx.input(|i| i.time);
@@ -97,7 +106,12 @@ pub fn image(ctx: &egui::Context, path: &str) -> Option<(TextureId, Vec2)> {
         Some(root) => root.clone(),
         None => ROOT.read().unwrap_or_else(|e| e.into_inner()).clone()?,
     };
-    let entry = cache.entries.entry(path.to_owned()).or_insert_with(|| {
+    let key = if repeat {
+        format!("{path}#repeat")
+    } else {
+        path.to_owned()
+    };
+    let entry = cache.entries.entry(key).or_insert_with(|| {
         let slot: Slot = Arc::default();
         let (done, file, ctx) = (Arc::clone(&slot), root.join(path), ctx.clone());
         let started = send_to_art_thread(Box::new(move || {
@@ -126,11 +140,11 @@ pub fn image(ctx: &egui::Context, path: &str) -> Option<(TextureId, Vec2)> {
             None => {}
             Some(None) => entry.state = State::Failed,
             Some(Some(pixels)) => {
-                let texture = ctx.load_texture(
-                    format!("pob-art:{path}"),
-                    pixels,
-                    egui::TextureOptions::LINEAR,
-                );
+                let mut options = egui::TextureOptions::LINEAR;
+                if repeat {
+                    options.wrap_mode = egui::TextureWrapMode::Repeat;
+                }
+                let texture = ctx.load_texture(format!("pob-art:{path}"), pixels, options);
                 entry.state = State::Ready(texture);
             }
         }
@@ -180,6 +194,13 @@ pub fn paint(
     let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
     painter.image(texture, rect, uv, tint);
     true
+}
+
+/// A `size` square for the image at `path`, drawn once it is loaded (a slot icon)
+pub fn icon(ui: &mut egui::Ui, path: &str, size: f32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
+    paint(ui.ctx(), ui.painter(), path, rect, egui::Color32::WHITE);
+    response
 }
 
 #[cfg(test)]

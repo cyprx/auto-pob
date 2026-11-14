@@ -565,14 +565,22 @@ end
 -- gems), each a header per side and the gem lines under it. A header is drawn at height 18 and
 -- the pair's `y`; this build's side is the left column.
 local function skill_rows(tab, entry)
-	local strings = {}
-	local draw_string = DrawString
+	local strings, icons = {}, {}
+	local draw_string, draw_image = DrawString, DrawImage
 	DrawString = function(x, y, align, height, font, text)
 		strings[#strings + 1] = { x = x, y = y, height = height, text = text }
 	end
+	-- the headers' slot icons, drawn just before their text at its y
+	DrawImage = function(handle, x, y, ...)
+		local file = glue.slot_icon_file(handle)
+		if file then
+			icons[#icons + 1] = { x = x, y = y, file = file }
+		end
+		return draw_image(handle, x, y, ...)
+	end
 	local width, height = GetScreenSize()
 	local ok, err = pcall(tab.DrawSkills, tab, { x = 0, y = 0, width = width, height = height }, entry)
-	DrawString = draw_string
+	DrawString, DrawImage = draw_string, draw_image
 	if not ok then
 		error(err, 0)
 	end
@@ -592,6 +600,11 @@ local function skill_rows(tab, entry)
 				rows[#rows + 1] = row
 			end
 			row[side .. "_header"] = s.text
+			for _, icon in ipairs(icons) do
+				if icon.y == s.y and (icon.x < right) == (side == "ours") then
+					row[side .. "_icon"] = icon.file
+				end
+			end
 		else
 			table.insert(row[side], s.text)
 		end
@@ -609,6 +622,8 @@ local function skill_rows(tab, entry)
 		end
 		out[i] = {
 			label = r.ours_header or r.theirs_header, theirs_label = r.theirs_header,
+			icon = r.ours_header and r.ours_icon or (not r.ours_header and r.theirs_icon) or nil,
+			theirs_icon = r.theirs_icon,
 			ours = r.ours, theirs = r.theirs, differ = differ,
 		}
 	end

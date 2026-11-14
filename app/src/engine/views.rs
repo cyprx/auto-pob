@@ -1194,6 +1194,9 @@ pub struct SocketGroupView {
     pub name: String,
     /// The group list's row text, with PoB's colour codes
     pub display_label: String,
+    /// The slot icon PoB draws before the row text (`GetRowIcon`), a file under its folder
+    #[serde(default)]
+    pub icon: Option<String>,
     #[serde(default)]
     pub slot: Option<String>,
     pub enabled: bool,
@@ -1741,6 +1744,8 @@ mod tests {
                 ours: vec!["^x08F2FFBoneshatter^7 20/0".into()],
                 theirs: vec![],
                 differ: true,
+                icon: None,
+                theirs_icon: None,
             }],
             config: vec![CompareConfigRow {
                 var: "usePowerCharges".into(),
@@ -2166,6 +2171,11 @@ pub struct CompareSkillRow {
     /// The comparison's group header, when it has a group in the pair
     #[serde(default)]
     pub theirs_label: Option<String>,
+    /// The slot icons PoB draws before the headers (CompareTab.lua:4316-4324)
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub theirs_icon: Option<String>,
     #[serde(default)]
     pub ours: Vec<String>,
     #[serde(default)]

@@ -476,7 +476,7 @@ fn upload_sheets(
         })
         .collect();
     // if nothing can decode them, they are drawn as dots and the canvas doesn't wait
-    if !to_decode.is_empty() && !decode_in_background(to_decode, ctx, spawn_named) {
+    if !to_decode.is_empty() && !decode_in_background(to_decode, ctx, send_to_art_thread) {
         waiting = false;
     }
     if waiting {
@@ -485,21 +485,44 @@ fn upload_sheets(
     sheets
 }
 
-/// A thread that runs `work`, named for the tree's art
-fn spawn_named(work: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
-    std::thread::Builder::new()
-        .name("tree-art".into())
-        .spawn(work)
-        .map(|_| ())
+/// Work for the tree's art thread
+type ArtJob = Box<dyn FnOnce() + Send>;
+
+/// Runs `work` on the process's one thread for the tree's art, started the first time. One
+/// thread, not one per batch: each new thread would get a malloc arena of its own, which keeps
+/// what the decoding left in it (about 25 MB more resident after a build was opened).
+fn send_to_art_thread(work: ArtJob) -> std::io::Result<()> {
+    static QUEUE: std::sync::OnceLock<Option<std::sync::Mutex<std::sync::mpsc::Sender<ArtJob>>>> =
+        std::sync::OnceLock::new();
+    let queue = QUEUE.get_or_init(|| {
+        let (send, receive) = std::sync::mpsc::channel::<ArtJob>();
+        std::thread::Builder::new()
+            .name("tree-art".into())
+            .spawn(move || {
+                for job in receive {
+                    job();
+                }
+            })
+            .ok()
+            .map(|_| std::sync::Mutex::new(send))
+    });
+    let Some(queue) = queue else {
+        return Err(std::io::Error::other("the tree's art thread didn't start"));
+    };
+    queue
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .send(work)
+        .map_err(|_| std::io::Error::other("the tree's art thread has ended"))
 }
 
-/// Decodes the claimed `sheets` on a thread `spawn` starts, asking for a frame after each. If
-/// no thread starts the files are marked failed, so nothing waits for them; returns whether one
-/// started.
+/// Decodes the claimed `sheets` on the thread `spawn` hands the work to, asking for a frame
+/// after each. If it can't take the work the files are marked failed, so nothing waits for
+/// them; returns whether it took it.
 fn decode_in_background(
     sheets: Vec<std::sync::Arc<crate::engine::SheetImage>>,
     ctx: &egui::Context,
-    spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()>,
+    spawn: impl FnOnce(ArtJob) -> std::io::Result<()>,
 ) -> bool {
     let ctx = ctx.clone();
     let failed = sheets.clone();
@@ -909,6 +932,23 @@ mod tests {
                 .map(|v| v.repaint_delay)
                 .collect::<Vec<_>>()
         );
+    }
+
+    /// Every batch of art is decoded on the same thread
+    #[test]
+    fn the_art_is_decoded_on_one_thread() {
+        let (send, receive) = std::sync::mpsc::channel();
+        for _ in 0..3 {
+            let send = send.clone();
+            send_to_art_thread(Box::new(move || {
+                let me = std::thread::current();
+                send.send((me.id(), me.name().map(String::from))).unwrap();
+            }))
+            .unwrap();
+        }
+        let ran: Vec<_> = (0..3).map(|_| receive.recv().unwrap()).collect();
+        assert!(ran.iter().all(|r| r == &ran[0]), "{ran:?}");
+        assert_eq!(ran[0].1.as_deref(), Some("tree-art"));
     }
 
     /// The rings' frames follow how fast their edge moves on screen

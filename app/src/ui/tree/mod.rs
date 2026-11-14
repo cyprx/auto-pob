@@ -356,6 +356,16 @@ impl TreeTab {
                 {
                     self.needs_fit = true;
                 }
+                // the art of files the new tree doesn't list (another tree version's) is freed;
+                // a file listed again is decoded again
+                let listed: HashSet<&std::path::Path> = layout
+                    .sheets
+                    .iter()
+                    .flatten()
+                    .map(|s| s.path.as_path())
+                    .collect();
+                self.textures
+                    .retain(|path, _| listed.contains(path.as_path()));
                 self.hover = None;
                 self.previewed = None;
                 self.layout = Some(layout.clone());
@@ -1835,6 +1845,40 @@ mod tests {
                 .filter(|v| v.color == egui::Color32::RED)
                 .all(|v| !rect.contains(v.pos))
         );
+    }
+
+    /// Another tree's layout frees the art of files it doesn't list, and keeps the shared ones
+    #[test]
+    fn another_trees_layout_frees_the_old_trees_art() {
+        let (l, s) = sample();
+        let file = |name: &str| {
+            Some(Arc::new(crate::engine::SheetImage::new(
+                name.into(),
+                [1, 1],
+                vec![255; 4],
+            )))
+        };
+        let mut old = (*l).clone();
+        old.sheets = vec![
+            file("TreeData/3_29/skills-3.jpg"),
+            file("TreeData/PSSkillFrame.png"),
+        ];
+        let mut h = Harness::new(Arc::new(old), s);
+        for path in ["TreeData/3_29/skills-3.jpg", "TreeData/PSSkillFrame.png"] {
+            let texture = h
+                .ctx
+                .load_texture(path, egui::ColorImage::example(), Default::default());
+            h.tab.textures.insert(path.into(), texture);
+        }
+        let mut new = (*l).clone();
+        new.version = "3_28".into();
+        new.sheets = vec![
+            file("TreeData/3_28/skills-3.jpg"),
+            file("TreeData/PSSkillFrame.png"),
+        ];
+        h.tab.on_snapshot(&Snapshot::TreeLayout(Arc::new(new)));
+        let kept: Vec<_> = h.tab.textures.keys().cloned().collect();
+        assert_eq!(kept, [PathBuf::from("TreeData/PSSkillFrame.png")]);
     }
 
     #[test]

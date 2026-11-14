@@ -323,6 +323,8 @@ fn tree_with_text() -> (AutoPobApp, egui::Context) {
         ascendancy: None,
         replaceable: false,
         mastery_effects: false,
+        in_radius: false,
+        radius_socket: false,
     };
     app.on_event(Event_::Snapshot {
         seq: app.last_sent,
@@ -338,6 +340,12 @@ fn tree_with_text() -> (AutoPobApp, egui::Context) {
             ],
             edges: vec![],
             sheets: vec![],
+            connectors: vec![],
+            groups: vec![],
+            class_art: vec![],
+            assets: Default::default(),
+            size: 1.0,
+            jewel_radii: vec![],
             key: "text".into(),
         })),
     });

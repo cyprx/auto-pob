@@ -158,6 +158,8 @@ pub(super) mod tests {
             ascendancy: None,
             replaceable: false,
             mastery_effects: false,
+            in_radius: false,
+            radius_socket: false,
         }
     }
 
@@ -167,6 +169,12 @@ pub(super) mod tests {
             nodes,
             edges,
             sheets: vec![],
+            connectors: vec![],
+            groups: vec![],
+            class_art: vec![],
+            assets: Default::default(),
+            size: 1.0,
+            jewel_radii: vec![],
             key: "k".into(),
         }
     }

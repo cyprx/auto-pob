@@ -1,6 +1,6 @@
 //! Typed snapshots of PoB state, deserialised from Lua tables.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -421,6 +421,21 @@ pub struct TreeLayout {
     pub nodes: Vec<TreeNode>,
     /// Connections, as indices into `nodes`
     pub edges: Vec<(usize, usize)>,
+    /// The connectors PoB draws (PassiveTree:BuildConnector): the tree's, then the cluster
+    /// jewels'. Fewer than `edges`: none to a class start or a mastery, none between
+    /// ascendancies.
+    pub connectors: Vec<Connector>,
+    /// Group background art: the groups', then the cluster jewels'
+    pub groups: Vec<GroupArt>,
+    /// The class background art, by class id (PassiveTreeView.lua:546-564)
+    pub class_art: Vec<ClassArt>,
+    /// The tree assets drawn by name (connectors, group and class backgrounds, socket overlays)
+    /// and the view's own images (`ring`, `highlightRing`, ...)
+    pub assets: HashMap<String, Sprite>,
+    /// `tree.size`: PoB's zoom is relative to it
+    pub size: f32,
+    /// `data.jewelRadius`
+    pub jewel_radii: Vec<JewelRadius>,
     /// Sprite sheets, indexed by [`Sprite::sheet`]. `None` if the image couldn't be loaded.
     pub sheets: Vec<Option<Arc<SheetImage>>>,
     /// The version plus a digest of the node ids; caches built from the layout are stale when
@@ -471,18 +486,111 @@ impl std::fmt::Debug for SheetImage {
 }
 
 /// A rectangle on a sprite sheet.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Sprite {
     pub sheet: usize,
     /// x, y, width, height in pixels
     pub rect: [f32; 4],
 }
 
-/// A node's artwork as [unallocated, allocated] pairs.
+/// What PoB draws for a node in each state (PassiveTreeView.lua:805-904). `base` and `overlay`
+/// are [unallocated, path, allocated]; `effect` is [unallocated, allocated] (a mastery's
+/// effect when allocated, a tattoo's always); `hover` is a hovered mastery's base. Which entry
+/// is drawn depends on the node's kind, as in PoB.
 #[derive(Debug, Default, Clone)]
 pub struct NodeArt {
-    pub icon: [Option<Sprite>; 2],
-    pub frame: [Option<Sprite>; 2],
+    pub base: [Option<Sprite>; 3],
+    pub overlay: [Option<Sprite>; 3],
+    pub effect: [Option<Sprite>; 2],
+    pub hover: Option<Sprite>,
+}
+
+/// A connector PoB draws, between two nodes
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Connector {
+    /// PoB's `nodeId1`, `nodeId2`
+    pub ids: [u32; 2],
+    /// The art's name without the state: `LineConnector` or `Orbit<n>`
+    pub kind: String,
+    #[serde(default)]
+    pub ascendancy: Option<String>,
+    /// Where the nodes are
+    pub ends: [[f32; 2]; 2],
+    /// An orbit's arc: the group's centre
+    #[serde(default)]
+    pub centre: Option<[f32; 2]>,
+    /// An orbit's arc: the quad's other three corners from `centre`, per unit of art size
+    /// (the art's width times 2.66, PassiveTree:BuildArc)
+    #[serde(default)]
+    pub quad: Option<[[f32; 2]; 3]>,
+    /// An orbit's arc: how much of the art's 90 degrees it shows
+    #[serde(default)]
+    pub p: f32,
+    /// Both nodes are conquered by an abyss jewel: the abyss art, where there is one
+    #[serde(default)]
+    pub abyss: bool,
+}
+
+/// A group's background art: at the group's centre, a half one mirrored below it
+#[derive(Debug, Clone)]
+pub struct GroupArt {
+    pub pos: [f32; 2],
+    pub art: Sprite,
+    pub half: bool,
+    /// An ascendancy's emblem: faded unless it is the build's or its bloodline
+    pub ascendancy: Option<String>,
+    pub flavour: Option<Flavour>,
+}
+
+/// An ascendancy's flavour text, drawn when zoomed in far enough
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Flavour {
+    pub text: String,
+    /// RRGGBB
+    pub colour: String,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// A group's background art as the glue lists it
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct LuaGroupArt {
+    pub x: f32,
+    pub y: f32,
+    pub art: LuaSprite,
+    #[serde(default)]
+    pub half: bool,
+    #[serde(default)]
+    pub ascendancy: Option<String>,
+    #[serde(default)]
+    pub flavour: Option<Flavour>,
+}
+
+impl LuaGroupArt {
+    pub fn resolve(&self, sheets: &[Option<Arc<SheetImage>>]) -> Option<GroupArt> {
+        Some(GroupArt {
+            pos: [self.x, self.y],
+            art: self.art.resolve(sheets)?,
+            half: self.half,
+            ascendancy: self.ascendancy.clone(),
+            flavour: self.flavour.clone(),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ClassArt {
+    pub class: u32,
+    pub art: Sprite,
+    pub pos: [f32; 2],
+}
+
+/// One of `data.jewelRadius`
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct JewelRadius {
+    pub inner: f32,
+    pub outer: f32,
+    pub colour: [u8; 3],
 }
 
 #[derive(Debug, Clone)]
@@ -507,6 +615,10 @@ pub struct TreeNode {
     pub replaceable: bool,
     /// Whether the node is a mastery with effects to choose from (R19)
     pub mastery_effects: bool,
+    /// Whether a hovered socket's radius colours it (PassiveTree.lua:645-648)
+    pub in_radius: bool,
+    /// A socket whose hover colours the nodes in its radius
+    pub radius_socket: bool,
 }
 
 /// The build's state on the active tree.
@@ -561,6 +673,12 @@ pub struct TreeState {
     /// subgraph): PoB draws them green and gives them a tooltip (PassiveTreeView.lua:1102-1153)
     #[serde(default)]
     pub compare_only: Vec<CompareOnlyNode>,
+    /// What the art depends on beyond the allocation
+    #[serde(default)]
+    pub draw: DrawState,
+    /// The sockets that draw radius rings, and their jewels' rings
+    #[serde(default)]
+    pub socket_rings: Vec<SocketRings>,
     #[serde(default)]
     pub power_stats: Vec<String>,
     #[serde(default)]
@@ -656,28 +774,97 @@ pub struct CompareOnlyNode {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct CompareOnlyArt {
     #[serde(default)]
-    pub icon: Option<LuaSprite>,
+    pub base: Option<LuaSprite>,
     #[serde(default)]
-    pub frame: Option<LuaSprite>,
+    pub overlay: Option<LuaSprite>,
 }
 
-/// A sprite as the glue lists it: a 1-based sheet and a pixel rectangle
+/// An image as the glue lists it: a 1-based sheet and a pixel rectangle, or no rectangle for
+/// the whole file
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub struct LuaSprite {
     pub sheet: usize,
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
+    #[serde(default)]
+    pub x: Option<f32>,
+    #[serde(default)]
+    pub y: Option<f32>,
+    #[serde(default)]
+    pub w: Option<f32>,
+    #[serde(default)]
+    pub h: Option<f32>,
 }
 
 impl LuaSprite {
-    pub fn sprite(&self) -> Option<Sprite> {
-        Some(Sprite {
-            sheet: self.sheet.checked_sub(1)?,
-            rect: [self.x, self.y, self.w, self.h],
-        })
+    /// The sprite, a whole file's rectangle its size; `None` for a file that couldn't be loaded
+    pub fn resolve(&self, sheets: &[Option<Arc<SheetImage>>]) -> Option<Sprite> {
+        let sheet = self.sheet.checked_sub(1)?;
+        let image = sheets.get(sheet)?.as_ref()?;
+        let rect = match (self.x, self.y, self.w, self.h) {
+            (Some(x), Some(y), Some(w), Some(h)) => [x, y, w, h],
+            _ => [0.0, 0.0, image.size[0] as f32, image.size[1] as f32],
+        };
+        Some(Sprite { sheet, rect })
     }
+}
+
+/// What the tree's art depends on beyond the allocation (PassiveTreeView.lua:805-845)
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct DrawState {
+    /// A spec is compared with (the Tree tab's, or the Compare tab's overlay)
+    #[serde(default)]
+    pub comparing: bool,
+    /// Nodes the compared spec doesn't have
+    #[serde(default)]
+    pub compare_missing: Vec<u32>,
+    /// Sockets holding a Thread of Hope-like jewel
+    #[serde(default)]
+    pub variable_sockets: Vec<u32>,
+    /// Nodes the build grants (`grantedPassives`): drawn allocated
+    #[serde(default)]
+    pub granted: Vec<u32>,
+    /// Nodes the compared spec allocates
+    #[serde(default)]
+    pub compare_allocated: Vec<u32>,
+    /// Split Personality's path, drawn in its colour
+    #[serde(default)]
+    pub split_path: Vec<u32>,
+    /// Nodes an Intuitive Leap-like jewel reaches
+    #[serde(default)]
+    pub leap: Vec<u32>,
+    /// The overlay asset of each socket's jewel
+    #[serde(default)]
+    pub socket_overlays: Vec<SocketOverlay>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SocketOverlay {
+    pub node: u32,
+    pub overlay: String,
+}
+
+/// A socket that draws radius rings (PassiveTreeView.lua:1198-1248)
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SocketRings {
+    pub node: u32,
+    /// Its jewel is Thread of Hope-like: hovering it shows the annuli
+    #[serde(default)]
+    pub variable: bool,
+    #[serde(default)]
+    pub rings: Vec<RingImage>,
+}
+
+/// One image of a jewel's radius art (drawJewelRadius)
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct RingImage {
+    /// The view image's field name, a key of [`TreeLayout::assets`]
+    pub image: String,
+    /// Across, in tree units
+    pub size: f32,
+    /// `DrawImageRotated`'s angle: radians turned per 1/0.00003 ms
+    pub spin: f32,
+    pub x: f32,
+    pub y: f32,
+    pub tint: [f32; 4],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]

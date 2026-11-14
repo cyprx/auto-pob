@@ -1,6 +1,10 @@
 //! Reads the passive tree's geometry out of PoB's Lua (see `glue/tree.lua`).
 
-use super::views::{NodeArt, SheetImage, Sprite, TreeLayout, TreeNode};
+use super::views::{
+    ClassArt, Connector, JewelRadius, LuaGroupArt, LuaSprite, NodeArt, SheetImage, Sprite,
+    TreeLayout, TreeNode,
+};
+use mlua::LuaSerdeExt;
 use mlua::{Function, Lua, Table};
 use std::{
     cell::RefCell,
@@ -38,6 +42,19 @@ pub(super) fn layout(lua: &Lua, pob_dir: &Path) -> mlua::Result<TreeLayout> {
     let glue: Table = lua.globals().get("glue")?;
     let tree: Table = glue.get::<Function>("tree_layout")?.call(())?;
 
+    // the files first: a whole file's sprite is as large as the file
+    let sheets: Vec<Option<Arc<SheetImage>>> = tree
+        .get::<Table>("sheets")?
+        .sequence_values::<String>()
+        .map(|path| path.map(|path| load_sheet(&pob_dir.join(path))))
+        .collect::<mlua::Result<_>>()?;
+    let sprite = |value: mlua::Value| -> mlua::Result<Option<Sprite>> {
+        if value.is_nil() {
+            return Ok(None);
+        }
+        Ok(lua.from_value::<LuaSprite>(value)?.resolve(&sheets))
+    };
+
     let nodes = tree
         .get::<Table>("nodes")?
         .sequence_values::<Table>()
@@ -58,10 +75,12 @@ pub(super) fn layout(lua: &Lua, pob_dir: &Path) -> mlua::Result<TreeLayout> {
                     .collect::<mlua::Result<_>>()?,
                 orbit: group.zip(orbit),
                 group_center: group_x.zip(group_y).map(|(x, y)| [x, y]),
-                art: node_art(&node.get::<Table>("art")?)?,
+                art: node_art(&node.get::<Table>("art")?, &sprite)?,
                 ascendancy: node.get("ascendancy")?,
                 replaceable: node.get("replaceable")?,
                 mastery_effects: node.get("mastery_effects")?,
+                in_radius: node.get::<Option<bool>>("in_radius")?.unwrap_or(false),
+                radius_socket: node.get::<Option<bool>>("radius_socket")?.unwrap_or(false),
             })
         })
         .collect::<mlua::Result<Vec<_>>>()?;
@@ -83,19 +102,70 @@ pub(super) fn layout(lua: &Lua, pob_dir: &Path) -> mlua::Result<TreeLayout> {
         })
         .collect::<mlua::Result<_>>()?;
 
-    let sheets = tree
-        .get::<Table>("sheets")?
-        .sequence_values::<String>()
-        .map(|path| path.map(|path| load_sheet(&pob_dir.join(path))))
+    let connectors: Vec<Connector> = lua.from_value(tree.get("connectors")?)?;
+    let groups = tree
+        .get::<Table>("groups")?
+        .sequence_values::<mlua::Value>()
+        .map(|g| Ok(lua.from_value::<LuaGroupArt>(g?)?.resolve(&sheets)))
+        .filter_map(Result::transpose)
+        .collect::<mlua::Result<_>>()?;
+    let class_art = tree
+        .get::<Table>("class_art")?
+        .sequence_values::<Table>()
+        .map(|entry| {
+            let entry = entry?;
+            Ok(sprite(entry.get("art")?)?.map(|art| ClassArt {
+                class: entry.get("class").unwrap_or(0),
+                art,
+                pos: [entry.get("x").unwrap_or(0.0), entry.get("y").unwrap_or(0.0)],
+            }))
+        })
+        .filter_map(Result::transpose)
+        .collect::<mlua::Result<_>>()?;
+    let mut assets = HashMap::new();
+    for entry in tree.get::<Table>("assets")?.sequence_values::<Table>() {
+        let entry = entry?;
+        if let Some(art) = sprite(entry.get("art")?)? {
+            assets.insert(entry.get::<String>("name")?, art);
+        }
+    }
+    let jewel_radii = tree
+        .get::<Table>("jewel_radii")?
+        .sequence_values::<Table>()
+        .map(|r| {
+            let r = r?;
+            Ok(JewelRadius {
+                inner: r.get("inner")?,
+                outer: r.get("outer")?,
+                colour: colour_code(&r.get::<String>("colour")?),
+            })
+        })
         .collect::<mlua::Result<_>>()?;
 
     Ok(TreeLayout {
         version: tree.get("version")?,
         nodes,
         edges,
+        connectors,
+        groups,
+        class_art,
+        assets,
+        size: tree.get::<Option<f32>>("size")?.unwrap_or(1.0),
+        jewel_radii,
         sheets,
         key: key_of(&tree.get::<mlua::LuaString>("digest")?.as_bytes()),
     })
+}
+
+/// A `^xRRGGBB` colour code's colour; white for anything else
+fn colour_code(code: &str) -> [u8; 3] {
+    let hex = code.strip_prefix("^x").unwrap_or(code);
+    let channel = |i: usize| {
+        hex.get(i..i + 2)
+            .and_then(|h| u8::from_str_radix(h, 16).ok())
+            .unwrap_or(255)
+    };
+    [channel(0), channel(2), channel(4)]
 }
 
 /// Decodes a sprite sheet, caching it since every loaded build resends the tree. The cache is
@@ -130,26 +200,36 @@ fn load_sheet(path: &Path) -> Option<Arc<SheetImage>> {
     Some(sheet)
 }
 
-fn node_art(art: &Table) -> mlua::Result<NodeArt> {
-    // a { unallocated, allocated } pair of sprites, either of which may be missing
-    let pair = |key: &str| -> mlua::Result<[Option<Sprite>; 2]> {
-        let Some(pair) = art.get::<Option<Table>>(key)? else {
-            return Ok([None, None]);
+fn node_art(
+    art: &Table,
+    sprite: &impl Fn(mlua::Value) -> mlua::Result<Option<Sprite>>,
+) -> mlua::Result<NodeArt> {
+    // a list of sprites, any of which may be missing
+    let list = |key: &str, n: usize| -> mlua::Result<Vec<Option<Sprite>>> {
+        let Some(list) = art.get::<Option<Table>>(key)? else {
+            return Ok(vec![None; n]);
         };
-        let sprite = |i: usize| -> mlua::Result<Option<Sprite>> {
-            let Some(s) = pair.get::<Option<Table>>(i)? else {
-                return Ok(None);
-            };
-            Ok(Some(Sprite {
-                // Lua indices start at 1
-                sheet: s.get::<usize>("sheet")? - 1,
-                rect: [s.get("x")?, s.get("y")?, s.get("w")?, s.get("h")?],
-            }))
-        };
-        Ok([sprite(1)?, sprite(2)?])
+        (1..=n).map(|i| sprite(list.get(i)?)).collect()
     };
+    let three = |key| -> mlua::Result<[Option<Sprite>; 3]> {
+        let v = list(key, 3)?;
+        Ok([v[0], v[1], v[2]])
+    };
+    let effect = list("effect", 2)?;
     Ok(NodeArt {
-        icon: pair("icon")?,
-        frame: pair("frame")?,
+        base: three("base")?,
+        overlay: three("overlay")?,
+        effect: [effect[0], effect[1]],
+        hover: sprite(art.get("hover")?)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn colour_codes_read_as_pob_writes_them() {
+        assert_eq!(super::colour_code("^xBB6600"), [0xbb, 0x66, 0x00]);
+        assert_eq!(super::colour_code("^x2222CC"), [0x22, 0x22, 0xcc]);
+        assert_eq!(super::colour_code("^7"), [255, 255, 255]);
+    }
 }

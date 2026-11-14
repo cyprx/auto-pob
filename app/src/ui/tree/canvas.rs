@@ -4,8 +4,9 @@
 use super::TreeTab;
 use super::geometry::{MIN_HIT_POINTS, arc_points, node_radius};
 use super::overlays::{self, ALLOCATED, Legend};
+use super::scene;
 use crate::engine::{
-    CompareOnlyNode, NodePower, NodeTooltip, Sprite, TooltipLine, TreeLayout, TreeNode, TreeState,
+    CompareOnlyNode, NodePower, NodeTooltip, TooltipLine, TreeLayout, TreeNode, TreeState,
 };
 use crate::theme;
 use crate::widgets::tooltip_ui;
@@ -32,26 +33,18 @@ pub enum CanvasAction {
 /// An uploaded sprite sheet: its texture and size in pixels.
 type Sheet = (egui::TextureId, Vec2);
 
+/// A connection in the socket viewer's plain drawing
 const EDGE: Color32 = Color32::from_rgb(72, 62, 50);
-const HOVER: Color32 = Color32::WHITE;
-/// A node allocated in the compared spec only: PoB tints its art green (`SetDrawColor(0, 1, 0)`)
-const COMPARE_ONLY: Color32 = Color32::from_rgb(0, 255, 0);
-/// The nodes a click would allocate
-const PATH: Color32 = Color32::from_rgb(120, 200, 255);
-/// The nodes a click would deallocate
-const DROP: Color32 = Color32::from_rgb(230, 80, 70);
-/// Below this many screen points, icons are unreadable and plain dots are drawn instead
-const MIN_ICON_SIZE: f32 = 8.0;
-/// PoB draws sprites at their pixel size times this, in tree units (`PassiveTreeView:DrawAsset`)
-const SPRITE_SCALE: f32 = 1.33 * 2.0;
 /// A search ring snapped to the view's edge is this much smaller (PoB's `scaled_down_ratio`)
 const EDGE_RING_SCALE: f32 = 0.6667;
-/// Nodes of ascendancies other than the build's are drawn this faint, as PoB does
-/// (`PassiveTreeView:Draw`, `renderGroup`: `SetDrawColor(1, 1, 1, 0.50)`)
-const OTHER_ASCENDANCY: f32 = 0.5;
-/// Connectors of ascendancies other than the build's are drawn this grey
-/// (`SetDrawColor(0.75, 0.75, 0.75)`, PassiveTreeView.lua:710-711)
-const CONNECTOR_FADE: f32 = 0.75;
+/// How far a snapped search ring may stick out past the view's edge (PoB's `peekaboo_ratio`)
+const PEEKABOO: f32 = 1.15;
+/// PoB shows the ascendancies' flavour text from this zoom on (PassiveTreeView.lua:612)
+const FLAVOUR_MIN_ZOOM: f32 = 2.5;
+/// PoB's flavour text size at a scale of 1 (PassiveTreeView.lua:611)
+const FLAVOUR_SIZE: f32 = 52.0;
+/// While jewel rings turn, the canvas is redrawn this often
+const RING_FRAME_MS: u64 = 200;
 
 pub fn show(
     ui: &mut egui::Ui,
@@ -102,143 +95,76 @@ pub fn show(
         actions.push(CanvasAction::Hover(hover_id));
     }
 
-    // the nodes a click on the hovered one would add or drop
-    let (highlight, highlight_colour) = match hovered_id {
-        // with Shift held the trace is the path, and nothing is a dependent
-        // (PassiveTreeView.lua:328-363)
-        _ if shift => (Some(&tab.trace), PATH),
-        Some(id) if tab.derived.allocated.contains(&id) => (tab.derived.depends.get(&id), DROP),
-        Some(id) => (tab.derived.paths.get(&id), PATH),
-        None => (None, PATH),
-    };
-    let highlight: HashSet<u32> = highlight.into_iter().flatten().copied().collect();
-    let fade = |node: &TreeNode| match &node.ascendancy {
-        Some(a) if !tab.derived.is_chosen(a) => OTHER_ASCENDANCY,
-        _ => 1.0,
-    };
-
-    // connections
-    for &(a, b) in &layout.edges {
-        let (na, nb) = (&layout.nodes[a], &layout.nodes[b]);
-        let (pa, pb) = (to_screen(na.pos), to_screen(nb.pos));
-        if !visible.contains(pa) && !visible.contains(pb) {
-            continue;
-        }
-        let on_highlight = highlight.contains(&na.id) && highlight.contains(&nb.id);
-        let colour = if on_highlight {
-            highlight_colour
-        } else if tab.derived.allocated.contains(&na.id) && tab.derived.allocated.contains(&nb.id) {
-            ALLOCATED
-        } else {
-            EDGE
-        };
-        let dependent = on_highlight && highlight_colour == DROP;
-        let colour = connector_shade(
-            colour,
-            na.ascendancy.as_deref(),
-            tab.derived.current_ascendancy.as_deref(),
-            dependent,
-        );
-        let stroke = Stroke::new((6.0 * zoom).clamp(1.0, 4.0), colour);
-        match arc_center(na, nb) {
-            Some(center) => {
-                painter.line(arc_points(center, na.pos, nb.pos, zoom, to_screen), stroke)
-            }
-            None => painter.line_segment([pa, pb], stroke),
-        };
-    }
-
-    // nodes
+    // what PoB draws with: the hovered node's path and dependents (PassiveTreeView.lua:323-376)
+    let hover_sets = scene::hover_sets(
+        hovered_id,
+        shift.then_some(tab.trace.as_slice()),
+        &tab.draw_sets,
+        &tab.derived.paths,
+        &tab.derived.depends,
+    );
     // P shows the map before any stat was chosen: damage against defence
     let heat_on = state.heatmap.is_some() || state.heatmap_shown;
+    let tree_view = Rect::from_min_max(
+        camera.to_tree(rect, rect.min).into(),
+        camera.to_tree(rect, rect.max).into(),
+    );
+    let now = ui.input(|i| i.time);
+    let look = scene::Look {
+        hover: hovered_id,
+        path: hover_sets.path.as_ref(),
+        deps: &hover_sets.deps,
+        trace_end: shift.then(|| tab.trace.last().copied()).flatten(),
+        heat: heat_on.then_some(power.map(|p| (p, &tab.power_index))),
+        power_theme: tab.power_theme,
+        view: tree_view,
+        pob_zoom: pob_zoom(zoom, layout.size, rect),
+        time_ms: (!tab.animations_off).then_some(now * 1000.0),
+    };
+    let images = scene::build(layout, state, &tab.draw_sets, &tab.index, &look);
+    paint(
+        &painter,
+        &sheets,
+        &images,
+        rect,
+        camera,
+        !tab.edge_search_off,
+    );
+    if !tab.animations_off
+        && images
+            .iter()
+            .any(|i| matches!(i.tag, scene::Tag::JewelRing(_)))
+    {
+        // the jewel rings turn slowly; a few frames a second follow them
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(RING_FRAME_MS));
+    }
+    draw_flavour(
+        &painter,
+        layout,
+        &tab.draw_sets,
+        camera,
+        rect,
+        look.pob_zoom,
+    );
+    // a node whose art couldn't be loaded is still shown, as a dot
     for node in &layout.nodes {
+        let art = &node.art;
+        if art.base.iter().chain(&art.overlay).any(Option::is_some) {
+            continue;
+        }
         let pos = to_screen(node.pos);
-        if !visible.contains(pos) {
-            continue;
-        }
-        let radius = (node_radius(&node.kind) * zoom).max(1.5);
-        let is_allocated = tab.derived.allocated.contains(&node.id);
-        let fade = fade(node);
-        let on_path = highlight.contains(&node.id);
-
-        if let Some(rgb) = tab.derived.compare.get(&node.id) {
-            overlays::draw_compare_tint(&painter, pos, radius, *rgb);
-        }
-        let glow = power
-            .filter(|_| {
-                heat_on
-                    && !is_allocated
-                    && !matches!(node.kind.as_str(), "ClassStart" | "AscendClassStart")
-            })
-            .and_then(|p| {
-                let entry = &p.nodes[*tab.power_index.get(&node.id)?];
-                overlays::heat_color(p, entry, tab.power_theme)
-            });
-        if let Some(colour) = glow {
-            painter.circle_filled(pos, radius * 1.4, colour);
-        }
-
-        let state_ix = usize::from(is_allocated);
-        let icon = node.art.icon[state_ix]
-            .and_then(|sprite| Some((sprite, sheets.get(sprite.sheet).copied().flatten()?)));
-        match icon {
-            Some((sprite, sheet)) if sprite_size(sprite, zoom).x >= MIN_ICON_SIZE => {
-                let tint = Color32::WHITE.gamma_multiply(fade);
-                draw_sprite(&painter, sheet, sprite, pos, zoom, tint);
-                let frame = node.art.frame[state_ix]
-                    .and_then(|s| Some((s, sheets.get(s.sheet).copied().flatten()?)));
-                if let Some((frame, sheet)) = frame {
-                    draw_sprite(&painter, sheet, frame, pos, zoom, tint);
-                }
-            }
-            _ => {
-                let fill = if is_allocated {
-                    ALLOCATED
-                } else if on_path {
-                    highlight_colour
-                } else {
-                    kind_color(&node.kind)
-                };
-                painter.circle_filled(pos, radius, fill.gamma_multiply(fade));
-                if matches!(node.kind.as_str(), "Notable" | "Keystone") {
-                    painter.circle_stroke(pos, radius, Stroke::new(1.0, Color32::from_gray(160)));
-                }
-            }
-        }
-        if on_path {
-            painter.circle_stroke(pos, radius + 1.5, Stroke::new(1.5, highlight_colour));
-        }
-        // with the edge option on, a match outside the view is drawn snapped, below
-        if tab.derived.matches.contains(&node.id) && (tab.edge_search_off || rect.contains(pos)) {
-            overlays::draw_search_ring(&painter, pos, radius);
+        if visible.contains(pos) {
+            let colour = if tab.derived.allocated.contains(&node.id) {
+                ALLOCATED
+            } else {
+                kind_color(&node.kind)
+            };
+            painter.circle_filled(pos, (node_radius(&node.kind) * zoom).max(1.5), colour);
         }
     }
-    // the compared spec's own nodes, green as PoB tints them (PassiveTreeView.lua:1102-1140)
-    for node in &state.compare_only {
-        let pos = to_screen([node.x, node.y]);
-        if !visible.contains(pos) {
-            continue;
-        }
-        let radius = (node_radius(&node.kind) * zoom).max(1.5);
-        let art = |s: Option<crate::engine::LuaSprite>| {
-            let sprite = s?.sprite()?;
-            Some((sprite, sheets.get(sprite.sheet).copied().flatten()?))
-        };
-        let icon = node.art.as_ref().and_then(|a| art(a.icon));
-        let frame = node.art.as_ref().and_then(|a| art(a.frame));
-        match icon.or(frame) {
-            Some((sprite, _)) if sprite_size(sprite, zoom).x >= MIN_ICON_SIZE => {
-                for (sprite, sheet) in [icon, frame].into_iter().flatten() {
-                    draw_sprite(&painter, sheet, sprite, pos, zoom, COMPARE_ONLY);
-                }
-            }
-            _ => {
-                painter.circle_filled(pos, radius, COMPARE_ONLY);
-            }
-        }
-    }
-    // PoB draws no hover ring on one, and no tooltip for a mastery without effects
-    // (PassiveTreeView.lua:1143)
+    // PoB draws no hover ring on a compare-only node, and no tooltip for a mastery without
+    // effects (PassiveTreeView.lua:1143)
     if let Some(node) = compare_hover.filter(|n| n.kind != "Mastery" || n.mastery_effects) {
         let reply = tab
             .tooltip
@@ -257,38 +183,9 @@ pub fn show(
                 }
             });
     }
-    // PoB's "Show search circles at viewport edge": a match outside the view shows as a
-    // smaller ring at the edge nearest to it (PassiveTreeView.lua:1017-1031)
-    if !tab.edge_search_off {
-        for &id in &tab.derived.matches {
-            let Some(&i) = tab.index.get(&id) else {
-                continue;
-            };
-            let node = &layout.nodes[i];
-            let pos = to_screen(node.pos);
-            if rect.contains(pos) {
-                continue;
-            }
-            let radius = (node_radius(&node.kind) * zoom).max(1.5) * EDGE_RING_SCALE;
-            // PoB lets the ring overhang the edge a little (its `peekaboo_ratio` 1.15)
-            let inset = radius * 0.13;
-            let at = egui::pos2(
-                pos.x.clamp(rect.left() + inset, rect.right() - inset),
-                pos.y.clamp(rect.top() + inset, rect.bottom() - inset),
-            );
-            overlays::draw_search_ring(&painter, at, radius);
-        }
-    }
-
-    for jewel in &state.jewels {
-        if let Some(&i) = tab.index.get(&jewel.node) {
-            let pos = to_screen(layout.nodes[i].pos);
-            overlays::draw_jewel_ring(&painter, visible, pos, jewel, zoom);
-        }
-    }
 
     if let Some((id, start)) = tab.pulse {
-        let age = ui.input(|i| i.time) - start;
+        let age = now - start;
         match tab.index.get(&id) {
             Some(&i) if age < super::PULSE_SECONDS => {
                 let node = &layout.nodes[i];
@@ -317,8 +214,6 @@ pub fn show(
         return actions;
     };
     let node = &layout.nodes[i];
-    let radius = (node_radius(&node.kind) * zoom).max(1.5);
-    painter.circle_stroke(to_screen(node.pos), radius + 2.0, Stroke::new(2.0, HOVER));
 
     let has_options = state
         .mastery_options
@@ -516,8 +411,11 @@ fn upload_sheets(
                     // serves one UI), so this can't happen; the sprites would be left out, as
                     // for a sheet that couldn't be loaded
                     let image = egui::ColorImage::from_rgba_unmultiplied(sheet.size, &rgba?);
-                    let options = egui::TextureOptions::LINEAR
+                    let mut options = egui::TextureOptions::LINEAR
                         .with_mipmap_mode(Some(egui::TextureFilter::Linear));
+                    if repeats(&sheet.path) {
+                        options.wrap_mode = egui::TextureWrapMode::Repeat;
+                    }
                     slot.insert(ctx.load_texture(sheet.path.display().to_string(), image, options))
                 }
             };
@@ -527,6 +425,18 @@ fn upload_sheets(
             ))
         })
         .collect()
+}
+
+/// Whether a file's art repeats across what it is drawn on: the line connectors along a
+/// line, the background across the view
+fn repeats(path: &std::path::Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    name.contains("LineConnector")
+        || name.contains("line-connector")
+        || name.starts_with("Background")
 }
 
 /// PoB's small view of a jewel socket's place in the tree (ItemSlotHelper.DrawViewer): the
@@ -622,50 +532,139 @@ fn compare_only_at(nodes: &[CompareOnlyNode], at: [f32; 2], zoom: f32) -> Option
         .map(|(n, _)| n)
 }
 
-/// A connector's colour after PoB's fade (renderConnector, PassiveTreeView.lua:708-712): a
-/// connector of an ascendancy other than the build's is drawn at 0.75 grey, a chosen bloodline's
-/// too (its `ascendancyName` is never `curAscendClassBaseName`). A connector between dependents
-/// of the hovered node stays red.
-fn connector_shade(
-    colour: Color32,
-    ascendancy: Option<&str>,
-    current: Option<&str>,
-    dependent: bool,
-) -> Color32 {
-    match ascendancy {
-        Some(a) if !dependent && Some(a) != current => {
-            let grey = |c: u8| (f32::from(c) * CONNECTOR_FADE).round() as u8;
-            Color32::from_rgba_premultiplied(
-                grey(colour.r()),
-                grey(colour.g()),
-                grey(colour.b()),
-                colour.a(),
-            )
-        }
-        _ => colour,
+/// PoB's `zoom` for a view: its scale is the view's smaller side over `tree.size`, times the
+/// zoom (PassiveTreeView.lua:271)
+pub fn pob_zoom(zoom: f32, tree_size: f32, view: Rect) -> f32 {
+    let side = view.width().min(view.height());
+    if side > 0.0 {
+        zoom * tree_size / side
+    } else {
+        1.0
     }
 }
 
-/// On-screen size of a sprite at the given zoom.
-fn sprite_size(sprite: Sprite, zoom: f32) -> Vec2 {
-    Vec2::new(sprite.rect[2], sprite.rect[3]) * SPRITE_SCALE * zoom
+/// Where PoB draws a search ring of `size` (half its width) around `at` with "Show search
+/// circles at viewport edge" on: unmoved while it fits, else held at the edge and smaller
+/// (PassiveTreeView.lua:1017-1031). Returns the ring's top-left corner and half width.
+pub fn snap_search_ring(at: Pos2, size: f32, view: Rect) -> (Pos2, f32) {
+    let clamp = |v: f32, lo: f32, hi: f32| v.max(lo).min(hi);
+    let x = clamp(
+        at.x - size,
+        view.left() - size / PEEKABOO,
+        view.right() - size * PEEKABOO,
+    );
+    let y = clamp(
+        at.y - size,
+        view.top() - size / PEEKABOO,
+        view.bottom() - size * PEEKABOO,
+    );
+    if x != at.x - size || y != at.y - size {
+        let size = size * EDGE_RING_SCALE;
+        (Pos2::new(x + size / 2.0, y + size / 2.0), size)
+    } else {
+        (Pos2::new(x, y), size)
+    }
 }
 
-fn draw_sprite(
+/// Draws the scene's images, each run of one texture in one mesh
+fn paint(
     painter: &egui::Painter,
-    (texture, sheet_size): Sheet,
-    sprite: Sprite,
-    pos: Pos2,
-    zoom: f32,
-    tint: Color32,
+    sheets: &[Option<Sheet>],
+    images: &[scene::Image],
+    rect: Rect,
+    camera: super::geometry::Camera,
+    edge_search: bool,
 ) {
-    let [x, y, w, h] = sprite.rect;
-    let uv = Rect::from_min_size(
-        Pos2::new(x / sheet_size.x, y / sheet_size.y),
-        Vec2::new(w / sheet_size.x, h / sheet_size.y),
-    );
-    let rect = Rect::from_center_size(pos, sprite_size(sprite, zoom));
-    painter.image(texture, rect, uv, tint);
+    let mut mesh = egui::Mesh::default();
+    let flush = |mesh: &mut egui::Mesh| {
+        if !mesh.is_empty() {
+            painter.add(egui::Shape::mesh(std::mem::take(mesh)));
+        }
+    };
+    for image in images {
+        let Some((texture, size)) = sheets.get(image.sprite.sheet).copied().flatten() else {
+            continue;
+        };
+        let mut quad = image.quad.map(|c| camera.to_screen(rect, c.into()));
+        if edge_search && matches!(image.tag, scene::Tag::SearchRing(_)) {
+            let half = (quad[1].x - quad[0].x) / 2.0;
+            let (min, half) =
+                snap_search_ring(camera.to_screen(rect, image.anchor.into()), half, rect);
+            let max = min + Vec2::splat(half * 2.0);
+            quad = [min, Pos2::new(max.x, min.y), max, Pos2::new(min.x, max.y)];
+        }
+        let bounds = Rect::from_points(&quad);
+        if !bounds.intersects(rect) {
+            continue;
+        }
+        if mesh.texture_id != texture {
+            flush(&mut mesh);
+            mesh.texture_id = texture;
+        }
+        let [x, y, w, h] = image.sprite.rect;
+        let uv = |u: Vec2| Pos2::new((x + u.x * w) / size.x, (y + u.y * h) / size.y);
+        let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let [r, g, b, a] = image.tint;
+        let colour = Color32::from_rgba_unmultiplied(c(r), c(g), c(b), c(a));
+        let first = mesh.vertices.len() as u32;
+        for (pos, u) in quad.iter().zip(image.uv) {
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: *pos,
+                uv: uv(u),
+                color: colour,
+            });
+        }
+        mesh.indices
+            .extend([first, first + 1, first + 2, first, first + 2, first + 3]);
+    }
+    flush(&mut mesh);
+}
+
+/// The ascendancies' flavour text, zoomed in far enough, at half strength for one that isn't
+/// the build's (PassiveTreeView.lua:597-621)
+fn draw_flavour(
+    painter: &egui::Painter,
+    layout: &TreeLayout,
+    sets: &scene::DrawSets,
+    camera: super::geometry::Camera,
+    rect: Rect,
+    pob_zoom: f32,
+) {
+    if pob_zoom < FLAVOUR_MIN_ZOOM {
+        return;
+    }
+    for group in &layout.groups {
+        let (Some(flavour), Some(asc)) = (&group.flavour, &group.ascendancy) else {
+            continue;
+        };
+        let at = camera.to_screen(rect, [flavour.x, flavour.y]);
+        if !rect.expand(rect.width()).contains(at) {
+            continue;
+        }
+        let chosen = Some(asc) == sets.ascendancy.as_ref() || Some(asc) == sets.bloodline.as_ref();
+        let channel = |i: usize| {
+            let v = flavour
+                .colour
+                .get(i..i + 2)
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+                .unwrap_or(255);
+            if chosen { v } else { v / 2 }
+        };
+        let colour = Color32::from_rgb(channel(0), channel(2), channel(4));
+        let mut job = egui::text::LayoutJob::default();
+        job.append(
+            &flavour.text,
+            0.0,
+            egui::TextFormat {
+                font_id: egui::FontId::proportional(FLAVOUR_SIZE * camera.zoom),
+                color: colour,
+                italics: true,
+                ..Default::default()
+            },
+        );
+        let galley = painter.layout_job(job);
+        painter.galley(at, galley, colour);
+    }
 }
 
 fn kind_color(kind: &str) -> Color32 {
@@ -721,6 +720,42 @@ mod tests {
         ))
     }
 
+    /// PassiveTreeView.lua:1017-1031: a ring that fits stays; one past an edge is held there,
+    /// two thirds the size, sticking out by PoB's `peekaboo_ratio`
+    #[test]
+    fn search_rings_snap_to_the_edge_as_pobs() {
+        let view = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        assert_eq!(
+            snap_search_ring(Pos2::new(400.0, 300.0), 20.0, view),
+            (Pos2::new(380.0, 280.0), 20.0)
+        );
+        // off the right bottom
+        let (at, size) = snap_search_ring(Pos2::new(1000.0, 900.0), 30.0, view);
+        assert!((size - 20.001).abs() < 1e-3, "{size}");
+        assert!(
+            (at.x - (800.0 - 30.0 * PEEKABOO + size / 2.0)).abs() < 1e-3,
+            "{at:?}"
+        );
+        assert!(
+            (at.y - (600.0 - 30.0 * PEEKABOO + size / 2.0)).abs() < 1e-3,
+            "{at:?}"
+        );
+        // off the left only
+        let (at, size) = snap_search_ring(Pos2::new(-200.0, 300.0), 30.0, view);
+        assert!(
+            (at.x - (-30.0 / PEEKABOO + size / 2.0)).abs() < 1e-3,
+            "{at:?}"
+        );
+        assert!((at.y - (270.0 + size / 2.0)).abs() < 1e-3, "{at:?}");
+        // a view smaller than the ring doesn't panic
+        snap_search_ring(
+            Pos2::new(5.0, 5.0),
+            30.0,
+            Rect::from_min_size(Pos2::ZERO, Vec2::splat(2.0)),
+        );
+        assert!((pob_zoom(0.5, 20_000.0, view) - 0.5 * 20_000.0 / 600.0).abs() < 1e-3);
+    }
+
     fn compare_only(id: u32, x: f32, kind: &str) -> CompareOnlyNode {
         CompareOnlyNode {
             id,
@@ -747,30 +782,6 @@ mod tests {
         // zoomed out, 6 points reach 300 tree units
         assert_eq!(at(250.0, 0.02), Some(2));
         assert_eq!(at(400.0, 0.02), None);
-    }
-
-    /// PoB fades every connector of an ascendancy that isn't the build's, a chosen bloodline's
-    /// included, unless it joins dependents of the hovered node (PassiveTreeView.lua:705-712)
-    #[test]
-    fn connectors_fade_outside_the_builds_ascendancy() {
-        let c = Color32::from_rgb(200, 100, 40);
-        let faded = Color32::from_rgb(150, 75, 30);
-        assert_eq!(connector_shade(c, None, Some("Raider"), false), c);
-        assert_eq!(connector_shade(c, Some("Raider"), Some("Raider"), false), c);
-        assert_eq!(
-            connector_shade(c, Some("Deadeye"), Some("Raider"), false),
-            faded
-        );
-        // the chosen bloodline's connectors stay faded, though its nodes don't
-        assert_eq!(
-            connector_shade(c, Some("Trialmaster"), Some("Raider"), false),
-            faded
-        );
-        assert_eq!(connector_shade(c, Some("Raider"), None, false), faded);
-        assert_eq!(
-            connector_shade(DROP, Some("Deadeye"), Some("Raider"), true),
-            DROP
-        );
     }
 
     #[test]

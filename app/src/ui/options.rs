@@ -59,6 +59,8 @@ pub struct UiEffects {
     pub power_theme: crate::ui::tree::overlays::PowerTheme,
     /// "Show search circles at viewport edge" (`edgeSearchHighlight`, on in PoB by default)
     pub edge_search: bool,
+    /// "Show Animations" (`showAnimations`, on in PoB by default): the tree's jewel rings turn
+    pub animations: bool,
 }
 
 impl Default for UiEffects {
@@ -68,6 +70,7 @@ impl Default for UiEffects {
             show_title: false,
             power_theme: Default::default(),
             edge_search: true,
+            animations: true,
         }
     }
 }
@@ -92,6 +95,7 @@ pub fn ui_effects(rows: &[SettingRow]) -> UiEffects {
             value("nodePowerTheme").unwrap_or_default(),
         ),
         edge_search: value("edgeSearchHighlight") != Some("false"),
+        animations: value("showAnimations") != Some("false"),
     }
 }
 
@@ -868,11 +872,20 @@ mod tests {
                 "false",
                 SettingEffect::Ui,
             ),
+            row(
+                "showAnimations",
+                "showAnimations",
+                "false",
+                SettingEffect::Ui,
+            ),
         ]);
         assert_eq!(fx.power_theme, PowerTheme::RedGreen);
         assert!(!fx.edge_search);
+        // the jewel rings stand still (PassiveTreeView.lua:1250-1255)
+        assert!(!fx.animations);
         // PoB's defaults
         assert_eq!(ui_effects(&[]).power_theme, PowerTheme::RedBlue);
         assert!(ui_effects(&[]).edge_search);
+        assert!(ui_effects(&[]).animations);
     }
 }

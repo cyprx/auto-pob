@@ -548,13 +548,12 @@ fn a_jewel_slot_shows_the_socket_viewer() {
         stats: Vec::new(),
         orbit: None,
         group_center: None,
-        art: NodeArt {
-            icon: [None, None],
-            frame: [None, None],
-        },
+        art: NodeArt::default(),
         ascendancy: None,
         replaceable: false,
         mastery_effects: false,
+        in_radius: false,
+        radius_socket: false,
     };
     let mut view = sample();
     view.slots.last_mut().unwrap().node = Some(5);
@@ -565,6 +564,12 @@ fn a_jewel_slot_shows_the_socket_viewer() {
             nodes: vec![node(5, 0.0), node(6, 300.0), node(7, 9000.0)],
             edges: vec![(0, 1)],
             sheets: Vec::new(),
+            connectors: vec![],
+            groups: vec![],
+            class_art: vec![],
+            assets: Default::default(),
+            size: 1.0,
+            jewel_radii: vec![],
             key: String::new(),
         }),
         allocated: Arc::new([5].into_iter().collect()),

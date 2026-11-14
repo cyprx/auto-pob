@@ -53,16 +53,26 @@ impl PowerTheme {
 /// there is nothing to show.
 pub fn heat_color(power: &NodePower, entry: &NodePowerEntry, theme: PowerTheme) -> Option<Color32> {
     let channel = |v: f32| (v * 255.0).round() as u8;
+    let [r, g, b] = heat_rgb(power, Some(entry), theme);
+    (r.max(g).max(b) > 0.02).then(|| Color32::from_rgb(channel(r), channel(g), channel(b)))
+}
+
+/// The colour PoB draws an unallocated node's art with while the heat map is on
+/// (PassiveTreeView.lua:907-934); a node without an entry has no power
+pub fn heat_rgb(power: &NodePower, entry: Option<&NodePowerEntry>, theme: PowerTheme) -> [f32; 3] {
+    let single = entry.map_or(0.0, |e| e.single);
+    let offence = entry.and_then(|e| e.offence).unwrap_or(0.0);
+    let defence = entry.and_then(|e| e.defence).unwrap_or(0.0);
     let (r, g, b) = if power.stat.is_some() {
-        let stat = heat_strength(entry.single, power.max_single);
+        let stat = heat_strength(single, power.max_single);
         match theme {
             PowerTheme::RedBlue => (stat, 0.0, 0.0),
             PowerTheme::RedGreen => (0.0, stat, 0.0),
             PowerTheme::GreenBlue => (0.0, 0.0, stat),
         }
     } else {
-        let dps = heat_strength(entry.offence.unwrap_or(0.0), power.max_offence);
-        let def = heat_strength(entry.defence.unwrap_or(0.0), power.max_defence);
+        let dps = heat_strength(offence, power.max_offence);
+        let def = heat_strength(defence, power.max_defence);
         let mix = ((dps - 0.5).max(0.0) + (def - 0.5).max(0.0)) / 2.0;
         match theme {
             PowerTheme::RedBlue => (dps, mix, def),
@@ -70,7 +80,7 @@ pub fn heat_color(power: &NodePower, entry: &NodePowerEntry, theme: PowerTheme) 
             PowerTheme::GreenBlue => (mix, dps, def),
         }
     };
-    (r.max(g).max(b) > 0.02).then(|| Color32::from_rgb(channel(r), channel(g), channel(b)))
+    [r, g, b]
 }
 
 pub fn draw_search_ring(painter: &Painter, pos: Pos2, radius: f32) {

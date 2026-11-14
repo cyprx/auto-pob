@@ -6,6 +6,7 @@ pub mod geometry;
 mod keys;
 pub mod overlays;
 pub mod power_report;
+pub mod scene;
 pub mod toolbar;
 
 use crate::engine::{
@@ -71,8 +72,6 @@ pub(super) struct Derived {
     pub allocated: Arc<HashSet<u32>>,
     pub paths: HashMap<u32, Vec<u32>>,
     pub depends: HashMap<u32, Vec<u32>>,
-    pub matches: HashSet<u32>,
-    pub compare: HashMap<u32, [f32; 3]>,
     /// The id (not the label) nodes of the build's ascendancy carry
     pub current_ascendancy: Option<String>,
     /// The id the chosen bloodline's nodes carry
@@ -90,13 +89,7 @@ impl Derived {
 
 impl Derived {
     fn new(state: &TreeState) -> Self {
-        let current_ascendancy = state
-            .classes
-            .iter()
-            .find(|c| c.id == state.class_id)
-            .and_then(|c| c.ascendancies.iter().find(|a| a.id == state.ascendancy_id))
-            .filter(|a| a.id != 0)
-            .map(|a| a.ascend_id.clone());
+        let current_ascendancy = scene::ascendancy_of(state);
         Self {
             allocated: Arc::new(state.allocated.iter().copied().collect()),
             paths: state
@@ -109,8 +102,6 @@ impl Derived {
                 .iter()
                 .map(|p| (p.node, p.path.clone()))
                 .collect(),
-            matches: state.search_matches.iter().copied().collect(),
-            compare: state.compare.iter().map(|c| (c.node, c.rgb)).collect(),
             current_ascendancy,
             bloodline: state.bloodline.clone(),
         }
@@ -145,6 +136,10 @@ pub struct TreeTab {
     /// Node id to index in the layout
     pub(super) index: HashMap<u32, usize>,
     pub(super) derived: Derived,
+    /// What the drawing looks up in the state
+    pub(super) draw_sets: scene::DrawSets,
+    /// PoB's "Show Animations" is off: jewel rings stand still
+    pub(super) animations_off: bool,
     /// Node id to index in `power.nodes`
     pub(super) power_index: HashMap<u32, usize>,
     /// Uploaded sprite sheets, by file
@@ -236,11 +231,17 @@ impl TreeTab {
         commands
     }
 
-    /// PoB's options the canvas follows: the heat map's colours and whether search matches
-    /// outside the view show at its edge
-    pub fn set_ui_settings(&mut self, theme: overlays::PowerTheme, edge_search: bool) {
+    /// PoB's options the canvas follows: the heat map's colours, whether search matches
+    /// outside the view show at its edge, and whether the jewel rings turn
+    pub fn set_ui_settings(
+        &mut self,
+        theme: overlays::PowerTheme,
+        edge_search: bool,
+        animations: bool,
+    ) {
         self.power_theme = theme;
         self.edge_search_off = !edge_search;
+        self.animations_off = !animations;
         self.toolbar.power_theme = theme;
     }
 
@@ -361,6 +362,8 @@ impl TreeTab {
             }
             Snapshot::Tree(state) => {
                 self.derived = Derived::new(state);
+                self.draw_sets =
+                    scene::DrawSets::new(state, self.derived.current_ascendancy.clone());
                 // the hovered node's tooltip may read differently now
                 self.previewed = None;
                 if self.picker.is_some_and(|n| !has_options(state, n)) {
@@ -1754,54 +1757,6 @@ mod tests {
         h.frame(vec![]);
         assert!(press(&mut h, "export_shrink").commands.is_empty());
         assert!(h.tab.has_dialog());
-    }
-
-    #[test]
-    fn a_search_match_off_screen_snaps_to_the_edge() {
-        // PassiveTreeView.lua:1017-1031: with the option on (PoB's default) a match outside
-        // the view shows at its edge; with it off, nowhere
-        let rings = |edge: bool| {
-            let (l, s) = sample();
-            let mut state = (*s).clone();
-            state.search_matches = vec![4];
-            let mut h = Harness::new(l, Arc::new(state));
-            h.tab.set_ui_settings(overlays::PowerTheme::RedBlue, edge);
-            h.frame(vec![]);
-            // node 4 at (600, 600) just off the view's right bottom
-            let rect = h.tab.rect.unwrap();
-            h.tab.camera.zoom = 0.5;
-            h.tab.camera.center =
-                egui::vec2(600.0, 600.0) - (rect.size() / 2.0 + egui::vec2(20.0, 20.0)) / 0.5;
-            let input = RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
-                time: Some(h.time + 1.0),
-                ..Default::default()
-            };
-            let mut output = h.ctx.run_ui(input, |ui| {
-                h.tab.show(ui, false);
-            });
-            output.textures_delta.clear();
-            let mut found = Vec::new();
-            fn walk(shape: &egui::Shape, out: &mut Vec<Pos2>) {
-                match shape {
-                    egui::Shape::Circle(c) if c.stroke.color == overlays::SEARCH_RING => {
-                        out.push(c.center)
-                    }
-                    egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
-                    _ => {}
-                }
-            }
-            output
-                .shapes
-                .iter()
-                .for_each(|c| walk(&c.shape, &mut found));
-            (found, rect)
-        };
-        let (found, rect) = rings(true);
-        assert_eq!(found.len(), 1, "{found:?}");
-        assert!(rect.expand(1.0).contains(found[0]), "{found:?} {rect:?}");
-        let (found, rect) = rings(false);
-        assert!(found.iter().all(|p| !rect.contains(*p)), "{found:?}");
     }
 
     #[test]

@@ -3,64 +3,369 @@
 
 glue = glue or {}
 
--- Sprite sheets used by glue.tree_layout(), as paths relative to the PoB folder.
+-- Image files used by glue.tree_layout(), as paths relative to the PoB folder: sprite sheets
+-- and the whole files PoB loads as tree assets.
 local sheets, sheetIndex
 
--- Looks up a sprite the way PoB's PassiveTree does, returning its sheet and pixel
--- rectangle. PoB's own UVs can't be used: headless images report a 1x1 size.
--- While set, a sprite on a sheet the last layout didn't send is left out
+-- While set, art on a file the last layout didn't send is left out
 local sheetsFrozen = false
 
-local function sprite(spriteType, name)
-	local tree = pob.build.spec.tree
-	local data = tree.skillSprites[spriteType]
-	if not data or not name then
+-- ---- The tree view's art ----
+-- Every image PassiveTreeView:Draw draws comes from one of PoB's tables: a sprite of a sheet
+-- (a `spriteMap` entry, and the assets PoB takes from those), a sprite of a legion sheet, or a
+-- whole file (the rest of `tree.assets`, loaded by PassiveTree:LoadImage). Headless images are
+-- 1x1, so PoB's own sizes and texture coordinates can't be used: each table is looked up here
+-- for its file and pixel rectangle. A whole file has no rectangle; the host reads its size.
+
+-- tree -> { [PoB's table] = { path, x, y, w, h } }
+local artIndexes = setmetatable({}, { __mode = "k" })
+
+local function last(v)
+	return type(v) == "table" and v[#v] or v
+end
+
+-- The file PassiveTree:LoadImage loads for a tree asset (PassiveTree.lua:883-904)
+local function asset_file(tree, name)
+	local path = "TreeData/" .. name .. ".png"
+	local file = io.open(path, "r")
+	if file then
+		file:close()
+		return path
+	end
+	return "TreeData/" .. tree.treeVersion .. "/" .. name .. ".png"
+end
+
+local function art_index(tree)
+	local index = artIndexes[tree]
+	if index then
+		return index
+	end
+	index = {}
+	-- the sprite sheets, at the zoom PoB loads (PassiveTree.lua:273-305)
+	local versionNum = treeVersions[tree.treeVersion].num
+	for spriteType, data in pairs(tree.skillSprites) do
+		local maxZoom = data
+		if tree.imageZoomLevels then
+			maxZoom = versionNum >= 3.19 and (data[0.3835] or data[1]) or data[#data]
+		end
+		local path = "TreeData/" .. tree.treeVersion .. "/" .. maxZoom.filename:gsub("%?%x+$", ""):gsub(".*/", "")
+		for name, coords in pairs(maxZoom.coords) do
+			local sprite = tree.spriteMap[name] and tree.spriteMap[name][spriteType]
+			if sprite then
+				index[sprite] = { path = path, x = last(coords.x), y = last(coords.y), w = last(coords.w), h = last(coords.h) }
+			end
+		end
+	end
+	-- the legion sheets (PassiveTree.lua:365-412)
+	local legion = LoadModule("TreeData/legion/tree-legion.lua")
+	for _, data in ipairs(legion.treeAssets or {}) do
+		for name, coords in pairs(data.coords) do
+			local asset = tree.assets[name]
+			if asset then
+				index[asset] = { path = "TreeData/legion/" .. data.filename, x = coords.x, y = coords.y, w = coords.w, h = coords.h }
+			end
+		end
+	end
+	for spriteType, data in pairs(legion) do
+		if spriteType ~= "treeAssets" then
+			local maxZoom = data[#data]
+			for name, coords in pairs(maxZoom.coords) do
+				local sprite = tree.spriteMap[name] and tree.spriteMap[name][spriteType]
+				if sprite then
+					index[sprite] = { path = "TreeData/legion/" .. maxZoom.filename, x = coords.x, y = coords.y, w = coords.w, h = coords.h }
+				end
+			end
+		end
+	end
+	-- whole files
+	for name, data in pairs(tree.assets) do
+		if not index[data] then
+			index[data] = { path = asset_file(tree, name) }
+		end
+	end
+	artIndexes[tree] = index
+	return index
+end
+
+-- The file and rectangle of one of PoB's art tables, its file listed in `sheets`; nil for none,
+-- or for a file the layout didn't send while the sheets are frozen
+local function art(tree, data)
+	if not data then
 		return nil
 	end
-	if tree.imageZoomLevels then
-		-- trees with several zoom levels: pick the one PoB draws with
-		data = treeVersions[tree.treeVersion].num >= 3.19 and (data[0.3835] or data[1]) or data[#data]
-	end
-	local coords = data.coords[name]
-	if not coords then
+	local found = art_index(tree)[data]
+	if not found then
 		return nil
 	end
-	-- some coordinates are per-zoom lists; PoB uses the last entry
-	local function last(v)
-		return type(v) == "table" and v[#v] or v
-	end
-	local file = data.filename:gsub("%?%x+$", ""):gsub(".*/", "")
-	if not sheetIndex[file] then
+	if not sheetIndex[found.path] then
 		if sheetsFrozen then
 			return nil
 		end
-		table.insert(sheets, "TreeData/" .. tree.treeVersion .. "/" .. file)
-		sheetIndex[file] = #sheets
+		table.insert(sheets, found.path)
+		sheetIndex[found.path] = #sheets
 	end
-	return { sheet = sheetIndex[file], x = last(coords.x), y = last(coords.y), w = last(coords.w), h = last(coords.h) }
+	return { sheet = sheetIndex[found.path], x = found.x, y = found.y, w = found.w, h = found.h }
 end
 
--- Frames drawn around node icons, by node type (from PoB's PassiveTree nodeOverlay)
-local frames = {
-	Normal = { "PSSkillFrame", "PSSkillFrameActive" },
-	Notable = { "NotableFrameUnallocated", "NotableFrameAllocated" },
-	Keystone = { "KeystoneFrameUnallocated", "KeystoneFrameAllocated" },
-	Socket = { "JewelFrameUnallocated", "JewelFrameAllocated" },
+local function isAbyssConquered(node)
+	local conqueror = node and node.conqueredBy and node.conqueredBy.conqueror
+	return conqueror and conqueror.type and conqueror.type:match("^abyss_") and true or false
+end
+
+local drawStates = { "unalloc", "path", "alloc" }
+
+-- What PassiveTreeView:Draw draws for a node in each of its states (PassiveTreeView.lua:805-904):
+-- `base` and `overlay` as { unalloc, path, alloc }, `effect` as { unallocated, allocated }, and
+-- `hover` the base of a hovered mastery. Which entry is drawn is the host's choice, as Draw's.
+local function nodeArt(node, spec)
+	local tree = spec.tree
+	local assets = tree.assets
+	local function a(data)
+		return art(tree, data)
+	end
+	if node.type == "ClassStart" then
+		return { overlay = { [1] = a(assets.PSStartNodeBackgroundInactive), [2] = a(assets.PSStartNodeBackgroundInactive), [3] = a(assets[node.startArt]) } }
+	elseif node.type == "AscendClassStart" then
+		local overlay = treeVersions[tree.treeVersion].num >= 3.10 and "AscendancyMiddle" or "PassiveSkillScreenAscendancyMiddle"
+		local prefix = node.ascendancyName and tree.bloodlineSpritePrefixes and tree.bloodlineSpritePrefixes[node.ascendancyName]
+		if prefix then
+			overlay = prefix .. overlay
+		end
+		local middle = a(assets[overlay])
+		return { overlay = { [1] = middle, [2] = middle, [3] = middle } }
+	end
+	local result = { base = {}, overlay = {}, effect = {} }
+	if node.type == "Socket" then
+		for i, state in ipairs(drawStates) do
+			result.base[i] = a(assets[(node.name == "Charm Socket" and "Azmeri" or "") .. node.overlay[state .. (node.expansionJewel and "Alt" or "")]])
+		end
+	elseif node.type == "Mastery" then
+		local override = spec.hashOverrides and spec.hashOverrides[node.id]
+		local sprites = override and tree.spriteMap[override.icon]
+		local effectSprites = override and tree.spriteMap[override.activeEffectImage]
+		if node.masteryEffects then
+			local ms = node.masterySprites or {}
+			local inactive = (sprites and sprites.masteryInactive) or (ms.inactiveIcon and ms.inactiveIcon.masteryInactive)
+			result.base[1] = a(inactive)
+			result.base[2] = result.base[1]
+			result.base[3] = a((sprites and sprites.masteryActiveSelected) or (ms.activeIcon and ms.activeIcon.masteryActiveSelected))
+			result.hover = a((sprites and sprites.masteryConnected) or (ms.inactiveIcon and ms.inactiveIcon.masteryConnected))
+			result.effect[2] = a((effectSprites and effectSprites.masteryActiveEffect) or (ms.activeEffectImage and ms.activeEffectImage.masteryActiveEffect))
+		else
+			local base = a((sprites and sprites.mastery) or (node.sprites and node.sprites.mastery))
+			result.base = { [1] = base, [2] = base, [3] = base }
+		end
+	else
+		if node.isTattoo and node.effectSprites then
+			local effect = a(node.effectSprites.tattooActiveEffect)
+			result.effect = { [1] = effect, [2] = effect }
+		end
+		local sprites = node.sprites or {}
+		local kind = node.type:lower()
+		result.base[1] = a(sprites[kind .. "Inactive"])
+		result.base[2] = result.base[1]
+		result.base[3] = a(sprites[kind .. "Active"])
+		for i, state in ipairs(drawStates) do
+			local overlayName = node.overlay and node.overlay[state .. (node.ascendancyName and "Ascend" or "") .. (node.isBlighted and "Blighted" or "")]
+			if isAbyssConquered(node) and (node.type == "Notable" or node.type == "Keystone") then
+				local frameType = node.ascendancyName and "Ascendancy" or node.type
+				local frameState = state == "alloc" and "Allocated" or state == "path" and "CanAllocate" or "Unallocated"
+				local abyssOverlay = "Abyss" .. frameType .. "Frame" .. frameState
+				if assets[abyssOverlay] then
+					overlayName = abyssOverlay
+				end
+			end
+			if node.ascendancyName then
+				local prefix = node.bloodlineOverlayPrefix or (tree.bloodlineSpritePrefixes and tree.bloodlineSpritePrefixes[node.ascendancyName])
+				if prefix and overlayName then
+					overlayName = prefix .. overlayName
+				end
+			end
+			result.overlay[i] = overlayName and a(assets[overlayName])
+		end
+	end
+	return result
+end
+
+-- The tree assets the host draws by name: the background, the class backgrounds, the group
+-- backgrounds, the connectors in each state, the jewel socket overlays; and the view's own
+-- rings (PassiveTreeView.lua:29-60) under their field names
+local namedAssets = { "^Background", "^PSGroupBackground", "^GroupBackground", "LineConnector", "^Orbit%d",
+	"^JewelSocketActive", "^CharmSocketActive" }
+local viewImages = {
+	ring = "Assets/ring.png", highlightRing = "Assets/small_ring.png",
+	jewelShadedOuterRing = "Assets/ShadedOuterRing.png", jewelShadedOuterRingFlipped = "Assets/ShadedOuterRingFlipped.png",
+	jewelShadedInnerRing = "Assets/ShadedInnerRing.png", jewelShadedInnerRingFlipped = "Assets/ShadedInnerRingFlipped.png",
+	eternal1 = "TreeData/PassiveSkillScreenEternalEmpireJewelCircle1.png", eternal2 = "TreeData/PassiveSkillScreenEternalEmpireJewelCircle2.png",
+	karui1 = "TreeData/PassiveSkillScreenKaruiJewelCircle1.png", karui2 = "TreeData/PassiveSkillScreenKaruiJewelCircle2.png",
+	maraketh1 = "TreeData/PassiveSkillScreenMarakethJewelCircle1.png", maraketh2 = "TreeData/PassiveSkillScreenMarakethJewelCircle2.png",
+	templar1 = "TreeData/PassiveSkillScreenTemplarJewelCircle1.png", templar2 = "TreeData/PassiveSkillScreenTemplarJewelCircle2.png",
+	vaal1 = "TreeData/PassiveSkillScreenVaalJewelCircle1.png", vaal2 = "TreeData/PassiveSkillScreenVaalJewelCircle2.png",
+	kalguur1 = "TreeData/PassiveSkillScreenKalguuranJewelCircle1.png", kalguur2 = "TreeData/PassiveSkillScreenKalguuranJewelCircle2.png",
 }
 
--- Icon and frame sprites for a node, as { unallocated, allocated } pairs.
-local function nodeArt(node)
-	if node.type == "Mastery" then
-		return {
-			icon = { sprite("masteryInactive", node.inactiveIcon), sprite("masteryActiveSelected", node.activeIcon) },
-		}
+local function named_assets(tree)
+	local list = {}
+	for name, data in pairs(tree.assets) do
+		for _, pattern in ipairs(namedAssets) do
+			if name:match(pattern) then
+				list[#list + 1] = { name = name, art = art(tree, data) }
+				break
+			end
+		end
 	end
-	local kind = node.type:lower()
-	local frame = frames[node.type]
-	return {
-		icon = { sprite(kind .. "Inactive", node.icon), sprite(kind .. "Active", node.icon) },
-		frame = frame and { sprite("frame", frame[1]), sprite("frame", frame[2]) },
+	for name, path in pairs(viewImages) do
+		if not sheetIndex[path] then
+			table.insert(sheets, path)
+			sheetIndex[path] = #sheets
+		end
+		list[#list + 1] = { name = name, art = { sheet = sheetIndex[path] } }
+	end
+	table.sort(list, function(a, b) return a.name < b.name end)
+	return list
+end
+
+-- A group's background art (renderGroup, PassiveTreeView.lua:568-641): an ascendancy's
+-- emblem at its start group, else the largest orbit's background, a half one mirrored below
+local function group_art(tree, group, isExpansion)
+	local x, y = group.x, group.y
+	if group.ascendancyName then
+		if not group.isAscendancyStart then
+			return nil
+		end
+		local entry = { x = x, y = y, art = art(tree, tree.assets["Classes" .. group.ascendancyName]), ascendancy = group.ascendancyName }
+		if tree.classes[1].ascendancies then
+			local data, alternate
+			for _, class in ipairs(tree.classes) do
+				for _, ascendancy in ipairs(class.ascendancies) do
+					if ascendancy.id == group.ascendancyName then
+						data = ascendancy
+						break
+					end
+				end
+				if data then break end
+			end
+			if not data and tree.alternate_ascendancies then
+				for _, ascendancy in pairs(tree.alternate_ascendancies) do
+					if ascendancy.id == group.ascendancyName then
+						data, alternate = ascendancy, true
+						break
+					end
+				end
+			end
+			if data and data.flavourTextRect then
+				local rect = data.flavourTextRect
+				entry.flavour = {
+					text = data.flavourText,
+					colour = data.flavourTextColour,
+					x = x + rect.x - (alternate and 744 or 650),
+					y = y + rect.y - (alternate and 706 or 650),
+				}
+			end
+		end
+		return entry.art and entry or nil
+	end
+	local name, half
+	if group.oo[3] then
+		name, half = isExpansion and "GroupBackgroundLargeHalfAlt" or "PSGroupBackground3", true
+	elseif group.oo[2] then
+		name = isExpansion and "GroupBackgroundMediumAlt" or "PSGroupBackground2"
+	elseif group.oo[1] then
+		name = isExpansion and "GroupBackgroundSmallAlt" or "PSGroupBackground1"
+	end
+	local found = name and art(tree, tree.assets[name])
+	return found and { x = x, y = y, art = found, half = half } or nil
+end
+
+-- The groups' art of the main tree, then of the spec's cluster jewels (PassiveTreeView.lua:643-650)
+local function groups_art(spec)
+	local tree = spec.tree
+	local list = {}
+	local ids = {}
+	for id, group in pairs(tree.groups) do
+		if not group.isProxy then
+			ids[#ids + 1] = id
+		end
+	end
+	table.sort(ids, function(a, b) return tostring(a) < tostring(b) end)
+	for _, id in ipairs(ids) do
+		list[#list + 1] = group_art(tree, tree.groups[id])
+	end
+	local subIds = {}
+	for id in pairs(spec.subGraphs) do
+		subIds[#subIds + 1] = id
+	end
+	table.sort(subIds)
+	for _, id in ipairs(subIds) do
+		list[#list + 1] = group_art(tree, spec.subGraphs[id].group, true)
+	end
+	return list
+end
+
+-- PoB's class background art and where it goes (PassiveTreeView.lua:546-564)
+local classArt = {
+	{ 1, "BackgroundStr", -2750, 1600 }, { 2, "BackgroundDex", 2550, 1600 }, { 3, "BackgroundInt", -250, -2200 },
+	{ 4, "BackgroundStrDex", -150, 2350 }, { 5, "BackgroundStrInt", -2100, -1500 }, { 6, "BackgroundDexInt", 2350, -1950 },
+}
+
+local function class_art(tree)
+	local list = {}
+	for _, entry in ipairs(classArt) do
+		local found = art(tree, tree.assets[entry[2]])
+		if found then
+			list[#list + 1] = { class = entry[1], art = found, x = entry[3], y = entry[4] }
+		end
+	end
+	return list
+end
+
+-- A connector as the host draws it: its nodes, its art's name (`type` and the state's suffix),
+-- where its ends are, and for an orbit's arc the quad PassiveTree:BuildArc made, as offsets from
+-- the group's centre per unit of art size (BuildArc scales it by the art's width, which the
+-- host knows). A line's quad is the host's to make from its ends (BuildConnector).
+local function connector_entry(tree, connector, nodes)
+	local n1, n2 = nodes[connector.nodeId1], nodes[connector.nodeId2]
+	local entry = {
+		ids = { connector.nodeId1, connector.nodeId2 },
+		kind = connector.type,
+		ascendancy = connector.ascendancyName,
+		ends = { { n1.x, n1.y }, { n2.x, n2.y } },
+		-- the game's abyss art when both ends are conquered (PassiveTreeView.lua:715-718)
+		abyss = isAbyssConquered(n1) and isAbyssConquered(n2),
 	}
+	if connector.type ~= "LineConnector" then
+		local vert = connector.vert.Normal
+		local normal = tree.assets[connector.type .. "Normal"]
+		local size = (normal and normal.width or 1) * 2 * 1.33
+		entry.centre = { vert[1], vert[2] }
+		entry.quad = {
+			{ (vert[3] - vert[1]) / size, (vert[4] - vert[2]) / size },
+			{ (vert[5] - vert[1]) / size, (vert[6] - vert[2]) / size },
+			{ (vert[7] - vert[1]) / size, (vert[8] - vert[2]) / size },
+		}
+		entry.p = connector.c[12]
+	end
+	return entry
+end
+
+-- The connectors PoB draws for the spec: the tree's, then its cluster jewels' (PassiveTreeView.lua:739-746)
+local function connectors_of(spec)
+	local tree = spec.tree
+	local list = {}
+	for _, connector in ipairs(tree.connectors) do
+		list[#list + 1] = connector_entry(tree, connector, spec.nodes)
+	end
+	local subIds = {}
+	for id in pairs(spec.subGraphs) do
+		subIds[#subIds + 1] = id
+	end
+	table.sort(subIds)
+	for _, id in ipairs(subIds) do
+		for _, connector in ipairs(spec.subGraphs[id].connectors) do
+			list[#list + 1] = connector_entry(tree, connector, spec.nodes)
+		end
+	end
+	return list
 end
 
 -- Nodes of the active spec that have a position: the main tree, ascendancies and any
@@ -81,7 +386,8 @@ end
 -- cluster jewels and mastery effects all rewrite these on the spec's own nodes. The host
 -- hashes the text into the layout's key.
 local function layout_digest(nodes)
-	local parts = { pob.build.spec.treeVersion }
+	local spec = pob.build.spec
+	local parts = { spec.treeVersion }
 	for _, node in ipairs(nodes) do
 		parts[#parts + 1] = table.concat({
 			node.id,
@@ -92,6 +398,10 @@ local function layout_digest(nodes)
 			node.inactiveIcon or "",
 			node.activeIcon or "",
 			node.ascendancyName or "",
+			-- the art PassiveTreeView:Draw picks for the node, beyond its icons
+			isAbyssConquered(node) and "abyss" or "",
+			node.isBlighted and "blighted" or "",
+			spec.hashOverrides and spec.hashOverrides[node.id] and spec.hashOverrides[node.id].icon or "",
 		}, "\2")
 	end
 	return table.concat(parts, "\n")
@@ -128,9 +438,19 @@ function glue.tree_layout_digest()
 	return layout_digest(placed_nodes())
 end
 
+-- Whether a socket's radius can hold the node, as PassiveTree lists the nodes in each socket's
+-- radius (PassiveTree.lua:645-648): a tree node, not a cluster jewel's
+local function in_socket_radius(tree, id)
+	local node = tree.nodes[id]
+	return node ~= nil and not node.isBlighted and node.group ~= nil and not node.isProxy
+		and not node.group.isProxy and not node.isMastery or nil
+end
+
 -- Geometry of the active spec's tree, for drawing it. Positions are PoB's own, in tree units.
 function glue.tree_layout()
 	sheets, sheetIndex = {}, {}
+	local spec = pob.build.spec
+	local tree = spec.tree
 	local placed = placed_nodes()
 	local nodes, edges = {}, {}
 	for _, node in ipairs(placed) do
@@ -151,7 +471,11 @@ function glue.tree_layout()
 			orbit = node.o,
 			group_x = node.group and node.group.x,
 			group_y = node.group and node.group.y,
-			art = nodeArt(node),
+			art = nodeArt(node, spec),
+			-- a node a hovered socket's radius colours (PassiveTree.lua:645-648)
+			in_radius = in_socket_radius(tree, node.id),
+			-- a socket whose hover colours the nodes in its radius (PassiveTreeView.lua:950-951)
+			radius_socket = tree.sockets[node.id] ~= nil and tree.sockets[node.id].nodesInRadius ~= nil or nil,
 			replaceable = glue.node_replaceable(node),
 			mastery_effects = glue.node_mastery_effects(node),
 		})
@@ -162,11 +486,21 @@ function glue.tree_layout()
 			end
 		end
 	end
+	local radii = {}
+	for i, radius in ipairs(pob.build.data.jewelRadius) do
+		radii[i] = { inner = radius.inner, outer = radius.outer, colour = radius.col }
+	end
 	return {
 		version = pob.build.spec.treeVersion,
 		digest = layout_digest(placed),
 		nodes = nodes,
 		edges = edges,
+		connectors = connectors_of(spec),
+		groups = groups_art(spec),
+		class_art = class_art(tree),
+		assets = named_assets(tree),
+		size = tree.size,
+		jewel_radii = radii,
 		sheets = sheets,
 	}
 end
@@ -404,15 +738,45 @@ local function compare_only(build, compareSpec, id)
 		and node.y ~= nil and node.type ~= "ClassStart" and node.type ~= "AscendClassStart"
 end
 
--- A compare-only node's allocated icon and frame, on sheets the layout already has
-local function compare_only_art(node)
+-- A compare-only node's allocated base and overlay, as PoB draws them tinted green
+-- (PassiveTreeView.lua:1108-1140), from the files the layout sent
+local function compare_only_art(build, compareSpec, node)
+	local tree = build.spec.tree
+	local viewer = build.treeTab.viewer
+	local base, overlay
 	sheetsFrozen = true
-	local ok, art = pcall(nodeArt, node)
+	local ok, err = pcall(function()
+		if node.type == "Socket" then
+			base = art(tree, tree.assets[node.overlay and node.overlay["alloc" .. (node.expansionJewel and "Alt" or "")] or "JewelSocketActiveBlue"])
+			local saved = viewer.compareSpec
+			viewer.compareSpec = compareSpec
+			local jewelOk, jewel = pcall(viewer.GetCompareJewel, viewer, node.id)
+			viewer.compareSpec = saved
+			if jewelOk and jewel then
+				local name = viewer:GetJewelSocketOverlay(jewel, node.expansionJewel)
+				overlay = name and art(tree, tree.assets[name])
+			end
+		elseif node.type == "Mastery" then
+			if node.masterySprites and node.masterySprites.activeIcon then
+				base = art(compareSpec.tree, node.masterySprites.activeIcon.masteryActiveSelected)
+			elseif node.sprites then
+				base = art(compareSpec.tree, node.sprites.mastery)
+			end
+		else
+			if node.sprites then
+				base = art(compareSpec.tree, node.sprites[node.type:lower() .. "Active"])
+			end
+			if node.overlay then
+				local name = node.overlay["alloc" .. (node.ascendancyName and "Ascend" or "") .. (node.isBlighted and "Blighted" or "")]
+				overlay = name and art(tree, tree.assets[name])
+			end
+		end
+	end)
 	sheetsFrozen = false
 	if not ok then
 		return nil
 	end
-	return { icon = art.icon[2], frame = art.frame and art.frame[2] or nil }
+	return { base = base, overlay = overlay }
 end
 
 -- Those nodes, sorted by id
@@ -427,11 +791,161 @@ local function compare_only_nodes(build)
 					mastery_effects = glue.node_mastery_effects(node),
 					-- PoB draws its allocated art, tinted green (PassiveTreeView.lua:1108-1140),
 					-- from the sheets the layout sent
-					art = sheetIndex and compare_only_art(node) or nil,
+					art = sheetIndex and compare_only_art(build, compareSpec, node) or nil,
 				}
 			end
 		end
 		table.sort(list, function(a, b) return a.id < b.id end)
+	end
+	return list
+end
+
+-- Ids of the nodes `test` picks, sorted
+local function ids_where(nodes, test)
+	local ids = {}
+	for id, node in pairs(nodes) do
+		if test(id, node) then
+			ids[#ids + 1] = id
+		end
+	end
+	table.sort(ids)
+	return ids
+end
+
+-- What the drawn tree's art depends on beyond the spec's allocation (PassiveTreeView.lua:805-813,
+-- 840-845): nodes the build grants, nodes the compared spec allocates, Split Personality's path,
+-- and the overlay of each socket's jewel
+local function draw_state(build)
+	local spec = build.spec
+	local compareSpec = viewed_compare_spec(build)
+	local granted = build.calcsTab.mainEnv and build.calcsTab.mainEnv.grantedPassives or {}
+	local split = spec.splitPersonalityPath or {}
+	local viewer = build.treeTab.viewer
+	local overlays = {}
+	for _, id in ipairs(ids_where(spec.nodes, function(_, node) return node.type == "Socket" end)) do
+		local _, jewel = build.itemsTab:GetSocketAndJewelForNodeID(id)
+		local name = jewel and viewer:GetJewelSocketOverlay(jewel, spec.nodes[id].expansionJewel)
+		if name then
+			overlays[#overlays + 1] = { node = id, overlay = name }
+		end
+	end
+	local variable = {}
+	for _, id in ipairs(ids_where(spec.nodes, function(_, node) return node.type == "Socket" end)) do
+		local _, jewel = build.itemsTab:GetSocketAndJewelForNodeID(id)
+		if jewel and jewel.jewelRadiusLabel == "Variable" then
+			variable[#variable + 1] = id
+		end
+	end
+	return {
+		comparing = compareSpec ~= nil,
+		-- nodes the compared spec doesn't have: their connectors keep their own state (PassiveTreeView.lua:689-694)
+		compare_missing = compareSpec and ids_where(spec.nodes, function(id) return compareSpec.nodes[id] == nil end) or {},
+		variable_sockets = variable,
+		granted = ids_where(spec.nodes, function(id) return granted[id] and true end),
+		compare_allocated = compareSpec and ids_where(spec.nodes, function(id)
+			return compareSpec.nodes[id] ~= nil and compareSpec.nodes[id].alloc
+		end) or {},
+		split_path = ids_where(spec.nodes, function(id) return split[id] and true end),
+		-- nodes an Intuitive Leap-like jewel reaches: hovering one shows no path (PassiveTreeView.lua:367-371)
+		leap = ids_where(spec.nodes, function(_, node)
+			return node.intuitiveLeapLikesAffecting ~= nil and #node.intuitiveLeapLikesAffecting > 0
+		end),
+		socket_overlays = overlays,
+	}
+end
+
+local jewelRingArt = {
+	{ "^Brutal Restraint", "maraketh1", "maraketh2" }, { "^Elegant Hubris", "eternal1", "eternal2" },
+	{ "^Glorious Vanity", "vaal1", "vaal2" }, { "^Lethal Pride", "karui1", "karui2" },
+	{ "^Militant Faith", "templar1", "templar2" }, { "^Heroic Tragedy", "kalguur1", "kalguur2" },
+}
+
+-- The rings PoB draws for a socketed jewel (drawJewelRadius, PassiveTreeView.lua:1156-1196):
+-- each a view image by its field name, its size across in tree units, where it is, how fast it
+-- turns (`DrawImageRotated`'s angle) and its tint
+local function jewel_ring_images(build, jewel, x, y, tint, list)
+	if isAbyssConquered(jewel.jewelData) then
+		return
+	end
+	local radius = build.data.jewelRadius[jewel.jewelRadiusIndex]
+	if not radius then
+		return
+	end
+	local outer, inner = radius.outer * 2, radius.inner * 1.06 * 2
+	local function add(image, size, spin, at)
+		list[#list + 1] = { image = image, size = size, spin = spin, x = at and at.x or x, y = at and at.y or y, tint = tint }
+	end
+	if jewel.title:match("Impossible Escape") then
+		for name in pairs(jewel.jewelData.impossibleEscapeKeystones or {}) do
+			local keystone = build.spec.tree.keystoneMap[name]
+			if keystone and keystone.x and keystone.y then
+				add("jewelShadedOuterRing", outer, -0.8, keystone)
+				add("jewelShadedOuterRingFlipped", outer, 1, keystone)
+				add("jewelShadedInnerRing", 300, -1.2, keystone)
+				add("jewelShadedInnerRingFlipped", 300, 1.0, keystone)
+			end
+		end
+		return
+	end
+	for _, entry in ipairs(jewelRingArt) do
+		if jewel.title:match(entry[1]) then
+			add(entry[2], outer, -0.7)
+			add(entry[3], outer, 0.7)
+			return
+		end
+	end
+	add("jewelShadedOuterRing", outer, -0.7)
+	add("jewelShadedOuterRingFlipped", outer, 0.7)
+	add("jewelShadedInnerRing", inner, -0.7)
+	add("jewelShadedInnerRingFlipped", inner, 0.7)
+end
+
+local ringNeutral, ringPrimary, ringCompare = { 1, 1, 1, 0.7 }, { 1, 0, 0, 0.7 }, { 0, 1, 0, 0.7 }
+
+-- The sockets that draw radius rings (PassiveTreeView.lua:1198-1248): whether a hover draws the
+-- Thread of Hope annuli (`variable`), and the rings of the socket's jewels
+local function socket_rings(build)
+	local spec = build.spec
+	local viewer = build.treeTab.viewer
+	local compareSpec = viewed_compare_spec(build)
+	local saved = viewer.compareSpec
+	viewer.compareSpec = compareSpec
+	local list = {}
+	local ok, err = pcall(function()
+		local ids = {}
+		for id in pairs(spec.tree.sockets) do
+			ids[#ids + 1] = id
+		end
+		table.sort(ids)
+		for _, id in ipairs(ids) do
+			local node = spec.nodes[id]
+			if node and node.name ~= "Charm Socket" and (not node.expansionJewel or node.expansionJewel.size == 2) then
+				local _, jewel = build.itemsTab:GetSocketAndJewelForNodeID(id)
+				local compareNode = compareSpec and compareSpec.nodes[id]
+				local cJewel = compareSpec and viewer:GetCompareJewel(id) or nil
+				local effective = jewel or cJewel
+				local entry = { node = id, variable = effective and effective.jewelRadiusLabel == "Variable" or false, rings = {} }
+				if node.alloc or (compareNode and compareNode.alloc) then
+					local same
+					if not jewel or not cJewel then
+						same = jewel == cJewel
+					else
+						same = jewel:BuildRaw() == cJewel:BuildRaw()
+					end
+					if jewel and jewel.jewelRadiusIndex then
+						jewel_ring_images(build, jewel, node.x, node.y, (not compareSpec or same) and ringNeutral or ringPrimary, entry.rings)
+					end
+					if cJewel and cJewel.jewelRadiusIndex and not same then
+						jewel_ring_images(build, cJewel, node.x, node.y, ringCompare, entry.rings)
+					end
+				end
+				list[#list + 1] = entry
+			end
+		end
+	end)
+	viewer.compareSpec = saved
+	if not ok then
+		error(err, 0)
 	end
 	return list
 end
@@ -556,6 +1070,8 @@ function glue.tree_state(fresh, held)
 		compare = compare,
 		compare_spec = compareSpec,
 		compare_only = compare_only_nodes(build),
+		draw = draw_state(build),
+		socket_rings = socket_rings(build),
 		jewels = jewel_sockets(build),
 		specs = spec_entries(),
 		active_spec = build.treeTab.activeSpec - 1,

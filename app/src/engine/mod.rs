@@ -47,4 +47,7 @@ pub use views::{
     SocketView, SpecEntry, Sprite, StatRow, StatsView, TooltipLine, TreeLayout, TreeNode,
     TreeState, VariantView,
 };
-pub use views::{HelpSection, HelpView};
+pub use views::{
+    ClassArt, Connector, DrawState, Flavour, GroupArt, HelpSection, HelpView, JewelRadius,
+    LuaGroupArt, RingImage, SocketOverlay, SocketRings,
+};

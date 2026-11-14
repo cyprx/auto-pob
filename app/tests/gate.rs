@@ -61,6 +61,8 @@ mod tattoos;
 mod timeless;
 #[path = "gate/trade.rs"]
 mod trade;
+#[path = "gate/tree_draw.rs"]
+mod tree_draw;
 
 /// PoB loads files relative to the process working directory, so only one test may run it.
 static CWD: Mutex<()> = Mutex::new(());
@@ -3770,18 +3772,16 @@ fn compare_only_nodes_match_pob() {
             return;
         }
         // the layout first, as the engine sends it before the state
-        let sheets = s.backend.tree_layout_view().unwrap().sheets.len();
+        let sheets = s.backend.tree_layout_view().unwrap().sheets;
         let state = s.backend.tree_state_view().unwrap();
         // PoB draws each with its allocated art (PassiveTreeView.lua:1124-1131): an icon on a
         // sheet the layout sent
         for node in state.compare_only.iter().filter(|n| n.kind != "Socket") {
-            let icon = node
-                .art
+            node.art
                 .as_ref()
-                .and_then(|a| a.icon)
-                .and_then(|i| i.sprite())
+                .and_then(|a| a.base)
+                .and_then(|i| i.resolve(&sheets))
                 .unwrap_or_else(|| panic!("node {} has no art", node.id));
-            assert!(icon.sheet < sheets, "node {}", node.id);
         }
         for node in &state.compare_only {
             let tip = s.backend.node_tooltip_view(node.id).unwrap();

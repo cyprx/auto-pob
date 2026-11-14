@@ -48,7 +48,7 @@ local SPEC = {
 	{ key = "colorHighlight", control = "colorHighlight", label = "Hex colour for highlight nodes", kind = "string", effect = "PobText", after = colour("HIGHLIGHT") },
 	{ key = "edgeSearchHighlight", control = "edgeSearchHighlight", label = "Show search circles at viewport edge", kind = "bool", effect = "Ui" },
 	{ key = "showFlavourText", control = "showFlavourText", label = "Styled Tooltips with Flavour Text", kind = "bool", effect = "PobText" },
-	{ key = "showAnimations", control = "showAnimations", label = "Show Animations", kind = "bool", effect = "NoEffect" },
+	{ key = "showAnimations", control = "showAnimations", label = "Show Animations", kind = "bool", effect = "Ui" },
 	{ key = "showAllItemAffixes", control = "showAllItemAffixes", label = "Show all item affixes sliders", kind = "bool", effect = "PobText" },
 	{ key = "disableScrollControlInteraction", control = "disableScrollControlInteraction", label = "Disable control scroll interaction", kind = "bool", effect = "NoEffect" },
 	{ key = "showThousandsSeparators", control = "showThousandsSeparators", label = "Show thousands separators", kind = "bool", effect = "PobText" },

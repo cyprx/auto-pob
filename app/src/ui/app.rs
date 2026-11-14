@@ -497,7 +497,7 @@ impl AutoPobApp {
     fn apply_ui_settings(&mut self, ctx: &egui::Context) {
         let effects = options::ui_effects(self.options.rows());
         self.tree
-            .set_ui_settings(effects.power_theme, effects.edge_search);
+            .set_ui_settings(effects.power_theme, effects.edge_search, effects.animations);
         if (effects.zoom - self.applied_zoom).abs() > f32::EPSILON {
             ctx.set_zoom_factor(effects.zoom);
             self.applied_zoom = effects.zoom;
@@ -2731,12 +2731,20 @@ mod tests {
                 ascendancy: None,
                 replaceable: false,
                 mastery_effects: false,
+                in_radius: false,
+                radius_socket: false,
             };
             Ok(crate::engine::TreeLayout {
                 version: "3_28".into(),
                 nodes: vec![node(1, 0.0), node(2, 600.0)],
                 edges: vec![(0, 1)],
                 sheets: vec![],
+                connectors: vec![],
+                groups: vec![],
+                class_art: vec![],
+                assets: Default::default(),
+                size: 1.0,
+                jewel_radii: vec![],
                 key: "fake".into(),
             })
         }
@@ -6637,9 +6645,17 @@ mod tests {
                 ascendancy: None,
                 replaceable: false,
                 mastery_effects: false,
+                in_radius: false,
+                radius_socket: false,
             }],
             edges: vec![],
             sheets: vec![],
+            connectors: vec![],
+            groups: vec![],
+            class_art: vec![],
+            assets: Default::default(),
+            size: 1.0,
+            jewel_radii: vec![],
             key: "socket".into(),
         };
         let state: TreeState = serde_json::from_value(serde_json::json!({

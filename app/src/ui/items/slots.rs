@@ -422,11 +422,11 @@ impl ItemsUi {
         }
         let rect = egui::Rect::from_min_size(egui::pos2(slot.left(), top), size);
         self.rects.note_rect(rect, "socket_viewer");
-        let painter = ui.ctx().layer_painter(egui::LayerId::new(
-            egui::Order::Tooltip,
-            ui.scope_id().with("socket_viewer"),
-        ));
-        crate::ui::tree::canvas::paint_socket_viewer(ui.ctx(), &painter, rect, scene, node);
+        let ctx = ui.ctx().clone();
+        let id = ui.scope_id().with("socket_viewer");
+        crate::ui::tree::canvas::viewer_area(&ctx, id, rect, 1.0, |painter| {
+            crate::ui::tree::canvas::paint_socket_viewer(&ctx, painter, rect, scene, node);
+        });
     }
 }
 

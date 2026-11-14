@@ -363,20 +363,20 @@ fn node_viewer(
     node: u32,
 ) {
     let rect = node_viewer_rect(cell.rect, ui.ctx().content_rect());
-    let painter = ui.ctx().layer_painter(egui::LayerId::new(
-        egui::Order::Tooltip,
-        ui.scope_id().with("calcs_node_viewer"),
-    ));
-    crate::ui::tree::canvas::paint_tree_viewer(
-        ui.ctx(),
-        &painter,
-        rect,
-        scene,
-        node,
-        NODE_VIEWER_ZOOM,
-        2.0,
-        crate::ui::tree::canvas::ViewerMark::Ring,
-    );
+    let ctx = ui.ctx().clone();
+    let id = ui.scope_id().with("calcs_node_viewer");
+    crate::ui::tree::canvas::viewer_area(&ctx, id, rect, 2.0, |painter| {
+        crate::ui::tree::canvas::paint_tree_viewer(
+            &ctx,
+            painter,
+            rect,
+            scene,
+            node,
+            NODE_VIEWER_ZOOM,
+            2.0,
+            crate::ui::tree::canvas::ViewerMark::Ring,
+        );
+    });
 }
 
 /// Where the node viewer's tree goes for a cell at `cell` (inside its 2-point border): right of

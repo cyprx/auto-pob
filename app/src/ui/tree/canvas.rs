@@ -677,6 +677,29 @@ pub fn socket_viewer_camera(rect: Rect, tree_size: f32, at: [f32; 2]) -> super::
     }
 }
 
+/// Shows `paint` in an area of its own over `rect` and its `border`: above the panels, taking no
+/// input, and under egui's tooltips, as PoB draws its tree viewers at layer 15 under the
+/// tooltips' 100. (A painter on an unregistered tooltip layer would paint over every tooltip.)
+pub fn viewer_area(
+    ctx: &egui::Context,
+    id: egui::Id,
+    rect: Rect,
+    border: f32,
+    paint: impl FnOnce(&egui::Painter),
+) {
+    let outer = rect.expand(border);
+    egui::Area::new(id)
+        .order(egui::Order::Foreground)
+        .fixed_pos(outer.min)
+        .fade_in(false)
+        .interactable(false)
+        .constrain(false)
+        .show(ctx, |ui| {
+            ui.allocate_space(outer.size());
+            paint(ui.painter());
+        });
+}
+
 /// What a small tree view marks its node with
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ViewerMark {
@@ -1475,5 +1498,52 @@ mod tests {
         broken.decode();
         assert_eq!(broken.take_rgba(), crate::engine::SheetPixels::Failed);
         assert!(upload_sheets(&tab.textures, &ctx, &sheet_layout(&broken), &all())[0].is_none());
+    }
+
+    /// A tree viewer is drawn under an egui tooltip that overlaps it (PoB: layer 15 under 100)
+    #[test]
+    fn viewers_go_under_tooltips() {
+        let ctx = egui::Context::default();
+        let red = Color32::from_rgb(255, 0, 0);
+        let blue = Color32::from_rgb(0, 0, 255);
+        let mut order = Vec::new();
+        for _ in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0))),
+                ..Default::default()
+            };
+            let out = ctx.run_ui(input, |ui| {
+                // a tooltip area first, then the viewer, as the Items tab does it
+                egui::Area::new(egui::Id::NULL.with("tip"))
+                    .order(egui::Order::Tooltip)
+                    .fade_in(false)
+                    .fixed_pos(Pos2::new(10.0, 10.0))
+                    .show(ui.ctx(), |ui| {
+                        let (r, _) = ui.allocate_exact_size(Vec2::splat(50.0), Sense::hover());
+                        ui.painter().rect_filled(r, 0.0, blue);
+                    });
+                let rect = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::splat(100.0));
+                viewer_area(ui.ctx(), egui::Id::NULL.with("viewer"), rect, 1.0, |p| {
+                    p.rect_filled(rect, 0.0, red);
+                });
+            });
+            fn walk(s: &egui::Shape, out: &mut Vec<Color32>) {
+                match s {
+                    egui::Shape::Rect(r) => out.push(r.fill),
+                    egui::Shape::Vec(v) => v.iter().for_each(|x| walk(x, out)),
+                    _ => {}
+                }
+            }
+            let mut fills = Vec::new();
+            for c in &out.shapes {
+                walk(&c.shape, &mut fills);
+            }
+            order = fills
+                .into_iter()
+                .filter(|f| *f == red || *f == blue)
+                .collect();
+            out.drop_without_applying_deltas();
+        }
+        assert_eq!(order, [red, blue]);
     }
 }

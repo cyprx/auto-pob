@@ -65,6 +65,7 @@ pub fn show(
     let valid_zoom = tab.camera.zoom > 0.0;
     if valid_zoom {
         handle_input(ui, tab, &response);
+        tab.camera.limit(rect, layout.size);
     }
     let sheets = upload_sheets(tab, ui.ctx(), layout);
     let camera = tab.camera;

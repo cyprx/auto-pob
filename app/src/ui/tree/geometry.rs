@@ -5,6 +5,8 @@ use eframe::egui::{Pos2, Rect, Vec2};
 use std::collections::HashMap;
 
 const MIN_ZOOM: f32 = 0.01;
+/// PoB's deepest zoom: 12 steps of 1.2 (PassiveTreeView.lua:1299)
+const MAX_POB_ZOOM: f32 = 8.916_100_5;
 const MAX_ZOOM: f32 = 2.0;
 /// A node can be hit this many screen points away from its centre, even when drawn smaller
 pub const MIN_HIT_POINTS: f32 = 6.0;
@@ -34,6 +36,21 @@ impl Camera {
         let under_cursor = Vec2::from(self.to_tree(rect, cursor));
         self.zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
         self.center = under_cursor - (cursor - rect.center()) / self.zoom;
+    }
+
+    /// Keeps the view within PoB's: zoomed between the tree's `size` across the view's smaller
+    /// side and 12 of its 1.2 steps in, and the tree's centre no farther from the view's than
+    /// 2/3 of the view at PoB's zoom (PassiveTreeView.lua:265-271, 1297-1310). A size of 1 or
+    /// less is no tree's: nothing is limited.
+    pub fn limit(&mut self, rect: Rect, size: f32) {
+        let side = rect.width().min(rect.height());
+        if size <= 1.0 || side <= 0.0 || self.zoom <= 0.0 {
+            return;
+        }
+        let least = side / size;
+        self.zoom = self.zoom.clamp(least, least * MAX_POB_ZOOM);
+        let reach = Vec2::new(rect.width(), rect.height()) * (2.0 / 3.0) * size / side;
+        self.center = self.center.clamp(-reach, reach);
     }
 
     /// Shows the whole tree. An empty, single-node or flat layout gets the centre of its nodes
@@ -244,6 +261,35 @@ pub(super) mod tests {
         // empty space
         assert_eq!(grid.node_at(&l, [500.0, 500.0], 1.0), None);
         assert_eq!(grid.node_at(&l, [0.0, 80.0], 1.0), None);
+    }
+
+    #[test]
+    fn the_view_stays_within_pobs() {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let mut c = Camera {
+            center: Vec2::ZERO,
+            zoom: 0.001,
+        };
+        c.limit(rect, 20_000.0);
+        assert_eq!(c.zoom, 600.0 / 20_000.0);
+        c.zoom = 5.0;
+        c.limit(rect, 20_000.0);
+        assert!(
+            (c.zoom - 0.03 * 1.2_f32.powi(12)).abs() < 1e-5,
+            "{}",
+            c.zoom
+        );
+        c.center = Vec2::new(1e6, -1e6);
+        c.limit(rect, 20_000.0);
+        let reach = Vec2::new(800.0, 600.0) * (2.0 / 3.0) * 20_000.0 / 600.0;
+        assert_eq!(c.center, Vec2::new(reach.x, -reach.y));
+        // no tree: nothing changes
+        let mut free = Camera {
+            center: Vec2::splat(1e6),
+            zoom: 0.001,
+        };
+        free.limit(rect, 1.0);
+        assert_eq!(free.zoom, 0.001);
     }
 
     /// PoB hovers a node within its frame's size (artWidth * 1.33) and never a class or

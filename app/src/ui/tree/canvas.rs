@@ -47,6 +47,9 @@ const EDGE_RING_SCALE: f32 = 0.6667;
 /// Nodes of ascendancies other than the build's are drawn this faint, as PoB does
 /// (`PassiveTreeView:Draw`, `renderGroup`: `SetDrawColor(1, 1, 1, 0.50)`)
 const OTHER_ASCENDANCY: f32 = 0.5;
+/// Connectors of ascendancies other than the build's are drawn this grey
+/// (`SetDrawColor(0.75, 0.75, 0.75)`, PassiveTreeView.lua:710-711)
+const CONNECTOR_FADE: f32 = 0.75;
 
 pub fn show(
     ui: &mut egui::Ui,
@@ -124,17 +127,22 @@ pub fn show(
         if !visible.contains(pa) && !visible.contains(pb) {
             continue;
         }
-        let colour = if highlight.contains(&na.id) && highlight.contains(&nb.id) {
+        let on_highlight = highlight.contains(&na.id) && highlight.contains(&nb.id);
+        let colour = if on_highlight {
             highlight_colour
         } else if tab.derived.allocated.contains(&na.id) && tab.derived.allocated.contains(&nb.id) {
             ALLOCATED
         } else {
             EDGE
         };
-        let stroke = Stroke::new(
-            (6.0 * zoom).clamp(1.0, 4.0),
-            colour.gamma_multiply(fade(na).min(fade(nb))),
+        let dependent = on_highlight && highlight_colour == DROP;
+        let colour = connector_shade(
+            colour,
+            na.ascendancy.as_deref(),
+            tab.derived.current_ascendancy.as_deref(),
+            dependent,
         );
+        let stroke = Stroke::new((6.0 * zoom).clamp(1.0, 4.0), colour);
         match arc_center(na, nb) {
             Some(center) => {
                 painter.line(arc_points(center, na.pos, nb.pos, zoom, to_screen), stroke)
@@ -605,6 +613,30 @@ fn arc_center(a: &TreeNode, b: &TreeNode) -> Option<[f32; 2]> {
     }
 }
 
+/// A connector's colour after PoB's fade (renderConnector, PassiveTreeView.lua:708-712): a
+/// connector of an ascendancy other than the build's is drawn at 0.75 grey, a chosen bloodline's
+/// too (its `ascendancyName` is never `curAscendClassBaseName`). A connector between dependents
+/// of the hovered node stays red.
+fn connector_shade(
+    colour: Color32,
+    ascendancy: Option<&str>,
+    current: Option<&str>,
+    dependent: bool,
+) -> Color32 {
+    match ascendancy {
+        Some(a) if !dependent && Some(a) != current => {
+            let grey = |c: u8| (f32::from(c) * CONNECTOR_FADE).round() as u8;
+            Color32::from_rgba_premultiplied(
+                grey(colour.r()),
+                grey(colour.g()),
+                grey(colour.b()),
+                colour.a(),
+            )
+        }
+        _ => colour,
+    }
+}
+
 /// On-screen size of a sprite at the given zoom.
 fn sprite_size(sprite: Sprite, zoom: f32) -> Vec2 {
     Vec2::new(sprite.rect[2], sprite.rect[3]) * SPRITE_SCALE * zoom
@@ -678,6 +710,30 @@ mod tests {
             [2, 1],
             vec![255; 8],
         ))
+    }
+
+    /// PoB fades every connector of an ascendancy that isn't the build's, a chosen bloodline's
+    /// included, unless it joins dependents of the hovered node (PassiveTreeView.lua:705-712)
+    #[test]
+    fn connectors_fade_outside_the_builds_ascendancy() {
+        let c = Color32::from_rgb(200, 100, 40);
+        let faded = Color32::from_rgb(150, 75, 30);
+        assert_eq!(connector_shade(c, None, Some("Raider"), false), c);
+        assert_eq!(connector_shade(c, Some("Raider"), Some("Raider"), false), c);
+        assert_eq!(
+            connector_shade(c, Some("Deadeye"), Some("Raider"), false),
+            faded
+        );
+        // the chosen bloodline's connectors stay faded, though its nodes don't
+        assert_eq!(
+            connector_shade(c, Some("Trialmaster"), Some("Raider"), false),
+            faded
+        );
+        assert_eq!(connector_shade(c, Some("Raider"), None, false), faded);
+        assert_eq!(
+            connector_shade(DROP, Some("Deadeye"), Some("Raider"), true),
+            DROP
+        );
     }
 
     #[test]

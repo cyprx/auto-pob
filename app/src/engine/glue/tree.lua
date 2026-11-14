@@ -424,6 +424,7 @@ local function compare_only_nodes(build)
 			if compare_only(build, compareSpec, id) then
 				list[#list + 1] = {
 					id = id, x = node.x, y = node.y, kind = node.type, name = node.dn or "",
+					mastery_effects = glue.node_mastery_effects(node),
 					-- PoB draws its allocated art, tinted green (PassiveTreeView.lua:1108-1140),
 					-- from the sheets the layout sent
 					art = sheetIndex and compare_only_art(node) or nil,

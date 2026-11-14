@@ -7,7 +7,7 @@ use std::collections::HashMap;
 const MIN_ZOOM: f32 = 0.01;
 const MAX_ZOOM: f32 = 2.0;
 /// A node can be hit this many screen points away from its centre, even when drawn smaller
-const MIN_HIT_POINTS: f32 = 6.0;
+pub const MIN_HIT_POINTS: f32 = 6.0;
 /// Side of a hit grid bucket, in tree units
 const CELL: f32 = 200.0;
 

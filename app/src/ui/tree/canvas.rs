@@ -2,9 +2,11 @@
 //! with the scroll wheel, click to allocate.
 
 use super::TreeTab;
-use super::geometry::{arc_points, node_radius};
+use super::geometry::{MIN_HIT_POINTS, arc_points, node_radius};
 use super::overlays::{self, ALLOCATED, Legend};
-use crate::engine::{NodePower, NodeTooltip, Sprite, TooltipLine, TreeLayout, TreeNode, TreeState};
+use crate::engine::{
+    CompareOnlyNode, NodePower, NodeTooltip, Sprite, TooltipLine, TreeLayout, TreeNode, TreeState,
+};
 use crate::theme;
 use crate::widgets::tooltip_ui;
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, TextureHandle, Tooltip, Vec2};
@@ -79,26 +81,21 @@ pub fn show(
     let visible = rect.expand(50.0);
 
     // the node under the pointer; none while panning
-    let hovered = response
+    let under = response
         .hover_pos()
         .filter(|_| valid_zoom && !response.dragged())
         .and_then(|p| tab.grid.node_at(layout, camera.to_tree(rect, p), zoom));
     // Shift traces a path through the hovered nodes (PassiveTreeView.lua:283-363); a node
     // the trace can't take is not hovered
     let shift = ui.input(|i| i.modifiers.shift);
-    let hovered_id = tab.trace_step(layout, hovered.map(|i| layout.nodes[i].id), shift);
+    let hovered_id = tab.trace_step(layout, under.map(|i| layout.nodes[i].id), shift);
     let hovered = hovered_id.and_then(|id| tab.index.get(&id).copied());
-    // where none of ours is, a node of the compared spec only (PassiveTreeView.lua:308-320)
+    // where none of ours is, a node of the compared spec only, Shift or not
+    // (PassiveTreeView.lua:308-320)
     let compare_hover = response
         .hover_pos()
-        .filter(|_| valid_zoom && !response.dragged() && !shift && hovered_id.is_none())
-        .and_then(|p| {
-            let at = Vec2::from(camera.to_tree(rect, p));
-            state
-                .compare_only
-                .iter()
-                .find(|n| (Vec2::new(n.x, n.y) - at).length() <= node_radius(&n.kind))
-        });
+        .filter(|_| valid_zoom && !response.dragged() && under.is_none())
+        .and_then(|p| compare_only_at(&state.compare_only, camera.to_tree(rect, p), zoom));
     let mut actions = Vec::new();
     let hover_id = hovered_id.or(compare_hover.map(|n| n.id));
     if hover_id != tab.hover {
@@ -239,11 +236,10 @@ pub fn show(
                 painter.circle_filled(pos, radius, COMPARE_ONLY);
             }
         }
-        if compare_hover.is_some_and(|n| n.id == node.id) {
-            painter.circle_stroke(pos, radius + 2.0, Stroke::new(2.0, HOVER));
-        }
     }
-    if let Some(node) = compare_hover {
+    // PoB draws no hover ring on one, and no tooltip for a mastery without effects
+    // (PassiveTreeView.lua:1143)
+    if let Some(node) = compare_hover.filter(|n| n.kind != "Mastery" || n.mastery_effects) {
         let reply = tab
             .tooltip
             .as_deref()
@@ -613,6 +609,19 @@ fn arc_center(a: &TreeNode, b: &TreeNode) -> Option<[f32; 2]> {
     }
 }
 
+/// The compare-only node at `at`, the nearest one when several are in reach, with the same
+/// least reach in screen points as our own nodes ([`super::geometry::HitGrid::node_at`])
+fn compare_only_at(nodes: &[CompareOnlyNode], at: [f32; 2], zoom: f32) -> Option<&CompareOnlyNode> {
+    let floor = MIN_HIT_POINTS / zoom;
+    let at = Vec2::from(at);
+    nodes
+        .iter()
+        .map(|n| (n, (Vec2::new(n.x, n.y) - at).length()))
+        .filter(|(n, d)| *d <= node_radius(&n.kind).max(floor))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(n, _)| n)
+}
+
 /// A connector's colour after PoB's fade (renderConnector, PassiveTreeView.lua:708-712): a
 /// connector of an ascendancy other than the build's is drawn at 0.75 grey, a chosen bloodline's
 /// too (its `ascendancyName` is never `curAscendClassBaseName`). A connector between dependents
@@ -710,6 +719,34 @@ mod tests {
             [2, 1],
             vec![255; 8],
         ))
+    }
+
+    fn compare_only(id: u32, x: f32, kind: &str) -> CompareOnlyNode {
+        CompareOnlyNode {
+            id,
+            x,
+            y: 0.0,
+            kind: kind.into(),
+            name: String::new(),
+            mastery_effects: false,
+            art: None,
+        }
+    }
+
+    /// The nearest compare-only node in reach, with our nodes' least reach on screen
+    #[test]
+    fn compare_only_nodes_are_hit_like_ours() {
+        let nodes = [
+            compare_only(1, 0.0, "Normal"),
+            compare_only(2, 40.0, "Normal"),
+        ];
+        let at = |x, zoom| compare_only_at(&nodes, [x, 0.0], zoom).map(|n| n.id);
+        assert_eq!(at(5.0, 1.0), Some(1));
+        assert_eq!(at(30.0, 1.0), Some(2));
+        assert_eq!(at(100.0, 1.0), None);
+        // zoomed out, 6 points reach 300 tree units
+        assert_eq!(at(250.0, 0.02), Some(2));
+        assert_eq!(at(400.0, 0.02), None);
     }
 
     /// PoB fades every connector of an ascendancy that isn't the build's, a chosen bloodline's

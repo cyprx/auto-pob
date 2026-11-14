@@ -644,6 +644,9 @@ pub struct CompareOnlyNode {
     pub y: f32,
     pub kind: String,
     pub name: String,
+    /// A mastery with effects to choose from: PoB shows a mastery's tooltip only then
+    #[serde(default)]
+    pub mastery_effects: bool,
     /// Its allocated icon and frame, from the layout's sheets
     #[serde(default)]
     pub art: Option<CompareOnlyArt>,

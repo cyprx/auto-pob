@@ -1075,6 +1075,7 @@ mod tests {
             y: 300.0,
             kind: "Notable".into(),
             name: "Prismatic Heart".into(),
+            mastery_effects: false,
             art: None,
         }];
         let mut h = Harness::new(l, Arc::new(state));
@@ -1097,6 +1098,21 @@ mod tests {
         h.frame(vec![]);
         let out = h.click_at(pos);
         assert!(out.commands.is_empty(), "{:?}", out.commands);
+        // Shift held: PoB still finds it (PassiveTreeView.lua:308-320)
+        h.frame(vec![Event::PointerMoved(Pos2::new(5.0, 5.0))]);
+        assert_eq!(h.tab.hover, None);
+        h.frame(vec![
+            Event::ModifiersChanged(egui::Modifiers::SHIFT),
+            Event::PointerMoved(pos),
+        ]);
+        assert_eq!(h.tab.hover, Some(70_000));
+        h.frame(vec![Event::ModifiersChanged(egui::Modifiers::NONE)]);
+        // zoomed far out it can still be pointed at, a few points off its centre
+        h.tab.camera.zoom = 0.02;
+        h.frame(vec![Event::PointerMoved(Pos2::new(5.0, 5.0))]);
+        let pos = h.tab.camera.to_screen(rect, [300.0, 300.0]) + Vec2::new(4.0, 0.0);
+        h.frame(vec![Event::PointerMoved(pos)]);
+        assert_eq!(h.tab.hover, Some(70_000));
     }
 
     #[test]

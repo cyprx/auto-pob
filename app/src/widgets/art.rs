@@ -380,4 +380,48 @@ mod tests {
         frame(&ctx, 1.0 + KEEP_SECONDS, sweep);
         assert!(cache(&ctx).lock().unwrap().entries.is_empty());
     }
+
+    /// An image the frame drew asks for no wake-up (an idle tab's background doesn't wake the
+    /// screen); one it didn't draw asks for one when its wait is over
+    #[test]
+    fn only_undrawn_images_wake_an_idle_screen() {
+        let dir = crate::test_dir::TestDir::new("art-wake");
+        image::RgbaImage::from_pixel(3, 2, image::Rgba([1, 2, 3, 255]))
+            .save(dir.join("c.png"))
+            .unwrap();
+        let ctx = egui::Context::default();
+        set_context_root(&ctx, &dir);
+        frame(&ctx, 0.0, |_| {});
+        let mut time = 0.0;
+        while frame(&ctx, time, |ctx| {
+            image(ctx, "c.png");
+        })
+        .0 == 0
+        {
+            assert!(time < 5.0, "never loaded");
+            time += 0.01;
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let delay = |time: f64, draw: bool| {
+            let input = RawInput {
+                time: Some(time),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                if draw {
+                    assert!(image(ui.ctx(), "c.png").is_some());
+                }
+                sweep(ui.ctx());
+            });
+            out.textures_delta.clear();
+            out.viewport_output[&egui::ViewportId::ROOT].repaint_delay
+        };
+        // let egui's own first-frame repaints settle
+        for i in 0..3 {
+            delay(10.0 + f64::from(i), true);
+        }
+        assert_eq!(delay(20.0, true), std::time::Duration::MAX);
+        let wait = delay(21.0, false).as_secs_f64();
+        assert!((wait - (KEEP_SECONDS - 1.0)).abs() < 0.01, "{wait}");
+    }
 }

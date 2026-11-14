@@ -443,7 +443,10 @@ pub fn node_tooltip_places(
             Pos2::new(x + tip.x + 5.0, y)
         }
     });
-    (main, skill_at)
+    // PoB wraps a tooltip taller than the view into columns, so it never starts above the view
+    // (Tooltip.lua:212-298); ours is one column, held at the view's top and left instead
+    let keep = |p: Pos2| Pos2::new(p.x.max(view.left()), p.y.max(view.top()));
+    (keep(main), skill_at.map(keep))
 }
 
 /// Where PoB's `Tooltip:Draw` puts a tooltip of `tip` for a hovered square at `corner`, `side`
@@ -1054,6 +1057,14 @@ mod tests {
         // edge, and 630 + 250 is 150 past the bottom
         assert_eq!(skill, Some(Pos2::new(805.0, 480.0)));
         assert_eq!(main, Pos2::new(500.0, 530.0));
+        // taller than the view: its top stays in it, and the skill's too
+        let tall = Vec2::new(300.0, 900.0);
+        let (main, skill) =
+            node_tooltip_places(Pos2::new(100.0, 300.0), 20.0, tall, Some(tall), view);
+        assert_eq!(main.y, view.top());
+        assert_eq!(skill.unwrap().y, view.top());
+        let (main, _) = node_tooltip_places(Pos2::new(100.0, 300.0), 20.0, tall, None, view);
+        assert!(main.y >= view.top() && main.x >= view.left());
         // the compare-only tooltip: right of the square, else left of it and under it
         let corner = Pos2::new(100.0, 100.0);
         assert_eq!(

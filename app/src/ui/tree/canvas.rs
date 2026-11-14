@@ -356,35 +356,34 @@ fn handle_input(ui: &egui::Ui, tab: &mut TreeTab, response: &egui::Response) {
         && let Some(pointer) = response.interact_pointer_pos()
     {
         let level = if response.secondary_clicked() { -2 } else { 2 };
-        tab.camera
-            .zoom_at(response.rect, pointer, 1.2f32.powi(level));
+        tab.camera.zoom_at(response.rect, pointer, level);
     }
     if let Some(pointer) = response.hover_pos() {
-        // PoB zooms one of its 1.2 steps a wheel notch, three with Shift
-        // (PassiveTreeView.lua:229-233); egui would turn Shift's wheel sideways
+        // PoB zooms one of its levels a wheel notch, three with Shift
+        // (PassiveTreeView.lua:229-233); egui would turn Shift's wheel sideways. A trackpad's
+        // pinch, or a touch screen's, counts a level for each 1.2 it zooms.
         let (notches, shift) = wheel_notches(ui);
-        tab.wheel_rest += notches;
+        let pinch = ui.input(|i| {
+            let pinch: f32 = i
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Zoom(f) => Some(*f),
+                    _ => None,
+                })
+                .product();
+            pinch * i.multi_touch().map_or(1.0, |t| t.zoom_delta)
+        });
+        let pinch_levels = if pinch > 0.0 && pinch != 1.0 {
+            pinch.ln() / 1.2f32.ln()
+        } else {
+            0.0
+        };
+        tab.wheel_rest += notches * if shift { 3.0 } else { 1.0 } + pinch_levels;
         let steps = tab.wheel_rest.trunc();
         tab.wheel_rest -= steps;
-        let mut factor = 1.0;
         if steps != 0.0 {
-            factor = 1.2f32.powi(steps as i32 * if shift { 3 } else { 1 });
-        } else if notches == 0.0 {
-            // a trackpad's pinch, or a touch screen's
-            factor = ui.input(|i| {
-                let pinch: f32 = i
-                    .events
-                    .iter()
-                    .filter_map(|e| match e {
-                        egui::Event::Zoom(f) => Some(*f),
-                        _ => None,
-                    })
-                    .product();
-                pinch * i.multi_touch().map_or(1.0, |t| t.zoom_delta)
-            });
-        }
-        if factor != 1.0 {
-            tab.camera.zoom_at(response.rect, pointer, factor);
+            tab.camera.zoom_at(response.rect, pointer, steps as i32);
         }
     }
 }

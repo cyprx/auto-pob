@@ -5,8 +5,10 @@ use eframe::egui::{Pos2, Rect, Vec2};
 use std::collections::HashMap;
 
 const MIN_ZOOM: f32 = 0.01;
-/// PoB's deepest zoom: 12 steps of 1.2 (PassiveTreeView.lua:1299)
-const MAX_POB_ZOOM: f32 = 8.916_100_5;
+/// PoB's deepest zoom level: `zoom = 1.2 ^ zoomLevel` from 0 to 12 (PassiveTreeView.lua:1299)
+pub const MAX_LEVEL: i32 = 12;
+/// PoB's zoom step
+const STEP: f32 = 1.2;
 const MAX_ZOOM: f32 = 2.0;
 /// A node can be hit this many screen points away from its centre, even when drawn smaller
 pub const MIN_HIT_POINTS: f32 = 6.0;
@@ -18,10 +20,13 @@ const CELL: f32 = 200.0;
 pub struct Camera {
     /// Tree position at the centre of the view
     pub center: Vec2,
-    /// Screen points per tree unit
+    /// Screen points per tree unit. With a tree it follows `level` and the view (see `limit`).
     pub zoom: f32,
     /// `tree.size` of the tree shown, which sets PoB's zoom range; 1 or less sets none
     pub tree_size: f32,
+    /// PoB's `zoomLevel`, 0 to [`MAX_LEVEL`]: the tree's size across the view's smaller side,
+    /// times 1.2 to the level (PassiveTreeView.lua:271, 1297-1301)
+    pub level: i32,
 }
 
 impl Camera {
@@ -33,43 +38,52 @@ impl Camera {
         (self.center + (screen - rect.center()) / self.zoom).into()
     }
 
-    /// Zooms by `factor` within PoB's range, keeping the tree point under `cursor` where it is.
-    pub fn zoom_at(&mut self, rect: Rect, cursor: Pos2, factor: f32) {
+    /// The zoom at level 0 for the view, when a tree is shown
+    fn base(&self, rect: Rect) -> Option<f32> {
+        let side = rect.width().min(rect.height());
+        (self.tree_size > 1.0 && side > 0.0).then(|| side / self.tree_size)
+    }
+
+    /// Zooms `steps` of PoB's levels, within its 0 to 12, keeping the tree point under `cursor`
+    /// where it is (PassiveTreeView:Zoom). A step past a limit changes nothing. Without a tree
+    /// the zoom is free, each step still 1.2.
+    pub fn zoom_at(&mut self, rect: Rect, cursor: Pos2, steps: i32) {
         let under_cursor = Vec2::from(self.to_tree(rect, cursor));
-        let (lo, hi) = self.zoom_range(rect);
-        self.zoom = (self.zoom * factor).clamp(lo, hi);
+        match self.base(rect) {
+            Some(base) => {
+                let level = (self.level + steps).clamp(0, MAX_LEVEL);
+                if level == self.level {
+                    return;
+                }
+                self.level = level;
+                self.zoom = base * STEP.powi(level);
+            }
+            None => self.zoom = (self.zoom * STEP.powi(steps)).clamp(MIN_ZOOM, MAX_ZOOM),
+        }
         self.center = under_cursor - (cursor - rect.center()) / self.zoom;
     }
 
-    /// PoB's zoom range for the view: the tree's size across its smaller side, to 12 of PoB's
-    /// 1.2 steps in (PassiveTreeView.lua:271, 1297-1310)
-    fn zoom_range(&self, rect: Rect) -> (f32, f32) {
-        let side = rect.width().min(rect.height());
-        if self.tree_size <= 1.0 || side <= 0.0 {
-            return (MIN_ZOOM, MAX_ZOOM);
-        }
-        let least = side / self.tree_size;
-        (least, least * MAX_POB_ZOOM)
-    }
-
-    /// Keeps the view within PoB's for a tree of `size`: zoomed within its range (see
-    /// `zoom_range`), and the tree's centre no farther from the view's than 2/3 of the view at
-    /// PoB's zoom (PassiveTreeView.lua:265-271). A size of 1 or less is no tree's: nothing is
-    /// limited.
+    /// Keeps the view within PoB's for a tree of `size`: the zoom at its level for this view,
+    /// and the tree's centre no farther from the view's than 2/3 of the view at PoB's zoom
+    /// (PassiveTreeView.lua:265-271). A size of 1 or less is no tree's: nothing is limited.
     pub fn limit(&mut self, rect: Rect, size: f32) {
         self.tree_size = size;
         let side = rect.width().min(rect.height());
-        if size <= 1.0 || side <= 0.0 || self.zoom <= 0.0 {
+        let Some(base) = self.base(rect) else {
+            return;
+        };
+        if self.zoom <= 0.0 {
             return;
         }
-        let (lo, hi) = self.zoom_range(rect);
-        self.zoom = self.zoom.clamp(lo, hi);
+        self.level = self.level.clamp(0, MAX_LEVEL);
+        self.zoom = base * STEP.powi(self.level);
         let reach = Vec2::new(rect.width(), rect.height()) * (2.0 / 3.0) * size / side;
         self.center = self.center.clamp(-reach, reach);
     }
 
-    /// Shows the whole tree. An empty, single-node or flat layout gets the centre of its nodes
-    /// and a usable zoom, so the zoom is never 0.
+    /// Shows the whole tree: at its centre, at the deepest of PoB's levels that still shows
+    /// every node. An empty, single-node or flat layout gets the centre of its nodes and a
+    /// usable zoom, so the zoom is never 0.
     pub fn fit(&mut self, rect: Rect, layout: &TreeLayout) {
         let bounds = layout.nodes.iter().fold(Rect::NOTHING, |r, n| {
             r.union(Rect::from_pos(Pos2::from(n.pos)))
@@ -81,7 +95,24 @@ impl Camera {
         }
         self.center = bounds.center().to_vec2();
         let (w, h) = (bounds.width().max(1.0), bounds.height().max(1.0));
-        self.zoom = ((rect.width() / w).min(rect.height() / h) * 0.95).clamp(MIN_ZOOM, MAX_ZOOM);
+        let whole = (rect.width() / w).min(rect.height() / h) * 0.95;
+        self.tree_size = layout.size;
+        match self.base(rect) {
+            Some(base) => {
+                let level = (whole / base).ln() / STEP.ln();
+                self.level = (level.floor() as i32).clamp(0, MAX_LEVEL);
+                self.zoom = base * STEP.powi(self.level);
+            }
+            None => self.zoom = whole.clamp(MIN_ZOOM, MAX_ZOOM),
+        }
+    }
+
+    /// PoB's `Focus`: the deepest level, centred on `at` (PassiveTreeView.lua:1312-1320)
+    pub fn focus(&mut self, at: [f32; 2]) {
+        self.center = at.into();
+        if self.tree_size > 1.0 {
+            self.level = MAX_LEVEL;
+        }
     }
 }
 
@@ -248,16 +279,82 @@ pub(super) mod tests {
 
     #[test]
     fn zoom_at_keeps_point_under_cursor() {
-        let mut camera = Camera {
-            center: Vec2::new(50.0, 80.0),
-            zoom: 0.3,
-            ..Camera::default()
+        // with a tree and without
+        for tree_size in [0.0, 20_000.0] {
+            let mut camera = Camera {
+                center: Vec2::new(50.0, 80.0),
+                zoom: 0.3,
+                tree_size,
+                level: 5,
+            };
+            let cursor = Pos2::new(600.0, 100.0);
+            let before = camera.to_tree(rect(), cursor);
+            camera.zoom_at(rect(), cursor, 2);
+            assert!(close(camera.to_tree(rect(), cursor), before));
+        }
+    }
+
+    /// PoB's 13 zoom levels: 1.2 to the level times the tree across the view's smaller side,
+    /// whatever the view's size; a step past 0 or 12 does nothing (PassiveTreeView.lua:271,
+    /// 1297-1310)
+    #[test]
+    fn the_zoom_takes_pobs_levels() {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let mut c = Camera {
+            center: Vec2::ZERO,
+            zoom: 1.0,
+            tree_size: 20_000.0,
+            level: 3,
         };
-        let cursor = Pos2::new(600.0, 100.0);
-        let before = camera.to_tree(rect(), cursor);
-        camera.zoom_at(rect(), cursor, 1.7);
-        assert!((camera.zoom - 0.51).abs() < 1e-4);
-        assert!(close(camera.to_tree(rect(), cursor), before));
+        c.limit(rect, 20_000.0);
+        let at = |level: i32| 600.0 / 20_000.0 * 1.2_f32.powi(level);
+        assert!((c.zoom - at(3)).abs() < 1e-6);
+        let cursor = Pos2::new(700.0, 100.0);
+        c.zoom_at(rect, cursor, 1);
+        assert_eq!(c.level, 4);
+        assert!((c.zoom - at(4)).abs() < 1e-6);
+        c.zoom_at(rect, cursor, 30);
+        assert_eq!(c.level, 12);
+        assert!((c.zoom - at(12)).abs() < 1e-6);
+        c.zoom_at(rect, cursor, -30);
+        assert_eq!(c.level, 0);
+        // a larger view keeps the level, as PoB's does
+        let wide = Rect::from_min_size(Pos2::ZERO, Vec2::new(1600.0, 1200.0));
+        c.level = 2;
+        c.limit(wide, 20_000.0);
+        assert!((c.zoom - 1200.0 / 20_000.0 * 1.44).abs() < 1e-6);
+        // fitting picks the deepest level that shows every node
+        let l = TreeLayout {
+            size: 20_000.0,
+            ..layout(
+                vec![
+                    node(1, [-9000.0, -9000.0], "Normal"),
+                    node(2, [9000.0, 9000.0], "Normal"),
+                ],
+                vec![],
+            )
+        };
+        c.fit(rect, &l);
+        assert_eq!(c.level, 0);
+        let small = TreeLayout {
+            size: 20_000.0,
+            ..layout(
+                vec![
+                    node(1, [-2000.0, -2000.0], "Normal"),
+                    node(2, [2000.0, 2000.0], "Normal"),
+                ],
+                vec![],
+            )
+        };
+        c.fit(rect, &small);
+        // 600 / 4000 * 0.95 over 0.03 is 4.75, and 1.2^8 = 4.3 < 4.75 < 1.2^9
+        assert_eq!(c.level, 8);
+        assert!((c.zoom - at(8)).abs() < 1e-6);
+        assert_eq!(c.center, Vec2::ZERO);
+        // PoB's Focus goes to the deepest level
+        c.focus([100.0, 200.0]);
+        c.limit(rect, 20_000.0);
+        assert_eq!((c.level, c.center), (12, Vec2::new(100.0, 200.0)));
     }
 
     #[test]
@@ -287,16 +384,10 @@ pub(super) mod tests {
             center: Vec2::ZERO,
             zoom: 0.001,
             tree_size: 0.0,
+            level: 0,
         };
         c.limit(rect, 20_000.0);
         assert_eq!(c.zoom, 600.0 / 20_000.0);
-        c.zoom = 5.0;
-        c.limit(rect, 20_000.0);
-        assert!(
-            (c.zoom - 0.03 * 1.2_f32.powi(12)).abs() < 1e-5,
-            "{}",
-            c.zoom
-        );
         c.center = Vec2::new(1e6, -1e6);
         c.limit(rect, 20_000.0);
         let reach = Vec2::new(800.0, 600.0) * (2.0 / 3.0) * 20_000.0 / 600.0;
@@ -306,21 +397,24 @@ pub(super) mod tests {
             center: Vec2::splat(1e6),
             zoom: 0.001,
             tree_size: 0.0,
+            level: 0,
         };
         free.limit(rect, 1.0);
         assert_eq!(free.zoom, 0.001);
         // a notch at a limit leaves the view where it is
         let mut at_limit = Camera {
             center: Vec2::new(100.0, 50.0),
-            zoom: 0.03 * MAX_POB_ZOOM,
+            zoom: 0.03 * 1.2_f32.powi(12),
             tree_size: 20_000.0,
+            level: 12,
         };
         let before = at_limit;
-        at_limit.zoom_at(rect, Pos2::new(700.0, 100.0), 1.2);
+        at_limit.zoom_at(rect, Pos2::new(700.0, 100.0), 1);
         assert_eq!(at_limit, before);
+        at_limit.level = 0;
         at_limit.zoom = 0.03;
         let before = at_limit;
-        at_limit.zoom_at(rect, Pos2::new(700.0, 100.0), 1.0 / 1.2);
+        at_limit.zoom_at(rect, Pos2::new(700.0, 100.0), -1);
         assert_eq!(at_limit, before);
     }
 

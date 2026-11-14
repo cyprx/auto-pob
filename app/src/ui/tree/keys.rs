@@ -5,9 +5,6 @@ use crate::engine::Command;
 use crate::ui::shortcuts::ShortcutAction;
 use eframe::egui;
 
-/// PoB's zoom step: `zoom = 1.2 ^ zoomLevel` (PassiveTreeView.lua:1297-1301)
-const ZOOM_STEP: f32 = 1.2;
-
 impl TreeTab {
     /// The pointer is over the tree selector or its list is open (TreeTab.lua:367-371)
     pub fn spec_select_busy(&self) -> bool {
@@ -146,7 +143,7 @@ impl TreeTab {
                 if let Some(rect) = self.rect {
                     // around the pointer, as PoB's Zoom keeps the point under the cursor
                     let at = ctx.pointer_hover_pos().unwrap_or(rect.center());
-                    self.camera.zoom_at(rect, at, ZOOM_STEP.powi(*level));
+                    self.camera.zoom_at(rect, at, *level);
                 }
                 None
             }

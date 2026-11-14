@@ -429,6 +429,11 @@ impl TreeTab {
         self.pulse = Some((id, now));
     }
 
+    fn camera_focus_point(&self, id: u32) -> Option<[f32; 2]> {
+        let (layout, &i) = (self.layout.as_ref()?, self.index.get(&id)?);
+        Some(layout.nodes[i].pos)
+    }
+
     /// `busy`: the engine is working, which the legend says.
     pub fn show(&mut self, ui: &mut egui::Ui, busy: bool) -> TreeOutput {
         let mut out = TreeOutput::default();
@@ -469,6 +474,10 @@ impl TreeTab {
             if let Some(id) = clicked {
                 let now = ui.input(|i| i.time);
                 self.focus_node(id, now);
+                // PoB's list jumps to the node at its deepest zoom (TreeTab.lua:275-282, 440-443)
+                if let Some(at) = self.camera_focus_point(id) {
+                    self.camera.focus(at);
+                }
             }
         }
         self.canvas(ui, &layout, &state, true, &mut out);
@@ -1198,7 +1207,7 @@ mod tests {
     }
 
     /// A sideways swipe or tilt wheel without Shift doesn't zoom; with Shift (as macOS sends
-    /// it) it does; a trackpad pinch (`Event::Zoom`) zooms by its factor
+    /// it) it does; a trackpad pinch (`Event::Zoom`) zooms a level for each 1.2 of its factor
     #[test]
     fn sideways_scroll_zooms_only_with_shift_and_a_pinch_zooms() {
         let (l, s) = sample();
@@ -1221,13 +1230,15 @@ mod tests {
             "{}",
             shifted / start
         );
+        // a pinch zooms whole levels: 0.5 is 3.8 of them, so 3 now and the rest kept
         h.frame(vec![Event::Zoom(0.5)]);
+        let pinched = h.tab.camera.zoom;
         assert!(
-            (h.tab.camera.zoom / shifted - 0.5).abs() < 1e-3,
-            "{} {}",
-            h.tab.camera.zoom,
-            shifted
+            (pinched / shifted - 1.2f32.powi(-3)).abs() < 1e-3,
+            "{pinched} {shifted}"
         );
+        h.frame(vec![Event::Zoom(1.2f32.powf(-0.3))]);
+        assert!((h.tab.camera.zoom / pinched - 1.0 / 1.2).abs() < 1e-3);
     }
 
     #[test]

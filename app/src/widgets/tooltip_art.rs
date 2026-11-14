@@ -472,4 +472,166 @@ mod tests {
         );
         assert!(header_shapes(&ctx, outer, &art, [1.0; 3], &[]).is_empty());
     }
+
+    /// What the item and node tooltip widgets paint is what `tooltip_art` lists, in order: the
+    /// gates compare the list with upstream's Draw, so the widgets must paint that list
+    #[test]
+    fn the_widgets_paint_what_tooltip_art_lists() {
+        use crate::engine::views::{ItemTooltip, ItemTooltipLine, TooltipLine};
+        let dir = crate::test_dir::TestDir::new("tooltip-art");
+        let file = |path: &str| {
+            let at = dir.join(path);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            if !at.exists() {
+                image::RgbaImage::from_pixel(2, 2, image::Rgba([9, 9, 9, 255]))
+                    .save(&at)
+                    .unwrap();
+            }
+        };
+        let text = |t: &str, background: Option<&str>| ItemTooltipLine::Line {
+            size: 14,
+            text: t.into(),
+            font: None,
+            center: false,
+            background: background.map(str::to_owned),
+            mod_line: None,
+        };
+        let sep = ItemTooltipLine::Separator { separator: 10 };
+        let rare = ItemTooltip {
+            header: Some("RARE".into()),
+            influences: vec!["Shaper".into(), "Elder".into()],
+            lines: vec![
+                ItemTooltipLine::Line {
+                    size: 20,
+                    text: "Doom Loop".into(),
+                    font: None,
+                    center: true,
+                    background: None,
+                    mod_line: None,
+                },
+                sep.clone(),
+                text("+10 life", None),
+                sep.clone(),
+                text("Memory Strands: 5", Some("Assets/memorybg.png")),
+                sep.clone(),
+                text("end", None),
+            ],
+            ..Default::default()
+        };
+        // no title first: no header art, but its first separator is still left out
+        let untitled = ItemTooltip {
+            header: Some("UNIQUE".into()),
+            lines: vec![sep.clone(), text("a", None), sep.clone(), text("b", None)],
+            ..Default::default()
+        };
+        let oils = vec!["AmberOil".to_owned(), "SepiaOil".to_owned()];
+        let node_lines = vec![
+            TooltipLine::Line {
+                size: 18,
+                text: "Notable".into(),
+            },
+            TooltipLine::Separator { separator: 14 },
+            TooltipLine::Line {
+                size: 14,
+                text: "stat".into(),
+            },
+        ];
+        let node_look = crate::widgets::Look {
+            header: Some("NOTABLE"),
+            recipe: &oils,
+            center: true,
+        };
+        let gem_lines = vec![
+            TooltipLine::Separator { separator: 10 },
+            TooltipLine::Line {
+                size: 14,
+                text: "gem".into(),
+            },
+            TooltipLine::Separator { separator: 10 },
+            TooltipLine::Line {
+                size: 14,
+                text: "more".into(),
+            },
+        ];
+        let gem_look = crate::widgets::Look {
+            header: Some("GEM"),
+            ..Default::default()
+        };
+        enum Tip<'a> {
+            Item(&'a ItemTooltip),
+            Lines(&'a [TooltipLine], crate::widgets::Look<'a>),
+        }
+        let cases = [
+            Tip::Item(&rare),
+            Tip::Item(&untitled),
+            Tip::Lines(&node_lines, node_look),
+            Tip::Lines(&gem_lines, gem_look),
+        ];
+        for tip in cases {
+            let want: Vec<String> = match &tip {
+                Tip::Item(t) => crate::widgets::item_tooltip::item_tooltip_art(t, true),
+                Tip::Lines(l, look) => crate::widgets::tooltip::tooltip_lines_art(l, look, true),
+            }
+            .into_iter()
+            .map(|(f, _)| f)
+            .collect();
+            for f in &want {
+                file(f);
+            }
+            let ctx = egui::Context::default();
+            art::set_context_root(&ctx, &dir);
+            // every image loaded first, so one frame paints them all
+            let mut loaded = false;
+            for i in 0..400 {
+                let input = egui::RawInput {
+                    time: Some(f64::from(i) * 0.01),
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(input, |ui| {
+                    loaded = want.iter().all(|f| art::image(ui.ctx(), f).is_some());
+                });
+                out.textures_delta.clear();
+                if loaded {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(3));
+            }
+            assert!(loaded);
+            let painted = {
+                let input = egui::RawInput {
+                    time: Some(4.0),
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(input, |ui| match &tip {
+                    Tip::Item(t) => {
+                        crate::widgets::item_tooltip_ui(ui, t);
+                    }
+                    Tip::Lines(l, look) => crate::widgets::styled_tooltip_ui(ui, l, look),
+                });
+                out.textures_delta.clear();
+                fn walk(s: &egui::Shape, out: &mut Vec<egui::TextureId>) {
+                    match s {
+                        egui::Shape::Mesh(m) => out.push(m.texture_id),
+                        egui::Shape::Vec(v) => v.iter().for_each(|x| walk(x, out)),
+                        _ => {}
+                    }
+                }
+                let mut ids = Vec::new();
+                for c in &out.shapes {
+                    walk(&c.shape, &mut ids);
+                }
+                let tm = ctx.tex_manager();
+                let tm = tm.read();
+                let mut painted: Vec<String> = ids
+                    .iter()
+                    .filter_map(|id| tm.meta(*id))
+                    .filter_map(|m| m.name.strip_prefix("pob-art:").map(str::to_owned))
+                    .collect();
+                // the header's middle is tiled: one entry for its run
+                painted.dedup_by(|a, b| a == b && a.contains("middle"));
+                painted
+            };
+            assert_eq!(painted, want);
+        }
+    }
 }

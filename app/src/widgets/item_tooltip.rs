@@ -151,8 +151,9 @@ fn single(
                         });
                     });
             }
-            // an item's or a gem's first separator is left out under its header art
-            let mut skip_separator = header.is_some()
+            // an item's first separator is left out with the option on, header art or not
+            // (Tooltip.lua:573-585)
+            let mut skip_separator = styled
                 && tooltip
                     .header
                     .as_deref()

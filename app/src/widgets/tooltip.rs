@@ -61,8 +61,9 @@ pub fn styled_tooltip_ui(ui: &mut egui::Ui, lines: &[TooltipLine], look: &Look) 
     if let Some(art) = &header {
         ui.add_space(art.text_offset);
     }
-    let mut skip_separator =
-        header.is_some() && look.header.is_some_and(tooltip_art::skips_first_separator);
+    // a gem's first separator is left out with the option on, header art or not
+    // (Tooltip.lua:573-585)
+    let mut skip_separator = styled && look.header.is_some_and(tooltip_art::skips_first_separator);
     let centred = |ui: &mut egui::Ui, add: &mut dyn FnMut(&mut egui::Ui)| {
         if look.center {
             ui.vertical_centered(|ui| add(ui));

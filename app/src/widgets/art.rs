@@ -159,7 +159,8 @@ fn image_with(ctx: &egui::Context, path: &str, repeat: bool) -> Option<(TextureI
 }
 
 /// Frees the textures nothing asked for in [`KEEP_SECONDS`], and asks for a frame then while
-/// any is kept, so they are freed on an idle screen too. Called once a frame.
+/// one that this frame didn't draw is kept, so it is freed on an idle screen too. Called once a
+/// frame, after everything drew.
 pub fn sweep(ctx: &egui::Context) {
     let shared = cache(ctx);
     let mut cache = shared.lock().unwrap_or_else(|e| e.into_inner());
@@ -168,10 +169,11 @@ pub fn sweep(ctx: &egui::Context) {
     cache
         .entries
         .retain(|_, e| matches!(e.state, State::Decoding(_)) || now - e.last < KEEP_SECONDS);
+    // what this frame drew (a tab's background) is kept without waking an idle screen
     if let Some(oldest) = cache
         .entries
         .values()
-        .filter(|e| matches!(e.state, State::Ready(_)))
+        .filter(|e| matches!(e.state, State::Ready(_)) && e.last < now)
         .map(|e| e.last)
         .reduce(f64::min)
     {
@@ -202,6 +204,22 @@ pub fn icon(ui: &mut egui::Ui, path: &str, size: f32) -> egui::Response {
     paint(ui.ctx(), ui.painter(), path, rect, egui::Color32::WHITE);
     response
 }
+
+/// PoB's background behind a tab (main:DrawBackground, Main.lua:1449-1458): the tree's
+/// Background2 tile, 100 points a repeat from the view's corner, at half brightness
+pub fn paint_background(ctx: &egui::Context, painter: &egui::Painter, rect: egui::Rect) {
+    let Some((texture, _)) = repeating_image(ctx, BACKGROUND_TILE) else {
+        return;
+    };
+    let uv = egui::Rect::from_min_max(
+        egui::pos2(0.0, 0.0),
+        egui::pos2(rect.width() / 100.0, rect.height() / 100.0),
+    );
+    painter.image(texture, rect, uv, egui::Color32::from_gray(128));
+}
+
+/// The latest tree's Background2 (`main.tree[latestTreeVersion].assets.Background2`)
+const BACKGROUND_TILE: &str = "TreeData/Background2.png";
 
 #[cfg(test)]
 mod tests {
@@ -269,5 +287,47 @@ mod tests {
             "the texture was freed"
         );
         assert!(cache(&ctx).lock().unwrap().entries.is_empty());
+    }
+
+    /// PoB's tab background: Background2 repeated every 100 points at half brightness
+    #[test]
+    fn the_background_tiles_every_100_points() {
+        let dir = crate::test_dir::TestDir::new("art-bg");
+        std::fs::create_dir_all(dir.join("TreeData")).unwrap();
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([9, 9, 9, 255]))
+            .save(dir.join("TreeData/Background2.png"))
+            .unwrap();
+        let ctx = egui::Context::default();
+        set_context_root(&ctx, &dir);
+        frame(&ctx, 0.0, |_| {});
+        let rect = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), Vec2::new(300.0, 200.0));
+        let mut mesh = None;
+        for i in 0..200 {
+            let input = RawInput {
+                time: Some(0.01 * f64::from(i)),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| paint_background(ui.ctx(), ui.painter(), rect));
+            out.textures_delta.clear();
+            mesh = out.shapes.iter().find_map(|s| match &s.shape {
+                egui::Shape::Mesh(m) => Some(m.clone()),
+                _ => None,
+            });
+            if mesh.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let mesh = mesh.expect("the background is drawn once loaded");
+        let max_uv = mesh
+            .vertices
+            .iter()
+            .fold(egui::Pos2::ZERO, |a, v| a.max(v.uv));
+        assert_eq!(max_uv, egui::pos2(3.0, 2.0));
+        assert!(
+            mesh.vertices
+                .iter()
+                .all(|v| v.color == egui::Color32::from_gray(128))
+        );
     }
 }

@@ -166,6 +166,21 @@ pub fn show(
             painter.circle_filled(pos, (node_radius(&node.kind) * zoom).max(1.5), colour);
         }
     }
+    // a compare-only node whose art isn't on the layout's files (another tree version's) is
+    // still shown, as a green dot
+    for node in &state.compare_only {
+        let drawn = node
+            .art
+            .as_ref()
+            .and_then(|a| a.base.or(a.overlay))
+            .and_then(|s| s.resolve(&layout.sheets))
+            .is_some();
+        let pos = to_screen([node.x, node.y]);
+        if !drawn && visible.contains(pos) {
+            let radius = (node_radius(&node.kind) * zoom).max(1.5);
+            painter.circle_filled(pos, radius, Color32::from_rgb(0, 255, 0));
+        }
+    }
     // PoB draws no hover ring on a compare-only node, and no tooltip for a mastery without
     // effects or while Ctrl is held (PassiveTreeView.lua:1143)
     let ctrl_held = ui.input(|i| i.modifiers.command);

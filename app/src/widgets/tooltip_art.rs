@@ -580,6 +580,7 @@ mod tests {
             }
             let ctx = egui::Context::default();
             art::set_context_root(&ctx, &dir);
+            art::hold_decodes(&ctx);
             // every image loaded first, so one frame paints them all
             let mut loaded = false;
             for i in 0..400 {
@@ -594,7 +595,7 @@ mod tests {
                 if loaded {
                     break;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(3));
+                art::run_decodes(&ctx);
             }
             assert!(loaded);
             let painted = {

@@ -70,6 +70,10 @@ struct Cache {
     /// This context's folder instead of the engine's (tests)
     root: Option<PathBuf>,
     entries: HashMap<String, Entry>,
+    /// Decodes wait here for `run_decodes` instead of going to the art thread (tests: the
+    /// decode happens at an explicit step, not on another thread's time)
+    #[cfg(test)]
+    held: Option<Vec<ArtJob>>,
 }
 
 type Shared = Arc<Mutex<Cache>>;
@@ -111,10 +115,15 @@ fn image_with(ctx: &egui::Context, path: &str, repeat: bool) -> Option<(TextureI
     } else {
         path.to_owned()
     };
+    #[cfg(test)]
+    let hold = cache.held.is_some();
+    #[cfg(not(test))]
+    let hold = false;
+    let mut held: Option<ArtJob> = None;
     let entry = cache.entries.entry(key).or_insert_with(|| {
         let slot: Slot = Arc::default();
         let (done, file, ctx) = (Arc::clone(&slot), root.join(path), ctx.clone());
-        let started = send_to_art_thread(Box::new(move || {
+        let job: ArtJob = Box::new(move || {
             let image = image::open(&file).ok().map(|i| {
                 let rgba = i.into_rgba8();
                 let size = [rgba.width() as usize, rgba.height() as usize];
@@ -122,7 +131,13 @@ fn image_with(ctx: &egui::Context, path: &str, repeat: bool) -> Option<(TextureI
             });
             *done.lock().unwrap_or_else(|e| e.into_inner()) = Some(image);
             ctx.request_repaint();
-        }));
+        });
+        let started = if hold {
+            held = Some(job);
+            Ok(())
+        } else {
+            send_to_art_thread(job)
+        };
         Entry {
             state: if started.is_ok() {
                 State::Decoding(slot)
@@ -149,13 +164,43 @@ fn image_with(ctx: &egui::Context, path: &str, repeat: bool) -> Option<(TextureI
             }
         }
     }
-    match &entry.state {
+    let found = match &entry.state {
         State::Ready(texture) => {
             let [w, h] = texture.size();
             Some((texture.id(), Vec2::new(w as f32, h as f32)))
         }
         _ => None,
+    };
+    #[cfg(test)]
+    if let (Some(job), Some(list)) = (held, cache.held.as_mut()) {
+        list.push(job);
     }
+    #[cfg(not(test))]
+    drop(held);
+    found
+}
+
+/// Holds this context's decodes until `run_decodes` (tests)
+#[cfg(test)]
+pub(crate) fn hold_decodes(ctx: &egui::Context) {
+    cache(ctx).lock().unwrap_or_else(|e| e.into_inner()).held = Some(Vec::new());
+}
+
+/// Runs the decodes held so far, on this thread; how many ran (tests)
+#[cfg(test)]
+pub(crate) fn run_decodes(ctx: &egui::Context) -> usize {
+    let jobs = cache(ctx)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .held
+        .as_mut()
+        .map(std::mem::take)
+        .unwrap_or_default();
+    let n = jobs.len();
+    for job in jobs {
+        job();
+    }
+    n
 }
 
 /// Frees the textures nothing asked for in [`KEEP_SECONDS`], and asks for a frame then while
@@ -268,6 +313,7 @@ mod tests {
             .unwrap();
         let ctx = egui::Context::default();
         set_context_root(&ctx, &dir);
+        hold_decodes(&ctx);
         // the font atlas's upload
         frame(&ctx, 0.0, |_| {});
         let mut got = None;
@@ -281,7 +327,7 @@ mod tests {
             if got.is_some() {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            run_decodes(&ctx);
         }
         let (id, size) = got.expect("the image loads");
         assert_eq!(size, Vec2::new(3.0, 2.0));
@@ -312,6 +358,7 @@ mod tests {
             .unwrap();
         let ctx = egui::Context::default();
         set_context_root(&ctx, &dir);
+        hold_decodes(&ctx);
         frame(&ctx, 0.0, |_| {});
         let rect = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), Vec2::new(300.0, 200.0));
         let mut mesh = None;
@@ -329,7 +376,7 @@ mod tests {
             if mesh.is_some() {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            run_decodes(&ctx);
         }
         let mesh = mesh.expect("the background is drawn once loaded");
         let max_uv = mesh
@@ -354,27 +401,21 @@ mod tests {
             .unwrap();
         let ctx = egui::Context::default();
         set_context_root(&ctx, &dir);
+        hold_decodes(&ctx);
         // asked once only (egui may run a frame's pass twice)
         let mut asked = false;
         frame(&ctx, 0.0, |ctx| {
             if !std::mem::replace(&mut asked, true) {
-                image(ctx, "b.png");
+                assert!(image(ctx, "b.png").is_none());
             }
         });
-        // the decode finishes off the frame
-        let decoded = || {
-            let cache = cache(&ctx);
-            let cache = cache.lock().unwrap();
-            match &cache.entries["b.png"].state {
-                State::Decoding(slot) => slot.lock().unwrap().is_some(),
-                _ => false,
-            }
+        // the decode finishes, and nothing asks for the image again
+        assert_eq!(run_decodes(&ctx), 1);
+        let decoded = match &cache(&ctx).lock().unwrap().entries["b.png"].state {
+            State::Decoding(slot) => slot.lock().unwrap().is_some(),
+            _ => false,
         };
-        let start = std::time::Instant::now();
-        while !decoded() {
-            assert!(start.elapsed().as_secs() < 5, "never decoded");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        assert!(decoded, "decoded and not claimed");
         frame(&ctx, 1.0, sweep);
         assert_eq!(
             cache(&ctx).lock().unwrap().entries.len(),
@@ -395,6 +436,7 @@ mod tests {
             .unwrap();
         let ctx = egui::Context::default();
         set_context_root(&ctx, &dir);
+        hold_decodes(&ctx);
         frame(&ctx, 0.0, |_| {});
         let mut time = 0.0;
         while frame(&ctx, time, |ctx| {
@@ -404,7 +446,7 @@ mod tests {
         {
             assert!(time < 5.0, "never loaded");
             time += 0.01;
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            run_decodes(&ctx);
         }
         let delay = |time: f64, draw: bool| {
             let input = RawInput {

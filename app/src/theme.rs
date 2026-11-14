@@ -1106,6 +1106,7 @@ mod tests {
         let ctx = egui::Context::default();
         apply(&ctx);
         crate::widgets::art::set_context_root(&ctx, &dir);
+        crate::widgets::art::hold_decodes(&ctx);
         let size = egui::vec2(1200.0, 600.0);
         let mut found = None;
         for i in 0..300 {
@@ -1140,7 +1141,7 @@ mod tests {
                 found = Some((tabs.iter().map(|t| t.rect).collect::<Vec<_>>(), meshes));
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            crate::widgets::art::run_decodes(&ctx);
         }
         let (tabs, meshes) = found.expect("the tile is drawn once loaded");
         let bottom = tabs[1].bottom();

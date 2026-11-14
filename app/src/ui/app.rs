@@ -4400,6 +4400,7 @@ mod tests {
                 skills_app()
             };
             crate::widgets::art::set_context_root(&ctx, &dir);
+            crate::widgets::art::hold_decodes(&ctx);
             let panel = ctx.global_style().visuals.panel_fill;
             let mut checked = false;
             for i in 0..300 {
@@ -4447,7 +4448,7 @@ mod tests {
                     checked = true;
                     break;
                 }
-                std::thread::sleep(Duration::from_millis(5));
+                crate::widgets::art::run_decodes(&ctx);
             }
             assert!(checked, "{tab:?}: the tile was never drawn");
         }

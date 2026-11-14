@@ -800,6 +800,44 @@ local function compare_only_nodes(build)
 	return list
 end
 
+-- The cluster jewels only the compared spec has: their group art, drawn green at 0.6, and
+-- their connectors between allocated nodes, drawn green in the Active art
+-- (PassiveTreeView.lua:651-660, 747-770)
+local function compare_only_subgraphs(build)
+	local compareSpec = viewed_compare_spec(build)
+	local groups, connectors = {}, {}
+	if not compareSpec or not sheetIndex then
+		return groups, connectors
+	end
+	local spec, tree = build.spec, build.spec.tree
+	local ids = {}
+	for id in pairs(compareSpec.subGraphs) do
+		if not spec.subGraphs[id] then
+			ids[#ids + 1] = id
+		end
+	end
+	table.sort(ids)
+	sheetsFrozen = true
+	local ok, err = pcall(function()
+		for _, id in ipairs(ids) do
+			local subGraph = compareSpec.subGraphs[id]
+			groups[#groups + 1] = group_art(tree, subGraph.group, true)
+			for _, connector in ipairs(subGraph.connectors) do
+				local n1 = compareSpec.nodes[connector.nodeId1]
+				local n2 = compareSpec.nodes[connector.nodeId2]
+				if n1 and n2 and n1.alloc and n2.alloc and connector.vert then
+					connectors[#connectors + 1] = connector_entry(tree, connector, compareSpec.nodes)
+				end
+			end
+		end
+	end)
+	sheetsFrozen = false
+	if not ok then
+		error(err, 0)
+	end
+	return groups, connectors
+end
+
 -- Ids of the nodes `test` picks, sorted
 local function ids_where(nodes, test)
 	local ids = {}
@@ -1042,6 +1080,7 @@ function glue.tree_state(fresh, held)
 	local send = held ~= paths.token
 	local masteries, masteryOptions = mastery_state(spec)
 	local compare, compareSpec = compare_state(build)
+	local compareGroups, compareConnectors = compare_only_subgraphs(build)
 
 	-- the id of the newest tree version, keeping the spec's suffix (TreeTab.lua:326)
 	local convertible
@@ -1070,6 +1109,8 @@ function glue.tree_state(fresh, held)
 		compare = compare,
 		compare_spec = compareSpec,
 		compare_only = compare_only_nodes(build),
+		compare_only_groups = compareGroups,
+		compare_only_connectors = compareConnectors,
 		draw = draw_state(build),
 		socket_rings = socket_rings(build),
 		jewels = jewel_sockets(build),

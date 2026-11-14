@@ -11,6 +11,8 @@ use std::collections::{HashMap, HashSet};
 pub const ART_SCALE: f32 = 1.33;
 /// The Split Personality path's colour (`colorCodes.SPLITPERSONALITY`, Global.lua:61)
 const SPLIT_PERSONALITY: [f32; 3] = [1.0, 214.0 / 255.0, 42.0 / 255.0];
+/// The group art of a cluster jewel only the compared spec has (PassiveTreeView.lua:654)
+const COMPARE_ONLY_GROUP: [f32; 4] = [0.0, 1.0, 0.0, 0.6];
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
 const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
@@ -564,6 +566,11 @@ pub fn build(
     for g in &layout.groups {
         group(&mut scene, g, WHITE);
     }
+    for g in &state.compare_only_groups {
+        if let Some(g) = g.resolve(&layout.sheets) {
+            group(&mut scene, &g, COMPARE_ONLY_GROUP);
+        }
+    }
 
     // the connectors
     scene.layer = LAYER_CONNECTOR;
@@ -592,6 +599,9 @@ pub fn build(
     for c in &layout.connectors {
         let (state, tint) = connector_look(c, sets, look);
         connector(&mut scene, c, state, tint);
+    }
+    for c in &state.compare_only_connectors {
+        connector(&mut scene, c, LineState::Active, GREEN);
     }
 
     // the nodes (PassiveTreeView.lua:805-1009)
@@ -742,7 +752,7 @@ pub fn build(
 mod tests {
     use super::super::geometry::tests::{layout, node};
     use super::*;
-    use crate::engine::{GroupArt, JewelRadius, SocketRings};
+    use crate::engine::{GroupArt, JewelRadius, LuaGroupArt, LuaSprite, SocketRings};
 
     /// A sprite of `w` x `h` pixels on sheet `sheet`
     fn art(sheet: usize, w: f32, h: f32) -> Sprite {
@@ -1158,7 +1168,7 @@ mod tests {
     }
 
     /// The group art (renderGroup): a half background mirrored below; an ascendancy's emblem
-    /// faded unless it is the build's or its bloodline
+    /// faded unless it is the build's or its bloodline; a compare-only cluster's green at 0.6
     #[test]
     fn groups_draw_their_backgrounds() {
         let mut l = layout(vec![], vec![]);
@@ -1176,10 +1186,25 @@ mod tests {
             g(false, Some("Deadeye")),
             g(false, Some("Trialmaster")),
         ];
-        let state = crate::engine::fake::empty_tree_state();
+        let mut state = crate::engine::fake::empty_tree_state();
+        state.compare_only_groups = vec![LuaGroupArt {
+            x: 0.0,
+            y: 0.0,
+            art: LuaSprite {
+                sheet: 1,
+                x: Some(0.0),
+                y: Some(0.0),
+                w: Some(4.0),
+                h: Some(4.0),
+            },
+            half: false,
+            ascendancy: None,
+            flavour: None,
+        }];
         let empty = HashSet::new();
         let mut s = sets(&[]);
         s.bloodline = Some("Trialmaster".into());
+        // the compare-only group's sheet isn't loaded: left out
         let images = build(&l, &state, &s, &HashMap::new(), &look(&empty));
         let groups = of(&images, Tag::Group);
         assert_eq!(groups.len(), 5);
@@ -1189,8 +1214,36 @@ mod tests {
         assert_eq!(bottom.uv[0], Vec2::new(0.0, 1.0));
         let alphas: Vec<f32> = groups[2..].iter().map(|g| g.tint[3]).collect();
         assert_eq!(alphas, [1.0, 0.5, 1.0]);
+        let sheet = std::sync::Arc::new(crate::engine::SheetImage::new(
+            "x.png".into(),
+            [4, 4],
+            vec![0; 64],
+        ));
+        l.sheets = vec![Some(sheet.clone()), Some(sheet)];
+        let images = build(&l, &state, &s, &HashMap::new(), &look(&empty));
+        assert_eq!(
+            of(&images, Tag::Group).last().unwrap().tint,
+            COMPARE_ONLY_GROUP
+        );
         // drawn first: the background layer
         assert!(images.iter().all(|i| i.layer == LAYER_BACK));
+    }
+
+    /// A cluster jewel only the compared spec has: its connectors in the Active art, green,
+    /// whatever this spec allocates (PassiveTreeView.lua:747-770)
+    #[test]
+    fn compare_only_connectors_are_green_and_active() {
+        let mut l = layout(vec![], vec![]);
+        l.assets.insert("LineConnectorNormal".into(), art(0, 736.0, 16.0));
+        l.assets.insert("LineConnectorActive".into(), art(1, 736.0, 16.0));
+        let mut state = crate::engine::fake::empty_tree_state();
+        state.compare_only_connectors = vec![line(70_000, 70_001, None)];
+        let empty = HashSet::new();
+        let images = build(&l, &state, &sets(&[]), &HashMap::new(), &look(&empty));
+        let drawn = of(&images, Tag::Connector([70_000, 70_001]));
+        assert_eq!(drawn.len(), 1);
+        assert_eq!((drawn[0].sprite.sheet, drawn[0].tint), (1, GREEN));
+        assert_eq!(drawn[0].layer, LAYER_CONNECTOR);
     }
 
     /// PoB's search ring: 175 / zoom^0.4 each side, red, above the nodes

@@ -673,6 +673,12 @@ pub struct TreeState {
     /// subgraph): PoB draws them green and gives them a tooltip (PassiveTreeView.lua:1102-1153)
     #[serde(default)]
     pub compare_only: Vec<CompareOnlyNode>,
+    /// The group art of the cluster jewels only the compared spec has (PassiveTreeView.lua:651-660)
+    #[serde(default)]
+    pub compare_only_groups: Vec<LuaGroupArt>,
+    /// Their connectors between allocated nodes (PassiveTreeView.lua:747-770)
+    #[serde(default)]
+    pub compare_only_connectors: Vec<Connector>,
     /// What the art depends on beyond the allocation
     #[serde(default)]
     pub draw: DrawState,

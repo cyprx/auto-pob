@@ -351,6 +351,16 @@ fn hovered_tree_drawing_matches_pob() {
     }
 }
 
+/// A cluster jewel only the compared tree has: its group art green at 0.6, its connectors green
+/// in the Active art, its nodes green; and the compared tree's own colours on ours
+/// (PassiveTreeView.lua:651-660, 747-770, 1102-1141)
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn compared_tree_drawing_matches_pob() {
+    let _guard = lock();
+    recipe_matches("compare_only", "");
+}
+
 /// A jewel's radius art and its socket's overlay (PassiveTreeView.lua:844-848, 1156-1248)
 #[test]
 #[ignore = "needs the pinned PoB install"]

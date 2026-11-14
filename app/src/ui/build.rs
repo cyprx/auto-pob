@@ -443,7 +443,10 @@ fn new_loadout_dialog(ctx: &egui::Context, state: &mut TopBarState, commands: &m
 pub fn tab_strip(ui: &mut egui::Ui, tab: &mut BuildTab) -> Vec<egui::Response> {
     let tabs = TABS.map(|(_, label)| label);
     let selected = TABS.iter().position(|(t, _)| t == tab).unwrap_or(0);
-    let responses = crate::theme::main_tabs(ui, &tabs, selected);
+    // every tab but the tree's has PoB's background under the band (main:DrawBackground; the
+    // tree draws its own)
+    let tiled = *tab != BuildTab::Tree;
+    let responses = crate::theme::main_tabs(ui, &tabs, selected, tiled);
     for (response, (t, _)) in responses.iter().zip(TABS) {
         if response.clicked() {
             *tab = t;
@@ -950,7 +953,7 @@ mod tests {
     }
 
     const GOLD: egui::Color32 = egui::Color32::from_rgb(200, 160, 80);
-    const BAND: egui::Color32 = egui::Color32::from_rgb(11, 9, 7);
+    const BAND: egui::Color32 = egui::Color32::from_rgb(2, 3, 4);
 
     /// [`strip_at`] on a 1200 pt wide screen
     fn strip(tab: &mut BuildTab, frames: Vec<Vec<Event>>) -> (Vec<Rect>, Vec<Painted>) {

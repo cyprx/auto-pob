@@ -208,15 +208,23 @@ pub fn icon(ui: &mut egui::Ui, path: &str, size: f32) -> egui::Response {
 /// PoB's background behind a tab (main:DrawBackground, Main.lua:1449-1458): the tree's
 /// Background2 tile, 100 points a repeat from the view's corner, at half brightness
 pub fn paint_background(ctx: &egui::Context, painter: &egui::Painter, rect: egui::Rect) {
-    let Some((texture, _)) = repeating_image(ctx, BACKGROUND_TILE) else {
+    let Some((texture, _)) = background_tile(ctx) else {
         return;
     };
     let uv = egui::Rect::from_min_max(
         egui::pos2(0.0, 0.0),
         egui::pos2(rect.width() / 100.0, rect.height() / 100.0),
     );
-    painter.image(texture, rect, uv, egui::Color32::from_gray(128));
+    painter.image(texture, rect, uv, TILE_TINT);
 }
+
+/// The background tile's texture, uploaded to repeat, once loaded
+pub fn background_tile(ctx: &egui::Context) -> Option<(TextureId, Vec2)> {
+    repeating_image(ctx, BACKGROUND_TILE)
+}
+
+/// PoB's half brightness for the background (`SetDrawColor(0.5, 0.5, 0.5)`)
+pub const TILE_TINT: egui::Color32 = egui::Color32::from_gray(128);
 
 /// The latest tree's Background2 (`main.tree[latestTreeVersion].assets.Background2`)
 const BACKGROUND_TILE: &str = "TreeData/Background2.png";

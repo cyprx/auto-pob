@@ -1596,8 +1596,9 @@ impl AutoPobApp {
             self.open_help(HelpStart::Tab(help::tab_name(None)));
         }
         egui::CentralPanel::default().show(ui, |ui| {
-            // PoB's build list draws its background first (BuildList.lua:179)
-            let rect = ui.max_rect();
+            // PoB's build list draws its background first, over the whole view (BuildList.lua:
+            // 179), the panel's margins included
+            let rect = ui.clip_rect();
             crate::widgets::art::paint_background(ui.ctx(), ui.painter(), rect);
             match self.list.clone() {
                 Some(view) => action = self.list_ui.show(ui, &view, blocked),
@@ -1859,13 +1860,8 @@ impl AutoPobApp {
         let mut compare_out = CompareOutput::default();
         let config = self.config.clone();
         egui::CentralPanel::default().show(ui, |ui| {
+            // the strip draws PoB's background under it, but on the tree's tab
             build::tab_strip(ui, &mut self.tab);
-            // every tab but the tree's draws PoB's background first (main:DrawBackground; the
-            // tree draws its own)
-            if self.tab != BuildTab::Tree {
-                let rect = ui.available_rect_before_wrap();
-                crate::widgets::art::paint_background(ui.ctx(), ui.painter(), rect);
-            }
             match self.tab {
                 BuildTab::Tree => {
                     self.tree.set_enabled_sockets(self.items.enabled_sockets());

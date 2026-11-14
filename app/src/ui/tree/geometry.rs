@@ -20,6 +20,8 @@ pub struct Camera {
     pub center: Vec2,
     /// Screen points per tree unit
     pub zoom: f32,
+    /// `tree.size` of the tree shown, which sets PoB's zoom range; 1 or less sets none
+    pub tree_size: f32,
 }
 
 impl Camera {
@@ -31,24 +33,37 @@ impl Camera {
         (self.center + (screen - rect.center()) / self.zoom).into()
     }
 
-    /// Zooms by `factor`, keeping the tree point under `cursor` where it is.
+    /// Zooms by `factor` within PoB's range, keeping the tree point under `cursor` where it is.
     pub fn zoom_at(&mut self, rect: Rect, cursor: Pos2, factor: f32) {
         let under_cursor = Vec2::from(self.to_tree(rect, cursor));
-        self.zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+        let (lo, hi) = self.zoom_range(rect);
+        self.zoom = (self.zoom * factor).clamp(lo, hi);
         self.center = under_cursor - (cursor - rect.center()) / self.zoom;
     }
 
-    /// Keeps the view within PoB's: zoomed between the tree's `size` across the view's smaller
-    /// side and 12 of its 1.2 steps in, and the tree's centre no farther from the view's than
-    /// 2/3 of the view at PoB's zoom (PassiveTreeView.lua:265-271, 1297-1310). A size of 1 or
-    /// less is no tree's: nothing is limited.
+    /// PoB's zoom range for the view: the tree's size across its smaller side, to 12 of PoB's
+    /// 1.2 steps in (PassiveTreeView.lua:271, 1297-1310)
+    fn zoom_range(&self, rect: Rect) -> (f32, f32) {
+        let side = rect.width().min(rect.height());
+        if self.tree_size <= 1.0 || side <= 0.0 {
+            return (MIN_ZOOM, MAX_ZOOM);
+        }
+        let least = side / self.tree_size;
+        (least, least * MAX_POB_ZOOM)
+    }
+
+    /// Keeps the view within PoB's for a tree of `size`: zoomed within its range (see
+    /// `zoom_range`), and the tree's centre no farther from the view's than 2/3 of the view at
+    /// PoB's zoom (PassiveTreeView.lua:265-271). A size of 1 or less is no tree's: nothing is
+    /// limited.
     pub fn limit(&mut self, rect: Rect, size: f32) {
+        self.tree_size = size;
         let side = rect.width().min(rect.height());
         if size <= 1.0 || side <= 0.0 || self.zoom <= 0.0 {
             return;
         }
-        let least = side / size;
-        self.zoom = self.zoom.clamp(least, least * MAX_POB_ZOOM);
+        let (lo, hi) = self.zoom_range(rect);
+        self.zoom = self.zoom.clamp(lo, hi);
         let reach = Vec2::new(rect.width(), rect.height()) * (2.0 / 3.0) * size / side;
         self.center = self.center.clamp(-reach, reach);
     }
@@ -221,6 +236,7 @@ pub(super) mod tests {
             let camera = Camera {
                 center: Vec2::new(120.0, -340.0),
                 zoom,
+                ..Camera::default()
             };
             let p = [500.0, -1200.0];
             assert!(close(
@@ -235,6 +251,7 @@ pub(super) mod tests {
         let mut camera = Camera {
             center: Vec2::new(50.0, 80.0),
             zoom: 0.3,
+            ..Camera::default()
         };
         let cursor = Pos2::new(600.0, 100.0);
         let before = camera.to_tree(rect(), cursor);
@@ -269,6 +286,7 @@ pub(super) mod tests {
         let mut c = Camera {
             center: Vec2::ZERO,
             zoom: 0.001,
+            tree_size: 0.0,
         };
         c.limit(rect, 20_000.0);
         assert_eq!(c.zoom, 600.0 / 20_000.0);
@@ -287,9 +305,23 @@ pub(super) mod tests {
         let mut free = Camera {
             center: Vec2::splat(1e6),
             zoom: 0.001,
+            tree_size: 0.0,
         };
         free.limit(rect, 1.0);
         assert_eq!(free.zoom, 0.001);
+        // a notch at a limit leaves the view where it is
+        let mut at_limit = Camera {
+            center: Vec2::new(100.0, 50.0),
+            zoom: 0.03 * MAX_POB_ZOOM,
+            tree_size: 20_000.0,
+        };
+        let before = at_limit;
+        at_limit.zoom_at(rect, Pos2::new(700.0, 100.0), 1.2);
+        assert_eq!(at_limit, before);
+        at_limit.zoom = 0.03;
+        let before = at_limit;
+        at_limit.zoom_at(rect, Pos2::new(700.0, 100.0), 1.0 / 1.2);
+        assert_eq!(at_limit, before);
     }
 
     /// PoB hovers a node within its frame's size (artWidth * 1.33) and never a class or

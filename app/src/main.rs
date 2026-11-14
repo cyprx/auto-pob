@@ -82,6 +82,8 @@ impl Setup {
 }
 
 fn main() -> eframe::Result {
+    // before the big allocations, so freed buffers go back to the OS
+    auto_pob::engine::memory::fix_mmap_threshold();
     env_logger::init();
     let data_dir = BaseDirs::new()
         .expect("home directory")

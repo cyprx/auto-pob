@@ -1,10 +1,13 @@
 //! PoB's item tooltip (`ItemTooltip`): sized lines, a rarity title band and clickable mod lines.
-//! Fonts, centring and backgrounds are approximated.
+//! With "Styled Tooltips with Flavour Text" on, PoB's header, separator, influence and line
+//! background art (`tooltip_art`). Fonts and centring are approximated.
 
+use super::art;
 use super::pob_text::{pob_colour, pob_text};
+use super::tooltip_art::{self, LineArt, TooltipArt};
 use crate::engine::views::{ItemTooltip, ItemTooltipLine, ModLineRef};
 use crate::theme;
-use eframe::egui::{self, Color32, Sense, Stroke, Vec2};
+use eframe::egui::{self, Color32, Rect, Sense, Stroke, Vec2};
 
 /// PoB font sizes are drawn at this fraction of their size in points.
 const SIZE_SCALE: f32 = 0.9;
@@ -59,6 +62,25 @@ pub fn item_tooltip_ui_with(
     .inner
 }
 
+/// The images PoB draws on this tooltip, in its order (see [`tooltip_art::tooltip_art`])
+pub fn item_tooltip_art(tooltip: &ItemTooltip, styled: bool) -> Vec<tooltip_art::Drawn> {
+    tooltip_art::tooltip_art(
+        &TooltipArt {
+            header: tooltip.header.as_deref(),
+            influences: &tooltip.influences,
+            foil: tooltip.foil.as_deref(),
+            recipe: &[],
+        },
+        styled,
+        tooltip.lines.iter().map(|l| match l {
+            ItemTooltipLine::Line { background, .. } => LineArt::Text {
+                background: background.as_deref(),
+            },
+            ItemTooltipLine::Separator { .. } => LineArt::Separator,
+        }),
+    )
+}
+
 fn single(
     ui: &mut egui::Ui,
     tooltip: &ItemTooltip,
@@ -70,6 +92,7 @@ fn single(
         .as_deref()
         .map_or(theme::BRONZE_DIM, |c| pob_colour(c, theme::BRONZE_DIM));
     let mut clicked = None;
+    let styled = tooltip_art::styled(ui.ctx());
     let titles = if tooltip.header.is_some() {
         tooltip
             .lines
@@ -81,11 +104,33 @@ fn single(
     } else {
         0
     };
-    egui::Frame::NONE
+    // PoB's header art behind the title, with the option on and a title to put it behind
+    // (Tooltip.lua:466-569)
+    let header = tooltip
+        .header
+        .as_deref()
+        .filter(|_| styled && matches!(tooltip.lines.first(), Some(ItemTooltipLine::Line { .. })))
+        .map(tooltip_art::header_art);
+    let header_slot = ui.painter().add(egui::Shape::Noop);
+    let frame = egui::Frame::NONE
         .stroke(Stroke::new(1.0, border))
         .inner_margin(6.0)
         .show(ui, |ui| {
-            if titles > 0 {
+            if let Some(art) = &header {
+                ui.add_space(art.text_offset);
+                if titles > 0 {
+                    ui.vertical_centered(|ui| {
+                        for line in &tooltip.lines[..titles] {
+                            if let ItemTooltipLine::Line {
+                                size, text, font, ..
+                            } = line
+                            {
+                                line_label(ui, *size, text, font.as_deref(), default, false);
+                            }
+                        }
+                    });
+                }
+            } else if titles > 0 {
                 egui::Frame::NONE
                     .fill(border.gamma_multiply(0.3))
                     .inner_margin(4.0)
@@ -106,6 +151,12 @@ fn single(
                         });
                     });
             }
+            // an item's or a gem's first separator is left out under its header art
+            let mut skip_separator = header.is_some()
+                && tooltip
+                    .header
+                    .as_deref()
+                    .is_some_and(tooltip_art::skips_first_separator);
             for (index, line) in tooltip.lines.iter().enumerate().skip(titles) {
                 match line {
                     ItemTooltipLine::Line {
@@ -126,11 +177,16 @@ fn single(
                                 mod_line.is_some(),
                             )
                         };
-                        let frame = egui::Frame::NONE.fill(if background.is_some() {
-                            Color32::from_white_alpha(10)
-                        } else {
-                            Color32::TRANSPARENT
-                        });
+                        // PoB's background image behind the line (Tooltip.lua:604-630)
+                        let art_background = background.as_deref().filter(|_| styled);
+                        let behind = ui.painter().add(egui::Shape::Noop);
+                        let frame = egui::Frame::NONE.fill(
+                            if background.is_some() && art_background.is_none() {
+                                Color32::from_white_alpha(10)
+                            } else {
+                                Color32::TRANSPARENT
+                            },
+                        );
                         let response = frame
                             .show(ui, |ui| {
                                 if *center {
@@ -140,6 +196,24 @@ fn single(
                                 }
                             })
                             .inner;
+                        if let Some(file) = art_background {
+                            let row = Rect::from_min_max(
+                                egui::pos2(ui.min_rect().left() - 2.0, response.rect.top() - 5.0),
+                                egui::pos2(
+                                    ui.min_rect().right() + 2.0,
+                                    response.rect.bottom() + 5.0,
+                                ),
+                            );
+                            if let Some((texture, _)) = art::image(ui.ctx(), file) {
+                                let mut mesh = egui::Mesh::with_texture(texture);
+                                mesh.add_rect_with_uv(
+                                    row,
+                                    Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                                    Color32::WHITE,
+                                );
+                                ui.painter().set(behind, egui::Shape::mesh(mesh));
+                            }
+                        }
                         seen(index, &response);
                         // a toggleable line lights up under the pointer, and any mouse button
                         // pressed on it toggles it, at the press (ItemsTab.lua:1521-1539)
@@ -161,19 +235,55 @@ fn single(
                             }
                         }
                     }
-                    ItemTooltipLine::Separator { .. } => {
+                    ItemTooltipLine::Separator { separator } => {
                         let width = ui.available_width().max(1.0);
-                        let (rect, _) =
-                            ui.allocate_exact_size(Vec2::new(width, 6.0), Sense::hover());
-                        ui.painter().hline(
-                            rect.x_range(),
-                            rect.center().y,
-                            Stroke::new(1.0, theme::BRONZE_DIM),
-                        );
+                        match tooltip.header.as_deref().filter(|_| styled) {
+                            // the rarity's separator image, `size` tall (Tooltip.lua:290-298)
+                            Some(name) => {
+                                let (rect, _) = ui.allocate_exact_size(
+                                    Vec2::new(width, *separator as f32),
+                                    Sense::hover(),
+                                );
+                                if std::mem::take(&mut skip_separator) {
+                                    continue;
+                                }
+                                art::paint(
+                                    ui.ctx(),
+                                    ui.painter(),
+                                    tooltip_art::separator_art(name),
+                                    rect,
+                                    Color32::WHITE,
+                                );
+                            }
+                            None => {
+                                let (rect, _) =
+                                    ui.allocate_exact_size(Vec2::new(width, 6.0), Sense::hover());
+                                ui.painter().hline(
+                                    rect.x_range(),
+                                    rect.center().y,
+                                    Stroke::new(1.0, theme::BRONZE_DIM),
+                                );
+                            }
+                        }
                     }
                 }
             }
         });
+    if let Some(art) = &header {
+        let tint = if tooltip.header.as_deref() == Some("RELIC") {
+            tooltip_art::foil_tint(tooltip.foil.as_deref())
+        } else {
+            [1.0; 3]
+        };
+        let shapes = tooltip_art::header_shapes(
+            ui.ctx(),
+            frame.response.rect,
+            art,
+            tint,
+            &tooltip.influences,
+        );
+        ui.painter().set(header_slot, egui::Shape::Vec(shapes));
+    }
     clicked
 }
 

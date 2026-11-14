@@ -11,6 +11,7 @@ pub mod scroll_step;
 pub mod search_combo;
 pub mod size_grip;
 pub mod tooltip;
+pub mod tooltip_art;
 pub mod url_click;
 
 pub use edit_box::{EditBox, EditBoxOptions, EditBoxes};

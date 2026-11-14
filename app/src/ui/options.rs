@@ -61,6 +61,9 @@ pub struct UiEffects {
     pub edge_search: bool,
     /// "Show Animations" (`showAnimations`, on in PoB by default): the tree's jewel rings turn
     pub animations: bool,
+    /// "Styled Tooltips with Flavour Text" (`showFlavourText`, on in PoB by default): the
+    /// tooltips' header and separator art
+    pub styled_tooltips: bool,
 }
 
 impl Default for UiEffects {
@@ -71,6 +74,7 @@ impl Default for UiEffects {
             power_theme: Default::default(),
             edge_search: true,
             animations: true,
+            styled_tooltips: true,
         }
     }
 }
@@ -96,6 +100,7 @@ pub fn ui_effects(rows: &[SettingRow]) -> UiEffects {
         ),
         edge_search: value("edgeSearchHighlight") != Some("false"),
         animations: value("showAnimations") != Some("false"),
+        styled_tooltips: value("showFlavourText") != Some("false"),
     }
 }
 

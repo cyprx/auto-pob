@@ -498,6 +498,7 @@ impl AutoPobApp {
         let effects = options::ui_effects(self.options.rows());
         self.tree
             .set_ui_settings(effects.power_theme, effects.edge_search, effects.animations);
+        crate::widgets::tooltip_art::set_styled(ctx, effects.styled_tooltips);
         if (effects.zoom - self.applied_zoom).abs() > f32::EPSILON {
             ctx.set_zoom_factor(effects.zoom);
             self.applied_zoom = effects.zoom;

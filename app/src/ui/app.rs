@@ -1887,7 +1887,10 @@ impl AutoPobApp {
                     self.items.set_socket_scene(self.tree.socket_scene());
                     items_out = self.items.show(ui, now, behind);
                 }
-                BuildTab::Calcs => calcs_out = self.calcs.show(ui, behind),
+                BuildTab::Calcs => {
+                    self.calcs.set_node_scene(self.tree.socket_scene());
+                    calcs_out = self.calcs.show(ui, behind);
+                }
                 BuildTab::Notes => {
                     let now = ui.input(|i| i.time);
                     notes_command = self.notes.show(ui, now);

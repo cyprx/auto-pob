@@ -674,6 +674,15 @@ pub fn socket_viewer_camera(rect: Rect, tree_size: f32, at: [f32; 2]) -> super::
     }
 }
 
+/// What a small tree view marks its node with
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ViewerMark {
+    /// The socket viewer's faint crosshair (ItemSlotHelper.lua:30-35)
+    Crosshair,
+    /// The Calcs node viewer's red highlight ring, 30 across (CalcBreakdownControl.lua:607-609)
+    Ring,
+}
+
 /// PoB's small view of a jewel socket's place in the tree (ItemSlotHelper.DrawViewer): a white
 /// 1-point border, then the viewer's own PassiveTreeView:Draw at zoom 17 centred on `node`,
 /// with nothing hovered, and a faint crosshair over it. The art is the Tree tab's.
@@ -684,15 +693,42 @@ pub fn paint_socket_viewer(
     scene_of: &super::SocketScene,
     node: u32,
 ) {
+    paint_tree_viewer(
+        ctx,
+        painter,
+        rect,
+        scene_of,
+        node,
+        SOCKET_VIEWER_ZOOM,
+        1.0,
+        ViewerMark::Crosshair,
+    );
+}
+
+/// A small view of the tree around `node` in `rect`, inside a white border `border` wide: the
+/// tree as a PassiveTreeView of its own draws it (no comparison, search, heat map or hover) at
+/// PoB's `zoom`, marked as `mark` says
+#[allow(clippy::too_many_arguments)]
+pub fn paint_tree_viewer(
+    ctx: &egui::Context,
+    painter: &egui::Painter,
+    rect: Rect,
+    scene_of: &super::SocketScene,
+    node: u32,
+    zoom: f32,
+    border: f32,
+    mark: ViewerMark,
+) {
     let layout = &scene_of.layout;
     let Some(centre) = scene_of.index.get(&node).map(|&i| layout.nodes[i].pos) else {
         return;
     };
-    let painter = painter.with_clip_rect(rect.expand(1.0));
-    painter.rect_filled(rect.expand(1.0), 0.0, Color32::WHITE);
+    let painter = painter.with_clip_rect(rect.expand(border));
+    painter.rect_filled(rect.expand(border), 0.0, Color32::WHITE);
     painter.rect_filled(rect, 0.0, theme::BACKGROUND);
     let painter = painter.with_clip_rect(rect);
-    let camera = socket_viewer_camera(rect, layout.size, centre);
+    let mut camera = socket_viewer_camera(rect, layout.size, centre);
+    camera.zoom *= zoom / SOCKET_VIEWER_ZOOM;
     let now = ctx.input(|i| i.time);
     let none = HashSet::new();
     let look = scene::Look {
@@ -706,7 +742,7 @@ pub fn paint_socket_viewer(
             camera.to_tree(rect, rect.min).into(),
             camera.to_tree(rect, rect.max).into(),
         ),
-        pob_zoom: SOCKET_VIEWER_ZOOM,
+        pob_zoom: zoom,
         time_ms: (!scene_of.animations_off).then_some(now * 1000.0),
     };
     let images = scene::build(
@@ -716,7 +752,12 @@ pub fn paint_socket_viewer(
         &scene_of.index,
         &look,
     );
-    let used: HashSet<usize> = images.iter().map(|i| i.sprite.sheet).collect();
+    let mut used: HashSet<usize> = images.iter().map(|i| i.sprite.sheet).collect();
+    if mark == ViewerMark::Ring
+        && let Some(ring) = layout.assets.get("highlightRing")
+    {
+        used.insert(ring.sheet);
+    }
     let sheets = upload_sheets(&scene_of.textures, ctx, layout, &used);
     paint(&painter, &sheets, &images, rect, camera, false);
     if !scene_of.animations_off {
@@ -725,27 +766,51 @@ pub fn paint_socket_viewer(
             ctx.request_repaint_after(wait);
         }
     }
-    // the crosshair (ItemSlotHelper.lua:30-35)
-    let faint = Color32::from_white_alpha(51);
-    painter.rect_filled(
-        Rect::from_min_size(
-            Pos2::new(rect.left() + (rect.width() / 2.0).floor() - 1.0, rect.top()),
-            Vec2::new(2.0, rect.height()),
-        ),
-        0.0,
-        faint,
-    );
-    painter.rect_filled(
-        Rect::from_min_size(
-            Pos2::new(
-                rect.left(),
-                rect.top() + (rect.height() / 2.0).floor() - 1.0,
-            ),
-            Vec2::new(rect.width(), 2.0),
-        ),
-        0.0,
-        faint,
-    );
+    match mark {
+        ViewerMark::Crosshair => {
+            // ItemSlotHelper.lua:30-35
+            let faint = Color32::from_white_alpha(51);
+            painter.rect_filled(
+                Rect::from_min_size(
+                    Pos2::new(rect.left() + (rect.width() / 2.0).floor() - 1.0, rect.top()),
+                    Vec2::new(2.0, rect.height()),
+                ),
+                0.0,
+                faint,
+            );
+            painter.rect_filled(
+                Rect::from_min_size(
+                    Pos2::new(
+                        rect.left(),
+                        rect.top() + (rect.height() / 2.0).floor() - 1.0,
+                    ),
+                    Vec2::new(rect.width(), 2.0),
+                ),
+                0.0,
+                faint,
+            );
+        }
+        ViewerMark::Ring => {
+            // the view's highlight ring, red (CalcBreakdownControl.lua:607-609)
+            if let Some((&ring, Some((texture, size)))) = layout
+                .assets
+                .get("highlightRing")
+                .map(|r| (r, sheets.get(r.sheet).copied().flatten()))
+            {
+                let [x, y, w, h] = ring.rect;
+                let uv = Rect::from_min_max(
+                    Pos2::new(x / size.x, y / size.y),
+                    Pos2::new((x + w) / size.x, (y + h) / size.y),
+                );
+                painter.image(
+                    texture,
+                    Rect::from_center_size(rect.center(), Vec2::splat(30.0)),
+                    uv,
+                    Color32::from_rgb(255, 0, 0),
+                );
+            }
+        }
+    }
 }
 
 /// The compare-only node at `at`, the nearest one when several are in reach, with the same

@@ -153,6 +153,11 @@ impl CalcsUi {
         }
     }
 
+    /// The tree the breakdown's node viewer shows (CalcBreakdownControl's `nodeViewer`)
+    pub fn set_node_scene(&mut self, scene: Option<crate::ui::tree::SocketScene>) {
+        self.bd.node_scene = scene;
+    }
+
     #[cfg(test)]
     pub fn breakdown_unavailable(&self) -> bool {
         self.bd.failed()

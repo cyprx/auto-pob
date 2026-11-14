@@ -212,9 +212,14 @@ fn record(lua: &mlua::Lua) -> Vec<Rec> {
 /// Upstream's Draw of the Items tab's socket viewer (ItemSlotHelper.DrawViewer's
 /// `itemsTab.socketViewer`), nothing hovered
 fn record_socket_viewer(lua: &mlua::Lua) -> Vec<Rec> {
+    record_viewer(lua, "build.itemsTab.socketViewer")
+}
+
+/// Upstream's Draw of another PassiveTreeView of the build's, `viewer` a Lua expression
+fn record_viewer(lua: &mlua::Lua, viewer: &str) -> Vec<Rec> {
     load_recorder(lua);
     let value: mlua::Value = lua
-        .load("return (recordTreeDraw(build.itemsTab.socketViewer, build))")
+        .load(format!("return (recordTreeDraw({viewer}, build))"))
         .eval()
         .expect("recording the socket viewer's Draw");
     let list: Vec<Drawn> = lua.from_value(value).expect("the recorded list");
@@ -402,9 +407,9 @@ fn bloodline_drawing_matches_pob() {
     recipe_matches("bloodline", "");
 }
 
-/// The Items tab's jewel socket viewer draws the tree as its own PassiveTreeView does: with the
-/// jewel's rings and our allocation, but without the Tree tab's search or comparison
-/// (ItemSlotHelper.DrawViewer)
+/// The Items tab's jewel socket viewer and the Calcs breakdown's node viewer draw the tree as
+/// their own PassiveTreeViews do: with the jewel's rings and our allocation, but without the
+/// Tree tab's search or comparison (ItemSlotHelper.DrawViewer, CalcBreakdownControl.lua:594-611)
 #[test]
 #[ignore = "needs the pinned PoB install"]
 fn socket_viewer_drawing_matches_pob() {
@@ -432,6 +437,10 @@ fn socket_viewer_drawing_matches_pob() {
     assert!(state.socket_rings.iter().any(|r| !r.rings.is_empty()));
     let viewer = auto_pob::ui::tree::viewer_state(&state);
     assert_same("socket viewer", ours(&layout, &viewer), theirs);
+    // the Calcs breakdown's node viewer is one such view too (CalcBreakdownControl.lua:22,
+    // 594-611)
+    let theirs = record_viewer(&lua, "build.calcsTab.controls.breakdown.nodeViewer");
+    assert_same("node viewer", ours(&layout, &viewer), theirs);
     // and the Tree tab's own drawing has the search rings the viewer leaves out
     assert!(
         ours(&layout, &state)

@@ -773,6 +773,8 @@ mod tests {
         time: f64,
         /// Draw the Compare tab's tree view instead of the Tree tab
         compare: bool,
+        /// The window's size
+        size: Vec2,
     }
 
     impl Harness {
@@ -785,6 +787,7 @@ mod tests {
                 ctx: egui::Context::default(),
                 time: 1.0,
                 compare: false,
+                size: Vec2::new(800.0, 600.0),
             };
             h.frame(vec![]);
             h
@@ -792,7 +795,7 @@ mod tests {
 
         fn frame(&mut self, events: Vec<Event>) -> TreeOutput {
             let input = RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.size)),
                 time: Some(self.time),
                 events,
                 ..Default::default()
@@ -1328,6 +1331,43 @@ mod tests {
             (three / one - 1.2f32.powi(3)).abs() < 1e-3,
             "{}",
             three / one
+        );
+    }
+
+    /// In the frame the window grows, a wheel notch keeps the tree point under the pointer for
+    /// the new view's zoom: the view is limited to the new size before the input
+    #[test]
+    fn a_wheel_in_a_resize_frame_keeps_the_point_under_the_pointer() {
+        let (l, s) = sample();
+        let layout = Arc::new(TreeLayout {
+            size: 2000.0,
+            ..(*l).clone()
+        });
+        let mut h = Harness::new(layout, s);
+        let at = Pos2::new(400.0, 300.0);
+        h.frame(vec![Event::PointerMoved(at)]);
+        h.frame(vec![]);
+        let level = h.tab.camera.level;
+        h.size = Vec2::new(1200.0, 900.0);
+        let wheel = Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            source: egui::MouseWheelSource::Wheel,
+            delta: Vec2::new(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let before = h.tab.camera;
+        h.frame(vec![Event::PointerMoved(at), wheel]);
+        let rect = h.tab.rect.unwrap();
+        // the point under the pointer in the new view, before the notch
+        let mut was = before;
+        was.limit(rect, 2000.0);
+        let under = was.to_tree(rect, at);
+        assert_eq!(h.tab.camera.level, level + 1);
+        let now = h.tab.camera.to_tree(rect, at);
+        assert!(
+            (now[0] - under[0]).abs() < 0.5 && (now[1] - under[1]).abs() < 0.5,
+            "{under:?} -> {now:?}"
         );
     }
 

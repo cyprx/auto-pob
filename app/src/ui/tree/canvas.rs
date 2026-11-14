@@ -66,8 +66,9 @@ pub fn show(
     }
     let valid_zoom = tab.camera.zoom > 0.0;
     if valid_zoom {
-        // PoB's zoom range holds for the input too
-        tab.camera.tree_size = layout.size;
+        // the zoom for this view first, so input in a resize frame anchors on it; then PoB's
+        // range again after the input
+        tab.camera.limit(rect, layout.size);
         handle_input(ui, tab, &response);
         tab.camera.limit(rect, layout.size);
     }

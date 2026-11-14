@@ -339,7 +339,7 @@ fn display_sections_follow_pobs_order() {
     assert!(shown(&h, "Selecting an influence here"), "{:?}", h.drawn);
 }
 
-/// The Foulborn box comes before the slider (ItemsTab.lua:1033-1074), and the line dropdown
+/// The Foulborn icon and box come before the slider (ItemsTab.lua:1033-1074), and the line dropdown
 /// goes back to the first line whenever PoB rebuilds it (UpdateDisplayItemRangeLines)
 #[test]
 fn the_range_row_is_pobs_and_resets_with_pob() {
@@ -351,6 +351,10 @@ fn the_range_row_is_pobs_and_resets_with_pob() {
     h.click("range_line_1");
     h.frame(vec![]);
     assert!(h.ui.rect("range_mutated").center().x < h.ui.rect("range_slider").center().x);
+    // PoB's Foulborn icon, 20 square, before the box (ItemsTab.lua:1046-1050)
+    let icon = h.ui.rect("range_foulborn");
+    assert_eq!(icon.size(), egui::vec2(20.0, 20.0));
+    assert!(icon.right() <= h.ui.rect("range_mutated").left());
     // a view after an edit that keeps PoB's list leaves the pick alone
     h.show_display(view.clone());
     assert_eq!(h.ui.display.range_line, 1);

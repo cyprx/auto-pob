@@ -81,7 +81,7 @@ impl HitGrid {
             return None;
         }
         let floor = MIN_HIT_POINTS / zoom;
-        let reach = floor.max(node_radius("ClassStart"));
+        let reach = floor.max(node_radius("Keystone"));
         let (x0, y0) = cell_of([tree_pos[0] - reach, tree_pos[1] - reach]);
         let (x1, y1) = cell_of([tree_pos[0] + reach, tree_pos[1] + reach]);
         let mut best: Option<(usize, f32)> = None;
@@ -89,6 +89,10 @@ impl HitGrid {
             for cy in y0..=y1 {
                 for &i in self.cells.get(&(cx, cy)).into_iter().flatten() {
                     let node = &layout.nodes[i];
+                    // PoB's class starts have no size, so no hover (PassiveTree.lua:860-869)
+                    if !hoverable(&node.kind) {
+                        continue;
+                    }
                     let d = (Vec2::from(node.pos) - Vec2::from(tree_pos)).length();
                     if d <= node_radius(&node.kind).max(floor) && best.is_none_or(|(_, b)| d < b) {
                         best = Some((i, d));
@@ -100,16 +104,23 @@ impl HitGrid {
     }
 }
 
-/// Approximate node size in tree units, by PoB node type.
+/// A node's size in tree units, by PoB node type: its frame's width times 1.33, the radius
+/// PoB hovers it within (`nodeOverlay` `artWidth`, PassiveTree.lua:423-474). A class start has
+/// none in PoB; it gets one for drawing a missing art's dot.
 pub fn node_radius(kind: &str) -> f32 {
-    match kind {
-        "Notable" => 38.0,
-        "Keystone" => 55.0,
-        "Mastery" => 30.0,
-        "Socket" => 35.0,
-        "ClassStart" => 60.0,
-        _ => 25.0,
-    }
+    let art_width = match kind {
+        "Notable" | "Socket" => 58.0,
+        "Keystone" => 84.0,
+        "Mastery" => 65.0,
+        "ClassStart" | "AscendClassStart" => 45.0,
+        _ => 40.0,
+    };
+    art_width * 1.33
+}
+
+/// Whether PoB lets the pointer find a node of this type: not a class or ascendancy start
+pub fn hoverable(kind: &str) -> bool {
+    !matches!(kind, "ClassStart" | "AscendClassStart")
 }
 
 /// Points along the shorter arc from `a` to `b` around `center`, in screen space.
@@ -233,6 +244,30 @@ pub(super) mod tests {
         // empty space
         assert_eq!(grid.node_at(&l, [500.0, 500.0], 1.0), None);
         assert_eq!(grid.node_at(&l, [0.0, 80.0], 1.0), None);
+    }
+
+    /// PoB hovers a node within its frame's size (artWidth * 1.33) and never a class or
+    /// ascendancy start, which has no size (PassiveTree.lua:423-474, 860-869)
+    #[test]
+    fn node_at_follows_pobs_sizes() {
+        let l = layout(
+            vec![
+                node(1, [0.0, 0.0], "Normal"),
+                node(2, [1000.0, 0.0], "Keystone"),
+                node(3, [2000.0, 0.0], "ClassStart"),
+                node(4, [3000.0, 0.0], "AscendClassStart"),
+            ],
+            vec![],
+        );
+        let grid = HitGrid::new(&l);
+        assert_eq!(grid.node_at(&l, [53.0, 0.0], 1.0), Some(0));
+        assert_eq!(grid.node_at(&l, [54.0, 0.0], 1.0), None);
+        assert_eq!(grid.node_at(&l, [1111.0, 0.0], 1.0), Some(1));
+        assert_eq!(grid.node_at(&l, [1113.0, 0.0], 1.0), None);
+        assert_eq!(grid.node_at(&l, [2000.0, 0.0], 1.0), None);
+        assert_eq!(grid.node_at(&l, [3000.0, 0.0], 1.0), None);
+        assert!((node_radius("Notable") - 77.14).abs() < 1e-3);
+        assert!((node_radius("Mastery") - 86.45).abs() < 1e-3);
     }
 
     #[test]

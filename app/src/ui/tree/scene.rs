@@ -1234,8 +1234,10 @@ mod tests {
     #[test]
     fn compare_only_connectors_are_green_and_active() {
         let mut l = layout(vec![], vec![]);
-        l.assets.insert("LineConnectorNormal".into(), art(0, 736.0, 16.0));
-        l.assets.insert("LineConnectorActive".into(), art(1, 736.0, 16.0));
+        l.assets
+            .insert("LineConnectorNormal".into(), art(0, 736.0, 16.0));
+        l.assets
+            .insert("LineConnectorActive".into(), art(1, 736.0, 16.0));
         let mut state = crate::engine::fake::empty_tree_state();
         state.compare_only_connectors = vec![line(70_000, 70_001, None)];
         let empty = HashSet::new();

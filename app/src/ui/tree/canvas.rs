@@ -164,8 +164,11 @@ pub fn show(
         }
     }
     // PoB draws no hover ring on a compare-only node, and no tooltip for a mastery without
-    // effects (PassiveTreeView.lua:1143)
-    if let Some(node) = compare_hover.filter(|n| n.kind != "Mastery" || n.mastery_effects) {
+    // effects or while Ctrl is held (PassiveTreeView.lua:1143)
+    let ctrl_held = ui.input(|i| i.modifiers.command);
+    if let Some(node) =
+        compare_hover.filter(|n| !ctrl_held && (n.kind != "Mastery" || n.mastery_effects))
+    {
         let reply = tab
             .tooltip
             .as_deref()
@@ -267,6 +270,11 @@ pub fn show(
         }
     }
 
+    // PoB shows no tooltip while Ctrl is held, none for a socket while Shift is, and none for a
+    // mastery without effects (PassiveTreeView.lua:1033)
+    if ctrl || (node.kind == "Socket" && shift) || (is_mastery && !node.mastery_effects) {
+        return actions;
+    }
     let jewel = state.jewels.iter().find(|j| j.node == node.id);
     // a reply is the tooltip for this trace (or for none)
     let reply = tab.tooltip.as_deref().filter(|t| t.trace == tab.trace);

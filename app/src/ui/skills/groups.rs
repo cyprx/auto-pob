@@ -78,9 +78,11 @@ impl SkillsUi {
         });
         let default = ui.visuals().text_color();
         // PoB's usage tips under its list (SkillsTab.lua:110-118)
-        egui::Panel::bottom("skills_group_tip").show(ui, |ui| {
-            ui.label(pob_text(GROUP_TIP, 13.0, default));
-        });
+        egui::Panel::bottom("skills_group_tip")
+            .frame(crate::theme::clear_side_panel(ui))
+            .show(ui, |ui| {
+                ui.label(pob_text(GROUP_TIP, 13.0, default));
+            });
         let ctx = ui.ctx().clone();
         let dragging = egui::DragAndDrop::has_payload_of_type::<usize>(&ctx);
         let mut target: Option<(usize, bool)> = None;

@@ -182,6 +182,7 @@ impl CalcsUi {
             egui::Panel::right("calcs_breakdown")
                 .resizable(true)
                 .default_size(380.0)
+                .frame(crate::theme::clear_side_panel(ui))
                 .show(ui, |ui| {
                     let (focus, unpin) = self.bd.show(ui, &mut self.rects);
                     out.focus_node = focus;

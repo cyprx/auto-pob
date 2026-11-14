@@ -4383,6 +4383,76 @@ mod tests {
         assert_eq!(sent_since(&app, before), ["Undo(Calcs)", "Redo(Calcs)"]);
     }
 
+    /// The Items and Skills tabs' panels have no fill of their own: PoB's background shows
+    /// through every one of them, so no large rectangle in the panels' colour is painted over
+    /// the tile (main:DrawBackground)
+    #[test]
+    fn tab_panels_let_the_background_show() {
+        let dir = crate::test_dir::TestDir::new("app-tile");
+        std::fs::create_dir_all(dir.join("TreeData")).unwrap();
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([8, 12, 17, 255]))
+            .save(dir.join("TreeData/Background2.png"))
+            .unwrap();
+        for tab in [BuildTab::Items, BuildTab::Skills] {
+            let (mut app, ctx) = if tab == BuildTab::Items {
+                items_app()
+            } else {
+                skills_app()
+            };
+            crate::widgets::art::set_context_root(&ctx, &dir);
+            let panel = ctx.global_style().visuals.panel_fill;
+            let mut checked = false;
+            for i in 0..300 {
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1400.0, 900.0),
+                    )),
+                    time: Some(f64::from(i) * 0.01),
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(input, |ui| app.show(ui));
+                out.textures_delta.clear();
+                // flattened in paint order: the tile's mesh, then what covers it
+                let mut flat = Vec::new();
+                fn walk(s: &egui::Shape, out: &mut Vec<egui::Shape>) {
+                    match s {
+                        egui::Shape::Vec(v) => v.iter().for_each(|x| walk(x, out)),
+                        other => out.push(other.clone()),
+                    }
+                }
+                for c in &out.shapes {
+                    walk(&c.shape, &mut flat);
+                }
+                let tile = flat.iter().position(|s| {
+                    // the build screen's content, right of the side bar
+                    matches!(s, egui::Shape::Mesh(m) if m.calc_bounds().width() > 1000.0
+                        && m.calc_bounds().height() > 600.0)
+                });
+                if let Some(tile) = tile {
+                    let covering: Vec<egui::Rect> = flat[tile + 1..]
+                        .iter()
+                        .filter_map(|s| match s {
+                            egui::Shape::Rect(r)
+                                if r.fill == panel
+                                    && r.rect.width() > 150.0
+                                    && r.rect.height() > 150.0 =>
+                            {
+                                Some(r.rect)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    assert!(covering.is_empty(), "{tab:?}: {covering:?}");
+                    checked = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(checked, "{tab:?}: the tile was never drawn");
+        }
+    }
+
     fn skills_app() -> (AutoPobApp, egui::Context) {
         let (mut app, ctx) = tree_app();
         app.on_event(Event::Snapshot {

@@ -474,6 +474,17 @@ pub fn main_tabs(
     tabs
 }
 
+/// A tab's side, top or bottom panel without a fill, its margins kept: PoB's background shows
+/// through, one tone across the tab (main:DrawBackground)
+pub fn clear_side_panel(ui: &egui::Ui) -> egui::Frame {
+    egui::Frame::side_top_panel(ui.style()).fill(Color32::TRANSPARENT)
+}
+
+/// A tab's central panel without a fill, its margins kept
+pub fn clear_central_panel(ui: &egui::Ui) -> egui::Frame {
+    egui::Frame::central_panel(ui.style()).fill(Color32::TRANSPARENT)
+}
+
 /// A gold Fontin heading.
 pub fn heading(ui: &mut egui::Ui, text: &str) {
     ui.heading(RichText::new(text).color(HEADING));

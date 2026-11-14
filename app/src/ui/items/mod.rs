@@ -388,10 +388,12 @@ impl ItemsUi {
         egui::Panel::left("items_slots")
             .resizable(true)
             .default_size(340.0)
+            .frame(crate::theme::clear_side_panel(ui))
             .show(ui, |ui| self.slots_panel(ui, &view, &mut out));
         egui::Panel::right("items_display")
             .resizable(true)
             .default_size(380.0)
+            .frame(crate::theme::clear_side_panel(ui))
             .show(ui, |ui| match self.display_view.clone() {
                 Some(d) => out
                     .commands
@@ -404,18 +406,22 @@ impl ItemsUi {
                 }
             });
         out.queries.extend(self.display.crafting.take_queries());
-        egui::CentralPanel::default().show(ui, |ui| {
+        let central = crate::theme::clear_central_panel(ui);
+        egui::CentralPanel::default().frame(central).show(ui, |ui| {
             // PoB's databases sit below the item list
             egui::Panel::bottom("items_db")
                 .resizable(self.db.expanded)
                 .default_size(300.0)
+                .frame(crate::theme::clear_side_panel(ui))
                 .show(ui, |ui| {
                     self.db.keys_blocked = self.has_dialog() || self.modal;
                     let o = db::show(ui, self.db_view.as_deref(), &mut self.db, now);
                     out.commands.extend(o.commands);
                     out.queries.extend(o.queries);
                 });
-            egui::CentralPanel::default().show(ui, |ui| self.item_list(ui, &view, &mut out));
+            egui::CentralPanel::default()
+                .frame(central)
+                .show(ui, |ui| self.item_list(ui, &view, &mut out));
         });
 
         let ctx = ui.ctx().clone();

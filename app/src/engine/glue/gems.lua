@@ -303,5 +303,5 @@ function glue.gem_tooltip(index, target, gem_id)
 	if not ok then
 		error(err, 0)
 	end
-	return { lines = recorder:lines() }
+	return { lines = recorder:lines(), header = recorder.tooltipHeader and tostring(recorder.tooltipHeader) or nil }
 end

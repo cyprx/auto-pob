@@ -10,7 +10,7 @@ use crate::engine::{
     TreeState,
 };
 use crate::theme;
-use crate::widgets::{art, tooltip_ui};
+use crate::widgets::{Look, art, styled_tooltip_ui};
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 use std::collections::HashSet;
 
@@ -206,7 +206,7 @@ pub fn show(
         let tip = area_size(ui.ctx(), id);
         let pos = hover_tooltip_place(corner, size * 2.0, tip.unwrap_or_default(), rect);
         tooltip_area(ui.ctx(), id, pos, |ui| match reply {
-            Some(t) => tooltip_ui(ui, &t.lines),
+            Some(t) => node_tooltip_ui(ui, t),
             None => {
                 ui.strong(if node.name.is_empty() {
                     &node.kind
@@ -328,11 +328,24 @@ pub fn show(
         rect,
     );
     if let (Some(skill), Some(at)) = (skill, skill_at) {
-        tooltip_area(ui.ctx(), skill_id, at, |ui| tooltip_ui(ui, &skill.lines));
+        tooltip_area(ui.ctx(), skill_id, at, |ui| {
+            styled_tooltip_ui(
+                ui,
+                &skill.lines,
+                &Look {
+                    header: skill.header.as_deref(),
+                    ..Default::default()
+                },
+            )
+        });
     }
     tooltip_area(ui.ctx(), main_id, main_at, |ui| match body {
         // PoB's lines start with the name and hold the stats, and the jewel for a socket
-        TooltipBody::Lines(lines) => tooltip_ui(ui, lines),
+        TooltipBody::Lines(_) => {
+            if let Some(t) = reply {
+                node_tooltip_ui(ui, t);
+            }
+        }
         TooltipBody::Instant => {
             ui.strong(if node.name.is_empty() {
                 &node.kind
@@ -348,6 +361,20 @@ pub fn show(
         }
     });
     actions
+}
+
+/// A node's tooltip as PoB draws it: centred, under its header art, a notable's oils after its
+/// name (PassiveTreeView.lua:1398-1420)
+fn node_tooltip_ui(ui: &mut egui::Ui, tip: &NodeTooltip) {
+    styled_tooltip_ui(
+        ui,
+        &tip.lines,
+        &Look {
+            header: tip.header.as_deref(),
+            recipe: &tip.recipe,
+            center: true,
+        },
+    );
 }
 
 /// The size a tooltip area had last frame; `None` on its first, which egui draws invisibly to

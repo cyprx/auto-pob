@@ -1143,6 +1143,8 @@ pub enum DpsMark {
 #[derive(Debug, Clone, PartialEq)]
 pub struct GemTooltipView {
     pub query: GemTooltipQuery,
+    /// PoB's `tooltipHeader` ("GEM"): the header art
+    pub header: Option<String>,
     pub lines: Vec<TooltipLine>,
 }
 

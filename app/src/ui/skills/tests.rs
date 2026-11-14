@@ -765,6 +765,7 @@ fn gem_tooltip_is_asked_again_after_the_view_changes() {
     h.ui.on_snapshot(&Snapshot::GemTooltip(Arc::new(
         crate::engine::views::GemTooltipView {
             query,
+            header: None,
             lines: vec![TooltipLine::Line {
                 size: 14,
                 text: "old".into(),

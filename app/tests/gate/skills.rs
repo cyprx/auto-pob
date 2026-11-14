@@ -2226,6 +2226,10 @@ fn gem_tooltip_matches_pob() {
             lua_value(&lua, "return gemTooltip(0, q_slot, q_id)");
         assert!(theirs.len() > 3, "{query:?}: {theirs:?}");
         assert_eq!(ours.lines, theirs, "{query:?}");
+        // the header art PoB draws (GemTooltip.lua:220)
+        let header: Option<String> = lua.load("return gemTooltipHeader").eval().unwrap();
+        assert_eq!(header.as_deref(), Some("GEM"));
+        assert_eq!(ours.header, header, "{query:?}");
     }
     // a failing tooltip is answered with no lines
     let bad = GemTooltipQuery {

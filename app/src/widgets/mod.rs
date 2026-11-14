@@ -19,4 +19,4 @@ pub use item_tooltip::{item_tooltip_ui, item_tooltip_ui_with};
 pub use list::{ListAction, ListColumn, ListSort, drop_index, list, list_sort, list_with};
 pub use pob_text::{fit_with_dots, pob_colour, pob_text};
 pub use search_combo::{search_combo, search_combo_ui};
-pub use tooltip::tooltip_ui;
+pub use tooltip::{Look, styled_tooltip_ui, tooltip_ui};

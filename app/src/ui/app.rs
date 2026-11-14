@@ -2858,6 +2858,7 @@ mod tests {
             Ok(crate::engine::GemTooltipView {
                 query: query.clone(),
                 lines: vec![],
+                header: None,
             })
         }
 

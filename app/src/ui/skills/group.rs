@@ -3,7 +3,7 @@
 use super::{SkillsOutput, SkillsUi};
 use crate::engine::views::{GemView, SkillsView, SocketGroupView};
 use crate::engine::{Command, DropdownOwner, GemTarget, GemToggle, GemTooltipQuery, HoverTarget};
-use crate::widgets::{pob_colour, pob_text, tooltip_ui};
+use crate::widgets::{pob_colour, pob_text};
 use eframe::egui::{self, Color32, Stroke};
 
 const ERROR: Color32 = Color32::from_rgb(255, 80, 80);
@@ -285,7 +285,16 @@ impl SkillsUi {
             && t.query.target == GemTarget::Slot(si)
             && !t.lines.is_empty()
         {
-            name.clone().on_hover_ui(|ui| tooltip_ui(ui, &t.lines));
+            name.clone().on_hover_ui(|ui| {
+                crate::widgets::styled_tooltip_ui(
+                    ui,
+                    &t.lines,
+                    &crate::widgets::Look {
+                        header: t.header.as_deref(),
+                        ..Default::default()
+                    },
+                )
+            });
         }
     }
 

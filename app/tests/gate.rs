@@ -3901,7 +3901,84 @@ fn tooltip_matches_pob() {
             .unwrap()
             .is_none()
     );
+
+    // the images upstream's Tooltip:Draw puts on each, styled: the header art, the separator
+    // images and a notable's oils (Tooltip.lua:221-298, 466-602)
+    lua.load(NODE_TOOLTIP_ART)
+        .set_name("=node_art")
+        .exec()
+        .unwrap();
+    for expected in &theirs {
+        lua.globals().set("art_id", expected.id).unwrap();
+        let drawn: Vec<(String, Vec<f32>)> = lua_value(&lua, "return nodeTooltipArt(art_id)");
+        let look = auto_pob::widgets::Look {
+            header: expected.header.as_deref(),
+            recipe: &expected.recipe,
+            center: true,
+        };
+        let ours = auto_pob::widgets::tooltip::tooltip_lines_art(&expected.lines, &look, true);
+        // PoB loaded its oils before the recording could see their files
+        let file = |f: &str| {
+            if f.ends_with("Oil.png") {
+                "?".to_owned()
+            } else {
+                f.to_owned()
+            }
+        };
+        let key = |c: &[f32]| {
+            c.iter()
+                .map(|v| (v * 1000.0).round() as i32)
+                .collect::<Vec<_>>()
+        };
+        let mut ours: Vec<_> = ours.iter().map(|(f, c)| (file(f), key(c))).collect();
+        ours.dedup_by(|a, b| a.0 == b.0);
+        let drawn: Vec<_> = drawn.iter().map(|(f, c)| (f.clone(), key(c))).collect();
+        assert!(ours.len() >= 3, "node {}: {ours:?}", expected.id);
+        assert_eq!(ours, drawn, "node {}: the art", expected.id);
+    }
+    // a notable's oils are drawn
+    assert!(!theirs[1].recipe.is_empty());
 }
+
+/// Records the images upstream's `Tooltip:Draw` draws for a node's tooltip, in order, as
+/// `{ file, colour }`, a run of one file (the header's middle tiles) as one entry. A handle
+/// loaded before the recording began (the oils) is "?".
+const NODE_TOOLTIP_ART: &str = r#"
+do
+    local meta = getmetatable(NewImageHandle())
+    local load = meta.Load
+    meta.Load = function(self, fileName, ...)
+        self.path = fileName
+        return load(self, fileName, ...)
+    end
+end
+function nodeTooltipArt(id)
+    local viewer = build.treeTab.viewer
+    local tt = new("Tooltip")
+    viewer:AddNodeTooltip(tt, build.spec.nodes[id], build)
+    local out, colour = {}, { 1, 1, 1, 1 }
+    local saved = { DrawImage = DrawImage, SetDrawColor = SetDrawColor,
+        DrawStringWidth = DrawStringWidth, GetDrawColor = GetDrawColor or false }
+    function SetDrawColor(r, g, b, a)
+        if type(r) == "number" then colour = { r, g, b, a or 1 } else colour = { 1, 1, 1, 1 } end
+    end
+    function DrawImage(handle)
+        if handle then
+            local file = handle.path or "?"
+            local last = out[#out]
+            if not (last and last[1] == file) then
+                out[#out + 1] = { file, { colour[1], colour[2], colour[3], colour[4] } }
+            end
+        end
+    end
+    function DrawStringWidth(_, _, text) return #text * 7 end
+    function GetDrawColor() return colour[1], colour[2], colour[3], colour[4] end
+    local ok, err = pcall(tt.Draw, tt, 0, 0, nil, nil, { x = 0, y = 0, width = 4000, height = 4000 })
+    for name, fn in pairs(saved) do _G[name] = fn or nil end
+    if not ok then error(err, 0) end
+    return out
+end
+"#;
 
 /// Runs `SetHeatmap` and then steps until the backend has no work left.
 fn run_power(s: &mut Session, stat: &str, max_depth: Option<u32>) -> Vec<u32> {

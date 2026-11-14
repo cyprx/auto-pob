@@ -3147,6 +3147,8 @@ impl Backend for PobBackend {
         struct Found {
             #[serde(default)]
             lines: Vec<TooltipLine>,
+            #[serde(default)]
+            header: Option<String>,
         }
         let target = lua_target(&self.lua, query.target)?;
         let found: Found = self.view(
@@ -3155,6 +3157,7 @@ impl Backend for PobBackend {
         )?;
         Ok(GemTooltipView {
             query: query.clone(),
+            header: found.header,
             lines: found.lines,
         })
     }

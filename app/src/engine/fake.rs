@@ -626,6 +626,7 @@ impl Backend for Fake {
         Ok(GemTooltipView {
             query: query.clone(),
             lines: vec![],
+            header: None,
         })
     }
 

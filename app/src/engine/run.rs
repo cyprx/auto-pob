@@ -656,6 +656,7 @@ pub fn send_snapshots(backend: &mut dyn Backend, seq: u64, flags: Affected, send
             .unwrap_or_else(|_| GemTooltipView {
                 query: query.clone(),
                 lines: vec![],
+                header: None,
             });
         send(Event::Snapshot {
             seq,

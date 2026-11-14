@@ -636,5 +636,6 @@ function gemTooltip(g, target, id)
 	end)
 	control.tooltip = saved
 	if not ok then error(err, 0) end
+	gemTooltipHeader = recorder.tooltipHeader or nil
 	return recorder:lines()
 end

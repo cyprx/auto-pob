@@ -766,3 +766,18 @@ fn a_refused_paste_leaves_the_caret_where_it_was() {
             .clone();
     assert_eq!(text, "AZB");
 }
+
+/// The viewer's white border sits at PoB's box corner and the view 1 inside it
+/// (ItemSlotHelper.lua:16-27)
+#[test]
+fn the_socket_viewer_sits_at_pobs_corner() {
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+    let slot = egui::Rect::from_min_size(egui::pos2(100.0, 500.0), egui::vec2(300.0, 20.0));
+    let view = super::slots::socket_viewer_rect(slot, screen, false);
+    assert_eq!(view.min, egui::pos2(101.0, 500.0 - 284.0 + 1.0));
+    assert_eq!(view.size(), egui::vec2(308.0, 280.0));
+    // the border is drawn 1 around the view: its corner is PoB's (slot.left, top)
+    assert_eq!(view.expand(1.0).min, egui::pos2(100.0, 216.0));
+    let low = super::slots::socket_viewer_rect(slot, screen, true);
+    assert_eq!(low.min, egui::pos2(101.0, 525.0));
+}

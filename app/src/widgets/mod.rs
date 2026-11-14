@@ -1,5 +1,6 @@
 //! Widgets shared by every screen. They know only `engine::views` types, egui and `theme`.
 
+pub mod art;
 pub mod dropdown;
 pub mod edit_box;
 pub mod escape;

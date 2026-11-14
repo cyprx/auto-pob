@@ -173,6 +173,8 @@ impl PobBackend {
         let lua_error = |e: mlua::Error| anyhow!("{e}");
 
         let lua = new_lua(pob_dir)?;
+        // the UI draws PoB's own images from its folder
+        crate::widgets::art::set_root(pob_dir);
         super::native::register(&lua, pob_dir, user_dir).map_err(lua_error)?;
         // before the bootstrap: its first frame already initialises a build (R4)
         let net = super::net::register(&lua, pob_dir, net).map_err(lua_error)?;

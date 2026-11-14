@@ -1190,6 +1190,8 @@ impl AutoPobApp {
     pub fn show(&mut self, ui: &mut egui::Ui) {
         self.show_frame(ui);
         os_clipboard(ui.ctx());
+        // PoB's images nothing drew for a while are freed
+        crate::widgets::art::sweep(ui.ctx());
     }
 
     fn show_frame(&mut self, ui: &mut egui::Ui) {

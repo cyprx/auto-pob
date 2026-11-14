@@ -165,10 +165,15 @@ pub fn sweep(ctx: &egui::Context) {
     let shared = cache(ctx);
     let mut cache = shared.lock().unwrap_or_else(|e| e.into_inner());
     let now = ctx.input(|i| i.time);
-    // a decode in flight is kept: its pixels would arrive to nobody
-    cache
-        .entries
-        .retain(|_, e| matches!(e.state, State::Decoding(_)) || now - e.last < KEEP_SECONDS);
+    // a decode in flight is kept, as its pixels would arrive to nobody; one done but never
+    // asked for again goes with its pixels, like any image unused for the wait
+    cache.entries.retain(|_, e| {
+        let in_flight = match &e.state {
+            State::Decoding(slot) => slot.lock().unwrap_or_else(|p| p.into_inner()).is_none(),
+            _ => false,
+        };
+        in_flight || now - e.last < KEEP_SECONDS
+    });
     // what this frame drew (a tab's background) is kept without waking an idle screen
     if let Some(oldest) = cache
         .entries
@@ -337,5 +342,42 @@ mod tests {
                 .iter()
                 .all(|v| v.color == egui::Color32::from_gray(128))
         );
+    }
+
+    /// An image asked for once, whose decode finishes but which is never asked for again,
+    /// doesn't keep its pixels past the wait
+    #[test]
+    fn a_decode_never_claimed_is_dropped() {
+        let dir = crate::test_dir::TestDir::new("art-unclaimed");
+        image::RgbaImage::from_pixel(3, 2, image::Rgba([1, 2, 3, 255]))
+            .save(dir.join("b.png"))
+            .unwrap();
+        let ctx = egui::Context::default();
+        set_context_root(&ctx, &dir);
+        frame(&ctx, 0.0, |ctx| {
+            assert!(image(ctx, "b.png").is_none());
+        });
+        // the decode finishes off the frame
+        let decoded = || {
+            let cache = cache(&ctx);
+            let cache = cache.lock().unwrap();
+            match &cache.entries["b.png"].state {
+                State::Decoding(slot) => slot.lock().unwrap().is_some(),
+                _ => false,
+            }
+        };
+        let start = std::time::Instant::now();
+        while !decoded() {
+            assert!(start.elapsed().as_secs() < 5, "never decoded");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        frame(&ctx, 1.0, sweep);
+        assert_eq!(
+            cache(&ctx).lock().unwrap().entries.len(),
+            1,
+            "kept within the wait"
+        );
+        frame(&ctx, 1.0 + KEEP_SECONDS, sweep);
+        assert!(cache(&ctx).lock().unwrap().entries.is_empty());
     }
 }

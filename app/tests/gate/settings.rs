@@ -239,7 +239,8 @@ fn settings_shared_and_overridden() {
     assert_eq!(effect("showTitlebarName"), SettingEffect::Ui);
     assert_eq!(effect("nodePowerTheme"), SettingEffect::Ui);
     assert_eq!(effect("edgeSearchHighlight"), SettingEffect::Ui);
-    assert_eq!(effect("showAnimations"), SettingEffect::NoEffect);
+    // the jewel rings on the tree turn with it on
+    assert_eq!(effect("showAnimations"), SettingEffect::Ui);
     assert_eq!(
         effect("invertSliderScrollDirection"),
         SettingEffect::NoEffect

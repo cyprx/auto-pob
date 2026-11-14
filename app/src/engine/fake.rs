@@ -847,6 +847,12 @@ pub fn empty_layout() -> TreeLayout {
         nodes: vec![],
         edges: vec![],
         sheets: vec![],
+        connectors: vec![],
+        groups: vec![],
+        class_art: vec![],
+        assets: Default::default(),
+        size: 1.0,
+        jewel_radii: vec![],
         key: "3_28:0:0".into(),
     }
 }
@@ -880,6 +886,10 @@ pub fn empty_tree_state() -> TreeState {
         active_spec: 0,
         compare_spec: None,
         compare_only: vec![],
+        compare_only_groups: vec![],
+        compare_only_connectors: vec![],
+        draw: Default::default(),
+        socket_rings: vec![],
         power_stats: vec![],
         heatmap: None,
         max_depth: None,

@@ -259,12 +259,20 @@ impl NotesUi {
         if self.preview {
             // the coloured text at the box's zoom, which Ctrl+wheel over it changes too
             let font = self.line_height as f32 * TEXT_SCALE;
-            egui::ScrollArea::vertical()
+            let area = egui::ScrollArea::vertical()
                 .auto_shrink(false)
                 .show(ui, |ui| {
-                    let response = ui.label(pob_text(&self.text, font, default));
-                    self.zoom_keys(ui, &response);
+                    ui.label(pob_text(&self.text, font, default));
                 });
+            // a label never has the keyboard: while the preview is up the keys are the notes',
+            // unless a popup, a dialog or a box elsewhere has them; the wheel counts anywhere
+            // over the preview, as over the editor that fills it, but not over what covers it
+            let ctx = ui.ctx();
+            let covered = ctx.any_popup_open()
+                || ctx.memory(|m| m.focused().is_some() || m.top_modal_layer().is_some());
+            // (rect_contains_pointer leaves out a pointer over a layer above this one)
+            let hovered = ui.rect_contains_pointer(area.inner_rect);
+            self.zoom_keys(ui, !covered, hovered);
         } else {
             egui::ScrollArea::vertical()
                 .auto_shrink(false)
@@ -291,7 +299,7 @@ impl NotesUi {
                     if response.changed() {
                         self.touch(now);
                     }
-                    self.zoom_keys(ui, &response);
+                    self.zoom_keys(ui, response.has_focus(), response.hovered());
                 });
         }
         match self.dirty_since {
@@ -306,15 +314,16 @@ impl NotesUi {
         }
     }
 
-    /// Ctrl +, - and 0, and Ctrl+wheel over the editor, zoom the notes' text only, as PoB's
-    /// notes box does; the keys are taken before egui's own zoom of the whole window sees them.
-    fn zoom_keys(&mut self, ui: &egui::Ui, response: &egui::Response) {
+    /// Ctrl +, - and 0 while `keys` (the editor has the keyboard, or the preview is up), and
+    /// Ctrl+wheel while `hovered`, zoom the notes' text only, as PoB's notes box does; the keys
+    /// are taken before egui's own zoom of the whole window sees them.
+    fn zoom_keys(&mut self, ui: &egui::Ui, keys_held: bool, hovered: bool) {
         use egui::gui_zoom::kb_shortcuts::{ZOOM_IN, ZOOM_IN_SECONDARY, ZOOM_OUT, ZOOM_RESET};
-        if !response.has_focus() && !response.hovered() {
+        if !keys_held && !hovered {
             return;
         }
         let mut keys = Vec::new();
-        if response.has_focus() {
+        if keys_held {
             ui.input_mut(|i| {
                 // each press counts, as each key event reaches PoB's box
                 while i.consume_shortcut(&ZOOM_RESET) {
@@ -328,7 +337,7 @@ impl NotesUi {
                 }
             });
         }
-        if response.hovered() {
+        if hovered {
             // one step per wheel event, as PoB's WHEELUP/WHEELDOWN keys, not per frame of a
             // smooth scroll
             ui.input(|i| {
@@ -756,6 +765,66 @@ mod tests {
         assert_eq!(ui.line_height, NOTES_LINE_HEIGHT);
     }
 
+    /// With a dialog over the preview, its box keeps Ctrl+= and the wheel over the dialog
+    /// isn't the notes'
+    #[test]
+    fn the_preview_leaves_the_zoom_to_what_covers_it() {
+        let ctx = egui::Context::default();
+        let mut ui = NotesUi {
+            text: "^1red".into(),
+            preview: true,
+            line_height: 30,
+            ..NotesUi::default()
+        };
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let mut typed = String::new();
+        let mut run = |ui: &mut NotesUi, events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |ui_| {
+                    ui.show(ui_, 0.0);
+                    egui::Window::new("dialog")
+                        .fixed_pos(egui::pos2(300.0, 300.0))
+                        .fixed_size(egui::vec2(200.0, 100.0))
+                        .show(ui_.ctx(), |w| {
+                            let edit = w.text_edit_singleline(&mut typed);
+                            edit.request_focus();
+                        });
+                },
+            );
+            out.textures_delta.clear();
+        };
+        run(&mut ui, vec![]);
+        run(&mut ui, vec![]);
+        let key = egui::Event::Key {
+            key: egui::Key::Equals,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        run(&mut ui, vec![key]);
+        assert_eq!(ui.line_height, 30, "the dialog's box has the keys");
+        let over = egui::pos2(380.0, 340.0);
+        let wheel = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::COMMAND,
+            source: egui::MouseWheelSource::Wheel,
+        };
+        run(&mut ui, vec![egui::Event::PointerMoved(over)]);
+        run(&mut ui, vec![egui::Event::PointerMoved(over), wheel]);
+        assert_eq!(
+            ui.line_height, 30,
+            "the wheel over the dialog isn't the notes'"
+        );
+    }
+
     /// The preview shows the text at the box's zoom, and Ctrl+wheel over it zooms it
     #[test]
     fn the_preview_follows_the_notes_zoom() {
@@ -812,7 +881,26 @@ mod tests {
             source: egui::MouseWheelSource::Wheel,
         };
         run(&mut ui, vec![egui::Event::PointerMoved(at)]);
-        run(&mut ui, vec![egui::Event::PointerMoved(at), wheel]);
+        run(&mut ui, vec![egui::Event::PointerMoved(at), wheel.clone()]);
         assert_eq!(ui.line_height, 31);
+        // well below the text, still over the preview
+        let below = egui::pos2(at.x, 500.0);
+        run(&mut ui, vec![egui::Event::PointerMoved(below)]);
+        run(&mut ui, vec![egui::Event::PointerMoved(below), wheel]);
+        assert_eq!(ui.line_height, 32);
+        // Ctrl+= zooms the notes, and egui's zoom of the whole window doesn't see it
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        run(&mut ui, vec![key(egui::Key::Equals)]);
+        assert_eq!(ui.line_height, 33);
+        assert_eq!(ctx.zoom_factor(), 1.0);
+        run(&mut ui, vec![key(egui::Key::Num0)]);
+        assert_eq!(ui.line_height, NOTES_LINE_HEIGHT);
+        assert_eq!(ctx.zoom_factor(), 1.0);
     }
 }

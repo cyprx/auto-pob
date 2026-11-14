@@ -227,7 +227,7 @@ fn a_fresh_folder_matches_pob() {
     assert!(view.saved_overrides.is_empty());
 
     // ---- what the UI does with them: no zoom, PoB's own title switch, PoB's default heat
-    // map colours and edge search circles ----
+    // map colours, edge search circles and animations ----
     assert_eq!(
         ui_effects(&view.rows),
         UiEffects {
@@ -235,6 +235,7 @@ fn a_fresh_folder_matches_pob() {
             show_title: true,
             power_theme: auto_pob::ui::tree::overlays::PowerTheme::RedBlue,
             edge_search: true,
+            animations: true,
         }
     );
 

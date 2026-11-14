@@ -6,6 +6,7 @@ pub mod geometry;
 mod keys;
 pub mod overlays;
 pub mod power_report;
+pub mod scene;
 pub mod toolbar;
 
 use crate::engine::{
@@ -71,8 +72,6 @@ pub(super) struct Derived {
     pub allocated: Arc<HashSet<u32>>,
     pub paths: HashMap<u32, Vec<u32>>,
     pub depends: HashMap<u32, Vec<u32>>,
-    pub matches: HashSet<u32>,
-    pub compare: HashMap<u32, [f32; 3]>,
     /// The id (not the label) nodes of the build's ascendancy carry
     pub current_ascendancy: Option<String>,
     /// The id the chosen bloodline's nodes carry
@@ -90,13 +89,7 @@ impl Derived {
 
 impl Derived {
     fn new(state: &TreeState) -> Self {
-        let current_ascendancy = state
-            .classes
-            .iter()
-            .find(|c| c.id == state.class_id)
-            .and_then(|c| c.ascendancies.iter().find(|a| a.id == state.ascendancy_id))
-            .filter(|a| a.id != 0)
-            .map(|a| a.ascend_id.clone());
+        let current_ascendancy = scene::ascendancy_of(state);
         Self {
             allocated: Arc::new(state.allocated.iter().copied().collect()),
             paths: state
@@ -109,8 +102,6 @@ impl Derived {
                 .iter()
                 .map(|p| (p.node, p.path.clone()))
                 .collect(),
-            matches: state.search_matches.iter().copied().collect(),
-            compare: state.compare.iter().map(|c| (c.node, c.rgb)).collect(),
             current_ascendancy,
             bloodline: state.bloodline.clone(),
         }
@@ -145,6 +136,10 @@ pub struct TreeTab {
     /// Node id to index in the layout
     pub(super) index: HashMap<u32, usize>,
     pub(super) derived: Derived,
+    /// What the drawing looks up in the state
+    pub(super) draw_sets: scene::DrawSets,
+    /// PoB's "Show Animations" is off: jewel rings stand still
+    pub(super) animations_off: bool,
     /// Node id to index in `power.nodes`
     pub(super) power_index: HashMap<u32, usize>,
     /// Uploaded sprite sheets, by file
@@ -236,11 +231,17 @@ impl TreeTab {
         commands
     }
 
-    /// PoB's options the canvas follows: the heat map's colours and whether search matches
-    /// outside the view show at its edge
-    pub fn set_ui_settings(&mut self, theme: overlays::PowerTheme, edge_search: bool) {
+    /// PoB's options the canvas follows: the heat map's colours, whether search matches
+    /// outside the view show at its edge, and whether the jewel rings turn
+    pub fn set_ui_settings(
+        &mut self,
+        theme: overlays::PowerTheme,
+        edge_search: bool,
+        animations: bool,
+    ) {
         self.power_theme = theme;
         self.edge_search_off = !edge_search;
+        self.animations_off = !animations;
         self.toolbar.power_theme = theme;
     }
 
@@ -355,12 +356,24 @@ impl TreeTab {
                 {
                     self.needs_fit = true;
                 }
+                // the art of files the new tree doesn't list (another tree version's) is freed;
+                // a file listed again is decoded again
+                let listed: HashSet<&std::path::Path> = layout
+                    .sheets
+                    .iter()
+                    .flatten()
+                    .map(|s| s.path.as_path())
+                    .collect();
+                self.textures
+                    .retain(|path, _| listed.contains(path.as_path()));
                 self.hover = None;
                 self.previewed = None;
                 self.layout = Some(layout.clone());
             }
             Snapshot::Tree(state) => {
                 self.derived = Derived::new(state);
+                self.draw_sets =
+                    scene::DrawSets::new(state, self.derived.current_ascendancy.clone());
                 // the hovered node's tooltip may read differently now
                 self.previewed = None;
                 if self.picker.is_some_and(|n| !has_options(state, n)) {
@@ -1075,6 +1088,7 @@ mod tests {
             y: 300.0,
             kind: "Notable".into(),
             name: "Prismatic Heart".into(),
+            mastery_effects: false,
             art: None,
         }];
         let mut h = Harness::new(l, Arc::new(state));
@@ -1097,6 +1111,21 @@ mod tests {
         h.frame(vec![]);
         let out = h.click_at(pos);
         assert!(out.commands.is_empty(), "{:?}", out.commands);
+        // Shift held: PoB still finds it (PassiveTreeView.lua:308-320)
+        h.frame(vec![Event::PointerMoved(Pos2::new(5.0, 5.0))]);
+        assert_eq!(h.tab.hover, None);
+        h.frame(vec![
+            Event::ModifiersChanged(egui::Modifiers::SHIFT),
+            Event::PointerMoved(pos),
+        ]);
+        assert_eq!(h.tab.hover, Some(70_000));
+        h.frame(vec![Event::ModifiersChanged(egui::Modifiers::NONE)]);
+        // zoomed far out it can still be pointed at, a few points off its centre
+        h.tab.camera.zoom = 0.02;
+        h.frame(vec![Event::PointerMoved(Pos2::new(5.0, 5.0))]);
+        let pos = h.tab.camera.to_screen(rect, [300.0, 300.0]) + Vec2::new(4.0, 0.0);
+        h.frame(vec![Event::PointerMoved(pos)]);
+        assert_eq!(h.tab.hover, Some(70_000));
     }
 
     #[test]
@@ -1740,22 +1769,37 @@ mod tests {
         assert!(h.tab.has_dialog());
     }
 
+    /// The canvas draws the scene's images as meshes of the uploaded files; a search match off
+    /// the view is held at its edge (PassiveTreeView.lua:1017-1031)
     #[test]
-    fn a_search_match_off_screen_snaps_to_the_edge() {
-        // PassiveTreeView.lua:1017-1031: with the option on (PoB's default) a match outside
-        // the view shows at its edge; with it off, nowhere
-        let rings = |edge: bool| {
+    fn the_canvas_draws_the_art_and_snaps_search_rings() {
+        let shapes = |edge: bool| {
             let (l, s) = sample();
+            let mut layout = (*l).clone();
+            layout.sheets = vec![Some(Arc::new(crate::engine::SheetImage::new(
+                "TreeData/x.png".into(),
+                [2, 2],
+                vec![255; 16],
+            )))];
+            let sprite = crate::engine::Sprite {
+                sheet: 0,
+                rect: [0.0, 0.0, 2.0, 2.0],
+            };
+            for node in &mut layout.nodes {
+                node.art.base = [Some(sprite); 3];
+            }
+            layout.assets.insert("highlightRing".into(), sprite);
+            layout.size = 2000.0;
             let mut state = (*s).clone();
             state.search_matches = vec![4];
-            let mut h = Harness::new(l, Arc::new(state));
-            h.tab.set_ui_settings(overlays::PowerTheme::RedBlue, edge);
+            let mut h = Harness::new(Arc::new(layout), Arc::new(state));
+            h.tab
+                .set_ui_settings(overlays::PowerTheme::RedBlue, edge, true);
             h.frame(vec![]);
-            // node 4 at (600, 600) just off the view's right bottom
             let rect = h.tab.rect.unwrap();
+            // node 4, at (600, 600), well off the view's right bottom
             h.tab.camera.zoom = 0.5;
-            h.tab.camera.center =
-                egui::vec2(600.0, 600.0) - (rect.size() / 2.0 + egui::vec2(20.0, 20.0)) / 0.5;
+            h.tab.camera.center = egui::vec2(600.0, 600.0) - rect.size() / 0.5;
             let input = RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
                 time: Some(h.time + 1.0),
@@ -1765,12 +1809,10 @@ mod tests {
                 h.tab.show(ui, false);
             });
             output.textures_delta.clear();
-            let mut found = Vec::new();
-            fn walk(shape: &egui::Shape, out: &mut Vec<Pos2>) {
+            let mut meshes = Vec::new();
+            fn walk(shape: &egui::Shape, out: &mut Vec<egui::Mesh>) {
                 match shape {
-                    egui::Shape::Circle(c) if c.stroke.color == overlays::SEARCH_RING => {
-                        out.push(c.center)
-                    }
+                    egui::Shape::Mesh(m) => out.push((**m).clone()),
                     egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
                     _ => {}
                 }
@@ -1778,14 +1820,65 @@ mod tests {
             output
                 .shapes
                 .iter()
-                .for_each(|c| walk(&c.shape, &mut found));
-            (found, rect)
+                .for_each(|c| walk(&c.shape, &mut meshes));
+            (meshes, rect)
         };
-        let (found, rect) = rings(true);
-        assert_eq!(found.len(), 1, "{found:?}");
-        assert!(rect.expand(1.0).contains(found[0]), "{found:?} {rect:?}");
-        let (found, rect) = rings(false);
-        assert!(found.iter().all(|p| !rect.contains(*p)), "{found:?}");
+        let (meshes, rect) = shapes(true);
+        // the red ring, the only red vertices, inside the view
+        let red: Vec<Pos2> = meshes
+            .iter()
+            .flat_map(|m| &m.vertices)
+            .filter(|v| v.color == egui::Color32::RED)
+            .map(|v| v.pos)
+            .collect();
+        assert_eq!(red.len(), 4, "{meshes:?}");
+        let centre = red.iter().fold(Vec2::ZERO, |a, p| a + p.to_vec2()) / 4.0;
+        assert!(
+            rect.expand(1.0).contains(centre.to_pos2()),
+            "{centre:?} {rect:?}"
+        );
+        let (meshes, rect) = shapes(false);
+        assert!(
+            meshes
+                .iter()
+                .flat_map(|m| &m.vertices)
+                .filter(|v| v.color == egui::Color32::RED)
+                .all(|v| !rect.contains(v.pos))
+        );
+    }
+
+    /// Another tree's layout frees the art of files it doesn't list, and keeps the shared ones
+    #[test]
+    fn another_trees_layout_frees_the_old_trees_art() {
+        let (l, s) = sample();
+        let file = |name: &str| {
+            Some(Arc::new(crate::engine::SheetImage::new(
+                name.into(),
+                [1, 1],
+                vec![255; 4],
+            )))
+        };
+        let mut old = (*l).clone();
+        old.sheets = vec![
+            file("TreeData/3_29/skills-3.jpg"),
+            file("TreeData/PSSkillFrame.png"),
+        ];
+        let mut h = Harness::new(Arc::new(old), s);
+        for path in ["TreeData/3_29/skills-3.jpg", "TreeData/PSSkillFrame.png"] {
+            let texture = h
+                .ctx
+                .load_texture(path, egui::ColorImage::example(), Default::default());
+            h.tab.textures.insert(path.into(), texture);
+        }
+        let mut new = (*l).clone();
+        new.version = "3_28".into();
+        new.sheets = vec![
+            file("TreeData/3_28/skills-3.jpg"),
+            file("TreeData/PSSkillFrame.png"),
+        ];
+        h.tab.on_snapshot(&Snapshot::TreeLayout(Arc::new(new)));
+        let kept: Vec<_> = h.tab.textures.keys().cloned().collect();
+        assert_eq!(kept, [PathBuf::from("TreeData/PSSkillFrame.png")]);
     }
 
     #[test]

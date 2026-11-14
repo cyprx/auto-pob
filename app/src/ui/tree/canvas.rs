@@ -2,12 +2,16 @@
 //! with the scroll wheel, click to allocate.
 
 use super::TreeTab;
-use super::geometry::{arc_points, node_radius};
+use super::geometry::{MIN_HIT_POINTS, arc_points, node_radius};
 use super::overlays::{self, ALLOCATED, Legend};
-use crate::engine::{NodePower, NodeTooltip, Sprite, TooltipLine, TreeLayout, TreeNode, TreeState};
+use super::scene;
+use crate::engine::{
+    CompareOnlyNode, NodePower, NodeTooltip, SheetPixels, TooltipLine, TreeLayout, TreeNode,
+    TreeState,
+};
 use crate::theme;
 use crate::widgets::tooltip_ui;
-use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, TextureHandle, Tooltip, Vec2};
+use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Tooltip, Vec2};
 use std::collections::HashSet;
 
 /// What the user did on the canvas this frame.
@@ -30,23 +34,21 @@ pub enum CanvasAction {
 /// An uploaded sprite sheet: its texture and size in pixels.
 type Sheet = (egui::TextureId, Vec2);
 
+/// A connection in the socket viewer's plain drawing
 const EDGE: Color32 = Color32::from_rgb(72, 62, 50);
-const HOVER: Color32 = Color32::WHITE;
-/// A node allocated in the compared spec only: PoB tints its art green (`SetDrawColor(0, 1, 0)`)
-const COMPARE_ONLY: Color32 = Color32::from_rgb(0, 255, 0);
-/// The nodes a click would allocate
-const PATH: Color32 = Color32::from_rgb(120, 200, 255);
-/// The nodes a click would deallocate
-const DROP: Color32 = Color32::from_rgb(230, 80, 70);
-/// Below this many screen points, icons are unreadable and plain dots are drawn instead
-const MIN_ICON_SIZE: f32 = 8.0;
-/// PoB draws sprites at their pixel size times this, in tree units (`PassiveTreeView:DrawAsset`)
-const SPRITE_SCALE: f32 = 1.33 * 2.0;
 /// A search ring snapped to the view's edge is this much smaller (PoB's `scaled_down_ratio`)
 const EDGE_RING_SCALE: f32 = 0.6667;
-/// Nodes of ascendancies other than the build's are drawn this faint, as PoB does
-/// (`PassiveTreeView:Draw`, `renderGroup`: `SetDrawColor(1, 1, 1, 0.50)`)
-const OTHER_ASCENDANCY: f32 = 0.5;
+/// How far a snapped search ring may stick out past the view's edge (PoB's `peekaboo_ratio`)
+const PEEKABOO: f32 = 1.15;
+/// PoB shows the ascendancies' flavour text from this zoom on (PassiveTreeView.lua:612)
+const FLAVOUR_MIN_ZOOM: f32 = 2.5;
+/// PoB's flavour text size at a scale of 1 (PassiveTreeView.lua:611)
+const FLAVOUR_SIZE: f32 = 52.0;
+/// While jewel rings turn, the canvas is redrawn when their edge has moved about a pixel, but
+/// no more often than this ...
+const RING_FRAME_MIN_MS: f32 = 100.0;
+/// ... nor less often than this
+const RING_FRAME_MAX_MS: f32 = 2000.0;
 
 pub fn show(
     ui: &mut egui::Ui,
@@ -66,9 +68,11 @@ pub fn show(
     }
     let valid_zoom = tab.camera.zoom > 0.0;
     if valid_zoom {
+        // PoB's zoom range holds for the input too
+        tab.camera.tree_size = layout.size;
         handle_input(ui, tab, &response);
+        tab.camera.limit(rect, layout.size);
     }
-    let sheets = upload_sheets(tab, ui.ctx(), layout);
     let camera = tab.camera;
     let zoom = camera.zoom;
     let to_screen = |p: [f32; 2]| camera.to_screen(rect, p);
@@ -76,166 +80,120 @@ pub fn show(
     let visible = rect.expand(50.0);
 
     // the node under the pointer; none while panning
-    let hovered = response
+    let under = response
         .hover_pos()
         .filter(|_| valid_zoom && !response.dragged())
         .and_then(|p| tab.grid.node_at(layout, camera.to_tree(rect, p), zoom));
     // Shift traces a path through the hovered nodes (PassiveTreeView.lua:283-363); a node
     // the trace can't take is not hovered
     let shift = ui.input(|i| i.modifiers.shift);
-    let hovered_id = tab.trace_step(layout, hovered.map(|i| layout.nodes[i].id), shift);
+    let hovered_id = tab.trace_step(layout, under.map(|i| layout.nodes[i].id), shift);
     let hovered = hovered_id.and_then(|id| tab.index.get(&id).copied());
-    // where none of ours is, a node of the compared spec only (PassiveTreeView.lua:308-320)
+    // where none of ours is, a node of the compared spec only, Shift or not
+    // (PassiveTreeView.lua:308-320)
     let compare_hover = response
         .hover_pos()
-        .filter(|_| valid_zoom && !response.dragged() && !shift && hovered_id.is_none())
-        .and_then(|p| {
-            let at = Vec2::from(camera.to_tree(rect, p));
-            state
-                .compare_only
-                .iter()
-                .find(|n| (Vec2::new(n.x, n.y) - at).length() <= node_radius(&n.kind))
-        });
+        .filter(|_| valid_zoom && !response.dragged() && under.is_none())
+        .and_then(|p| compare_only_at(&state.compare_only, camera.to_tree(rect, p), zoom));
     let mut actions = Vec::new();
     let hover_id = hovered_id.or(compare_hover.map(|n| n.id));
     if hover_id != tab.hover {
         actions.push(CanvasAction::Hover(hover_id));
     }
 
-    // the nodes a click on the hovered one would add or drop
-    let (highlight, highlight_colour) = match hovered_id {
-        // with Shift held the trace is the path, and nothing is a dependent
-        // (PassiveTreeView.lua:328-363)
-        _ if shift => (Some(&tab.trace), PATH),
-        Some(id) if tab.derived.allocated.contains(&id) => (tab.derived.depends.get(&id), DROP),
-        Some(id) => (tab.derived.paths.get(&id), PATH),
-        None => (None, PATH),
-    };
-    let highlight: HashSet<u32> = highlight.into_iter().flatten().copied().collect();
-    let fade = |node: &TreeNode| match &node.ascendancy {
-        Some(a) if !tab.derived.is_chosen(a) => OTHER_ASCENDANCY,
-        _ => 1.0,
-    };
-
-    // connections
-    for &(a, b) in &layout.edges {
-        let (na, nb) = (&layout.nodes[a], &layout.nodes[b]);
-        let (pa, pb) = (to_screen(na.pos), to_screen(nb.pos));
-        if !visible.contains(pa) && !visible.contains(pb) {
-            continue;
-        }
-        let colour = if highlight.contains(&na.id) && highlight.contains(&nb.id) {
-            highlight_colour
-        } else if tab.derived.allocated.contains(&na.id) && tab.derived.allocated.contains(&nb.id) {
-            ALLOCATED
-        } else {
-            EDGE
-        };
-        let stroke = Stroke::new(
-            (6.0 * zoom).clamp(1.0, 4.0),
-            colour.gamma_multiply(fade(na).min(fade(nb))),
-        );
-        match arc_center(na, nb) {
-            Some(center) => {
-                painter.line(arc_points(center, na.pos, nb.pos, zoom, to_screen), stroke)
-            }
-            None => painter.line_segment([pa, pb], stroke),
-        };
-    }
-
-    // nodes
+    // what PoB draws with: the hovered node's path and dependents (PassiveTreeView.lua:323-376)
+    let hover_sets = scene::hover_sets(
+        hovered_id,
+        shift.then_some(tab.trace.as_slice()),
+        &tab.draw_sets,
+        &tab.derived.paths,
+        &tab.derived.depends,
+    );
     // P shows the map before any stat was chosen: damage against defence
     let heat_on = state.heatmap.is_some() || state.heatmap_shown;
-    for node in &layout.nodes {
-        let pos = to_screen(node.pos);
-        if !visible.contains(pos) {
-            continue;
-        }
-        let radius = (node_radius(&node.kind) * zoom).max(1.5);
-        let is_allocated = tab.derived.allocated.contains(&node.id);
-        let fade = fade(node);
-        let on_path = highlight.contains(&node.id);
-
-        if let Some(rgb) = tab.derived.compare.get(&node.id) {
-            overlays::draw_compare_tint(&painter, pos, radius, *rgb);
-        }
-        let glow = power
-            .filter(|_| {
-                heat_on
-                    && !is_allocated
-                    && !matches!(node.kind.as_str(), "ClassStart" | "AscendClassStart")
+    let tree_view = Rect::from_min_max(
+        camera.to_tree(rect, rect.min).into(),
+        camera.to_tree(rect, rect.max).into(),
+    );
+    let now = ui.input(|i| i.time);
+    let look = scene::Look {
+        hover: hovered_id,
+        path: hover_sets.path.as_ref(),
+        deps: &hover_sets.deps,
+        trace_end: shift.then(|| tab.trace.last().copied()).flatten(),
+        heat: heat_on.then_some(power.map(|p| (p, &tab.power_index))),
+        power_theme: tab.power_theme,
+        view: tree_view,
+        pob_zoom: pob_zoom(zoom, layout.size, rect),
+        time_ms: (!tab.animations_off).then_some(now * 1000.0),
+    };
+    let images = scene::build(layout, state, &tab.draw_sets, &tab.index, &look);
+    let pob_zoom = look.pob_zoom;
+    // only the files this frame draws are decoded and uploaded
+    let used: HashSet<usize> = images.iter().map(|i| i.sprite.sheet).collect();
+    let sheets = upload_sheets(tab, ui.ctx(), layout, &used);
+    paint(
+        &painter,
+        &sheets,
+        &images,
+        rect,
+        camera,
+        !tab.edge_search_off,
+    );
+    if !tab.animations_off {
+        let shown: HashSet<u32> = images
+            .iter()
+            .filter_map(|i| match i.tag {
+                scene::Tag::JewelRing(node) => Some(node),
+                _ => None,
             })
-            .and_then(|p| {
-                let entry = &p.nodes[*tab.power_index.get(&node.id)?];
-                overlays::heat_color(p, entry, tab.power_theme)
-            });
-        if let Some(colour) = glow {
-            painter.circle_filled(pos, radius * 1.4, colour);
-        }
-
-        let state_ix = usize::from(is_allocated);
-        let icon = node.art.icon[state_ix]
-            .and_then(|sprite| Some((sprite, sheets.get(sprite.sheet).copied().flatten()?)));
-        match icon {
-            Some((sprite, sheet)) if sprite_size(sprite, zoom).x >= MIN_ICON_SIZE => {
-                let tint = Color32::WHITE.gamma_multiply(fade);
-                draw_sprite(&painter, sheet, sprite, pos, zoom, tint);
-                let frame = node.art.frame[state_ix]
-                    .and_then(|s| Some((s, sheets.get(s.sheet).copied().flatten()?)));
-                if let Some((frame, sheet)) = frame {
-                    draw_sprite(&painter, sheet, frame, pos, zoom, tint);
-                }
-            }
-            _ => {
-                let fill = if is_allocated {
-                    ALLOCATED
-                } else if on_path {
-                    highlight_colour
-                } else {
-                    kind_color(&node.kind)
-                };
-                painter.circle_filled(pos, radius, fill.gamma_multiply(fade));
-                if matches!(node.kind.as_str(), "Notable" | "Keystone") {
-                    painter.circle_stroke(pos, radius, Stroke::new(1.0, Color32::from_gray(160)));
-                }
-            }
-        }
-        if on_path {
-            painter.circle_stroke(pos, radius + 1.5, Stroke::new(1.5, highlight_colour));
-        }
-        // with the edge option on, a match outside the view is drawn snapped, below
-        if tab.derived.matches.contains(&node.id) && (tab.edge_search_off || rect.contains(pos)) {
-            overlays::draw_search_ring(&painter, pos, radius);
+            .collect();
+        let rings = state
+            .socket_rings
+            .iter()
+            .filter(|s| shown.contains(&s.node))
+            .flat_map(|s| &s.rings);
+        if let Some(wait) = ring_frame_interval(rings, zoom) {
+            ui.ctx().request_repaint_after(wait);
         }
     }
-    // the compared spec's own nodes, green as PoB tints them (PassiveTreeView.lua:1102-1140)
-    for node in &state.compare_only {
-        let pos = to_screen([node.x, node.y]);
-        if !visible.contains(pos) {
+    draw_flavour(&painter, layout, &tab.draw_sets, camera, rect, pob_zoom);
+    // a node whose art couldn't be loaded is still shown, as a dot
+    for node in &layout.nodes {
+        if !art_missing(layout, &node.art) {
             continue;
         }
-        let radius = (node_radius(&node.kind) * zoom).max(1.5);
-        let art = |s: Option<crate::engine::LuaSprite>| {
-            let sprite = s?.sprite()?;
-            Some((sprite, sheets.get(sprite.sheet).copied().flatten()?))
-        };
-        let icon = node.art.as_ref().and_then(|a| art(a.icon));
-        let frame = node.art.as_ref().and_then(|a| art(a.frame));
-        match icon.or(frame) {
-            Some((sprite, _)) if sprite_size(sprite, zoom).x >= MIN_ICON_SIZE => {
-                for (sprite, sheet) in [icon, frame].into_iter().flatten() {
-                    draw_sprite(&painter, sheet, sprite, pos, zoom, COMPARE_ONLY);
-                }
-            }
-            _ => {
-                painter.circle_filled(pos, radius, COMPARE_ONLY);
-            }
-        }
-        if compare_hover.is_some_and(|n| n.id == node.id) {
-            painter.circle_stroke(pos, radius + 2.0, Stroke::new(2.0, HOVER));
+        let pos = to_screen(node.pos);
+        if visible.contains(pos) {
+            let colour = if tab.derived.allocated.contains(&node.id) {
+                ALLOCATED
+            } else {
+                kind_color(&node.kind)
+            };
+            painter.circle_filled(pos, (node_radius(&node.kind) * zoom).max(1.5), colour);
         }
     }
-    if let Some(node) = compare_hover {
+    // a compare-only node whose art isn't on the layout's files (another tree version's) is
+    // still shown, as a green dot
+    for node in &state.compare_only {
+        let drawn = node
+            .art
+            .as_ref()
+            .and_then(|a| a.base.or(a.overlay))
+            .and_then(|s| s.resolve(&layout.sheets))
+            .is_some();
+        let pos = to_screen([node.x, node.y]);
+        if !drawn && visible.contains(pos) {
+            let radius = (node_radius(&node.kind) * zoom).max(1.5);
+            painter.circle_filled(pos, radius, Color32::from_rgb(0, 255, 0));
+        }
+    }
+    // PoB draws no hover ring on a compare-only node, and no tooltip for a mastery without
+    // effects or while Ctrl is held (PassiveTreeView.lua:1143)
+    let ctrl_held = ui.input(|i| i.modifiers.command);
+    if let Some(node) =
+        compare_hover.filter(|n| !ctrl_held && (n.kind != "Mastery" || n.mastery_effects))
+    {
         let reply = tab
             .tooltip
             .as_deref()
@@ -253,38 +211,9 @@ pub fn show(
                 }
             });
     }
-    // PoB's "Show search circles at viewport edge": a match outside the view shows as a
-    // smaller ring at the edge nearest to it (PassiveTreeView.lua:1017-1031)
-    if !tab.edge_search_off {
-        for &id in &tab.derived.matches {
-            let Some(&i) = tab.index.get(&id) else {
-                continue;
-            };
-            let node = &layout.nodes[i];
-            let pos = to_screen(node.pos);
-            if rect.contains(pos) {
-                continue;
-            }
-            let radius = (node_radius(&node.kind) * zoom).max(1.5) * EDGE_RING_SCALE;
-            // PoB lets the ring overhang the edge a little (its `peekaboo_ratio` 1.15)
-            let inset = radius * 0.13;
-            let at = egui::pos2(
-                pos.x.clamp(rect.left() + inset, rect.right() - inset),
-                pos.y.clamp(rect.top() + inset, rect.bottom() - inset),
-            );
-            overlays::draw_search_ring(&painter, at, radius);
-        }
-    }
-
-    for jewel in &state.jewels {
-        if let Some(&i) = tab.index.get(&jewel.node) {
-            let pos = to_screen(layout.nodes[i].pos);
-            overlays::draw_jewel_ring(&painter, visible, pos, jewel, zoom);
-        }
-    }
 
     if let Some((id, start)) = tab.pulse {
-        let age = ui.input(|i| i.time) - start;
+        let age = now - start;
         match tab.index.get(&id) {
             Some(&i) if age < super::PULSE_SECONDS => {
                 let node = &layout.nodes[i];
@@ -313,8 +242,6 @@ pub fn show(
         return actions;
     };
     let node = &layout.nodes[i];
-    let radius = (node_radius(&node.kind) * zoom).max(1.5);
-    painter.circle_stroke(to_screen(node.pos), radius + 2.0, Stroke::new(2.0, HOVER));
 
     let has_options = state
         .mastery_options
@@ -368,6 +295,11 @@ pub fn show(
         }
     }
 
+    // PoB shows no tooltip while Ctrl is held, none for a socket while Shift is, and none for a
+    // mastery without effects (PassiveTreeView.lua:1033)
+    if ctrl || (node.kind == "Socket" && shift) || (is_mastery && !node.mastery_effects) {
+        return actions;
+    }
     let jewel = state.jewels.iter().find(|j| j.node == node.id);
     // a reply is the tooltip for this trace (or for none)
     let reply = tab.tooltip.as_deref().filter(|t| t.trace == tab.trace);
@@ -491,38 +423,134 @@ fn wheel_notches(ui: &egui::Ui) -> (f32, bool) {
     })
 }
 
-/// Uploads sprite sheets that aren't on the GPU yet. Returns them indexed like
-/// [`TreeLayout::sheets`]. Every sheet's pixels are taken and dropped, uploaded or not: the
-/// texture is what gets drawn, and keeping the decoded copy would hold it twice.
+/// Uploads the images `used` draws that aren't on the GPU yet. Returns the uploaded ones
+/// indexed like [`TreeLayout::sheets`]; one still decoding, or not used yet, is `None` for now. The pixels are decoded on a
+/// thread of their own the first time they are wanted, and dropped once uploaded: the texture
+/// is what gets drawn, and keeping the decoded copy would hold it twice.
 fn upload_sheets(
     tab: &mut TreeTab,
     ctx: &egui::Context,
     layout: &TreeLayout,
+    used: &HashSet<usize>,
 ) -> Vec<Option<Sheet>> {
-    layout
+    let mut to_decode = Vec::new();
+    let mut waiting = false;
+    let sheets = layout
         .sheets
         .iter()
-        .map(|sheet| {
+        .enumerate()
+        .map(|(i, sheet)| {
             let sheet = sheet.as_ref()?;
-            let rgba = sheet.take_rgba();
-            let texture: &TextureHandle = match tab.textures.entry(sheet.path.clone()) {
-                std::collections::hash_map::Entry::Occupied(held) => held.into_mut(),
-                std::collections::hash_map::Entry::Vacant(slot) => {
-                    // no pixels: this UI took them before and has the texture (an engine
-                    // serves one UI), so this can't happen; the sprites would be left out, as
-                    // for a sheet that couldn't be loaded
-                    let image = egui::ColorImage::from_rgba_unmultiplied(sheet.size, &rgba?);
-                    let options = egui::TextureOptions::LINEAR
-                        .with_mipmap_mode(Some(egui::TextureFilter::Linear));
-                    slot.insert(ctx.load_texture(sheet.path.display().to_string(), image, options))
+            let size = Vec2::new(sheet.size[0] as f32, sheet.size[1] as f32);
+            if let Some(texture) = tab.textures.get(&sheet.path) {
+                // a copy decoded again for this layout is dropped
+                let _ = sheet.take_rgba();
+                return Some((texture.id(), size));
+            }
+            // a file nothing draws yet stays on disk
+            if !used.contains(&i) {
+                return None;
+            }
+            let pixels = sheet.take_rgba();
+            let rgba = match pixels {
+                SheetPixels::Ready(rgba) => rgba,
+                SheetPixels::Pending => {
+                    if sheet.claim() {
+                        to_decode.push(std::sync::Arc::clone(sheet));
+                    }
+                    waiting = true;
+                    return None;
                 }
+                SheetPixels::Failed => return None,
             };
-            Some((
-                texture.id(),
-                Vec2::new(sheet.size[0] as f32, sheet.size[1] as f32),
-            ))
+            let image = egui::ColorImage::from_rgba_unmultiplied(sheet.size, &rgba);
+            let mut options =
+                egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear));
+            if repeats(&sheet.path) {
+                options.wrap_mode = egui::TextureWrapMode::Repeat;
+            }
+            let texture = ctx.load_texture(sheet.path.display().to_string(), image, options);
+            let id = texture.id();
+            tab.textures.insert(sheet.path.clone(), texture);
+            Some((id, size))
         })
-        .collect()
+        .collect();
+    // if nothing can decode them, they are drawn as dots and the canvas doesn't wait
+    if !to_decode.is_empty() && !decode_in_background(to_decode, ctx, send_to_art_thread) {
+        waiting = false;
+    }
+    if waiting {
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
+    }
+    sheets
+}
+
+/// Work for the tree's art thread
+type ArtJob = Box<dyn FnOnce() + Send>;
+
+/// Runs `work` on the process's one thread for the tree's art, started the first time. One
+/// thread, not one per batch: each new thread would get a malloc arena of its own, which keeps
+/// what the decoding left in it (about 25 MB more resident after a build was opened).
+fn send_to_art_thread(work: ArtJob) -> std::io::Result<()> {
+    static QUEUE: std::sync::OnceLock<Option<std::sync::Mutex<std::sync::mpsc::Sender<ArtJob>>>> =
+        std::sync::OnceLock::new();
+    let queue = QUEUE.get_or_init(|| {
+        let (send, receive) = std::sync::mpsc::channel::<ArtJob>();
+        std::thread::Builder::new()
+            .name("tree-art".into())
+            .spawn(move || {
+                for job in receive {
+                    job();
+                }
+            })
+            .ok()
+            .map(|_| std::sync::Mutex::new(send))
+    });
+    let Some(queue) = queue else {
+        return Err(std::io::Error::other("the tree's art thread didn't start"));
+    };
+    queue
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .send(work)
+        .map_err(|_| std::io::Error::other("the tree's art thread has ended"))
+}
+
+/// Decodes the claimed `sheets` on the thread `spawn` hands the work to, asking for a frame
+/// after each. If it can't take the work the files are marked failed, so nothing waits for
+/// them; returns whether it took it.
+fn decode_in_background(
+    sheets: Vec<std::sync::Arc<crate::engine::SheetImage>>,
+    ctx: &egui::Context,
+    spawn: impl FnOnce(ArtJob) -> std::io::Result<()>,
+) -> bool {
+    let ctx = ctx.clone();
+    let failed = sheets.clone();
+    let started = spawn(Box::new(move || {
+        for sheet in &sheets {
+            sheet.decode_claimed();
+            ctx.request_repaint();
+        }
+    }));
+    if started.is_err() {
+        eprintln!("Unable to start decoding the tree's art");
+        for sheet in &failed {
+            sheet.fail();
+        }
+    }
+    started.is_ok()
+}
+
+/// Whether a file's art repeats across what it is drawn on: the line connectors along a
+/// line, the background across the view
+fn repeats(path: &std::path::Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    name.contains("LineConnector")
+        || name.contains("line-connector")
+        || name.starts_with("Background")
 }
 
 /// PoB's small view of a jewel socket's place in the tree (ItemSlotHelper.DrawViewer): the
@@ -605,26 +633,187 @@ fn arc_center(a: &TreeNode, b: &TreeNode) -> Option<[f32; 2]> {
     }
 }
 
-/// On-screen size of a sprite at the given zoom.
-fn sprite_size(sprite: Sprite, zoom: f32) -> Vec2 {
-    Vec2::new(sprite.rect[2], sprite.rect[3]) * SPRITE_SCALE * zoom
+/// The compare-only node at `at`, the nearest one when several are in reach, with the same
+/// least reach in screen points as our own nodes ([`super::geometry::HitGrid::node_at`])
+fn compare_only_at(nodes: &[CompareOnlyNode], at: [f32; 2], zoom: f32) -> Option<&CompareOnlyNode> {
+    let floor = MIN_HIT_POINTS / zoom;
+    let at = Vec2::from(at);
+    nodes
+        .iter()
+        .map(|n| (n, (Vec2::new(n.x, n.y) - at).length()))
+        .filter(|(n, d)| *d <= node_radius(&n.kind).max(floor))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(n, _)| n)
 }
 
-fn draw_sprite(
-    painter: &egui::Painter,
-    (texture, sheet_size): Sheet,
-    sprite: Sprite,
-    pos: Pos2,
+/// How long the turning jewel rings can wait for a frame: until the fastest edge on screen has
+/// moved about a pixel (PoB turns a ring `spin * 0.03` radians a second, PassiveTreeView.lua:
+/// 1250-1274), within [`RING_FRAME_MIN_MS`] and [`RING_FRAME_MAX_MS`]. `None` without rings.
+fn ring_frame_interval<'a>(
+    rings: impl Iterator<Item = &'a crate::engine::RingImage>,
     zoom: f32,
-    tint: Color32,
-) {
-    let [x, y, w, h] = sprite.rect;
-    let uv = Rect::from_min_size(
-        Pos2::new(x / sheet_size.x, y / sheet_size.y),
-        Vec2::new(w / sheet_size.x, h / sheet_size.y),
+) -> Option<std::time::Duration> {
+    let fastest = rings
+        .map(|r| r.size / 2.0 * zoom * r.spin.abs() * 0.03)
+        .reduce(f32::max)?;
+    let ms = if fastest > 0.0 {
+        1000.0 / fastest
+    } else {
+        RING_FRAME_MAX_MS
+    };
+    Some(std::time::Duration::from_secs_f32(
+        ms.clamp(RING_FRAME_MIN_MS, RING_FRAME_MAX_MS) / 1000.0,
+    ))
+}
+
+/// Whether none of a node's art can be drawn: it has none, or its files couldn't be loaded
+fn art_missing(layout: &TreeLayout, art: &crate::engine::NodeArt) -> bool {
+    art.base.iter().chain(&art.overlay).flatten().all(|s| {
+        layout
+            .sheets
+            .get(s.sheet)
+            .and_then(Option::as_ref)
+            .is_none_or(|f| f.is_failed())
+    })
+}
+
+/// PoB's `zoom` for a view: its scale is the view's smaller side over `tree.size`, times the
+/// zoom (PassiveTreeView.lua:271)
+pub fn pob_zoom(zoom: f32, tree_size: f32, view: Rect) -> f32 {
+    let side = view.width().min(view.height());
+    if side > 0.0 {
+        zoom * tree_size / side
+    } else {
+        1.0
+    }
+}
+
+/// Where PoB draws a search ring of `size` (half its width) around `at` with "Show search
+/// circles at viewport edge" on: unmoved while it fits, else held at the edge and smaller
+/// (PassiveTreeView.lua:1017-1031). Returns the ring's top-left corner and half width.
+pub fn snap_search_ring(at: Pos2, size: f32, view: Rect) -> (Pos2, f32) {
+    let clamp = |v: f32, lo: f32, hi: f32| v.max(lo).min(hi);
+    let x = clamp(
+        at.x - size,
+        view.left() - size / PEEKABOO,
+        view.right() - size * PEEKABOO,
     );
-    let rect = Rect::from_center_size(pos, sprite_size(sprite, zoom));
-    painter.image(texture, rect, uv, tint);
+    let y = clamp(
+        at.y - size,
+        view.top() - size / PEEKABOO,
+        view.bottom() - size * PEEKABOO,
+    );
+    if x != at.x - size || y != at.y - size {
+        let size = size * EDGE_RING_SCALE;
+        (Pos2::new(x + size / 2.0, y + size / 2.0), size)
+    } else {
+        (Pos2::new(x, y), size)
+    }
+}
+
+/// Draws the scene's images, each run of one texture in one mesh
+fn paint(
+    painter: &egui::Painter,
+    sheets: &[Option<Sheet>],
+    images: &[scene::Image],
+    rect: Rect,
+    camera: super::geometry::Camera,
+    edge_search: bool,
+) {
+    let mut mesh = egui::Mesh::default();
+    let flush = |mesh: &mut egui::Mesh| {
+        if !mesh.is_empty() {
+            painter.add(egui::Shape::mesh(std::mem::take(mesh)));
+        }
+    };
+    // PoB's layers, and within one each pass a file at a time: one mesh per file, not one per
+    // switch between a node's icon and its frame
+    let mut order: Vec<&scene::Image> = images.iter().collect();
+    order.sort_by_key(|i| (i.layer, i.pass, i.sprite.sheet));
+    for image in order {
+        let Some((texture, size)) = sheets.get(image.sprite.sheet).copied().flatten() else {
+            continue;
+        };
+        let mut quad = image.quad.map(|c| camera.to_screen(rect, c.into()));
+        if edge_search && matches!(image.tag, scene::Tag::SearchRing(_)) {
+            let half = (quad[1].x - quad[0].x) / 2.0;
+            let (min, half) =
+                snap_search_ring(camera.to_screen(rect, image.anchor.into()), half, rect);
+            let max = min + Vec2::splat(half * 2.0);
+            quad = [min, Pos2::new(max.x, min.y), max, Pos2::new(min.x, max.y)];
+        }
+        let bounds = Rect::from_points(&quad);
+        if !bounds.intersects(rect) {
+            continue;
+        }
+        if mesh.texture_id != texture {
+            flush(&mut mesh);
+            mesh.texture_id = texture;
+        }
+        let [x, y, w, h] = image.sprite.rect;
+        let uv = |u: Vec2| Pos2::new((x + u.x * w) / size.x, (y + u.y * h) / size.y);
+        let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let [r, g, b, a] = image.tint;
+        let colour = Color32::from_rgba_unmultiplied(c(r), c(g), c(b), c(a));
+        let first = mesh.vertices.len() as u32;
+        for (pos, u) in quad.iter().zip(image.uv) {
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: *pos,
+                uv: uv(u),
+                color: colour,
+            });
+        }
+        mesh.indices
+            .extend([first, first + 1, first + 2, first, first + 2, first + 3]);
+    }
+    flush(&mut mesh);
+}
+
+/// The ascendancies' flavour text, zoomed in far enough, at half strength for one that isn't
+/// the build's (PassiveTreeView.lua:597-621)
+fn draw_flavour(
+    painter: &egui::Painter,
+    layout: &TreeLayout,
+    sets: &scene::DrawSets,
+    camera: super::geometry::Camera,
+    rect: Rect,
+    pob_zoom: f32,
+) {
+    if pob_zoom < FLAVOUR_MIN_ZOOM {
+        return;
+    }
+    for group in &layout.groups {
+        let (Some(flavour), Some(asc)) = (&group.flavour, &group.ascendancy) else {
+            continue;
+        };
+        let at = camera.to_screen(rect, [flavour.x, flavour.y]);
+        if !rect.expand(rect.width()).contains(at) {
+            continue;
+        }
+        let chosen = Some(asc) == sets.ascendancy.as_ref() || Some(asc) == sets.bloodline.as_ref();
+        let channel = |i: usize| {
+            let v = flavour
+                .colour
+                .get(i..i + 2)
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+                .unwrap_or(255);
+            if chosen { v } else { v / 2 }
+        };
+        let colour = Color32::from_rgb(channel(0), channel(2), channel(4));
+        let mut job = egui::text::LayoutJob::default();
+        job.append(
+            &flavour.text,
+            0.0,
+            egui::TextFormat {
+                font_id: egui::FontId::proportional(FLAVOUR_SIZE * camera.zoom),
+                color: colour,
+                italics: true,
+                ..Default::default()
+            },
+        );
+        let galley = painter.layout_job(job);
+        painter.galley(at, galley, colour);
+    }
 }
 
 fn kind_color(kind: &str) -> Color32 {
@@ -672,6 +861,147 @@ mod tests {
         layout
     }
 
+    /// Both sheets of `sheet_layout`
+    fn all() -> HashSet<usize> {
+        [0, 1].into()
+    }
+
+    /// A file that fails to decode, the decoder panicking included, stops the waiting, and its
+    /// nodes' art counts as missing (drawn as dots)
+    #[test]
+    fn a_failed_decode_ends_the_wait_and_leaves_dots() {
+        let dir = crate::test_dir::TestDir::new("bad-sheet");
+        let path = dir.join("art.png");
+        std::fs::write(&path, b"\x89PNG\r\n\x1a\nnot a png").unwrap();
+        let bad = std::sync::Arc::new(crate::engine::SheetImage::lazy(path, [1, 1]));
+        assert!(bad.claim());
+        bad.decode_claimed();
+        assert!(bad.is_failed());
+        // a decoder that panics
+        let panicked = crate::engine::SheetImage::lazy(dir.join("x.png"), [1, 1]);
+        assert!(panicked.claim());
+        panicked.decode_with(|_| panic!("a damaged file"));
+        assert!(panicked.is_failed());
+        // no thread to decode on
+        let orphan =
+            std::sync::Arc::new(crate::engine::SheetImage::lazy(dir.join("y.png"), [1, 1]));
+        assert!(orphan.claim());
+        let ctx = egui::Context::default();
+        let started = decode_in_background(vec![orphan.clone()], &ctx, |_| {
+            Err(std::io::Error::other("no threads"))
+        });
+        assert!(!started);
+        assert!(orphan.is_failed());
+        assert!(!bad.claim(), "a failed file isn't decoded again");
+        let mut layout = sheet_layout(&bad);
+        let sprite = crate::engine::Sprite {
+            sheet: 0,
+            rect: [0.0, 0.0, 1.0, 1.0],
+        };
+        let art = crate::engine::NodeArt {
+            base: [Some(sprite); 3],
+            ..Default::default()
+        };
+        assert!(art_missing(&layout, &art));
+        layout.sheets[0] = Some(sheet());
+        assert!(!art_missing(&layout, &art));
+        // a failed file asks for no more frames
+        let mut tab = TreeTab::default();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            let up = upload_sheets(&mut tab, ui.ctx(), &sheet_layout(&bad), &all());
+            assert!(up[0].is_none());
+        })
+        .textures_delta
+        .clear();
+        // egui itself asks for the first few frames
+        let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
+        for _ in 0..4 {
+            out.textures_delta.clear();
+            out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                upload_sheets(&mut tab, ui.ctx(), &sheet_layout(&bad), &all());
+            });
+        }
+        out.textures_delta.clear();
+        assert!(
+            out.viewport_output
+                .values()
+                .all(|v| v.repaint_delay == std::time::Duration::MAX),
+            "the canvas still waits for a failed file: {:?}",
+            out.viewport_output
+                .values()
+                .map(|v| v.repaint_delay)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Every batch of art is decoded on the same thread
+    #[test]
+    fn the_art_is_decoded_on_one_thread() {
+        let (send, receive) = std::sync::mpsc::channel();
+        for _ in 0..3 {
+            let send = send.clone();
+            send_to_art_thread(Box::new(move || {
+                let me = std::thread::current();
+                send.send((me.id(), me.name().map(String::from))).unwrap();
+            }))
+            .unwrap();
+        }
+        let ran: Vec<_> = (0..3).map(|_| receive.recv().unwrap()).collect();
+        assert!(ran.iter().all(|r| r == &ran[0]), "{ran:?}");
+        assert_eq!(ran[0].1.as_deref(), Some("tree-art"));
+    }
+
+    /// The rings' frames follow how fast their edge moves on screen
+    #[test]
+    fn ring_frames_follow_the_rings_on_screen() {
+        let ring = |size: f32, spin: f32| crate::engine::RingImage {
+            image: "jewelShadedOuterRing".into(),
+            size,
+            spin,
+            x: 0.0,
+            y: 0.0,
+            tint: [1.0; 4],
+        };
+        let ms = |rings: &[crate::engine::RingImage], zoom| {
+            ring_frame_interval(rings.iter(), zoom).map(|d| d.as_millis())
+        };
+        assert_eq!(ms(&[], 1.0), None);
+        // a 2400 radius ring at fit zoom (0.03): its edge moves 1.5 px a second
+        let big = ring(4800.0, -0.7);
+        assert_eq!(ms(std::slice::from_ref(&big), 0.03), Some(661));
+        // a small one barely moves: a frame every 2 s
+        assert_eq!(ms(&[ring(100.0, 0.7)], 0.03), Some(2000));
+        // zoomed in, a frame per pixel, but no more than 10 a second
+        assert_eq!(ms(std::slice::from_ref(&big), 0.1), Some(198));
+        assert_eq!(ms(std::slice::from_ref(&big), 0.27), Some(100));
+        // the fastest ring counts
+        assert_eq!(ms(&[ring(100.0, 0.7), big], 0.1), Some(198));
+    }
+
+    /// A file no image of the frame draws is neither decoded nor uploaded
+    #[test]
+    fn only_the_files_drawn_are_decoded() {
+        let ctx = egui::Context::default();
+        let mut tab = TreeTab::default();
+        let dir = crate::test_dir::TestDir::new("unused-sheet");
+        let path = dir.join("art.png");
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 255]))
+            .save(&path)
+            .unwrap();
+        let lazy = std::sync::Arc::new(crate::engine::SheetImage::lazy(path, [1, 1]));
+        let up = upload_sheets(&mut tab, &ctx, &sheet_layout(&lazy), &HashSet::new());
+        assert!(up[0].is_none());
+        assert!(
+            lazy.is_unloaded(),
+            "decoding started for a file nothing draws"
+        );
+        let ready = sheet();
+        let up = upload_sheets(&mut tab, &ctx, &sheet_layout(&ready), &[1].into());
+        assert!(up[0].is_none());
+        assert!(tab.textures.is_empty());
+        assert!(ready.has_rgba());
+    }
+
     fn sheet() -> std::sync::Arc<crate::engine::SheetImage> {
         std::sync::Arc::new(crate::engine::SheetImage::new(
             "TreeData/3_29/skills-3.jpg".into(),
@@ -680,12 +1010,170 @@ mod tests {
         ))
     }
 
+    /// The background tile goes under the class art and the groups, whatever its file's index
+    /// (PassiveTreeView.lua:536-660); a frame goes over its icon
+    #[test]
+    fn paint_keeps_pobs_order_within_a_layer() {
+        let ctx = egui::Context::default();
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let camera = super::super::geometry::Camera {
+            center: Vec2::ZERO,
+            zoom: 1.0,
+            ..Default::default()
+        };
+        let image = |sheet: usize, layer: u8, pass: u8, tag| scene::Image {
+            layer,
+            pass,
+            sprite: crate::engine::Sprite {
+                sheet,
+                rect: [0.0, 0.0, 1.0, 1.0],
+            },
+            quad: [
+                Vec2::new(-10.0, -10.0),
+                Vec2::new(10.0, -10.0),
+                Vec2::new(10.0, 10.0),
+                Vec2::new(-10.0, 10.0),
+            ],
+            uv: [Vec2::ZERO; 4],
+            tint: [1.0; 4],
+            anchor: Vec2::ZERO,
+            tag,
+        };
+        // the scene's own passes for the background, class art and a group, the background's
+        // file last in the layout; and a node's icon and frame, the frame's file first
+        let mut l = super::super::geometry::tests::layout(
+            vec![super::super::geometry::tests::node(1, [0.0, 0.0], "Normal")],
+            vec![],
+        );
+        let tex = |i| egui::TextureId::User(i);
+        let sheets: Vec<Option<Sheet>> = (0..5).map(|i| Some((tex(i), Vec2::ONE))).collect();
+        for (i, name) in ["Group", "Class", "Frame", "Icon", "Background2"]
+            .iter()
+            .enumerate()
+        {
+            l.assets.insert(
+                (*name).into(),
+                crate::engine::Sprite {
+                    sheet: i,
+                    rect: [0.0, 0.0, 1.0, 1.0],
+                },
+            );
+        }
+        l.class_art = vec![crate::engine::ClassArt {
+            class: 0,
+            art: l.assets["Class"],
+            pos: [0.0, 0.0],
+        }];
+        l.groups = vec![crate::engine::GroupArt {
+            pos: [0.0, 0.0],
+            art: l.assets["Group"],
+            half: false,
+            ascendancy: None,
+            flavour: None,
+        }];
+        let state = crate::engine::fake::empty_tree_state();
+        let sets = scene::DrawSets::new(&state, None);
+        let empty = HashSet::new();
+        let look = scene::Look {
+            hover: None,
+            path: None,
+            deps: &empty,
+            trace_end: None,
+            heat: None,
+            power_theme: Default::default(),
+            view: Rect::from_min_max(Pos2::new(-1e4, -1e4), Pos2::new(1e4, 1e4)),
+            pob_zoom: 1.0,
+            time_ms: None,
+        };
+        let mut images = scene::build(&l, &state, &sets, &Default::default(), &look);
+        images.push(image(3, scene::LAYER_NODE, 1, scene::Tag::Node(1)));
+        images.push(image(2, scene::LAYER_NODE, 2, scene::Tag::Node(1)));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let (_, painter) = ui.allocate_painter(rect.size(), Sense::hover());
+            paint(&painter, &sheets, &images, rect, camera, false);
+        });
+        output.textures_delta.clear();
+        let order: Vec<egui::TextureId> = output
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Mesh(m) => Some(m.texture_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(order, [tex(4), tex(1), tex(0), tex(3), tex(2)]);
+    }
+
+    /// PassiveTreeView.lua:1017-1031: a ring that fits stays; one past an edge is held there,
+    /// two thirds the size, sticking out by PoB's `peekaboo_ratio`
+    #[test]
+    fn search_rings_snap_to_the_edge_as_pobs() {
+        let view = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        assert_eq!(
+            snap_search_ring(Pos2::new(400.0, 300.0), 20.0, view),
+            (Pos2::new(380.0, 280.0), 20.0)
+        );
+        // off the right bottom
+        let (at, size) = snap_search_ring(Pos2::new(1000.0, 900.0), 30.0, view);
+        assert!((size - 20.001).abs() < 1e-3, "{size}");
+        assert!(
+            (at.x - (800.0 - 30.0 * PEEKABOO + size / 2.0)).abs() < 1e-3,
+            "{at:?}"
+        );
+        assert!(
+            (at.y - (600.0 - 30.0 * PEEKABOO + size / 2.0)).abs() < 1e-3,
+            "{at:?}"
+        );
+        // off the left only
+        let (at, size) = snap_search_ring(Pos2::new(-200.0, 300.0), 30.0, view);
+        assert!(
+            (at.x - (-30.0 / PEEKABOO + size / 2.0)).abs() < 1e-3,
+            "{at:?}"
+        );
+        assert!((at.y - (270.0 + size / 2.0)).abs() < 1e-3, "{at:?}");
+        // a view smaller than the ring doesn't panic
+        snap_search_ring(
+            Pos2::new(5.0, 5.0),
+            30.0,
+            Rect::from_min_size(Pos2::ZERO, Vec2::splat(2.0)),
+        );
+        assert!((pob_zoom(0.5, 20_000.0, view) - 0.5 * 20_000.0 / 600.0).abs() < 1e-3);
+    }
+
+    fn compare_only(id: u32, x: f32, kind: &str) -> CompareOnlyNode {
+        CompareOnlyNode {
+            id,
+            x,
+            y: 0.0,
+            kind: kind.into(),
+            name: String::new(),
+            mastery_effects: false,
+            art: None,
+        }
+    }
+
+    /// The nearest compare-only node in reach, with our nodes' least reach on screen
+    #[test]
+    fn compare_only_nodes_are_hit_like_ours() {
+        let nodes = [
+            compare_only(1, 0.0, "Normal"),
+            compare_only(2, 40.0, "Normal"),
+        ];
+        let at = |x, zoom| compare_only_at(&nodes, [x, 0.0], zoom).map(|n| n.id);
+        assert_eq!(at(5.0, 1.0), Some(1));
+        assert_eq!(at(30.0, 1.0), Some(2));
+        assert_eq!(at(100.0, 1.0), None);
+        // zoomed out, 6 points reach 300 tree units
+        assert_eq!(at(250.0, 0.02), Some(2));
+        assert_eq!(at(400.0, 0.02), None);
+    }
+
     #[test]
     fn uploaded_sheets_drop_their_pixels() {
         let ctx = egui::Context::default();
         let mut tab = TreeTab::default();
         let first = sheet();
-        let up = upload_sheets(&mut tab, &ctx, &sheet_layout(&first));
+        let up = upload_sheets(&mut tab, &ctx, &sheet_layout(&first), &all());
         assert_eq!(up.len(), 2);
         let (id, size) = up[0].expect("uploaded");
         assert_eq!(size, Vec2::new(2.0, 1.0));
@@ -693,16 +1181,53 @@ mod tests {
         // the texture holds the sheet now; the decoded copy is gone
         assert!(!first.has_rgba());
         // later frames draw from the texture
-        let again = upload_sheets(&mut tab, &ctx, &sheet_layout(&first));
+        let again = upload_sheets(&mut tab, &ctx, &sheet_layout(&first), &all());
         assert_eq!(again[0].map(|s| s.0), Some(id));
         // a later layout's fresh copy of a sheet already up is dropped too, not kept
         let second = sheet();
-        let next = upload_sheets(&mut tab, &ctx, &sheet_layout(&second));
+        let next = upload_sheets(&mut tab, &ctx, &sheet_layout(&second), &all());
         assert_eq!(next[0].map(|s| s.0), Some(id));
         assert!(!second.has_rgba());
         // without pixels nor a texture the sheet's sprites are left out, not a panic
         let mut other = TreeTab::default();
-        assert!(upload_sheets(&mut other, &ctx, &sheet_layout(&first))[0].is_none());
+        assert!(upload_sheets(&mut other, &ctx, &sheet_layout(&first), &all())[0].is_none());
         assert!(other.textures.is_empty());
+    }
+
+    /// A file is decoded off the frame the first time it is wanted, then uploaded; the layout
+    /// only read its size (crate::engine::tree::load_sheet)
+    #[test]
+    fn a_files_pixels_are_decoded_when_first_drawn() {
+        let dir = crate::test_dir::TestDir::new("lazy-sheet");
+        let path = dir.join("art.png");
+        image::RgbaImage::from_pixel(3, 2, image::Rgba([1, 2, 3, 255]))
+            .save(&path)
+            .unwrap();
+        let lazy = std::sync::Arc::new(crate::engine::SheetImage::lazy(path, [3, 2]));
+        assert!(lazy.is_unloaded());
+        let ctx = egui::Context::default();
+        let mut tab = TreeTab::default();
+        // the first frame starts the decoding and draws without it
+        assert!(upload_sheets(&mut tab, &ctx, &sheet_layout(&lazy), &all())[0].is_none());
+        assert!(!lazy.is_unloaded());
+        let start = std::time::Instant::now();
+        let up = loop {
+            if let Some(up) = upload_sheets(&mut tab, &ctx, &sheet_layout(&lazy), &all())[0] {
+                break up;
+            }
+            assert!(start.elapsed().as_secs() < 10, "never decoded");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(up.1, Vec2::new(3.0, 2.0));
+        // uploaded: the pixels are dropped
+        assert!(!lazy.has_rgba());
+        // a file that can't be decoded is left out for good
+        let broken = std::sync::Arc::new(crate::engine::SheetImage::lazy(
+            dir.join("none.png"),
+            [1, 1],
+        ));
+        broken.decode();
+        assert_eq!(broken.take_rgba(), crate::engine::SheetPixels::Failed);
+        assert!(upload_sheets(&mut tab, &ctx, &sheet_layout(&broken), &all())[0].is_none());
     }
 }

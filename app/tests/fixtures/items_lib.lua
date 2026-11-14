@@ -332,10 +332,16 @@ function layoutDigest()
 	end
 	table.sort(nodes, function(a, b) return a.id < b.id end)
 	local lines = { build.spec.treeVersion }
+	local overrides = build.spec.hashOverrides or {}
 	for _, node in ipairs(nodes) do
+		local conqueror = node.conqueredBy and node.conqueredBy.conqueror
+		local abyss = conqueror and conqueror.type and conqueror.type:match("^abyss_")
 		lines[#lines + 1] = table.concat({
 			tostring(node.id), node.dn or "", table.concat(node.sd or {}, "\1"), node.type or "",
 			node.icon or "", node.inactiveIcon or "", node.activeIcon or "", node.ascendancyName or "",
+			-- the frame art PassiveTreeView:Draw picks: abyss conquest, blight, a tattoo's icon
+			abyss and "abyss" or "", node.isBlighted and "blighted" or "",
+			overrides[node.id] and overrides[node.id].icon or "",
 		}, "\2")
 	end
 	return table.concat(lines, "\n")

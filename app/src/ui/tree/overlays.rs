@@ -1,7 +1,7 @@
-//! What is drawn on top of the nodes: search rings, compare tint, jewel radii, the heatmap
-//! glow and the legend.
+//! The heat map's colours and what the canvas adds to PoB's drawing: the legend and the pulse
+//! around a node the user was pointed to.
 
-use crate::engine::{JewelSocket, NodePower, NodePowerEntry};
+use crate::engine::{NodePower, NodePowerEntry};
 use crate::theme;
 use eframe::egui::{self, Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, Vec2};
 
@@ -53,16 +53,26 @@ impl PowerTheme {
 /// there is nothing to show.
 pub fn heat_color(power: &NodePower, entry: &NodePowerEntry, theme: PowerTheme) -> Option<Color32> {
     let channel = |v: f32| (v * 255.0).round() as u8;
+    let [r, g, b] = heat_rgb(power, Some(entry), theme);
+    (r.max(g).max(b) > 0.02).then(|| Color32::from_rgb(channel(r), channel(g), channel(b)))
+}
+
+/// The colour PoB draws an unallocated node's art with while the heat map is on
+/// (PassiveTreeView.lua:907-934); a node without an entry has no power
+pub fn heat_rgb(power: &NodePower, entry: Option<&NodePowerEntry>, theme: PowerTheme) -> [f32; 3] {
+    let single = entry.map_or(0.0, |e| e.single);
+    let offence = entry.and_then(|e| e.offence).unwrap_or(0.0);
+    let defence = entry.and_then(|e| e.defence).unwrap_or(0.0);
     let (r, g, b) = if power.stat.is_some() {
-        let stat = heat_strength(entry.single, power.max_single);
+        let stat = heat_strength(single, power.max_single);
         match theme {
             PowerTheme::RedBlue => (stat, 0.0, 0.0),
             PowerTheme::RedGreen => (0.0, stat, 0.0),
             PowerTheme::GreenBlue => (0.0, 0.0, stat),
         }
     } else {
-        let dps = heat_strength(entry.offence.unwrap_or(0.0), power.max_offence);
-        let def = heat_strength(entry.defence.unwrap_or(0.0), power.max_defence);
+        let dps = heat_strength(offence, power.max_offence);
+        let def = heat_strength(defence, power.max_defence);
         let mix = ((dps - 0.5).max(0.0) + (def - 0.5).max(0.0)) / 2.0;
         match theme {
             PowerTheme::RedBlue => (dps, mix, def),
@@ -70,33 +80,7 @@ pub fn heat_color(power: &NodePower, entry: &NodePowerEntry, theme: PowerTheme) 
             PowerTheme::GreenBlue => (mix, dps, def),
         }
     };
-    (r.max(g).max(b) > 0.02).then(|| Color32::from_rgb(channel(r), channel(g), channel(b)))
-}
-
-pub fn draw_search_ring(painter: &Painter, pos: Pos2, radius: f32) {
-    painter.circle_stroke(pos, radius + 4.0, Stroke::new(2.0, SEARCH_RING));
-}
-
-pub fn draw_compare_tint(painter: &Painter, pos: Pos2, radius: f32, rgb: [f32; 3]) {
-    let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    let colour = Color32::from_rgba_unmultiplied(c(rgb[0]), c(rgb[1]), c(rgb[2]), 150);
-    painter.circle_filled(pos, radius * 1.5, colour);
-}
-
-/// The jewel's radius around its socket: the outer ring, and the inner one when it has a hole.
-pub fn draw_jewel_ring(painter: &Painter, view: Rect, pos: Pos2, jewel: &JewelSocket, zoom: f32) {
-    let Some([inner, outer]) = jewel.ring else {
-        return;
-    };
-    let outer = outer * zoom;
-    if !view.expand(outer).contains(pos) {
-        return;
-    }
-    let stroke = Stroke::new(1.5, JEWEL_RING.gamma_multiply(0.7));
-    painter.circle_stroke(pos, outer, stroke);
-    if inner > 0.0 {
-        painter.circle_stroke(pos, inner * zoom, stroke);
-    }
+    [r, g, b]
 }
 
 /// What the legend has to explain.
@@ -110,18 +94,17 @@ pub struct Legend<'a> {
 }
 
 pub fn draw_legend(painter: &Painter, view: Rect, legend: &Legend) {
-    let mut rows: Vec<(Color32, String)> = vec![(ALLOCATED, "Allocated".into())];
-    rows.push((
-        Color32::from_rgb(120, 200, 255),
-        "Path to hovered node".into(),
-    ));
+    // the colours PoB tints its art with (PassiveTreeView.lua:166-185, 1013)
+    let mut rows: Vec<(Color32, String)> = Vec::new();
     if legend.searching {
         rows.push((SEARCH_RING, "Search match".into()));
     }
     if legend.compare {
+        rows.push((Color32::from_rgb(0, 255, 0), "Only in compared tree".into()));
+        rows.push((Color32::from_rgb(255, 0, 0), "Only in this tree".into()));
         rows.push((
-            Color32::from_rgb(255, 160, 60),
-            "Differs in compared tree".into(),
+            Color32::from_rgb(0, 0, 255),
+            "Changed in compared tree".into(),
         ));
     }
     if legend.heat {

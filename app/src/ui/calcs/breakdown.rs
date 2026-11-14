@@ -5,7 +5,7 @@ use crate::engine::Command;
 use crate::engine::views::{BreakdownRow, BreakdownSection, BreakdownView, CellRef};
 use crate::ui::tree::Rects;
 use crate::widgets::{pob_text, tooltip_ui};
-use eframe::egui::{self, Align, Color32, Layout, Pos2, Sense, Stroke, StrokeKind, Vec2};
+use eframe::egui::{self, Align, Color32, Layout, Sense, Vec2};
 use std::{cmp::Ordering, collections::HashMap, sync::Arc};
 
 /// How long the pointer rests on a cell before the engine is asked about it (seconds)
@@ -340,24 +340,74 @@ fn cell(ui: &mut egui::Ui, row: &BreakdownRow, key: &str) -> (egui::Response, Op
     (response, focus)
 }
 
-/// R12: the radius as a circle on a dark 16:9 box standing for 1920 by 1080 world units.
+/// PoB's radius visual's size: 1920 by 1080 at a quarter (CalcBreakdownControl.lua:140-147)
+const RADIUS_SIZE: Vec2 = Vec2::new(480.0, 270.0);
+
+/// PoB's isometric camera, world units to the visual's pixels, rounded (Main.lua:1486-1499)
+fn world_to_screen(x: f64, y: f64, width: f64, height: f64) -> (i64, i64) {
+    let cos45 = (std::f64::consts::PI / 4.0).cos();
+    let cos35 = (std::f64::consts::PI * 0.195).cos();
+    let sin35 = (std::f64::consts::PI * 0.195).sin();
+    let cx = (x - y) * cos45;
+    let cy = -5.33 - (y + x) * cos45 * cos35;
+    let cz = 122.0 + (y + x) * cos45 * sin35;
+    let sx = width * 0.5 + cx / cz * 1.27 * height;
+    let sy = height * 0.5 + cy / cz * 1.27 * height;
+    ((sx + 0.5).floor() as i64, (sy + 0.5).floor() as i64)
+}
+
+/// The rows of PoB's filled circle of `radius` on the ground (main:RenderCircle, Main.lua:
+/// 1502-1523): each pixel row's `(y, left, right)`, top to bottom
+pub fn radius_rows(width: f64, height: f64, radius: f64) -> Vec<(i64, i64, i64)> {
+    let mut rows: std::collections::BTreeMap<i64, (i64, i64)> = Default::default();
+    // PoB's `for d = 0, 360, 0.15`, the step added each time as LuaJIT does
+    let mut d = 0.0f64;
+    while d <= 360.0 {
+        let r = d / 180.0 * std::f64::consts::PI;
+        let (px, py) = world_to_screen(r.sin() * radius, r.cos() * radius, width, height);
+        if py >= 0 && (py as f64) < height {
+            let px = px.clamp(0, width as i64);
+            let row = rows.entry(py).or_insert((px, px));
+            row.0 = row.0.min(px);
+            row.1 = row.1.max(px);
+        }
+        d += 0.15;
+    }
+    rows.into_iter().map(|(y, (l, r))| (y, l, r)).collect()
+}
+
+/// PoB's radius visual (CalcBreakdownControl:DrawRadiusVisual): the range guide at 3/4
+/// brightness, the radius as a translucent green disc in the game's perspective, and the game's
+/// UI over it. 480 by 270, or smaller to fit.
 fn radius_box(ui: &mut egui::Ui, radius: f64) {
-    let width = ui.available_width().clamp(120.0, 360.0);
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, width * 9.0 / 16.0), Sense::hover());
+    let width = ui.available_width().clamp(120.0, RADIUS_SIZE.x);
+    let (rect, _) = ui.allocate_exact_size(
+        Vec2::new(width, width * RADIUS_SIZE.y / RADIUS_SIZE.x),
+        Sense::hover(),
+    );
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, Color32::from_gray(12));
-    painter.rect_stroke(
+    let ctx = ui.ctx().clone();
+    crate::widgets::art::paint(
+        &ctx,
+        &painter,
+        "Assets/range_guide.png",
         rect,
-        0.0,
-        Stroke::new(1.0, Color32::from_gray(70)),
-        StrokeKind::Inside,
+        Color32::from_gray(191),
     );
-    let scale = width / 1920.0;
-    let centre: Pos2 = rect.center();
-    painter.circle_stroke(
-        centre,
-        radius as f32 * scale,
-        Stroke::new(1.5, Color32::from_rgb(255, 255, 255)),
+    let scale = width / RADIUS_SIZE.x;
+    let green = Color32::from_rgba_unmultiplied(128, 255, 128, 84);
+    for (y, left, right) in radius_rows(f64::from(RADIUS_SIZE.x), f64::from(RADIUS_SIZE.y), radius)
+    {
+        let min = rect.min + Vec2::new(left as f32, y as f32) * scale;
+        let size = Vec2::new((right - left + 1) as f32, 1.0) * scale;
+        painter.rect_filled(egui::Rect::from_min_size(min, size), 0.0, green);
+    }
+    crate::widgets::art::paint(
+        &ctx,
+        &painter,
+        "Assets/game_ui_small.png",
+        rect,
+        Color32::WHITE,
     );
-    painter.circle_filled(centre, 2.0, Color32::from_rgb(255, 255, 255));
 }

@@ -779,6 +779,100 @@ mod tests {
         ))
     }
 
+    /// The background tile goes under the class art and the groups, whatever its file's index
+    /// (PassiveTreeView.lua:536-660); a frame goes over its icon
+    #[test]
+    fn paint_keeps_pobs_order_within_a_layer() {
+        let ctx = egui::Context::default();
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let camera = super::super::geometry::Camera {
+            center: Vec2::ZERO,
+            zoom: 1.0,
+            ..Default::default()
+        };
+        let image = |sheet: usize, layer: u8, pass: u8, tag| scene::Image {
+            layer,
+            pass,
+            sprite: crate::engine::Sprite {
+                sheet,
+                rect: [0.0, 0.0, 1.0, 1.0],
+            },
+            quad: [
+                Vec2::new(-10.0, -10.0),
+                Vec2::new(10.0, -10.0),
+                Vec2::new(10.0, 10.0),
+                Vec2::new(-10.0, 10.0),
+            ],
+            uv: [Vec2::ZERO; 4],
+            tint: [1.0; 4],
+            anchor: Vec2::ZERO,
+            tag,
+        };
+        // the scene's own passes for the background, class art and a group, the background's
+        // file last in the layout; and a node's icon and frame, the frame's file first
+        let mut l = super::super::geometry::tests::layout(
+            vec![super::super::geometry::tests::node(1, [0.0, 0.0], "Normal")],
+            vec![],
+        );
+        let tex = |i| egui::TextureId::User(i);
+        let sheets: Vec<Option<Sheet>> = (0..5).map(|i| Some((tex(i), Vec2::ONE))).collect();
+        for (i, name) in ["Group", "Class", "Frame", "Icon", "Background2"]
+            .iter()
+            .enumerate()
+        {
+            l.assets.insert(
+                (*name).into(),
+                crate::engine::Sprite {
+                    sheet: i,
+                    rect: [0.0, 0.0, 1.0, 1.0],
+                },
+            );
+        }
+        l.class_art = vec![crate::engine::ClassArt {
+            class: 0,
+            art: l.assets["Class"],
+            pos: [0.0, 0.0],
+        }];
+        l.groups = vec![crate::engine::GroupArt {
+            pos: [0.0, 0.0],
+            art: l.assets["Group"],
+            half: false,
+            ascendancy: None,
+            flavour: None,
+        }];
+        let state = crate::engine::fake::empty_tree_state();
+        let sets = scene::DrawSets::new(&state, None);
+        let empty = HashSet::new();
+        let look = scene::Look {
+            hover: None,
+            path: None,
+            deps: &empty,
+            trace_end: None,
+            heat: None,
+            power_theme: Default::default(),
+            view: Rect::from_min_max(Pos2::new(-1e4, -1e4), Pos2::new(1e4, 1e4)),
+            pob_zoom: 1.0,
+            time_ms: None,
+        };
+        let mut images = scene::build(&l, &state, &sets, &Default::default(), &look);
+        images.push(image(3, scene::LAYER_NODE, 1, scene::Tag::Node(1)));
+        images.push(image(2, scene::LAYER_NODE, 2, scene::Tag::Node(1)));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let (_, painter) = ui.allocate_painter(rect.size(), Sense::hover());
+            paint(&painter, &sheets, &images, rect, camera, false);
+        });
+        output.textures_delta.clear();
+        let order: Vec<egui::TextureId> = output
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Mesh(m) => Some(m.texture_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(order, [tex(4), tex(1), tex(0), tex(3), tex(2)]);
+    }
+
     /// PassiveTreeView.lua:1017-1031: a ring that fits stays; one past an edge is held there,
     /// two thirds the size, sticking out by PoB's `peekaboo_ratio`
     #[test]

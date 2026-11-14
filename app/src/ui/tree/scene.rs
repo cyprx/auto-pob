@@ -551,7 +551,9 @@ pub fn build(
             });
         }
     }
-    // the class's background art
+    // the class's background art over the background, the groups' over both
+    // (PassiveTreeView.lua:536-660)
+    scene.pass = 1;
     if let Some(art) = layout.class_art.iter().find(|a| a.class == sets.class_id) {
         scene.draw_asset(Some(art.art), Vec2::from(art.pos), WHITE, Tag::ClassArt);
     }
@@ -573,9 +575,11 @@ pub fn build(
             scene.draw_asset(Some(g.art), at, tint, Tag::Group);
         }
     };
+    scene.pass = 2;
     for g in &layout.groups {
         group(&mut scene, g, WHITE);
     }
+    scene.pass = 3;
     for g in &state.compare_only_groups {
         if let Some(g) = g.resolve(&layout.sheets) {
             group(&mut scene, &g, COMPARE_ONLY_GROUP);

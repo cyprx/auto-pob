@@ -209,6 +209,19 @@ fn record(lua: &mlua::Lua) -> Vec<Rec> {
     record_hovering(lua, None)
 }
 
+/// Upstream's Draw of the Items tab's socket viewer (ItemSlotHelper.DrawViewer's
+/// `itemsTab.socketViewer`), nothing hovered
+fn record_socket_viewer(lua: &mlua::Lua) -> Vec<Rec> {
+    load_recorder(lua);
+    let value: mlua::Value = lua
+        .load("return (recordTreeDraw(build.itemsTab.socketViewer, build))")
+        .eval()
+        .expect("recording the socket viewer's Draw");
+    let list: Vec<Drawn> = lua.from_value(value).expect("the recorded list");
+    assert!(list.len() > 1000, "{} images", list.len());
+    theirs(&list)
+}
+
 /// `record` with the cursor on `hover`, which PoB must find there
 fn record_hovering(lua: &mlua::Lua, hover: Option<u32>) -> Vec<Rec> {
     load_recorder(lua);
@@ -387,4 +400,42 @@ fn jewel_drawing_matches_pob() {
 fn bloodline_drawing_matches_pob() {
     let _guard = lock();
     recipe_matches("bloodline", "");
+}
+
+/// The Items tab's jewel socket viewer draws the tree as its own PassiveTreeView does: with the
+/// jewel's rings and our allocation, but without the Tree tab's search or comparison
+/// (ItemSlotHelper.DrawViewer)
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn socket_viewer_drawing_matches_pob() {
+    let _guard = lock();
+    let recipe = super::upstream_tree_recipe("jewel");
+    let xml = recipe.xml.expect("the jewel recipe saves its build");
+    let lua = auto_pob::engine::upstream::upstream_lua(&pob_dir()).unwrap();
+    auto_pob::engine::upstream::load_xml(&lua, &xml, "jewel").unwrap();
+    let mut s = Session::start("tree-draw-viewer");
+    let path = s.user.join("jewel.xml");
+    fs::create_dir_all(&s.user).unwrap();
+    fs::write(&path, &xml).unwrap();
+    s.open_fixture("jewel", &path);
+    // a search on the Tree tab, which the viewer doesn't show
+    s.run(Command::SetTreeSearch {
+        text: "life".into(),
+    })
+    .unwrap();
+    lua.load("build.treeTab.viewer.searchStr = 'life'")
+        .exec()
+        .unwrap();
+    let theirs = record_socket_viewer(&lua);
+    let (layout, state) = snapshot(&mut s);
+    assert!(state.search_matches.len() > 10);
+    assert!(state.socket_rings.iter().any(|r| !r.rings.is_empty()));
+    let viewer = auto_pob::ui::tree::viewer_state(&state);
+    assert_same("socket viewer", ours(&layout, &viewer), theirs);
+    // and the Tree tab's own drawing has the search rings the viewer leaves out
+    assert!(
+        ours(&layout, &state)
+            .iter()
+            .any(|r| r.key.0.contains("small_ring"))
+    );
 }

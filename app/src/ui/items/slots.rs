@@ -426,13 +426,7 @@ impl ItemsUi {
             egui::Order::Tooltip,
             ui.scope_id().with("socket_viewer"),
         ));
-        crate::ui::tree::canvas::paint_socket_viewer(
-            &painter,
-            rect,
-            &scene.layout,
-            &scene.allocated,
-            node,
-        );
+        crate::ui::tree::canvas::paint_socket_viewer(ui.ctx(), &painter, rect, scene, node);
     }
 }
 

@@ -2,7 +2,7 @@
 //! with the scroll wheel, click to allocate.
 
 use super::TreeTab;
-use super::geometry::{MIN_HIT_POINTS, arc_points, node_radius};
+use super::geometry::{MIN_HIT_POINTS, node_radius};
 use super::overlays::{self, ALLOCATED, Legend};
 use super::scene;
 use crate::engine::{
@@ -11,7 +11,7 @@ use crate::engine::{
 };
 use crate::theme;
 use crate::widgets::{Look, art, styled_tooltip_ui};
-use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
+use eframe::egui::{self, Color32, Pos2, Rect, Sense, Vec2};
 use std::collections::HashSet;
 
 /// What the user did on the canvas this frame.
@@ -34,8 +34,6 @@ pub enum CanvasAction {
 /// An uploaded sprite sheet: its texture and size in pixels.
 type Sheet = (egui::TextureId, Vec2);
 
-/// A connection in the socket viewer's plain drawing
-const EDGE: Color32 = Color32::from_rgb(72, 62, 50);
 /// A search ring snapped to the view's edge is this much smaller (PoB's `scaled_down_ratio`)
 const EDGE_RING_SCALE: f32 = 0.6667;
 /// How far a snapped search ring may stick out past the view's edge (PoB's `peekaboo_ratio`)
@@ -131,7 +129,7 @@ pub fn show(
     let pob_zoom = look.pob_zoom;
     // only the files this frame draws are decoded and uploaded
     let used: HashSet<usize> = images.iter().map(|i| i.sprite.sheet).collect();
-    let sheets = upload_sheets(tab, ui.ctx(), layout, &used);
+    let sheets = upload_sheets(&tab.textures, ui.ctx(), layout, &used);
     paint(
         &painter,
         &sheets,
@@ -567,7 +565,7 @@ fn wheel_notches(ui: &egui::Ui) -> (f32, bool) {
 /// thread of their own the first time they are wanted, and dropped once uploaded: the texture
 /// is what gets drawn, and keeping the decoded copy would hold it twice.
 fn upload_sheets(
-    tab: &mut TreeTab,
+    textures: &super::Textures,
     ctx: &egui::Context,
     layout: &TreeLayout,
     used: &HashSet<usize>,
@@ -581,7 +579,7 @@ fn upload_sheets(
         .map(|(i, sheet)| {
             let sheet = sheet.as_ref()?;
             let size = Vec2::new(sheet.size[0] as f32, sheet.size[1] as f32);
-            if let Some(texture) = tab.textures.get(&sheet.path) {
+            if let Some(texture) = super::lock(textures).get(&sheet.path) {
                 // a copy decoded again for this layout is dropped
                 let _ = sheet.take_rgba();
                 return Some((texture.id(), size));
@@ -610,7 +608,7 @@ fn upload_sheets(
             }
             let texture = ctx.load_texture(sheet.path.display().to_string(), image, options);
             let id = texture.id();
-            tab.textures.insert(sheet.path.clone(), texture);
+            super::lock(textures).insert(sheet.path.clone(), texture);
             Some((id, size))
         })
         .collect();
@@ -661,84 +659,93 @@ fn repeats(path: &std::path::Path) -> bool {
         || name.starts_with("Background")
 }
 
-/// PoB's small view of a jewel socket's place in the tree (ItemSlotHelper.DrawViewer): the
-/// tree at zoom 17 of a view `rect.min_side()` across, centred on `node`, with a faint
-/// crosshair. Drawn in plain shapes: connections, and nodes in the allocated colour or grey.
-pub fn paint_socket_viewer(
-    painter: &egui::Painter,
-    rect: Rect,
-    layout: &TreeLayout,
-    allocated: &HashSet<u32>,
-    node: u32,
-) {
-    let Some(centre) = layout.nodes.iter().find(|n| n.id == node).map(|n| n.pos) else {
-        return;
-    };
-    // PassiveTree.lua:93: the tree's size is its smaller extent, and 10% more
-    let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
-    for n in &layout.nodes {
-        for k in 0..2 {
-            lo[k] = lo[k].min(n.pos[k]);
-            hi[k] = hi[k].max(n.pos[k]);
-        }
+/// PoB's zoom for the socket viewer (ItemSlotHelper.lua:21)
+pub const SOCKET_VIEWER_ZOOM: f32 = 17.0;
+
+/// The socket viewer's camera: the tree at PoB's zoom 17 of a view `rect.min_side()` across,
+/// centred on the socket at `at` (ItemSlotHelper.lua:21-26, PassiveTreeView.lua:271)
+pub fn socket_viewer_camera(rect: Rect, tree_size: f32, at: [f32; 2]) -> super::geometry::Camera {
+    let side = rect.width().min(rect.height());
+    super::geometry::Camera {
+        center: at.into(),
+        zoom: side / tree_size.max(1.0) * SOCKET_VIEWER_ZOOM,
+        tree_size,
+        level: 0,
     }
-    let size = ((hi[0] - lo[0]).min(hi[1] - lo[1]) * 1.1).max(1.0);
-    // PassiveTreeView.lua:271 with ItemSlotHelper's zoom of 17
-    let zoom = rect.width().min(rect.height()) / size * 17.0;
-    let to_screen = |p: [f32; 2]| rect.center() + (Vec2::from(p) - Vec2::from(centre)) * zoom;
-    let painter = painter.with_clip_rect(rect);
-    painter.rect_filled(rect.expand(1.0), 0.0, Color32::WHITE);
-    painter.rect_filled(rect, 0.0, theme::BACKGROUND);
-    let visible = rect.expand(40.0);
-    for &(a, b) in &layout.edges {
-        let (na, nb) = (&layout.nodes[a], &layout.nodes[b]);
-        let (pa, pb) = (to_screen(na.pos), to_screen(nb.pos));
-        if !visible.contains(pa) && !visible.contains(pb) {
-            continue;
-        }
-        let on = allocated.contains(&na.id) && allocated.contains(&nb.id);
-        let stroke = Stroke::new(
-            (6.0 * zoom).clamp(1.0, 4.0),
-            if on { ALLOCATED } else { EDGE },
-        );
-        match arc_center(na, nb) {
-            Some(c) => painter.line(arc_points(c, na.pos, nb.pos, zoom, to_screen), stroke),
-            None => painter.line_segment([pa, pb], stroke),
-        };
-    }
-    for n in &layout.nodes {
-        let pos = to_screen(n.pos);
-        if !visible.contains(pos) {
-            continue;
-        }
-        let colour = if allocated.contains(&n.id) {
-            ALLOCATED
-        } else {
-            kind_color(&n.kind)
-        };
-        painter.circle_filled(pos, (node_radius(&n.kind) * zoom).max(1.5), colour);
-    }
-    // the crosshair (ItemSlotHelper.lua:33-35)
-    let faint = Color32::from_white_alpha(51);
-    painter.rect_filled(
-        Rect::from_center_size(rect.center(), Vec2::new(2.0, rect.height())),
-        0.0,
-        faint,
-    );
-    painter.rect_filled(
-        Rect::from_center_size(rect.center(), Vec2::new(rect.width(), 2.0)),
-        0.0,
-        faint,
-    );
 }
 
-/// If both nodes sit on the same orbit of the same group, PoB connects them with an arc
-/// around the group's centre.
-fn arc_center(a: &TreeNode, b: &TreeNode) -> Option<[f32; 2]> {
-    match (a.orbit, b.orbit, a.group_center) {
-        (Some(oa), Some(ob), Some(center)) if oa == ob && oa.1 > 0 => Some(center),
-        _ => None,
+/// PoB's small view of a jewel socket's place in the tree (ItemSlotHelper.DrawViewer): a white
+/// 1-point border, then the viewer's own PassiveTreeView:Draw at zoom 17 centred on `node`,
+/// with nothing hovered, and a faint crosshair over it. The art is the Tree tab's.
+pub fn paint_socket_viewer(
+    ctx: &egui::Context,
+    painter: &egui::Painter,
+    rect: Rect,
+    scene_of: &super::SocketScene,
+    node: u32,
+) {
+    let layout = &scene_of.layout;
+    let Some(centre) = scene_of.index.get(&node).map(|&i| layout.nodes[i].pos) else {
+        return;
+    };
+    let painter = painter.with_clip_rect(rect.expand(1.0));
+    painter.rect_filled(rect.expand(1.0), 0.0, Color32::WHITE);
+    painter.rect_filled(rect, 0.0, theme::BACKGROUND);
+    let painter = painter.with_clip_rect(rect);
+    let camera = socket_viewer_camera(rect, layout.size, centre);
+    let now = ctx.input(|i| i.time);
+    let none = HashSet::new();
+    let look = scene::Look {
+        hover: None,
+        path: None,
+        deps: &none,
+        trace_end: None,
+        heat: None,
+        power_theme: Default::default(),
+        view: Rect::from_min_max(
+            camera.to_tree(rect, rect.min).into(),
+            camera.to_tree(rect, rect.max).into(),
+        ),
+        pob_zoom: SOCKET_VIEWER_ZOOM,
+        time_ms: (!scene_of.animations_off).then_some(now * 1000.0),
+    };
+    let images = scene::build(
+        layout,
+        &scene_of.state,
+        &scene_of.sets,
+        &scene_of.index,
+        &look,
+    );
+    let used: HashSet<usize> = images.iter().map(|i| i.sprite.sheet).collect();
+    let sheets = upload_sheets(&scene_of.textures, ctx, layout, &used);
+    paint(&painter, &sheets, &images, rect, camera, false);
+    if !scene_of.animations_off {
+        let rings = scene_of.state.socket_rings.iter().flat_map(|s| &s.rings);
+        if let Some(wait) = ring_frame_interval(rings, camera.zoom) {
+            ctx.request_repaint_after(wait);
+        }
     }
+    // the crosshair (ItemSlotHelper.lua:30-35)
+    let faint = Color32::from_white_alpha(51);
+    painter.rect_filled(
+        Rect::from_min_size(
+            Pos2::new(rect.left() + (rect.width() / 2.0).floor() - 1.0, rect.top()),
+            Vec2::new(2.0, rect.height()),
+        ),
+        0.0,
+        faint,
+    );
+    painter.rect_filled(
+        Rect::from_min_size(
+            Pos2::new(
+                rect.left(),
+                rect.top() + (rect.height() / 2.0).floor() - 1.0,
+            ),
+            Vec2::new(rect.width(), 2.0),
+        ),
+        0.0,
+        faint,
+    );
 }
 
 /// The compare-only node at `at`, the nearest one when several are in reach, with the same
@@ -998,6 +1005,16 @@ mod tests {
         );
     }
 
+    /// The socket viewer is PoB's zoom 17 over the view's smaller side, on the socket
+    /// (ItemSlotHelper.lua:21-26)
+    #[test]
+    fn the_socket_viewer_zooms_17_on_the_socket() {
+        let rect = Rect::from_min_size(Pos2::new(50.0, 60.0), Vec2::new(308.0, 280.0));
+        let camera = socket_viewer_camera(rect, 20_000.0, [1000.0, -500.0]);
+        assert!((camera.zoom - 280.0 / 20_000.0 * 17.0).abs() < 1e-6);
+        assert_eq!(camera.to_screen(rect, [1000.0, -500.0]), rect.center());
+    }
+
     #[test]
     fn tooltip_body_prefers_the_engines_lines_for_the_hovered_node() {
         let n = node(5, [0.0, 0.0], "Normal");
@@ -1059,9 +1076,9 @@ mod tests {
         layout.sheets[0] = Some(sheet());
         assert!(!art_missing(&layout, &art));
         // a failed file asks for no more frames
-        let mut tab = TreeTab::default();
+        let tab = TreeTab::default();
         ctx.run_ui(egui::RawInput::default(), |ui| {
-            let up = upload_sheets(&mut tab, ui.ctx(), &sheet_layout(&bad), &all());
+            let up = upload_sheets(&tab.textures, ui.ctx(), &sheet_layout(&bad), &all());
             assert!(up[0].is_none());
         })
         .textures_delta
@@ -1071,7 +1088,7 @@ mod tests {
         for _ in 0..4 {
             out.textures_delta.clear();
             out = ctx.run_ui(egui::RawInput::default(), |ui| {
-                upload_sheets(&mut tab, ui.ctx(), &sheet_layout(&bad), &all());
+                upload_sheets(&tab.textures, ui.ctx(), &sheet_layout(&bad), &all());
             });
         }
         out.textures_delta.clear();
@@ -1135,23 +1152,23 @@ mod tests {
     #[test]
     fn only_the_files_drawn_are_decoded() {
         let ctx = egui::Context::default();
-        let mut tab = TreeTab::default();
+        let tab = TreeTab::default();
         let dir = crate::test_dir::TestDir::new("unused-sheet");
         let path = dir.join("art.png");
         image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 255]))
             .save(&path)
             .unwrap();
         let lazy = std::sync::Arc::new(crate::engine::SheetImage::lazy(path, [1, 1]));
-        let up = upload_sheets(&mut tab, &ctx, &sheet_layout(&lazy), &HashSet::new());
+        let up = upload_sheets(&tab.textures, &ctx, &sheet_layout(&lazy), &HashSet::new());
         assert!(up[0].is_none());
         assert!(
             lazy.is_unloaded(),
             "decoding started for a file nothing draws"
         );
         let ready = sheet();
-        let up = upload_sheets(&mut tab, &ctx, &sheet_layout(&ready), &[1].into());
+        let up = upload_sheets(&tab.textures, &ctx, &sheet_layout(&ready), &[1].into());
         assert!(up[0].is_none());
-        assert!(tab.textures.is_empty());
+        assert!(super::super::lock(&tab.textures).is_empty());
         assert!(ready.has_rgba());
     }
 
@@ -1324,9 +1341,9 @@ mod tests {
     #[test]
     fn uploaded_sheets_drop_their_pixels() {
         let ctx = egui::Context::default();
-        let mut tab = TreeTab::default();
+        let tab = TreeTab::default();
         let first = sheet();
-        let up = upload_sheets(&mut tab, &ctx, &sheet_layout(&first), &all());
+        let up = upload_sheets(&tab.textures, &ctx, &sheet_layout(&first), &all());
         assert_eq!(up.len(), 2);
         let (id, size) = up[0].expect("uploaded");
         assert_eq!(size, Vec2::new(2.0, 1.0));
@@ -1334,17 +1351,17 @@ mod tests {
         // the texture holds the sheet now; the decoded copy is gone
         assert!(!first.has_rgba());
         // later frames draw from the texture
-        let again = upload_sheets(&mut tab, &ctx, &sheet_layout(&first), &all());
+        let again = upload_sheets(&tab.textures, &ctx, &sheet_layout(&first), &all());
         assert_eq!(again[0].map(|s| s.0), Some(id));
         // a later layout's fresh copy of a sheet already up is dropped too, not kept
         let second = sheet();
-        let next = upload_sheets(&mut tab, &ctx, &sheet_layout(&second), &all());
+        let next = upload_sheets(&tab.textures, &ctx, &sheet_layout(&second), &all());
         assert_eq!(next[0].map(|s| s.0), Some(id));
         assert!(!second.has_rgba());
         // without pixels nor a texture the sheet's sprites are left out, not a panic
-        let mut other = TreeTab::default();
-        assert!(upload_sheets(&mut other, &ctx, &sheet_layout(&first), &all())[0].is_none());
-        assert!(other.textures.is_empty());
+        let other = TreeTab::default();
+        assert!(upload_sheets(&other.textures, &ctx, &sheet_layout(&first), &all())[0].is_none());
+        assert!(super::super::lock(&other.textures).is_empty());
     }
 
     /// A file is decoded off the frame the first time it is wanted, then uploaded; the layout
@@ -1359,13 +1376,13 @@ mod tests {
         let lazy = std::sync::Arc::new(crate::engine::SheetImage::lazy(path, [3, 2]));
         assert!(lazy.is_unloaded());
         let ctx = egui::Context::default();
-        let mut tab = TreeTab::default();
+        let tab = TreeTab::default();
         // the first frame starts the decoding and draws without it
-        assert!(upload_sheets(&mut tab, &ctx, &sheet_layout(&lazy), &all())[0].is_none());
+        assert!(upload_sheets(&tab.textures, &ctx, &sheet_layout(&lazy), &all())[0].is_none());
         assert!(!lazy.is_unloaded());
         let start = std::time::Instant::now();
         let up = loop {
-            if let Some(up) = upload_sheets(&mut tab, &ctx, &sheet_layout(&lazy), &all())[0] {
+            if let Some(up) = upload_sheets(&tab.textures, &ctx, &sheet_layout(&lazy), &all())[0] {
                 break up;
             }
             assert!(start.elapsed().as_secs() < 10, "never decoded");
@@ -1381,6 +1398,6 @@ mod tests {
         ));
         broken.decode();
         assert_eq!(broken.take_rgba(), crate::engine::SheetPixels::Failed);
-        assert!(upload_sheets(&mut tab, &ctx, &sheet_layout(&broken), &all())[0].is_none());
+        assert!(upload_sheets(&tab.textures, &ctx, &sheet_layout(&broken), &all())[0].is_none());
     }
 }

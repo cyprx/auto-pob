@@ -558,22 +558,33 @@ fn a_jewel_slot_shows_the_socket_viewer() {
     let mut view = sample();
     view.slots.last_mut().unwrap().node = Some(5);
     let mut h = Harness::new(view);
-    h.ui.set_socket_scene(Some(crate::ui::tree::SocketScene {
-        layout: Arc::new(TreeLayout {
-            version: "3_29".into(),
-            nodes: vec![node(5, 0.0), node(6, 300.0), node(7, 9000.0)],
-            edges: vec![(0, 1)],
-            sheets: Vec::new(),
-            connectors: vec![],
-            groups: vec![],
-            class_art: vec![],
-            assets: Default::default(),
-            size: 1.0,
-            jewel_radii: vec![],
-            key: String::new(),
-        }),
-        allocated: Arc::new([5].into_iter().collect()),
-    }));
+    let state: crate::engine::TreeState = serde_json::from_value(serde_json::json!({
+        "version": "3_29", "version_label": "3.29", "class_id": 0, "ascendancy_id": 0,
+        "points": { "used": 1, "available": 122, "ascendancy_used": 0,
+                    "ascendancy_available": 8 },
+        "allocated": [5], "paths": [], "depends": [], "mastery_options": [],
+        "search_matches": [], "compare": [], "jewels": [],
+        "active_spec": 0, "can_undo": false, "can_redo": false,
+    }))
+    .unwrap();
+    let layout = Arc::new(TreeLayout {
+        version: "3_29".into(),
+        nodes: vec![node(5, 0.0), node(6, 300.0), node(7, 9000.0)],
+        edges: vec![(0, 1)],
+        sheets: Vec::new(),
+        connectors: vec![],
+        groups: vec![],
+        class_art: vec![],
+        assets: Default::default(),
+        size: 1.0,
+        jewel_radii: vec![],
+        key: String::new(),
+    });
+    h.ui.set_socket_scene(Some(crate::ui::tree::SocketScene::new(
+        layout,
+        &state,
+        Default::default(),
+    )));
     h.settle();
     let at = h.ui.rect("slot_Ring 1").center();
     h.frame(vec![Event::PointerMoved(at)]);

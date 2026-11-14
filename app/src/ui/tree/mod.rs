@@ -108,12 +108,77 @@ impl Derived {
     }
 }
 
-/// What the Items tab's jewel socket viewer draws: the tree and what is allocated
-/// (ItemSlotHelper.DrawViewer)
+/// The tree's uploaded sprite sheets, by file; the Items tab's socket viewer draws from them too
+pub type Textures = Arc<std::sync::Mutex<HashMap<PathBuf, TextureHandle>>>;
+
+pub(crate) fn lock(
+    textures: &Textures,
+) -> std::sync::MutexGuard<'_, HashMap<PathBuf, TextureHandle>> {
+    textures.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// What the Items tab's jewel socket viewer draws (ItemSlotHelper.DrawViewer): the tree as the
+/// Items tab's own PassiveTreeView sees it, which compares with nothing, searches nothing and
+/// has no heat map, and the Tree tab's uploaded art
 #[derive(Clone)]
 pub struct SocketScene {
     pub layout: Arc<TreeLayout>,
     pub allocated: Arc<HashSet<u32>>,
+    pub state: Arc<TreeState>,
+    pub sets: Arc<scene::DrawSets>,
+    pub index: Arc<HashMap<u32, usize>>,
+    pub textures: Textures,
+    /// "Show Animations" is off
+    pub animations_off: bool,
+}
+
+impl SocketScene {
+    pub fn new(layout: Arc<TreeLayout>, state: &TreeState, textures: Textures) -> Self {
+        let viewer = viewer_state(state);
+        let sets = scene::DrawSets::new(&viewer, scene::ascendancy_of(&viewer));
+        let index = layout
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.id, i))
+            .collect();
+        Self {
+            layout,
+            allocated: Arc::new(state.allocated.iter().copied().collect()),
+            state: Arc::new(viewer),
+            sets: Arc::new(sets),
+            index: Arc::new(index),
+            textures,
+            animations_off: false,
+        }
+    }
+}
+
+/// The state as the socket viewer's PassiveTreeView draws it: no compared spec (so neither its
+/// nodes, colours nor jewels), no search; a jewel's rings in the neutral colour, on an allocated
+/// socket only (PassiveTreeView.lua:1198-1248)
+pub fn viewer_state(state: &TreeState) -> TreeState {
+    let mut viewer = state.clone();
+    viewer.compare.clear();
+    viewer.compare_only.clear();
+    viewer.compare_only_groups.clear();
+    viewer.compare_only_connectors.clear();
+    viewer.search_matches.clear();
+    viewer.draw.comparing = false;
+    viewer.draw.compare_allocated.clear();
+    viewer.draw.compare_missing.clear();
+    let allocated: HashSet<u32> = state.allocated.iter().copied().collect();
+    let compare = [0.0, 1.0, 0.0, 0.7];
+    for socket in &mut viewer.socket_rings {
+        if !allocated.contains(&socket.node) {
+            socket.rings.clear();
+        }
+        socket.rings.retain(|r| r.tint != compare);
+        for ring in &mut socket.rings {
+            ring.tint = [1.0, 1.0, 1.0, 0.7];
+        }
+    }
+    viewer
 }
 
 #[derive(Default)]
@@ -143,7 +208,10 @@ pub struct TreeTab {
     /// Node id to index in `power.nodes`
     pub(super) power_index: HashMap<u32, usize>,
     /// Uploaded sprite sheets, by file
-    pub(super) textures: HashMap<PathBuf, TextureHandle>,
+    pub(super) textures: Textures,
+    /// The socket viewer's scene, and the state it was made from
+    socket_scene: Option<SocketScene>,
+    socket_scene_of: Option<Arc<TreeState>>,
     pub(super) hover: Option<u32>,
     /// `ui.input(|i| i.time)` when the hover started
     hover_since: f64,
@@ -172,12 +240,25 @@ pub struct TreeTab {
 }
 
 impl TreeTab {
-    /// The tree as the Items tab's socket viewer shows it, once a layout is here
-    pub fn socket_scene(&self) -> Option<SocketScene> {
-        Some(SocketScene {
-            layout: self.layout.clone()?,
-            allocated: Arc::clone(&self.derived.allocated),
-        })
+    /// The tree as the Items tab's socket viewer shows it, once a layout and a state are here.
+    /// Made again only for another layout or state.
+    pub fn socket_scene(&mut self) -> Option<SocketScene> {
+        let (layout, state) = (self.layout.clone()?, self.state.clone()?);
+        let fresh = self.socket_scene.as_ref().is_some_and(|s| {
+            Arc::ptr_eq(&s.layout, &layout) && Arc::ptr_eq(&s.allocated, &self.derived.allocated)
+        }) && self
+            .socket_scene_of
+            .as_ref()
+            .is_some_and(|s| Arc::ptr_eq(s, &state));
+        if !fresh {
+            let mut scene = SocketScene::new(layout, &state, Arc::clone(&self.textures));
+            scene.allocated = Arc::clone(&self.derived.allocated);
+            self.socket_scene = Some(scene);
+            self.socket_scene_of = Some(state);
+        }
+        let mut scene = self.socket_scene.clone()?;
+        scene.animations_off = self.animations_off;
+        Some(scene)
     }
     /// Forgets the build's state, as for another build. Uploaded textures stay.
     ///
@@ -185,7 +266,7 @@ impl TreeTab {
     /// snapshot replaces it.
     pub fn reset(&mut self) {
         let kept = Self {
-            textures: std::mem::take(&mut self.textures),
+            textures: Arc::clone(&self.textures),
             layout: self.layout.take(),
             grid: std::mem::take(&mut self.grid),
             index: std::mem::take(&mut self.index),
@@ -364,8 +445,7 @@ impl TreeTab {
                     .flatten()
                     .map(|s| s.path.as_path())
                     .collect();
-                self.textures
-                    .retain(|path, _| listed.contains(path.as_path()));
+                lock(&self.textures).retain(|path, _| listed.contains(path.as_path()));
                 self.hover = None;
                 self.previewed = None;
                 self.layout = Some(layout.clone());
@@ -814,10 +894,53 @@ mod tests {
     #[test]
     fn the_socket_scene_shares_the_allocated_set() {
         let (l, s) = sample();
-        let h = Harness::new(l, s);
+        let mut h = Harness::new(l, s);
         let (a, b) = (h.tab.socket_scene().unwrap(), h.tab.socket_scene().unwrap());
         assert!(Arc::ptr_eq(&a.allocated, &b.allocated));
         assert!(a.allocated.contains(&1));
+        // made once for a state, with the Tree tab's textures
+        assert!(Arc::ptr_eq(&a.state, &b.state));
+        assert!(Arc::ptr_eq(&a.textures, &h.tab.textures));
+    }
+
+    /// The viewer's PassiveTreeView compares with nothing and searches nothing: a compared
+    /// jewel's rings go, ours turn neutral, and an unallocated socket draws none
+    #[test]
+    fn the_socket_viewer_draws_no_comparison_or_search() {
+        use crate::engine::{RingImage, SocketRings};
+        let (_, s) = sample();
+        let mut state = (*s).clone();
+        state.search_matches = vec![2];
+        state.draw.comparing = true;
+        state.draw.compare_allocated = vec![1];
+        let ring = |tint| RingImage {
+            image: "ring".into(),
+            size: 10.0,
+            spin: 0.0,
+            x: 0.0,
+            y: 0.0,
+            tint,
+        };
+        state.socket_rings = vec![
+            SocketRings {
+                node: 1,
+                variable: false,
+                rings: vec![ring([1.0, 0.0, 0.0, 0.7]), ring([0.0, 1.0, 0.0, 0.7])],
+            },
+            SocketRings {
+                node: 2,
+                variable: false,
+                rings: vec![ring([1.0, 1.0, 1.0, 0.7])],
+            },
+        ];
+        let viewer = viewer_state(&state);
+        assert!(viewer.search_matches.is_empty() && !viewer.draw.comparing);
+        assert!(viewer.draw.compare_allocated.is_empty());
+        assert_eq!(
+            viewer.socket_rings[0].rings,
+            vec![ring([1.0, 1.0, 1.0, 0.7])]
+        );
+        assert!(viewer.socket_rings[1].rings.is_empty());
     }
 
     /// The sample with the mastery 3 allocated with the first effect.
@@ -1881,7 +2004,7 @@ mod tests {
             let texture = h
                 .ctx
                 .load_texture(path, egui::ColorImage::example(), Default::default());
-            h.tab.textures.insert(path.into(), texture);
+            lock(&h.tab.textures).insert(path.into(), texture);
         }
         let mut new = (*l).clone();
         new.version = "3_28".into();
@@ -1890,7 +2013,7 @@ mod tests {
             file("TreeData/PSSkillFrame.png"),
         ];
         h.tab.on_snapshot(&Snapshot::TreeLayout(Arc::new(new)));
-        let kept: Vec<_> = h.tab.textures.keys().cloned().collect();
+        let kept: Vec<_> = lock(&h.tab.textures).keys().cloned().collect();
         assert_eq!(kept, [PathBuf::from("TreeData/PSSkillFrame.png")]);
     }
 

@@ -173,6 +173,8 @@ impl PobBackend {
         let lua_error = |e: mlua::Error| anyhow!("{e}");
 
         let lua = new_lua(pob_dir)?;
+        // the UI draws PoB's own images from its folder
+        crate::widgets::art::set_root(pob_dir);
         super::native::register(&lua, pob_dir, user_dir).map_err(lua_error)?;
         // before the bootstrap: its first frame already initialises a build (R4)
         let net = super::net::register(&lua, pob_dir, net).map_err(lua_error)?;
@@ -3145,6 +3147,8 @@ impl Backend for PobBackend {
         struct Found {
             #[serde(default)]
             lines: Vec<TooltipLine>,
+            #[serde(default)]
+            header: Option<String>,
         }
         let target = lua_target(&self.lua, query.target)?;
         let found: Found = self.view(
@@ -3153,6 +3157,7 @@ impl Backend for PobBackend {
         )?;
         Ok(GemTooltipView {
             query: query.clone(),
+            header: found.header,
             lines: found.lines,
         })
     }

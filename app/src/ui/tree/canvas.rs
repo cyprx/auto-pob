@@ -2,7 +2,7 @@
 //! with the scroll wheel, click to allocate.
 
 use super::TreeTab;
-use super::geometry::{MIN_HIT_POINTS, arc_points, node_radius};
+use super::geometry::{MIN_HIT_POINTS, node_radius};
 use super::overlays::{self, ALLOCATED, Legend};
 use super::scene;
 use crate::engine::{
@@ -10,8 +10,8 @@ use crate::engine::{
     TreeState,
 };
 use crate::theme;
-use crate::widgets::tooltip_ui;
-use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Tooltip, Vec2};
+use crate::widgets::{Look, art, styled_tooltip_ui};
+use eframe::egui::{self, Color32, Pos2, Rect, Sense, Vec2};
 use std::collections::HashSet;
 
 /// What the user did on the canvas this frame.
@@ -34,8 +34,6 @@ pub enum CanvasAction {
 /// An uploaded sprite sheet: its texture and size in pixels.
 type Sheet = (egui::TextureId, Vec2);
 
-/// A connection in the socket viewer's plain drawing
-const EDGE: Color32 = Color32::from_rgb(72, 62, 50);
 /// A search ring snapped to the view's edge is this much smaller (PoB's `scaled_down_ratio`)
 const EDGE_RING_SCALE: f32 = 0.6667;
 /// How far a snapped search ring may stick out past the view's edge (PoB's `peekaboo_ratio`)
@@ -68,8 +66,9 @@ pub fn show(
     }
     let valid_zoom = tab.camera.zoom > 0.0;
     if valid_zoom {
-        // PoB's zoom range holds for the input too
-        tab.camera.tree_size = layout.size;
+        // the zoom for this view first, so input in a resize frame anchors on it; then PoB's
+        // range again after the input
+        tab.camera.limit(rect, layout.size);
         handle_input(ui, tab, &response);
         tab.camera.limit(rect, layout.size);
     }
@@ -131,7 +130,7 @@ pub fn show(
     let pob_zoom = look.pob_zoom;
     // only the files this frame draws are decoded and uploaded
     let used: HashSet<usize> = images.iter().map(|i| i.sprite.sheet).collect();
-    let sheets = upload_sheets(tab, ui.ctx(), layout, &used);
+    let sheets = upload_sheets(&tab.textures, ui.ctx(), layout, &used);
     paint(
         &painter,
         &sheets,
@@ -198,18 +197,23 @@ pub fn show(
             .tooltip
             .as_deref()
             .filter(|t| t.id == node.id && t.trace.is_empty() && !t.lines.is_empty());
-        Tooltip::for_widget(&response)
-            .at_pointer()
-            .show(|ui| match reply {
-                Some(t) => tooltip_ui(ui, &t.lines),
-                None => {
-                    ui.strong(if node.name.is_empty() {
-                        &node.kind
-                    } else {
-                        &node.name
-                    });
-                }
-            });
+        // PoB's hover form, beside the node's square (PassiveTreeView.lua:1148-1150)
+        let at = to_screen([node.x, node.y]);
+        let size = (node_radius(&node.kind) * zoom).floor();
+        let corner = Pos2::new((at.x - size).floor(), (at.y - size).floor());
+        let id = egui::Id::NULL.with(("tree-compare-tip", node.id, reply.is_some()));
+        let tip = area_size(ui.ctx(), id);
+        let pos = hover_tooltip_place(corner, size * 2.0, tip.unwrap_or_default(), rect);
+        tooltip_area(ui.ctx(), id, pos, |ui| match reply {
+            Some(t) => node_tooltip_ui(ui, t),
+            None => {
+                ui.strong(if node.name.is_empty() {
+                    &node.kind
+                } else {
+                    &node.name
+                });
+            }
+        });
     }
 
     if let Some((id, start)) = tab.pulse {
@@ -304,26 +308,164 @@ pub fn show(
     // a reply is the tooltip for this trace (or for none)
     let reply = tab.tooltip.as_deref().filter(|t| t.trace == tab.trace);
     let body = tooltip_body(node, reply);
-    Tooltip::for_widget(&response)
-        .at_pointer()
-        .show(|ui| match body {
-            // PoB's lines start with the name and hold the stats, and the jewel for a socket
-            TooltipBody::Lines(lines) => tooltip_ui(ui, lines),
-            TooltipBody::Instant => {
-                ui.strong(if node.name.is_empty() {
-                    &node.kind
-                } else {
-                    &node.name
-                });
-                for line in &node.stats {
-                    ui.label(line);
-                }
-                if let Some(jewel) = jewel.filter(|j| !j.name.is_empty()) {
-                    ui.colored_label(overlays::JEWEL_RING, &jewel.name);
-                }
-            }
+    let skill = reply
+        .filter(|t| t.id == node.id)
+        .and_then(|t| t.skill.as_ref());
+    // PoB anchors the tooltip at the node's top right, and the granted skill's beside it or
+    // under it (PassiveTreeView.lua:1044-1097); the sizes are the last frame's
+    let has_lines = matches!(body, TooltipBody::Lines(_));
+    let main_id = egui::Id::NULL.with(("tree-tip", node.id, has_lines));
+    let skill_id = egui::Id::NULL.with(("tree-skill-tip", node.id));
+    let main_size = area_size(ui.ctx(), main_id);
+    let skill_size = skill.and_then(|_| area_size(ui.ctx(), skill_id));
+    let size = (node_radius(&node.kind) * zoom).floor();
+    let (main_at, skill_at) = node_tooltip_places(
+        to_screen(node.pos),
+        size,
+        main_size.unwrap_or_default(),
+        skill.map(|_| skill_size.unwrap_or_default()),
+        rect,
+    );
+    if let (Some(skill), Some(at)) = (skill, skill_at) {
+        tooltip_area(ui.ctx(), skill_id, at, |ui| {
+            styled_tooltip_ui(
+                ui,
+                &skill.lines,
+                &Look {
+                    header: skill.header.as_deref(),
+                    ..Default::default()
+                },
+            )
         });
+    }
+    tooltip_area(ui.ctx(), main_id, main_at, |ui| match body {
+        // PoB's lines start with the name and hold the stats, and the jewel for a socket
+        TooltipBody::Lines(_) => {
+            if let Some(t) = reply {
+                node_tooltip_ui(ui, t);
+            }
+        }
+        TooltipBody::Instant => {
+            ui.strong(if node.name.is_empty() {
+                &node.kind
+            } else {
+                &node.name
+            });
+            for line in &node.stats {
+                ui.label(line);
+            }
+            if let Some(jewel) = jewel.filter(|j| !j.name.is_empty()) {
+                ui.colored_label(overlays::JEWEL_RING, &jewel.name);
+            }
+        }
+    });
     actions
+}
+
+/// A node's tooltip as PoB draws it: centred, under its header art, a notable's oils after its
+/// name (PassiveTreeView.lua:1398-1420)
+fn node_tooltip_ui(ui: &mut egui::Ui, tip: &NodeTooltip) {
+    styled_tooltip_ui(
+        ui,
+        &tip.lines,
+        &Look {
+            header: tip.header.as_deref(),
+            recipe: &tip.recipe,
+            center: true,
+        },
+    );
+}
+
+/// The size a tooltip area had last frame; `None` on its first, which egui draws invisibly to
+/// measure it
+fn area_size(ctx: &egui::Context, id: egui::Id) -> Option<Vec2> {
+    ctx.memory(|m| m.area_rect(id)).map(|r| r.size())
+}
+
+/// A tooltip at `pos`, its top left, above everything and taking no input
+fn tooltip_area(ctx: &egui::Context, id: egui::Id, pos: Pos2, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Area::new(id)
+        .order(egui::Order::Tooltip)
+        .fixed_pos(pos)
+        .interactable(false)
+        .constrain(false)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_max_width(ui.spacing().tooltip_width);
+                add(ui);
+            });
+        });
+}
+
+/// Where PoB draws a node's tooltip and its granted skill's, as top-left corners, for a node
+/// at `node` drawn `size` each side (`node.size * scale`), tooltips of `tip` and `skill` and the
+/// view (PassiveTreeView.lua:1044-1097). A skill wider than half again its height goes under the
+/// node's tooltip, else beside it; both move left and up to stay in the view.
+pub fn node_tooltip_places(
+    node: Pos2,
+    size: f32,
+    tip: Vec2,
+    skill: Option<Vec2>,
+    view: Rect,
+) -> (Pos2, Option<Pos2>) {
+    let skill_size = skill.unwrap_or_default();
+    let fat = skill.is_some() && skill_size.x > skill_size.y * 1.5;
+    let total = if fat {
+        Vec2::new(tip.x.max(skill_size.x), tip.y + skill_size.y)
+    } else {
+        Vec2::new(tip.x + skill_size.x, tip.y.max(skill_size.y))
+    };
+    let node_x = (node.x + size).floor();
+    let node_y = (node.y - size).floor();
+    let (mut x, mut y) = (node_x, node_y);
+    let right = x + total.x - view.left() - view.width();
+    if right > 0.0 {
+        x -= right;
+    }
+    let below = y + total.y - view.top() - view.height();
+    if below > 0.0 {
+        y -= below;
+    }
+    let main = if fat {
+        Pos2::new(
+            node_x.min(view.width() - tip.x + view.left()),
+            y.max(view.top()),
+        )
+    } else {
+        Pos2::new(
+            x.max(view.left()),
+            node_y.min(view.height() - tip.y + view.top()),
+        )
+    };
+    let skill_at = skill.map(|_| {
+        if fat {
+            Pos2::new(x, y + tip.y)
+        } else {
+            Pos2::new(x + tip.x + 5.0, y)
+        }
+    });
+    // PoB wraps a tooltip taller than the view into columns, so it never starts above the view
+    // (Tooltip.lua:212-298); ours is one column, held at the view's top and left instead
+    let keep = |p: Pos2| Pos2::new(p.x.max(view.left()), p.y.max(view.top()));
+    (keep(main), skill_at.map(keep))
+}
+
+/// Where PoB's `Tooltip:Draw` puts a tooltip of `tip` for a hovered square at `corner`, `side`
+/// across: right of it, else left, and under it when that overlaps; held up inside the view
+/// (Tooltip.lua's hover form)
+pub fn hover_tooltip_place(corner: Pos2, side: f32, tip: Vec2, view: Rect) -> Pos2 {
+    let mut x = corner.x + side + 5.0;
+    let mut y = corner.y;
+    if x + tip.x > view.right() {
+        x = view.left().max(corner.x - 5.0 - tip.x);
+        if x + tip.x > corner.x {
+            y += side;
+        }
+    }
+    if y + tip.y > view.bottom() {
+        y = view.top().max(corner.y + side - tip.y);
+    }
+    Pos2::new(x, y)
 }
 
 /// What a node tooltip shows.
@@ -356,35 +498,34 @@ fn handle_input(ui: &egui::Ui, tab: &mut TreeTab, response: &egui::Response) {
         && let Some(pointer) = response.interact_pointer_pos()
     {
         let level = if response.secondary_clicked() { -2 } else { 2 };
-        tab.camera
-            .zoom_at(response.rect, pointer, 1.2f32.powi(level));
+        tab.camera.zoom_at(response.rect, pointer, level);
     }
     if let Some(pointer) = response.hover_pos() {
-        // PoB zooms one of its 1.2 steps a wheel notch, three with Shift
-        // (PassiveTreeView.lua:229-233); egui would turn Shift's wheel sideways
+        // PoB zooms one of its levels a wheel notch, three with Shift
+        // (PassiveTreeView.lua:229-233); egui would turn Shift's wheel sideways. A trackpad's
+        // pinch, or a touch screen's, counts a level for each 1.2 it zooms.
         let (notches, shift) = wheel_notches(ui);
-        tab.wheel_rest += notches;
+        let pinch = ui.input(|i| {
+            let pinch: f32 = i
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Zoom(f) => Some(*f),
+                    _ => None,
+                })
+                .product();
+            pinch * i.multi_touch().map_or(1.0, |t| t.zoom_delta)
+        });
+        let pinch_levels = if pinch > 0.0 && pinch != 1.0 {
+            pinch.ln() / 1.2f32.ln()
+        } else {
+            0.0
+        };
+        tab.wheel_rest += notches * if shift { 3.0 } else { 1.0 } + pinch_levels;
         let steps = tab.wheel_rest.trunc();
         tab.wheel_rest -= steps;
-        let mut factor = 1.0;
         if steps != 0.0 {
-            factor = 1.2f32.powi(steps as i32 * if shift { 3 } else { 1 });
-        } else if notches == 0.0 {
-            // a trackpad's pinch, or a touch screen's
-            factor = ui.input(|i| {
-                let pinch: f32 = i
-                    .events
-                    .iter()
-                    .filter_map(|e| match e {
-                        egui::Event::Zoom(f) => Some(*f),
-                        _ => None,
-                    })
-                    .product();
-                pinch * i.multi_touch().map_or(1.0, |t| t.zoom_delta)
-            });
-        }
-        if factor != 1.0 {
-            tab.camera.zoom_at(response.rect, pointer, factor);
+            tab.camera.zoom_at(response.rect, pointer, steps as i32);
         }
     }
 }
@@ -428,7 +569,7 @@ fn wheel_notches(ui: &egui::Ui) -> (f32, bool) {
 /// thread of their own the first time they are wanted, and dropped once uploaded: the texture
 /// is what gets drawn, and keeping the decoded copy would hold it twice.
 fn upload_sheets(
-    tab: &mut TreeTab,
+    textures: &super::Textures,
     ctx: &egui::Context,
     layout: &TreeLayout,
     used: &HashSet<usize>,
@@ -442,7 +583,7 @@ fn upload_sheets(
         .map(|(i, sheet)| {
             let sheet = sheet.as_ref()?;
             let size = Vec2::new(sheet.size[0] as f32, sheet.size[1] as f32);
-            if let Some(texture) = tab.textures.get(&sheet.path) {
+            if let Some(texture) = super::lock(textures).get(&sheet.path) {
                 // a copy decoded again for this layout is dropped
                 let _ = sheet.take_rgba();
                 return Some((texture.id(), size));
@@ -471,12 +612,12 @@ fn upload_sheets(
             }
             let texture = ctx.load_texture(sheet.path.display().to_string(), image, options);
             let id = texture.id();
-            tab.textures.insert(sheet.path.clone(), texture);
+            super::lock(textures).insert(sheet.path.clone(), texture);
             Some((id, size))
         })
         .collect();
     // if nothing can decode them, they are drawn as dots and the canvas doesn't wait
-    if !to_decode.is_empty() && !decode_in_background(to_decode, ctx, send_to_art_thread) {
+    if !to_decode.is_empty() && !decode_in_background(to_decode, ctx, art::send_to_art_thread) {
         waiting = false;
     }
     if waiting {
@@ -485,44 +626,13 @@ fn upload_sheets(
     sheets
 }
 
-/// Work for the tree's art thread
-type ArtJob = Box<dyn FnOnce() + Send>;
-
-/// Runs `work` on the process's one thread for the tree's art, started the first time. One
-/// thread, not one per batch: each new thread would get a malloc arena of its own, which keeps
-/// what the decoding left in it (about 25 MB more resident after a build was opened).
-fn send_to_art_thread(work: ArtJob) -> std::io::Result<()> {
-    static QUEUE: std::sync::OnceLock<Option<std::sync::Mutex<std::sync::mpsc::Sender<ArtJob>>>> =
-        std::sync::OnceLock::new();
-    let queue = QUEUE.get_or_init(|| {
-        let (send, receive) = std::sync::mpsc::channel::<ArtJob>();
-        std::thread::Builder::new()
-            .name("tree-art".into())
-            .spawn(move || {
-                for job in receive {
-                    job();
-                }
-            })
-            .ok()
-            .map(|_| std::sync::Mutex::new(send))
-    });
-    let Some(queue) = queue else {
-        return Err(std::io::Error::other("the tree's art thread didn't start"));
-    };
-    queue
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .send(work)
-        .map_err(|_| std::io::Error::other("the tree's art thread has ended"))
-}
-
 /// Decodes the claimed `sheets` on the thread `spawn` hands the work to, asking for a frame
 /// after each. If it can't take the work the files are marked failed, so nothing waits for
 /// them; returns whether it took it.
 fn decode_in_background(
     sheets: Vec<std::sync::Arc<crate::engine::SheetImage>>,
     ctx: &egui::Context,
-    spawn: impl FnOnce(ArtJob) -> std::io::Result<()>,
+    spawn: impl FnOnce(art::ArtJob) -> std::io::Result<()>,
 ) -> bool {
     let ctx = ctx.clone();
     let failed = sheets.clone();
@@ -553,83 +663,180 @@ fn repeats(path: &std::path::Path) -> bool {
         || name.starts_with("Background")
 }
 
-/// PoB's small view of a jewel socket's place in the tree (ItemSlotHelper.DrawViewer): the
-/// tree at zoom 17 of a view `rect.min_side()` across, centred on `node`, with a faint
-/// crosshair. Drawn in plain shapes: connections, and nodes in the allocated colour or grey.
+/// PoB's zoom for the socket viewer (ItemSlotHelper.lua:21)
+pub const SOCKET_VIEWER_ZOOM: f32 = 17.0;
+
+/// The socket viewer's camera: the tree at PoB's zoom 17 of a view `rect.min_side()` across,
+/// centred on the socket at `at` (ItemSlotHelper.lua:21-26, PassiveTreeView.lua:271)
+pub fn socket_viewer_camera(rect: Rect, tree_size: f32, at: [f32; 2]) -> super::geometry::Camera {
+    let side = rect.width().min(rect.height());
+    super::geometry::Camera {
+        center: at.into(),
+        zoom: side / tree_size.max(1.0) * SOCKET_VIEWER_ZOOM,
+        tree_size,
+        level: 0,
+    }
+}
+
+/// Shows `paint` in an area of its own over `rect` and its `border`: above the panels, taking no
+/// input, and under egui's tooltips, as PoB draws its tree viewers at layer 15 under the
+/// tooltips' 100. (A painter on an unregistered tooltip layer would paint over every tooltip.)
+pub fn viewer_area(
+    ctx: &egui::Context,
+    id: egui::Id,
+    rect: Rect,
+    border: f32,
+    paint: impl FnOnce(&egui::Painter),
+) {
+    let outer = rect.expand(border);
+    egui::Area::new(id)
+        .order(egui::Order::Foreground)
+        .fixed_pos(outer.min)
+        .fade_in(false)
+        .interactable(false)
+        .constrain(false)
+        .show(ctx, |ui| {
+            ui.allocate_space(outer.size());
+            paint(ui.painter());
+        });
+}
+
+/// What a small tree view marks its node with
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ViewerMark {
+    /// The socket viewer's faint crosshair (ItemSlotHelper.lua:30-35)
+    Crosshair,
+    /// The Calcs node viewer's red highlight ring, 30 across (CalcBreakdownControl.lua:607-609)
+    Ring,
+}
+
+/// PoB's small view of a jewel socket's place in the tree (ItemSlotHelper.DrawViewer): a white
+/// 1-point border, then the viewer's own PassiveTreeView:Draw at zoom 17 centred on `node`,
+/// with nothing hovered, and a faint crosshair over it. The art is the Tree tab's.
 pub fn paint_socket_viewer(
+    ctx: &egui::Context,
     painter: &egui::Painter,
     rect: Rect,
-    layout: &TreeLayout,
-    allocated: &HashSet<u32>,
+    scene_of: &super::SocketScene,
     node: u32,
 ) {
-    let Some(centre) = layout.nodes.iter().find(|n| n.id == node).map(|n| n.pos) else {
-        return;
-    };
-    // PassiveTree.lua:93: the tree's size is its smaller extent, and 10% more
-    let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
-    for n in &layout.nodes {
-        for k in 0..2 {
-            lo[k] = lo[k].min(n.pos[k]);
-            hi[k] = hi[k].max(n.pos[k]);
-        }
-    }
-    let size = ((hi[0] - lo[0]).min(hi[1] - lo[1]) * 1.1).max(1.0);
-    // PassiveTreeView.lua:271 with ItemSlotHelper's zoom of 17
-    let zoom = rect.width().min(rect.height()) / size * 17.0;
-    let to_screen = |p: [f32; 2]| rect.center() + (Vec2::from(p) - Vec2::from(centre)) * zoom;
-    let painter = painter.with_clip_rect(rect);
-    painter.rect_filled(rect.expand(1.0), 0.0, Color32::WHITE);
-    painter.rect_filled(rect, 0.0, theme::BACKGROUND);
-    let visible = rect.expand(40.0);
-    for &(a, b) in &layout.edges {
-        let (na, nb) = (&layout.nodes[a], &layout.nodes[b]);
-        let (pa, pb) = (to_screen(na.pos), to_screen(nb.pos));
-        if !visible.contains(pa) && !visible.contains(pb) {
-            continue;
-        }
-        let on = allocated.contains(&na.id) && allocated.contains(&nb.id);
-        let stroke = Stroke::new(
-            (6.0 * zoom).clamp(1.0, 4.0),
-            if on { ALLOCATED } else { EDGE },
-        );
-        match arc_center(na, nb) {
-            Some(c) => painter.line(arc_points(c, na.pos, nb.pos, zoom, to_screen), stroke),
-            None => painter.line_segment([pa, pb], stroke),
-        };
-    }
-    for n in &layout.nodes {
-        let pos = to_screen(n.pos);
-        if !visible.contains(pos) {
-            continue;
-        }
-        let colour = if allocated.contains(&n.id) {
-            ALLOCATED
-        } else {
-            kind_color(&n.kind)
-        };
-        painter.circle_filled(pos, (node_radius(&n.kind) * zoom).max(1.5), colour);
-    }
-    // the crosshair (ItemSlotHelper.lua:33-35)
-    let faint = Color32::from_white_alpha(51);
-    painter.rect_filled(
-        Rect::from_center_size(rect.center(), Vec2::new(2.0, rect.height())),
-        0.0,
-        faint,
-    );
-    painter.rect_filled(
-        Rect::from_center_size(rect.center(), Vec2::new(rect.width(), 2.0)),
-        0.0,
-        faint,
+    paint_tree_viewer(
+        ctx,
+        painter,
+        rect,
+        scene_of,
+        node,
+        SOCKET_VIEWER_ZOOM,
+        1.0,
+        ViewerMark::Crosshair,
     );
 }
 
-/// If both nodes sit on the same orbit of the same group, PoB connects them with an arc
-/// around the group's centre.
-fn arc_center(a: &TreeNode, b: &TreeNode) -> Option<[f32; 2]> {
-    match (a.orbit, b.orbit, a.group_center) {
-        (Some(oa), Some(ob), Some(center)) if oa == ob && oa.1 > 0 => Some(center),
-        _ => None,
+/// A small view of the tree around `node` in `rect`, inside a white border `border` wide: the
+/// tree as a PassiveTreeView of its own draws it (no comparison, search, heat map or hover) at
+/// PoB's `zoom`, marked as `mark` says
+#[allow(clippy::too_many_arguments)]
+pub fn paint_tree_viewer(
+    ctx: &egui::Context,
+    painter: &egui::Painter,
+    rect: Rect,
+    scene_of: &super::SocketScene,
+    node: u32,
+    zoom: f32,
+    border: f32,
+    mark: ViewerMark,
+) {
+    let layout = &scene_of.layout;
+    let Some(centre) = scene_of.index.get(&node).map(|&i| layout.nodes[i].pos) else {
+        return;
+    };
+    let painter = painter.with_clip_rect(rect.expand(border));
+    painter.rect_filled(rect.expand(border), 0.0, Color32::WHITE);
+    painter.rect_filled(rect, 0.0, theme::BACKGROUND);
+    let painter = painter.with_clip_rect(rect);
+    let mut camera = socket_viewer_camera(rect, layout.size, centre);
+    camera.zoom *= zoom / SOCKET_VIEWER_ZOOM;
+    let now = ctx.input(|i| i.time);
+    let none = HashSet::new();
+    let look = scene::Look {
+        hover: None,
+        path: None,
+        deps: &none,
+        trace_end: None,
+        heat: None,
+        power_theme: Default::default(),
+        view: Rect::from_min_max(
+            camera.to_tree(rect, rect.min).into(),
+            camera.to_tree(rect, rect.max).into(),
+        ),
+        pob_zoom: zoom,
+        time_ms: (!scene_of.animations_off).then_some(now * 1000.0),
+    };
+    let images = scene::build(
+        layout,
+        &scene_of.state,
+        &scene_of.sets,
+        &scene_of.index,
+        &look,
+    );
+    let mut used: HashSet<usize> = images.iter().map(|i| i.sprite.sheet).collect();
+    if mark == ViewerMark::Ring
+        && let Some(ring) = layout.assets.get("highlightRing")
+    {
+        used.insert(ring.sheet);
+    }
+    let sheets = upload_sheets(&scene_of.textures, ctx, layout, &used);
+    paint(&painter, &sheets, &images, rect, camera, false);
+    if !scene_of.animations_off {
+        let rings = scene_of.state.socket_rings.iter().flat_map(|s| &s.rings);
+        if let Some(wait) = ring_frame_interval(rings, camera.zoom) {
+            ctx.request_repaint_after(wait);
+        }
+    }
+    match mark {
+        ViewerMark::Crosshair => {
+            // ItemSlotHelper.lua:30-35
+            let faint = Color32::from_white_alpha(51);
+            painter.rect_filled(
+                Rect::from_min_size(
+                    Pos2::new(rect.left() + (rect.width() / 2.0).floor() - 1.0, rect.top()),
+                    Vec2::new(2.0, rect.height()),
+                ),
+                0.0,
+                faint,
+            );
+            painter.rect_filled(
+                Rect::from_min_size(
+                    Pos2::new(
+                        rect.left(),
+                        rect.top() + (rect.height() / 2.0).floor() - 1.0,
+                    ),
+                    Vec2::new(rect.width(), 2.0),
+                ),
+                0.0,
+                faint,
+            );
+        }
+        ViewerMark::Ring => {
+            // the view's highlight ring, red (CalcBreakdownControl.lua:607-609)
+            if let Some((&ring, Some((texture, size)))) = layout
+                .assets
+                .get("highlightRing")
+                .map(|r| (r, sheets.get(r.sheet).copied().flatten()))
+            {
+                let [x, y, w, h] = ring.rect;
+                let uv = Rect::from_min_max(
+                    Pos2::new(x / size.x, y / size.y),
+                    Pos2::new((x + w) / size.x, (y + h) / size.y),
+                );
+                painter.image(
+                    texture,
+                    Rect::from_center_size(rect.center(), Vec2::splat(30.0)),
+                    uv,
+                    Color32::from_rgb(255, 0, 0),
+                );
+            }
+        }
     }
 }
 
@@ -842,7 +1049,70 @@ mod tests {
                     text: "x".into(),
                 })
                 .collect(),
+            ..Default::default()
         }
+    }
+
+    /// PoB's node tooltip sits at the node's top right; the skill's beside it, or under it when
+    /// wide; both are pushed back into the view (PassiveTreeView.lua:1044-1097)
+    #[test]
+    fn node_tooltips_sit_where_pobs_do() {
+        let view = Rect::from_min_size(Pos2::new(0.0, 30.0), Vec2::new(1000.0, 700.0));
+        let tip = Vec2::new(300.0, 200.0);
+        // alone, with room: at the node's top right
+        let (main, skill) = node_tooltip_places(Pos2::new(100.5, 300.0), 20.0, tip, None, view);
+        assert_eq!((main, skill), (Pos2::new(120.0, 280.0), None));
+        // a tall skill goes beside it, 5 apart
+        let tall = Vec2::new(200.0, 250.0);
+        let (main, skill) =
+            node_tooltip_places(Pos2::new(100.0, 300.0), 20.0, tip, Some(tall), view);
+        assert_eq!(main, Pos2::new(120.0, 280.0));
+        assert_eq!(skill, Some(Pos2::new(425.0, 280.0)));
+        // a wide one under it
+        let wide = Vec2::new(400.0, 100.0);
+        let (main, skill) =
+            node_tooltip_places(Pos2::new(100.0, 300.0), 20.0, tip, Some(wide), view);
+        assert_eq!(main, Pos2::new(120.0, 280.0));
+        assert_eq!(skill, Some(Pos2::new(120.0, 480.0)));
+        // near the right and bottom edges both move in; the node's tooltip keeps its own clamp
+        let (main, skill) =
+            node_tooltip_places(Pos2::new(900.0, 650.0), 20.0, tip, Some(tall), view);
+        // the pair is 500 wide (PoB leaves out the 5 between): 920 + 500 is 420 past the right
+        // edge, and 630 + 250 is 150 past the bottom
+        assert_eq!(skill, Some(Pos2::new(805.0, 480.0)));
+        assert_eq!(main, Pos2::new(500.0, 530.0));
+        // taller than the view: its top stays in it, and the skill's too
+        let tall = Vec2::new(300.0, 900.0);
+        let (main, skill) =
+            node_tooltip_places(Pos2::new(100.0, 300.0), 20.0, tall, Some(tall), view);
+        assert_eq!(main.y, view.top());
+        assert_eq!(skill.unwrap().y, view.top());
+        let (main, _) = node_tooltip_places(Pos2::new(100.0, 300.0), 20.0, tall, None, view);
+        assert!(main.y >= view.top() && main.x >= view.left());
+        // the compare-only tooltip: right of the square, else left of it and under it
+        let corner = Pos2::new(100.0, 100.0);
+        assert_eq!(
+            hover_tooltip_place(corner, 40.0, tip, view),
+            Pos2::new(145.0, 100.0)
+        );
+        assert_eq!(
+            hover_tooltip_place(Pos2::new(900.0, 100.0), 40.0, tip, view),
+            Pos2::new(595.0, 100.0)
+        );
+        assert_eq!(
+            hover_tooltip_place(Pos2::new(100.0, 600.0), 40.0, Vec2::new(950.0, 200.0), view),
+            Pos2::new(0.0, 440.0)
+        );
+    }
+
+    /// The socket viewer is PoB's zoom 17 over the view's smaller side, on the socket
+    /// (ItemSlotHelper.lua:21-26)
+    #[test]
+    fn the_socket_viewer_zooms_17_on_the_socket() {
+        let rect = Rect::from_min_size(Pos2::new(50.0, 60.0), Vec2::new(308.0, 280.0));
+        let camera = socket_viewer_camera(rect, 20_000.0, [1000.0, -500.0]);
+        assert!((camera.zoom - 280.0 / 20_000.0 * 17.0).abs() < 1e-6);
+        assert_eq!(camera.to_screen(rect, [1000.0, -500.0]), rect.center());
     }
 
     #[test]
@@ -906,9 +1176,9 @@ mod tests {
         layout.sheets[0] = Some(sheet());
         assert!(!art_missing(&layout, &art));
         // a failed file asks for no more frames
-        let mut tab = TreeTab::default();
+        let tab = TreeTab::default();
         ctx.run_ui(egui::RawInput::default(), |ui| {
-            let up = upload_sheets(&mut tab, ui.ctx(), &sheet_layout(&bad), &all());
+            let up = upload_sheets(&tab.textures, ui.ctx(), &sheet_layout(&bad), &all());
             assert!(up[0].is_none());
         })
         .textures_delta
@@ -918,7 +1188,7 @@ mod tests {
         for _ in 0..4 {
             out.textures_delta.clear();
             out = ctx.run_ui(egui::RawInput::default(), |ui| {
-                upload_sheets(&mut tab, ui.ctx(), &sheet_layout(&bad), &all());
+                upload_sheets(&tab.textures, ui.ctx(), &sheet_layout(&bad), &all());
             });
         }
         out.textures_delta.clear();
@@ -940,7 +1210,7 @@ mod tests {
         let (send, receive) = std::sync::mpsc::channel();
         for _ in 0..3 {
             let send = send.clone();
-            send_to_art_thread(Box::new(move || {
+            art::send_to_art_thread(Box::new(move || {
                 let me = std::thread::current();
                 send.send((me.id(), me.name().map(String::from))).unwrap();
             }))
@@ -982,23 +1252,23 @@ mod tests {
     #[test]
     fn only_the_files_drawn_are_decoded() {
         let ctx = egui::Context::default();
-        let mut tab = TreeTab::default();
+        let tab = TreeTab::default();
         let dir = crate::test_dir::TestDir::new("unused-sheet");
         let path = dir.join("art.png");
         image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 255]))
             .save(&path)
             .unwrap();
         let lazy = std::sync::Arc::new(crate::engine::SheetImage::lazy(path, [1, 1]));
-        let up = upload_sheets(&mut tab, &ctx, &sheet_layout(&lazy), &HashSet::new());
+        let up = upload_sheets(&tab.textures, &ctx, &sheet_layout(&lazy), &HashSet::new());
         assert!(up[0].is_none());
         assert!(
             lazy.is_unloaded(),
             "decoding started for a file nothing draws"
         );
         let ready = sheet();
-        let up = upload_sheets(&mut tab, &ctx, &sheet_layout(&ready), &[1].into());
+        let up = upload_sheets(&tab.textures, &ctx, &sheet_layout(&ready), &[1].into());
         assert!(up[0].is_none());
-        assert!(tab.textures.is_empty());
+        assert!(super::super::lock(&tab.textures).is_empty());
         assert!(ready.has_rgba());
     }
 
@@ -1171,9 +1441,9 @@ mod tests {
     #[test]
     fn uploaded_sheets_drop_their_pixels() {
         let ctx = egui::Context::default();
-        let mut tab = TreeTab::default();
+        let tab = TreeTab::default();
         let first = sheet();
-        let up = upload_sheets(&mut tab, &ctx, &sheet_layout(&first), &all());
+        let up = upload_sheets(&tab.textures, &ctx, &sheet_layout(&first), &all());
         assert_eq!(up.len(), 2);
         let (id, size) = up[0].expect("uploaded");
         assert_eq!(size, Vec2::new(2.0, 1.0));
@@ -1181,17 +1451,17 @@ mod tests {
         // the texture holds the sheet now; the decoded copy is gone
         assert!(!first.has_rgba());
         // later frames draw from the texture
-        let again = upload_sheets(&mut tab, &ctx, &sheet_layout(&first), &all());
+        let again = upload_sheets(&tab.textures, &ctx, &sheet_layout(&first), &all());
         assert_eq!(again[0].map(|s| s.0), Some(id));
         // a later layout's fresh copy of a sheet already up is dropped too, not kept
         let second = sheet();
-        let next = upload_sheets(&mut tab, &ctx, &sheet_layout(&second), &all());
+        let next = upload_sheets(&tab.textures, &ctx, &sheet_layout(&second), &all());
         assert_eq!(next[0].map(|s| s.0), Some(id));
         assert!(!second.has_rgba());
         // without pixels nor a texture the sheet's sprites are left out, not a panic
-        let mut other = TreeTab::default();
-        assert!(upload_sheets(&mut other, &ctx, &sheet_layout(&first), &all())[0].is_none());
-        assert!(other.textures.is_empty());
+        let other = TreeTab::default();
+        assert!(upload_sheets(&other.textures, &ctx, &sheet_layout(&first), &all())[0].is_none());
+        assert!(super::super::lock(&other.textures).is_empty());
     }
 
     /// A file is decoded off the frame the first time it is wanted, then uploaded; the layout
@@ -1206,13 +1476,13 @@ mod tests {
         let lazy = std::sync::Arc::new(crate::engine::SheetImage::lazy(path, [3, 2]));
         assert!(lazy.is_unloaded());
         let ctx = egui::Context::default();
-        let mut tab = TreeTab::default();
+        let tab = TreeTab::default();
         // the first frame starts the decoding and draws without it
-        assert!(upload_sheets(&mut tab, &ctx, &sheet_layout(&lazy), &all())[0].is_none());
+        assert!(upload_sheets(&tab.textures, &ctx, &sheet_layout(&lazy), &all())[0].is_none());
         assert!(!lazy.is_unloaded());
         let start = std::time::Instant::now();
         let up = loop {
-            if let Some(up) = upload_sheets(&mut tab, &ctx, &sheet_layout(&lazy), &all())[0] {
+            if let Some(up) = upload_sheets(&tab.textures, &ctx, &sheet_layout(&lazy), &all())[0] {
                 break up;
             }
             assert!(start.elapsed().as_secs() < 10, "never decoded");
@@ -1228,6 +1498,53 @@ mod tests {
         ));
         broken.decode();
         assert_eq!(broken.take_rgba(), crate::engine::SheetPixels::Failed);
-        assert!(upload_sheets(&mut tab, &ctx, &sheet_layout(&broken), &all())[0].is_none());
+        assert!(upload_sheets(&tab.textures, &ctx, &sheet_layout(&broken), &all())[0].is_none());
+    }
+
+    /// A tree viewer is drawn under an egui tooltip that overlaps it (PoB: layer 15 under 100)
+    #[test]
+    fn viewers_go_under_tooltips() {
+        let ctx = egui::Context::default();
+        let red = Color32::from_rgb(255, 0, 0);
+        let blue = Color32::from_rgb(0, 0, 255);
+        let mut order = Vec::new();
+        for _ in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0))),
+                ..Default::default()
+            };
+            let out = ctx.run_ui(input, |ui| {
+                // a tooltip area first, then the viewer, as the Items tab does it
+                egui::Area::new(egui::Id::NULL.with("tip"))
+                    .order(egui::Order::Tooltip)
+                    .fade_in(false)
+                    .fixed_pos(Pos2::new(10.0, 10.0))
+                    .show(ui.ctx(), |ui| {
+                        let (r, _) = ui.allocate_exact_size(Vec2::splat(50.0), Sense::hover());
+                        ui.painter().rect_filled(r, 0.0, blue);
+                    });
+                let rect = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::splat(100.0));
+                viewer_area(ui.ctx(), egui::Id::NULL.with("viewer"), rect, 1.0, |p| {
+                    p.rect_filled(rect, 0.0, red);
+                });
+            });
+            fn walk(s: &egui::Shape, out: &mut Vec<Color32>) {
+                match s {
+                    egui::Shape::Rect(r) => out.push(r.fill),
+                    egui::Shape::Vec(v) => v.iter().for_each(|x| walk(x, out)),
+                    _ => {}
+                }
+            }
+            let mut fills = Vec::new();
+            for c in &out.shapes {
+                walk(&c.shape, &mut fills);
+            }
+            order = fills
+                .into_iter()
+                .filter(|f| *f == red || *f == blue)
+                .collect();
+            out.drop_without_applying_deltas();
+        }
+        assert_eq!(order, [red, blue]);
     }
 }

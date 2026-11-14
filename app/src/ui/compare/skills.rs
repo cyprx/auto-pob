@@ -15,6 +15,15 @@ fn headers(row: &CompareSkillRow) -> [Option<&str>; 2] {
     }
 }
 
+/// The headers' slot icons, as `headers` pairs them
+fn icons(row: &CompareSkillRow) -> [Option<&str>; 2] {
+    if row.ours.is_empty() {
+        [None, row.theirs_icon.as_deref().or(row.icon.as_deref())]
+    } else {
+        [row.icon.as_deref(), row.theirs_icon.as_deref()]
+    }
+}
+
 pub(super) fn show(ui: &mut egui::Ui, view: &CompareView) {
     let default = ui.visuals().text_color();
     let weak = ui.visuals().weak_text_color();
@@ -36,12 +45,22 @@ pub(super) fn show(ui: &mut egui::Ui, view: &CompareView) {
                     ui.label(super::header(&view.headers[1], default));
                     ui.end_row();
                     for row in &view.skills {
-                        for (header, lines) in
-                            headers(row).into_iter().zip([&row.ours, &row.theirs])
+                        for ((header, icon), lines) in headers(row)
+                            .into_iter()
+                            .zip(icons(row))
+                            .zip([&row.ours, &row.theirs])
                         {
                             ui.vertical(|ui| {
                                 if let Some(h) = header {
-                                    ui.label(pob_text(h, 16.0, default));
+                                    // PoB's slot icon, 16 square, before the header
+                                    // (CompareTab.lua:4316-4324)
+                                    ui.horizontal(|ui| {
+                                        ui.spacing_mut().item_spacing.x = 2.0;
+                                        if let Some(icon) = icon {
+                                            crate::widgets::art::icon(ui, icon, 16.0);
+                                        }
+                                        ui.label(pob_text(h, 16.0, default));
+                                    });
                                 }
                                 if lines.is_empty() {
                                     ui.label(egui::RichText::new("(no group)").color(weak));

@@ -5,7 +5,7 @@ use crate::engine::Command;
 use crate::engine::views::{BreakdownRow, BreakdownSection, BreakdownView, CellRef};
 use crate::ui::tree::Rects;
 use crate::widgets::{pob_text, tooltip_ui};
-use eframe::egui::{self, Align, Color32, Layout, Pos2, Sense, Stroke, StrokeKind, Vec2};
+use eframe::egui::{self, Align, Color32, Layout, Sense, Vec2};
 use std::{cmp::Ordering, collections::HashMap, sync::Arc};
 
 /// How long the pointer rests on a cell before the engine is asked about it (seconds)
@@ -101,6 +101,8 @@ pub struct State {
     requery: bool,
     failed: bool,
     sorts: HashMap<usize, Sort>,
+    /// The tree the node viewer shows, as the Tree tab has it
+    pub node_scene: Option<crate::ui::tree::SocketScene>,
 }
 
 impl State {
@@ -270,8 +272,9 @@ impl State {
                                 for &ri in &order {
                                     let row = &rows[ri];
                                     for column in columns {
+                                        let scene = self.node_scene.as_ref();
                                         let r = ui.with_layout(align(column.right), |ui| {
-                                            cell(ui, row, &column.key)
+                                            cell(ui, row, &column.key, scene)
                                         });
                                         rects.note(&r.inner.0, || {
                                             format!("bd_cell_{table}_{ri}_{}", column.key)
@@ -313,7 +316,12 @@ fn align(right: bool) -> Layout {
 
 /// One table cell. A cell with a tooltip shows it on hover; one without but with a node is a
 /// link to that node (PoB shows a node location only when there is no tooltip function).
-fn cell(ui: &mut egui::Ui, row: &BreakdownRow, key: &str) -> (egui::Response, Option<u32>) {
+fn cell(
+    ui: &mut egui::Ui,
+    row: &BreakdownRow,
+    key: &str,
+    scene: Option<&crate::ui::tree::SocketScene>,
+) -> (egui::Response, Option<u32>) {
     let text = row.cells.get(key).map_or("", String::as_str);
     let tooltip = row.tooltips.get(key).filter(|t| !t.is_empty());
     let node = row.nodes.get(key).copied().filter(|_| tooltip.is_none());
@@ -336,28 +344,155 @@ fn cell(ui: &mut egui::Ui, row: &BreakdownRow, key: &str) -> (egui::Response, Op
         if response.clicked() {
             focus = Some(id);
         }
+        if response.hovered()
+            && let Some(scene) = scene
+        {
+            node_viewer(ui, &response, scene, id);
+        }
     }
     (response, focus)
 }
 
-/// R12: the radius as a circle on a dark 16:9 box standing for 1920 by 1080 world units.
+/// The node viewer PoB shows by a hovered node cell: the node's place in the tree, 300 square
+/// at zoom 5 inside a 2-point white border, right of the cell or else left of it, held inside
+/// the screen, with a red ring on the node (CalcBreakdownControl.lua:594-611)
+fn node_viewer(
+    ui: &egui::Ui,
+    cell: &egui::Response,
+    scene: &crate::ui::tree::SocketScene,
+    node: u32,
+) {
+    let rect = node_viewer_rect(cell.rect, ui.ctx().content_rect());
+    let ctx = ui.ctx().clone();
+    let id = ui.scope_id().with("calcs_node_viewer");
+    crate::ui::tree::canvas::viewer_area(&ctx, id, rect, 2.0, |painter| {
+        crate::ui::tree::canvas::paint_tree_viewer(
+            &ctx,
+            painter,
+            rect,
+            scene,
+            node,
+            NODE_VIEWER_ZOOM,
+            2.0,
+            crate::ui::tree::canvas::ViewerMark::Ring,
+        );
+    });
+}
+
+/// Where the node viewer's tree goes for a cell at `cell` (inside its 2-point border): right of
+/// the cell, else left of it; no lower than the screen allows (CalcBreakdownControl.lua:595-600)
+pub fn node_viewer_rect(cell: egui::Rect, screen: egui::Rect) -> egui::Rect {
+    let mut x = cell.right() + 5.0;
+    if screen.right() < x + 304.0 {
+        x = cell.left() - 309.0;
+    }
+    let y = cell.top().min(screen.bottom() - 304.0);
+    egui::Rect::from_min_size(egui::pos2(x + 2.0, y + 2.0), Vec2::splat(300.0))
+}
+
+/// The node viewer's zoom (CalcBreakdownControl.lua:602)
+const NODE_VIEWER_ZOOM: f32 = 5.0;
+
+/// PoB's radius visual's size: 1920 by 1080 at a quarter (CalcBreakdownControl.lua:140-147)
+const RADIUS_SIZE: Vec2 = Vec2::new(480.0, 270.0);
+
+/// PoB's isometric camera, world units to the visual's pixels, rounded (Main.lua:1486-1499)
+fn world_to_screen(x: f64, y: f64, width: f64, height: f64) -> (i64, i64) {
+    let cos45 = (std::f64::consts::PI / 4.0).cos();
+    let cos35 = (std::f64::consts::PI * 0.195).cos();
+    let sin35 = (std::f64::consts::PI * 0.195).sin();
+    let cx = (x - y) * cos45;
+    let cy = -5.33 - (y + x) * cos45 * cos35;
+    let cz = 122.0 + (y + x) * cos45 * sin35;
+    let sx = width * 0.5 + cx / cz * 1.27 * height;
+    let sy = height * 0.5 + cy / cz * 1.27 * height;
+    ((sx + 0.5).floor() as i64, (sy + 0.5).floor() as i64)
+}
+
+/// The rows of PoB's filled circle of `radius` on the ground (main:RenderCircle, Main.lua:
+/// 1502-1523): each pixel row's `(y, left, right)`, top to bottom
+pub fn radius_rows(width: f64, height: f64, radius: f64) -> Vec<(i64, i64, i64)> {
+    let mut rows: std::collections::BTreeMap<i64, (i64, i64)> = Default::default();
+    // PoB's `for d = 0, 360, 0.15`, the step added each time as LuaJIT does
+    let mut d = 0.0f64;
+    while d <= 360.0 {
+        let r = d / 180.0 * std::f64::consts::PI;
+        let (px, py) = world_to_screen(r.sin() * radius, r.cos() * radius, width, height);
+        if py >= 0 && (py as f64) < height {
+            let px = px.clamp(0, width as i64);
+            let row = rows.entry(py).or_insert((px, px));
+            row.0 = row.0.min(px);
+            row.1 = row.1.max(px);
+        }
+        d += 0.15;
+    }
+    rows.into_iter().map(|(y, (l, r))| (y, l, r)).collect()
+}
+
+/// PoB's radius visual (CalcBreakdownControl:DrawRadiusVisual): the range guide at 3/4
+/// brightness, the radius as a translucent green disc in the game's perspective, and the game's
+/// UI over it. 480 by 270, or smaller to fit.
 fn radius_box(ui: &mut egui::Ui, radius: f64) {
-    let width = ui.available_width().clamp(120.0, 360.0);
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, width * 9.0 / 16.0), Sense::hover());
+    let width = ui.available_width().clamp(120.0, RADIUS_SIZE.x);
+    let (rect, _) = ui.allocate_exact_size(
+        Vec2::new(width, width * RADIUS_SIZE.y / RADIUS_SIZE.x),
+        Sense::hover(),
+    );
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, Color32::from_gray(12));
-    painter.rect_stroke(
+    let ctx = ui.ctx().clone();
+    crate::widgets::art::paint(
+        &ctx,
+        &painter,
+        "Assets/range_guide.png",
         rect,
-        0.0,
-        Stroke::new(1.0, Color32::from_gray(70)),
-        StrokeKind::Inside,
+        Color32::from_gray(191),
     );
-    let scale = width / 1920.0;
-    let centre: Pos2 = rect.center();
-    painter.circle_stroke(
-        centre,
-        radius as f32 * scale,
-        Stroke::new(1.5, Color32::from_rgb(255, 255, 255)),
+    let scale = width / RADIUS_SIZE.x;
+    let green = Color32::from_rgba_unmultiplied(128, 255, 128, 84);
+    for (y, left, right) in radius_rows(f64::from(RADIUS_SIZE.x), f64::from(RADIUS_SIZE.y), radius)
+    {
+        let min = rect.min + Vec2::new(left as f32, y as f32) * scale;
+        let size = Vec2::new((right - left + 1) as f32, 1.0) * scale;
+        painter.rect_filled(egui::Rect::from_min_size(min, size), 0.0, green);
+    }
+    crate::widgets::art::paint(
+        &ctx,
+        &painter,
+        "Assets/game_ui_small.png",
+        rect,
+        Color32::WHITE,
     );
-    painter.circle_filled(centre, 2.0, Color32::from_rgb(255, 255, 255));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// PoB's node viewer sits right of the cell, or left when the screen ends first, and never
+    /// below the screen (CalcBreakdownControl.lua:595-600)
+    #[test]
+    fn the_node_viewer_sits_where_pobs_does() {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1000.0, 700.0));
+        let cell =
+            |x: f32, y: f32| egui::Rect::from_min_size(egui::pos2(x, y), Vec2::new(80.0, 14.0));
+        assert_eq!(
+            node_viewer_rect(cell(100.0, 50.0), screen).min,
+            egui::pos2(187.0, 52.0)
+        );
+        // 700 + 5 + 304 is past 1000: on the left, 309 from the cell
+        assert_eq!(
+            node_viewer_rect(cell(620.0, 50.0), screen).min,
+            egui::pos2(313.0, 52.0)
+        );
+        // low on the screen: held up
+        assert_eq!(
+            node_viewer_rect(cell(100.0, 600.0), screen).min,
+            egui::pos2(187.0, 398.0)
+        );
+        assert_eq!(
+            node_viewer_rect(cell(100.0, 50.0), screen).size(),
+            Vec2::splat(300.0)
+        );
+    }
 }

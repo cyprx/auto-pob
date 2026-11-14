@@ -11,6 +11,7 @@ Recorder.__index = Recorder
 function Recorder:Clear()
 	self._lines = {}
 	self._imaged = nil
+	self._recipe = nil
 	self.tooltipHeader = false
 end
 
@@ -41,7 +42,18 @@ function Recorder:AddSeparator(size)
 	end
 end
 
-function Recorder:SetRecipe() end
+-- the oils of an anointable notable, which PoB draws after its name (Tooltip.lua:112-114)
+function Recorder:SetRecipe(recipe)
+	if recipe then
+		local list = {}
+		for i, name in ipairs(recipe) do
+			list[i] = name
+		end
+		self._recipe = list
+	else
+		self._recipe = nil
+	end
+end
 
 function Recorder:GetSize()
 	return 0, 0
@@ -61,4 +73,38 @@ end
 
 function glue.tooltip()
 	return setmetatable({ _lines = {} }, Recorder)
+end
+
+-- A node tooltip as data: its lines, PoB's header art (`tooltipHeader`), the oils of an
+-- anointable notable, and the granted skill's tooltip PoB draws beside it (`skill`, the viewer's
+-- `skillTooltip` recorder; PassiveTreeView.lua:1044-1097, 1460, 1605-1625)
+function glue.node_tooltip_data(id, tooltip, skill, trace)
+	local out = { id = id, lines = tooltip:lines(), trace = trace or {} }
+	if tooltip.tooltipHeader then
+		out.header = tostring(tooltip.tooltipHeader)
+	end
+	if tooltip._recipe and #tooltip._recipe > 0 then
+		out.recipe = tooltip._recipe
+	end
+	if skill and #skill:lines() > 0 then
+		out.skill = { lines = skill:lines() }
+		if skill.tooltipHeader then
+			out.skill.header = tostring(skill.tooltipHeader)
+		end
+	end
+	return out
+end
+
+-- Runs `fn(...)` with the viewer's skill tooltip swapped for a recorder; returns the recorder
+-- and `fn`'s result. The viewer's own is put back, whatever happens.
+function glue.with_skill_recorder(viewer, fn, ...)
+	local saved = viewer.skillTooltip
+	local skill = glue.tooltip()
+	viewer.skillTooltip = skill
+	local ok, err = pcall(fn, ...)
+	viewer.skillTooltip = saved
+	if not ok then
+		error(err, 0)
+	end
+	return skill
 end

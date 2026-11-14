@@ -339,7 +339,7 @@ fn display_sections_follow_pobs_order() {
     assert!(shown(&h, "Selecting an influence here"), "{:?}", h.drawn);
 }
 
-/// The Foulborn box comes before the slider (ItemsTab.lua:1033-1074), and the line dropdown
+/// The Foulborn icon and box come before the slider (ItemsTab.lua:1033-1074), and the line dropdown
 /// goes back to the first line whenever PoB rebuilds it (UpdateDisplayItemRangeLines)
 #[test]
 fn the_range_row_is_pobs_and_resets_with_pob() {
@@ -351,6 +351,10 @@ fn the_range_row_is_pobs_and_resets_with_pob() {
     h.click("range_line_1");
     h.frame(vec![]);
     assert!(h.ui.rect("range_mutated").center().x < h.ui.rect("range_slider").center().x);
+    // PoB's Foulborn icon, 20 square, before the box (ItemsTab.lua:1046-1050)
+    let icon = h.ui.rect("range_foulborn");
+    assert_eq!(icon.size(), egui::vec2(20.0, 20.0));
+    assert!(icon.right() <= h.ui.rect("range_mutated").left());
     // a view after an edit that keeps PoB's list leaves the pick alone
     h.show_display(view.clone());
     assert_eq!(h.ui.display.range_line, 1);
@@ -558,22 +562,33 @@ fn a_jewel_slot_shows_the_socket_viewer() {
     let mut view = sample();
     view.slots.last_mut().unwrap().node = Some(5);
     let mut h = Harness::new(view);
-    h.ui.set_socket_scene(Some(crate::ui::tree::SocketScene {
-        layout: Arc::new(TreeLayout {
-            version: "3_29".into(),
-            nodes: vec![node(5, 0.0), node(6, 300.0), node(7, 9000.0)],
-            edges: vec![(0, 1)],
-            sheets: Vec::new(),
-            connectors: vec![],
-            groups: vec![],
-            class_art: vec![],
-            assets: Default::default(),
-            size: 1.0,
-            jewel_radii: vec![],
-            key: String::new(),
-        }),
-        allocated: Arc::new([5].into_iter().collect()),
-    }));
+    let state: crate::engine::TreeState = serde_json::from_value(serde_json::json!({
+        "version": "3_29", "version_label": "3.29", "class_id": 0, "ascendancy_id": 0,
+        "points": { "used": 1, "available": 122, "ascendancy_used": 0,
+                    "ascendancy_available": 8 },
+        "allocated": [5], "paths": [], "depends": [], "mastery_options": [],
+        "search_matches": [], "compare": [], "jewels": [],
+        "active_spec": 0, "can_undo": false, "can_redo": false,
+    }))
+    .unwrap();
+    let layout = Arc::new(TreeLayout {
+        version: "3_29".into(),
+        nodes: vec![node(5, 0.0), node(6, 300.0), node(7, 9000.0)],
+        edges: vec![(0, 1)],
+        sheets: Vec::new(),
+        connectors: vec![],
+        groups: vec![],
+        class_art: vec![],
+        assets: Default::default(),
+        size: 1.0,
+        jewel_radii: vec![],
+        key: String::new(),
+    });
+    h.ui.set_socket_scene(Some(crate::ui::tree::SocketScene::new(
+        layout,
+        &state,
+        Default::default(),
+    )));
     h.settle();
     let at = h.ui.rect("slot_Ring 1").center();
     h.frame(vec![Event::PointerMoved(at)]);
@@ -750,4 +765,19 @@ fn a_refused_paste_leaves_the_caret_where_it_was() {
             .text
             .clone();
     assert_eq!(text, "AZB");
+}
+
+/// The viewer's white border sits at PoB's box corner and the view 1 inside it
+/// (ItemSlotHelper.lua:16-27)
+#[test]
+fn the_socket_viewer_sits_at_pobs_corner() {
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+    let slot = egui::Rect::from_min_size(egui::pos2(100.0, 500.0), egui::vec2(300.0, 20.0));
+    let view = super::slots::socket_viewer_rect(slot, screen, false);
+    assert_eq!(view.min, egui::pos2(101.0, 500.0 - 284.0 + 1.0));
+    assert_eq!(view.size(), egui::vec2(308.0, 280.0));
+    // the border is drawn 1 around the view: its corner is PoB's (slot.left, top)
+    assert_eq!(view.expand(1.0).min, egui::pos2(100.0, 216.0));
+    let low = super::slots::socket_viewer_rect(slot, screen, true);
+    assert_eq!(low.min, egui::pos2(101.0, 525.0));
 }

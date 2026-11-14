@@ -406,6 +406,18 @@ impl ItemsUi {
     }
 }
 
+/// Where the socket viewer's tree goes for a slot at `slot`: PoB's box at the slot's left, 4
+/// above it (or under it), its white border at that corner and the view 1 inside it
+/// (ItemSlotControl.lua:142-153, ItemSlotHelper.lua:16-27)
+pub(super) fn socket_viewer_rect(slot: egui::Rect, screen: egui::Rect, below: bool) -> egui::Rect {
+    let size = egui::vec2(308.0, 280.0);
+    let mut top = slot.top() - size.y - 4.0;
+    if below || top < screen.top() {
+        top = slot.bottom() + 4.0;
+    }
+    egui::Rect::from_min_size(egui::pos2(slot.left() + 1.0, top + 1.0), size)
+}
+
 impl ItemsUi {
     /// PoB's 308 by 280 view of the socket's place in the tree, above the slot, or under it
     /// when its list drops upward or there is no room above (ItemSlotControl.lua:142-153,
@@ -414,25 +426,13 @@ impl ItemsUi {
         let Some(scene) = &self.socket_scene else {
             return;
         };
-        let size = egui::vec2(308.0, 280.0);
-        let screen = ui.ctx().content_rect();
-        let mut top = slot.top() - size.y - 4.0;
-        if below || top < screen.top() {
-            top = slot.bottom() + 4.0;
-        }
-        let rect = egui::Rect::from_min_size(egui::pos2(slot.left(), top), size);
+        let rect = socket_viewer_rect(slot, ui.ctx().content_rect(), below);
         self.rects.note_rect(rect, "socket_viewer");
-        let painter = ui.ctx().layer_painter(egui::LayerId::new(
-            egui::Order::Tooltip,
-            ui.scope_id().with("socket_viewer"),
-        ));
-        crate::ui::tree::canvas::paint_socket_viewer(
-            &painter,
-            rect,
-            &scene.layout,
-            &scene.allocated,
-            node,
-        );
+        let ctx = ui.ctx().clone();
+        let id = ui.scope_id().with("socket_viewer");
+        crate::ui::tree::canvas::viewer_area(&ctx, id, rect, 1.0, |painter| {
+            crate::ui::tree::canvas::paint_socket_viewer(&ctx, painter, rect, scene, node);
+        });
     }
 }
 

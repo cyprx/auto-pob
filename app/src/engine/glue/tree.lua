@@ -1651,7 +1651,7 @@ function glue.node_tooltip(id, trace)
 		if not ok then
 			error(tostring(err):match("[^\n]+") or "couldn't build the tooltip", 0)
 		end
-		return { id = id, lines = tooltip:lines(), trace = {} }
+		return glue.node_tooltip_data(id, tooltip)
 	end
 	local tab = build.treeTab
 	local viewer = tab.viewer
@@ -1673,12 +1673,12 @@ function glue.node_tooltip(id, trace)
 	-- as TreeTab:Draw sets it (TreeTab.lua:445), or the Compare tab's overlay
 	-- (CompareTab.lua:3392)
 	viewer.compareSpec = viewed
-	local ok, err = pcall(viewer.AddNodeTooltip, viewer, tooltip, node, build)
+	local ok, skill = pcall(glue.with_skill_recorder, viewer, viewer.AddNodeTooltip, viewer, tooltip, node, build)
 	viewer.tracePath, viewer.compareSpec, viewer.traceMode = tracePath, compareSpec, traceMode
 	if not ok then
-		error(tostring(err):match("[^\n]+") or "couldn't build the tooltip", 0)
+		error(tostring(skill):match("[^\n]+") or "couldn't build the tooltip", 0)
 	end
-	return { id = id, lines = tooltip:lines(), trace = trace or {} }
+	return glue.node_tooltip_data(id, tooltip, skill, trace)
 end
 
 -- ---- Keys ----

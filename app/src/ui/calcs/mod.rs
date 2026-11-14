@@ -153,6 +153,11 @@ impl CalcsUi {
         }
     }
 
+    /// The tree the breakdown's node viewer shows (CalcBreakdownControl's `nodeViewer`)
+    pub fn set_node_scene(&mut self, scene: Option<crate::ui::tree::SocketScene>) {
+        self.bd.node_scene = scene;
+    }
+
     #[cfg(test)]
     pub fn breakdown_unavailable(&self) -> bool {
         self.bd.failed()
@@ -177,6 +182,7 @@ impl CalcsUi {
             egui::Panel::right("calcs_breakdown")
                 .resizable(true)
                 .default_size(380.0)
+                .frame(crate::theme::clear_side_panel(ui))
                 .show(ui, |ui| {
                     let (focus, unpin) = self.bd.show(ui, &mut self.rects);
                     out.focus_node = focus;

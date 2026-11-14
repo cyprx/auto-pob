@@ -388,13 +388,30 @@ pub struct PowerReportRow {
     pub path_dist: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct NodeTooltip {
     pub id: u32,
     pub lines: Vec<TooltipLine>,
     /// The Shift-traced path the tooltip was built with (empty: none)
     #[serde(default)]
     pub trace: Vec<u32>,
+    /// PoB's `tooltipHeader`: which header art the tooltip has (NOTABLE, KEYSTONE, ...)
+    #[serde(default)]
+    pub header: Option<String>,
+    /// The oils of an anointable notable, drawn after its name (`SetRecipe`)
+    #[serde(default)]
+    pub recipe: Vec<String>,
+    /// The tooltip of the skill the node grants, which PoB draws beside it (`skillTooltip`)
+    #[serde(default)]
+    pub skill: Option<SkillTip>,
+}
+
+/// A gem's tooltip beside a node's (PassiveTreeView.lua:1605-1625)
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SkillTip {
+    #[serde(default)]
+    pub header: Option<String>,
+    pub lines: Vec<TooltipLine>,
 }
 
 /// What PoB's group list shows when the mouse is over a socket group (`AddValueTooltip`).
@@ -1126,6 +1143,8 @@ pub enum DpsMark {
 #[derive(Debug, Clone, PartialEq)]
 pub struct GemTooltipView {
     pub query: GemTooltipQuery,
+    /// PoB's `tooltipHeader` ("GEM"): the header art
+    pub header: Option<String>,
     pub lines: Vec<TooltipLine>,
 }
 
@@ -1175,6 +1194,9 @@ pub struct SocketGroupView {
     pub name: String,
     /// The group list's row text, with PoB's colour codes
     pub display_label: String,
+    /// The slot icon PoB draws before the row text (`GetRowIcon`), a file under its folder
+    #[serde(default)]
+    pub icon: Option<String>,
     #[serde(default)]
     pub slot: Option<String>,
     pub enabled: bool,
@@ -1722,6 +1744,8 @@ mod tests {
                 ours: vec!["^x08F2FFBoneshatter^7 20/0".into()],
                 theirs: vec![],
                 differ: true,
+                icon: None,
+                theirs_icon: None,
             }],
             config: vec![CompareConfigRow {
                 var: "usePowerCharges".into(),
@@ -2147,6 +2171,11 @@ pub struct CompareSkillRow {
     /// The comparison's group header, when it has a group in the pair
     #[serde(default)]
     pub theirs_label: Option<String>,
+    /// The slot icons PoB draws before the headers (CompareTab.lua:4316-4324)
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub theirs_icon: Option<String>,
     #[serde(default)]
     pub ours: Vec<String>,
     #[serde(default)]

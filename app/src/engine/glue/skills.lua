@@ -59,6 +59,31 @@ local function gem_view(tab, group, index, gem)
 	}
 end
 
+-- The file of a slot icon handle the group list draws (SkillListControl.lua:9-27, a file local,
+-- read through GetRowIcon's upvalues); nil for any other handle
+local slot_icon_files
+function glue.slot_icon_file(handle)
+	if not handle then
+		return nil
+	end
+	if not slot_icon_files then
+		slot_icon_files = {}
+		local fn = common.classes.SkillListControl.GetRowIcon
+		for i = 1, 64 do
+			local name, value = debug.getupvalue(fn, i)
+			if not name then
+				break
+			end
+			if type(value) == "table" and type(value["Weapon 1"]) == "table" and value["Weapon 1"].path then
+				for _, entry in pairs(value) do
+					slot_icon_files[entry.icon] = entry.path
+				end
+			end
+		end
+	end
+	return slot_icon_files[handle]
+end
+
 local function group_view(tab, index, group)
 	tab.displayGroup = group
 	tab.controls.groupSlot:SelByValue(group.slot, "slotName")
@@ -68,6 +93,8 @@ local function group_view(tab, index, group)
 		label = group.label or "",
 		name = group.displayLabel or "",
 		display_label = c.groupList:GetRowValue(1, index, group),
+		-- the slot's icon before the row text (ListControl.lua:272-278)
+		icon = glue.slot_icon_file(c.groupList:GetRowIcon(1, index, group)),
 		slot = group.slot,
 		enabled = group.enabled and true or false,
 		slot_enabled = group.slotEnabled ~= false,

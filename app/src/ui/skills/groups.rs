@@ -78,9 +78,11 @@ impl SkillsUi {
         });
         let default = ui.visuals().text_color();
         // PoB's usage tips under its list (SkillsTab.lua:110-118)
-        egui::Panel::bottom("skills_group_tip").show(ui, |ui| {
-            ui.label(pob_text(GROUP_TIP, 13.0, default));
-        });
+        egui::Panel::bottom("skills_group_tip")
+            .frame(crate::theme::clear_side_panel(ui))
+            .show(ui, |ui| {
+                ui.label(pob_text(GROUP_TIP, 13.0, default));
+            });
         let ctx = ui.ctx().clone();
         let dragging = egui::DragAndDrop::has_payload_of_type::<usize>(&ctx);
         let mut target: Option<(usize, bool)> = None;
@@ -97,7 +99,17 @@ impl SkillsUi {
                         let inner = ui.dnd_drag_source(id, i, |ui| {
                             crate::theme::row_frame(ui, selected, |ui| {
                                 ui.set_min_width(ui.available_width());
-                                ui.add(egui::Label::new(row_text(g, default)).selectable(false));
+                                // PoB's slot icon, 16 square, before the text (ListControl.lua:
+                                // 272-278)
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 2.0;
+                                    if let Some(icon) = &g.icon {
+                                        crate::widgets::art::icon(ui, icon, 16.0);
+                                    }
+                                    ui.add(
+                                        egui::Label::new(row_text(g, default)).selectable(false),
+                                    );
+                                });
                             });
                         });
                         // the click goes over the drag source, which senses only drags

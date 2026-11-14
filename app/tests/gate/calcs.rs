@@ -870,3 +870,34 @@ fn calcs_view_mode_build_matches_pob() {
     }
     assert_matches_pob(&mut s, &lua, "CALCS viewMode after frames");
 }
+
+/// The Calcs breakdown's radius visual: the rows of PoB's green disc in the game's perspective
+/// (main:RenderCircle through main:WorldToScreen, CalcBreakdownControl:DrawRadiusVisual), as
+/// upstream draws them for radii from a point to past the view
+#[test]
+#[ignore = "needs the pinned PoB install"]
+fn radius_visual_matches_pob() {
+    let _guard = lock();
+    let lua = upstream_lua(&pob_dir()).expect("starting upstream PoB");
+    for radius in [1.0, 8.0, 11.0, 24.0, 30.0, 47.0, 80.0, 140.0] {
+        lua.globals().set("gate_radius", radius).unwrap();
+        let theirs: Vec<(i64, i64, i64)> = lua_value(
+            &lua,
+            r#"
+            local rows = {}
+            local saved = DrawImage
+            DrawImage = function(_, x, y, w)
+                rows[#rows + 1] = { y, x, x + w - 1 }
+            end
+            local m = main or launch.main
+            local ok, err = pcall(m.RenderCircle, m, 0, 0, 480, 270, 0, 0, gate_radius)
+            DrawImage = saved
+            assert(ok, err)
+            return rows
+            "#,
+        );
+        assert!(!theirs.is_empty(), "radius {radius}");
+        let ours = auto_pob::ui::calcs::breakdown::radius_rows(480.0, 270.0, radius);
+        assert_eq!(ours, theirs, "radius {radius}");
+    }
+}

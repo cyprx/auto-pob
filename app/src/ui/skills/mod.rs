@@ -251,9 +251,11 @@ impl SkillsUi {
         egui::Panel::left("skills_groups")
             .resizable(true)
             .default_size(300.0)
+            .frame(crate::theme::clear_side_panel(ui))
             .show(ui, |ui| {
                 egui::Panel::bottom("skills_options")
                     .resizable(false)
+                    .frame(crate::theme::clear_side_panel(ui))
                     .show(ui, |ui| self.options(ui, &view, busy, &mut out));
                 self.group_list(ui, &view, now, &mut out);
             });

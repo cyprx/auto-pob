@@ -840,8 +840,16 @@ impl Upstream {
             text: String,
         }
         #[derive(serde::Deserialize)]
+        struct Icon {
+            x: f64,
+            y: f64,
+            file: String,
+        }
+        #[derive(serde::Deserialize)]
         struct Raw {
             strings: Vec<Drawn>,
+            #[serde(default)]
+            icons: Vec<Icon>,
             added: String,
             missing: String,
         }
@@ -849,11 +857,20 @@ impl Upstream {
         // the names are drawn `colWidth` apart in the tab's coordinates; in the list's own the
         // comparison's column starts at `colWidth` (CompareTab.lua:4370-4371, 4446-4454)
         let column = raw.strings[1].x - raw.strings[0].x;
+        // a header's slot icon is drawn on its line, on its side
+        let icon_at = |y: f64, ours: bool| {
+            raw.icons
+                .iter()
+                .find(|i| i.y == y && (i.x < column) == ours)
+                .map(|i| i.file.clone())
+        };
         let body = &raw.strings[2..];
         struct Pair {
             y: f64,
             ours_header: Option<String>,
             theirs_header: Option<String>,
+            ours_icon: Option<String>,
+            theirs_icon: Option<String>,
             ours: Vec<String>,
             theirs: Vec<String>,
         }
@@ -866,6 +883,8 @@ impl Upstream {
                         y: d.y,
                         ours_header: None,
                         theirs_header: None,
+                        ours_icon: None,
+                        theirs_icon: None,
                         ours: vec![],
                         theirs: vec![],
                     });
@@ -873,8 +892,10 @@ impl Upstream {
                 let pair = pairs.last_mut().unwrap();
                 if ours {
                     pair.ours_header = Some(d.text.clone());
+                    pair.ours_icon = icon_at(d.y, true);
                 } else {
                     pair.theirs_header = Some(d.text.clone());
+                    pair.theirs_icon = icon_at(d.y, false);
                 }
             } else {
                 let pair = pairs.last_mut().expect("a gem line before any header");
@@ -895,6 +916,12 @@ impl Upstream {
                     .any(|l| l.starts_with(&raw.added) || l.starts_with(&raw.missing));
                 CompareSkillRow {
                     differ: marked || p.ours_header.is_none() || p.theirs_header.is_none(),
+                    icon: if p.ours_header.is_some() {
+                        p.ours_icon
+                    } else {
+                        p.theirs_icon.clone()
+                    },
+                    theirs_icon: p.theirs_icon,
                     label: p.ours_header.or(p.theirs_header.clone()).unwrap(),
                     theirs_label: p.theirs_header,
                     ours: p.ours,
@@ -1746,6 +1773,26 @@ fn compare_views_and_copies_match_pob() {
     let ours = same_views(&mut s, &up, "ring3, gear");
     assert!(ours.items.iter().any(|r| r.ours_unallocated));
 
+    // a group in a slot: its header has the slot's icon (CompareTab.lua:4316-4324)
+    run(
+        &mut s,
+        Command::SetGroupSlot {
+            group: 0,
+            slot: Some("Weapon 1".into()),
+        },
+    )
+    .unwrap();
+    up.eval::<()>(
+        "local tab = build.skillsTab tab.socketGroupList[1].slot = 'Weapon 1' \
+         tab:AddUndoState() build.buildFlag = true runCallback('OnFrame')",
+    );
+    let slotted = same_views(&mut s, &up, "ring3 slotted, gear");
+    assert!(
+        slotted.skills.iter().any(|r| r.icon.is_some()),
+        "{:?}",
+        slotted.skills
+    );
+
     // ---- Review Focus 5: a build change leaves nothing of the comparison ----
     s.open_fixture("attack");
     assert_eq!(s.backend.compare_view().unwrap(), None);
@@ -1902,9 +1949,9 @@ fn overlay_node_tooltips_follow_the_comparison() {
             r#"local viewer = build.treeTab.viewer
             viewer.compareSpec = build.compareTab:GetActiveCompare().spec
             local tooltip = glue.tooltip()
-            viewer:AddNodeTooltip(tooltip, build.spec.nodes[{id}], build)
+            local skill = glue.with_skill_recorder(viewer, viewer.AddNodeTooltip, viewer, tooltip, build.spec.nodes[{id}], build)
             viewer.compareSpec = nil
-            return {{ id = {id}, lines = tooltip:lines() }}"#
+            return glue.node_tooltip_data({id}, tooltip, skill)"#
         ));
         let ours = s.backend.node_tooltip_view(id).unwrap();
         assert_eq!(ours.as_ref(), Some(&want), "node {id}");
@@ -1965,7 +2012,7 @@ fn the_overlay_shows_the_comparisons_own_nodes() {
         for _, id in ipairs(ids) do
             local tooltip = glue.tooltip()
             viewer:AddCompareNodeTooltip(tooltip, spec.nodes[id], build)
-            list[#list + 1] = { id = id, lines = tooltip:lines() }
+            list[#list + 1] = glue.node_tooltip_data(id, tooltip)
         end
         viewer.compareSpec = nil
         return list"#,

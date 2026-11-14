@@ -626,6 +626,7 @@ impl Backend for Fake {
         Ok(GemTooltipView {
             query: query.clone(),
             lines: vec![],
+            header: None,
         })
     }
 
@@ -718,6 +719,7 @@ impl Backend for Fake {
                 size: 14,
                 text: format!("node {id}"),
             }],
+            ..Default::default()
         }))
     }
 

@@ -333,27 +333,53 @@ function itemsExpandedFrame()
 	return cards
 end
 
--- What DrawSkills draws in a whole SKILLS frame: { x, y, height, text }, the build names first
+-- The slot icon files of SkillListControl (a file local of its, read off GetRowIcon), by handle
+local function slotIconFiles()
+	local files = {}
+	local fn = common.classes.SkillListControl.GetRowIcon
+	for i = 1, 64 do
+		local name, value = debug.getupvalue(fn, i)
+		if not name then
+			break
+		end
+		if type(value) == "table" and type(value["Weapon 1"]) == "table" then
+			for _, entry in pairs(value) do
+				files[entry.icon] = entry.path
+			end
+		end
+	end
+	return files
+end
+
+-- What DrawSkills draws in a whole SKILLS frame: { x, y, height, text }, the build names first,
+-- and the slot icons it draws, { x, y, file }
 function skillsFrame()
 	local tab = build.compareTab
-	local strings = {}
+	local strings, icons = {}, {}
+	local files = slotIconFiles()
 	compareFrame("SKILLS", function(on)
 		if on then
 			local drawSkills = tab.DrawSkills
 			tab.DrawSkills = function(self, ...)
-				local outer = DrawString
+				local outer, outerImage = DrawString, DrawImage
 				DrawString = function(x, y, align, height, font, text)
 					strings[#strings + 1] = { x = x, y = y, height = height, text = text }
 				end
+				DrawImage = function(handle, x, y, ...)
+					if handle and files[handle] then
+						icons[#icons + 1] = { x = x, y = y, file = files[handle] }
+					end
+					return outerImage(handle, x, y, ...)
+				end
 				local ok, err = pcall(drawSkills, self, ...)
-				DrawString = outer
+				DrawString, DrawImage = outer, outerImage
 				assert(ok, err)
 			end
 		else
 			tab.DrawSkills = nil
 		end
 	end)
-	return { strings = strings, added = colorCodes.POSITIVE .. "+ ", missing = colorCodes.NEGATIVE .. "- " }
+	return { strings = strings, icons = icons, added = colorCodes.POSITIVE .. "+ ", missing = colorCodes.NEGATIVE .. "- " }
 end
 
 -- The rows a whole CONFIG frame marks as differing (LayoutConfigView's section layout), with

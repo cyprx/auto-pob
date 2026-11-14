@@ -281,6 +281,8 @@ struct Seen {
     foil: usize,
     /// with a line that has a background
     background: usize,
+    /// with images PoB draws
+    art: usize,
 }
 
 /// Compares every item's list tooltip and the tooltip of every slot that lists it.
@@ -314,6 +316,24 @@ fn compare_tooltips(s: &mut Session, lua: &mlua::Lua, what: &str) -> Seen {
                 (Some(ours), Some(theirs)) => {
                     assert_eq!(ours.query, query);
                     assert_same(&json_of(&ours.tooltip), &theirs, &label);
+                    // the images PoB draws on it, styled (Tooltip.lua:466-630)
+                    let drawn: Vec<(String, Vec<f32>)> = lua_value(
+                        lua,
+                        "local list = {} for i, d in ipairs(drawnArt()) do list[i] = { d.file, d.colour } end return list",
+                    );
+                    let mut art =
+                        auto_pob::widgets::item_tooltip::item_tooltip_art(&ours.tooltip, true);
+                    art.dedup_by(|a, b| a.0 == b.0);
+                    let key = |c: &[f32]| {
+                        c.iter()
+                            .map(|v| (v * 1000.0).round() as i32)
+                            .collect::<Vec<_>>()
+                    };
+                    let ours_art: Vec<_> = art.iter().map(|(f, c)| (f.clone(), key(c))).collect();
+                    let theirs_art: Vec<_> =
+                        drawn.iter().map(|(f, c)| (f.clone(), key(c))).collect();
+                    assert_eq!(ours_art, theirs_art, "{label}: the art");
+                    seen.art += usize::from(!art.is_empty());
                     let lines = &ours.tooltip.lines;
                     assert!(
                         !lines.windows(2).any(|pair| matches!(
@@ -521,6 +541,7 @@ fn item_tooltips_match_pob() {
     assert!(on.influences > 0, "no tooltip has an influence");
     assert!(on.foil > 0, "no tooltip has a foil type");
     assert!(on.background > 0, "no tooltip has a line background");
+    assert!(on.art > 40, "only {} tooltips have art", on.art);
 
     // PoB's Ctrl+D body: the toggle only
     s.run(Command::SetShowStatDifferences { on: false })

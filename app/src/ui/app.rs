@@ -498,6 +498,7 @@ impl AutoPobApp {
         let effects = options::ui_effects(self.options.rows());
         self.tree
             .set_ui_settings(effects.power_theme, effects.edge_search, effects.animations);
+        crate::widgets::tooltip_art::set_styled(ctx, effects.styled_tooltips);
         if (effects.zoom - self.applied_zoom).abs() > f32::EPSILON {
             ctx.set_zoom_factor(effects.zoom);
             self.applied_zoom = effects.zoom;
@@ -1190,6 +1191,8 @@ impl AutoPobApp {
     pub fn show(&mut self, ui: &mut egui::Ui) {
         self.show_frame(ui);
         os_clipboard(ui.ctx());
+        // PoB's images nothing drew for a while are freed
+        crate::widgets::art::sweep(ui.ctx());
     }
 
     fn show_frame(&mut self, ui: &mut egui::Ui) {
@@ -1592,10 +1595,16 @@ impl AutoPobApp {
         if shortcut == Some(ShortcutAction::Help) {
             self.open_help(HelpStart::Tab(help::tab_name(None)));
         }
-        egui::CentralPanel::default().show(ui, |ui| match self.list.clone() {
-            Some(view) => action = self.list_ui.show(ui, &view, blocked),
-            None => {
-                ui.spinner();
+        egui::CentralPanel::default().show(ui, |ui| {
+            // PoB's build list draws its background first, over the whole view (BuildList.lua:
+            // 179), the panel's margins included
+            let rect = ui.clip_rect();
+            crate::widgets::art::paint_background(ui.ctx(), ui.painter(), rect);
+            match self.list.clone() {
+                Some(view) => action = self.list_ui.show(ui, &view, blocked),
+                None => {
+                    ui.spinner();
+                }
             }
         });
         if let Some(action) = action {
@@ -1851,6 +1860,7 @@ impl AutoPobApp {
         let mut compare_out = CompareOutput::default();
         let config = self.config.clone();
         egui::CentralPanel::default().show(ui, |ui| {
+            // the strip draws PoB's background under it, but on the tree's tab
             build::tab_strip(ui, &mut self.tab);
             match self.tab {
                 BuildTab::Tree => {
@@ -1873,7 +1883,10 @@ impl AutoPobApp {
                     self.items.set_socket_scene(self.tree.socket_scene());
                     items_out = self.items.show(ui, now, behind);
                 }
-                BuildTab::Calcs => calcs_out = self.calcs.show(ui, behind),
+                BuildTab::Calcs => {
+                    self.calcs.set_node_scene(self.tree.socket_scene());
+                    calcs_out = self.calcs.show(ui, behind);
+                }
                 BuildTab::Notes => {
                     let now = ui.input(|i| i.time);
                     notes_command = self.notes.show(ui, now);
@@ -2855,6 +2868,7 @@ mod tests {
             Ok(crate::engine::GemTooltipView {
                 query: query.clone(),
                 lines: vec![],
+                header: None,
             })
         }
 
@@ -4367,6 +4381,77 @@ mod tests {
         frame(&mut app, &ctx, ctrl(egui::Key::Z));
         frame(&mut app, &ctx, ctrl(egui::Key::Y));
         assert_eq!(sent_since(&app, before), ["Undo(Calcs)", "Redo(Calcs)"]);
+    }
+
+    /// The Items and Skills tabs' panels have no fill of their own: PoB's background shows
+    /// through every one of them, so no large rectangle in the panels' colour is painted over
+    /// the tile (main:DrawBackground)
+    #[test]
+    fn tab_panels_let_the_background_show() {
+        let dir = crate::test_dir::TestDir::new("app-tile");
+        std::fs::create_dir_all(dir.join("TreeData")).unwrap();
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([8, 12, 17, 255]))
+            .save(dir.join("TreeData/Background2.png"))
+            .unwrap();
+        for tab in [BuildTab::Items, BuildTab::Skills] {
+            let (mut app, ctx) = if tab == BuildTab::Items {
+                items_app()
+            } else {
+                skills_app()
+            };
+            crate::widgets::art::set_context_root(&ctx, &dir);
+            crate::widgets::art::hold_decodes(&ctx);
+            let panel = ctx.global_style().visuals.panel_fill;
+            let mut checked = false;
+            for i in 0..300 {
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1400.0, 900.0),
+                    )),
+                    time: Some(f64::from(i) * 0.01),
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(input, |ui| app.show(ui));
+                out.textures_delta.clear();
+                // flattened in paint order: the tile's mesh, then what covers it
+                let mut flat = Vec::new();
+                fn walk(s: &egui::Shape, out: &mut Vec<egui::Shape>) {
+                    match s {
+                        egui::Shape::Vec(v) => v.iter().for_each(|x| walk(x, out)),
+                        other => out.push(other.clone()),
+                    }
+                }
+                for c in &out.shapes {
+                    walk(&c.shape, &mut flat);
+                }
+                let tile = flat.iter().position(|s| {
+                    // the build screen's content, right of the side bar
+                    matches!(s, egui::Shape::Mesh(m) if m.calc_bounds().width() > 1000.0
+                        && m.calc_bounds().height() > 600.0)
+                });
+                if let Some(tile) = tile {
+                    let covering: Vec<egui::Rect> = flat[tile + 1..]
+                        .iter()
+                        .filter_map(|s| match s {
+                            egui::Shape::Rect(r)
+                                if r.fill == panel
+                                    && r.rect.width() > 150.0
+                                    && r.rect.height() > 150.0 =>
+                            {
+                                Some(r.rect)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    assert!(covering.is_empty(), "{tab:?}: {covering:?}");
+                    checked = true;
+                    break;
+                }
+                crate::widgets::art::run_decodes(&ctx);
+            }
+            assert!(checked, "{tab:?}: the tile was never drawn");
+        }
     }
 
     fn skills_app() -> (AutoPobApp, egui::Context) {

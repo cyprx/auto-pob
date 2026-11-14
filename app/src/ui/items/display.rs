@@ -10,6 +10,25 @@ use crate::widgets::{EditBox, EditBoxOptions, item_tooltip_ui_with, pob_text};
 use eframe::egui;
 use std::sync::Arc;
 
+/// The icon PoB draws before a mod line's Foulborn box (ItemsTab.lua:1023-1024)
+const FOULBORN_ICON: &str = "Assets/breachicon.png";
+
+/// A Foulborn box: no text beside it, as PoB's (its icon says what it is), but named for
+/// screen readers and on hover
+fn foulborn_box(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
+    let response = ui.checkbox(on, "");
+    let state = *on;
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::accesskit::Role::CheckBox,
+            ui.is_enabled(),
+            state,
+            "Foulborn",
+        )
+    });
+    response.on_hover_text("Foulborn")
+}
+
 /// The raw-text window asks about its text once it stops changing this long
 const TEXT_PAUSE: f64 = 0.25;
 
@@ -579,8 +598,12 @@ fn panel(
         ui.horizontal_wrapped(|ui| {
             // PoB's Foulborn box comes before the slider (ItemsTab.lua:1033-1074)
             if current.mutable {
+                // PoB's Foulborn icon, 20 square, before the box (ItemsTab.lua:1023-1050)
+                let icon =
+                    crate::widgets::art::icon(ui, FOULBORN_ICON, 20.0).on_hover_text("Foulborn");
+                state.rects.note(&icon, || "range_foulborn".into());
                 let mut on = current.mutated;
-                let mutated = ui.checkbox(&mut on, "Foulborn");
+                let mutated = foulborn_box(ui, &mut on);
                 state.rects.note(&mutated, || "range_mutated".into());
                 if mutated.changed() {
                     out.push(Command::SetRangeLineMutated { line, on });
@@ -648,8 +671,10 @@ fn stacked_range_lines(
         }
         ui.horizontal(|ui| {
             if current.mutable {
+                // PoB's Foulborn icon before the box (ItemsTab.lua:1127-1133)
+                crate::widgets::art::icon(ui, FOULBORN_ICON, 20.0);
                 let mut on = current.mutated;
-                let mutated = ui.checkbox(&mut on, "");
+                let mutated = foulborn_box(ui, &mut on);
                 state
                     .rects
                     .note(&mutated, || format!("stacked_mutated_{line}"));
@@ -691,5 +716,34 @@ fn stacked_range_lines(
             ));
             state.rects.note(&label, || format!("stacked_line_{line}"));
         });
+    }
+}
+
+#[cfg(test)]
+mod foulborn_tests {
+    use super::*;
+
+    /// The Foulborn box is named "Foulborn" for screen readers
+    #[test]
+    fn the_foulborn_box_has_a_name() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut labels = Vec::new();
+        for _ in 0..2 {
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                let mut on = false;
+                foulborn_box(ui, &mut on);
+            });
+            if let Some(update) = out.platform_output.accesskit_update.take() {
+                labels = update
+                    .nodes
+                    .iter()
+                    .filter(|(_, n)| n.role() == egui::accesskit::Role::CheckBox)
+                    .filter_map(|(_, n)| n.label().map(str::to_owned))
+                    .collect();
+            }
+            out.textures_delta.clear();
+        }
+        assert_eq!(labels, ["Foulborn"]);
     }
 }

@@ -356,6 +356,7 @@ function listTooltip(id)
 		if listed == id then
 			local tt = new("Tooltip")
 			list:AddValueTooltip(tt, i, id)
+			lastTooltip = tt
 			return tooltipDump(tt)
 		end
 	end
@@ -369,6 +370,7 @@ function slotTooltip(slotName, id)
 		if entry == id then
 			local tt = new("Tooltip")
 			slot.tooltipFunc(tt, "HOVER", i, id)
+			lastTooltip = tt
 			return tooltipDump(tt)
 		end
 	end
@@ -1328,4 +1330,54 @@ function act.shared_set_move(from, to)
 		shared.selDragIndex = to > from and to + 2 or to + 1
 		shared:OnKeyUp("LEFTBUTTON")
 	end)
+end
+
+-- Every image handle remembers the file it loaded, for `drawnArt`
+do
+	local meta = getmetatable(NewImageHandle())
+	local load = meta.Load
+	meta.Load = function(self, fileName, ...)
+		self.path = fileName
+		return load(self, fileName, ...)
+	end
+end
+
+-- The images `Tooltip:Draw` draws for the last tooltip `listTooltip` or `slotTooltip` built, in
+-- order, as { file, colour }; a run of one file (the header's middle tiles) is one entry. Text
+-- is 7 pixels a character wide, so the header has a middle to tile.
+function drawnArt()
+	local tt = lastTooltip
+	local out, colour = {}, { 1, 1, 1, 1 }
+	local saved = { DrawImage = DrawImage, SetDrawColor = SetDrawColor, DrawStringWidth = DrawStringWidth,
+		GetDrawColor = GetDrawColor or false }
+	function SetDrawColor(r, g, b, a)
+		if type(r) == "number" then
+			colour = { r, g, b, a or 1 }
+		else
+			colour = { 1, 1, 1, 1 }
+		end
+	end
+	function DrawImage(handle)
+		if handle and handle.path then
+			local last = out[#out]
+			if not (last and last.file == handle.path) then
+				out[#out + 1] = { file = handle.path, colour = { colour[1], colour[2], colour[3], colour[4] } }
+			end
+		end
+	end
+	function DrawStringWidth(_, _, text)
+		return #text * 7
+	end
+	-- the headless wrapper has none
+	function GetDrawColor()
+		return colour[1], colour[2], colour[3], colour[4]
+	end
+	local ok, err = pcall(tt.Draw, tt, 0, 0, nil, nil, { x = 0, y = 0, width = 4000, height = 4000 })
+	for name, fn in pairs(saved) do
+		_G[name] = fn or nil
+	end
+	if not ok then
+		error(err, 0)
+	end
+	return out
 end

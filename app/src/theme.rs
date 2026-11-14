@@ -271,8 +271,9 @@ const TAB_BAND_TOP: f32 = 5.0;
 const TAB_FONT_SIZE: f32 = 17.0;
 /// The selected tab's gold line
 pub const TAB_ACCENT: f32 = 2.0;
-/// The band, darker than the panels
-const TAB_BAND: Color32 = Color32::from_rgb(11, 9, 7);
+/// The band, darker than the panels and than PoB's background tile under the tabs (its mean is
+/// about rgb 4, 6, 9 at PoB's half brightness)
+const TAB_BAND: Color32 = Color32::from_rgb(2, 3, 4);
 /// An unselected tab: muted
 const TAB: Color32 = Color32::from_rgb(34, 29, 23);
 const TAB_TEXT: Color32 = Color32::from_rgb(165, 155, 138);
@@ -330,12 +331,15 @@ fn tab_metrics(ui: &egui::Ui, labels: &[&str], width: f32) -> (FontId, f32) {
 }
 
 /// One main tab
+/// A main tab; with `tiled`, the selected one's fill is left to `main_tabs` (the background tile,
+/// joined to the content's), as the returned slot
 fn main_tab(
     ui: &mut egui::Ui,
     selected: bool,
+    tiled: bool,
     text: &str,
     (font, pad): &(FontId, f32),
-) -> egui::Response {
+) -> (egui::Response, Option<egui::layers::ShapeIdx>) {
     let galley = ui
         .painter()
         .layout_no_wrap(text.to_owned(), font.clone(), Color32::PLACEHOLDER);
@@ -347,10 +351,15 @@ fn main_tab(
     if response.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
+    let mut slot = None;
     if ui.is_rect_visible(rect) {
         let (fill, border, text_colour) = tab_colours(selected, &response);
         let painter = ui.painter();
-        painter.rect_filled(rect, CornerRadius::ZERO, fill);
+        if selected && tiled {
+            slot = Some(painter.add(egui::Shape::Noop));
+        } else {
+            painter.rect_filled(rect, CornerRadius::ZERO, fill);
+        }
         if border != Color32::TRANSPARENT {
             painter.rect_stroke(
                 rect,
@@ -369,14 +378,29 @@ fn main_tab(
         let at = rect.center() - galley.size() / 2.0;
         painter.galley(at, galley, text_colour);
     }
-    response
+    (response, slot)
+}
+
+/// Where PoB's background goes under the main tabs: the panel's whole width (`clip`, margins
+/// included), from the band's bottom line down
+pub fn tile_rect(clip: Rect, band_bottom: f32) -> Rect {
+    Rect::from_x_y_ranges(clip.x_range(), band_bottom..=clip.bottom())
 }
 
 /// The main tab strip: `labels` as tabs on a dark band spanning the panel, `selected` drawn
 /// joined to the content. The tabs shrink their padding, then their text, to fit the panel;
 /// past that they wrap, the band and its line under the last row. The tabs' responses, in
 /// order.
-pub fn main_tabs(ui: &mut egui::Ui, labels: &[&str], selected: usize) -> Vec<egui::Response> {
+///
+/// With `tiled`, PoB's background tile (main:DrawBackground) fills the panel under the band,
+/// edge to edge, and the selected tab is filled with the same tile, continuing it, so it still
+/// reads as joined to the content.
+pub fn main_tabs(
+    ui: &mut egui::Ui,
+    labels: &[&str],
+    selected: usize,
+    tiled: bool,
+) -> Vec<egui::Response> {
     let clip = ui.clip_rect();
     let top = ui.cursor().top();
     let metrics = tab_metrics(ui, labels, ui.available_width());
@@ -388,10 +412,11 @@ pub fn main_tabs(ui: &mut egui::Ui, labels: &[&str], selected: usize) -> Vec<egu
             labels
                 .iter()
                 .enumerate()
-                .map(|(i, label)| main_tab(ui, i == selected, label, &metrics))
+                .map(|(i, label)| main_tab(ui, i == selected, tiled, label, &metrics))
                 .collect::<Vec<_>>()
         })
         .inner;
+    let (tabs, slots): (Vec<_>, Vec<_>) = tabs.into_iter().unzip();
     let bottom = tabs
         .iter()
         .map(|t| t.rect.bottom())
@@ -418,8 +443,46 @@ pub fn main_tabs(ui: &mut egui::Ui, labels: &[&str], selected: usize) -> Vec<egu
             ui.painter().hline(band_rect.x_range(), y, line);
         }
     }
-    ui.add_space(4.0);
+    if tiled {
+        let content = tile_rect(clip, bottom);
+        let ctx = ui.ctx().clone();
+        // the content's tile, and the selected tab's continuing it from the content's corner
+        let tile = |rect: Rect| -> Option<egui::Shape> {
+            let (texture, _) = crate::widgets::art::background_tile(&ctx)?;
+            let uv = Rect::from_min_max(
+                ((rect.min - content.min) / 100.0).to_pos2(),
+                ((rect.max - content.min) / 100.0).to_pos2(),
+            );
+            let mut mesh = egui::Mesh::with_texture(texture);
+            mesh.add_rect_with_uv(rect, uv, crate::widgets::art::TILE_TINT);
+            Some(egui::Shape::mesh(mesh))
+        };
+        if let Some(shape) = tile(content) {
+            ui.painter().add(shape);
+        }
+        for (slot, tab) in slots.iter().zip(&tabs) {
+            if let Some(slot) = slot {
+                let shape = tile(tab.rect).unwrap_or_else(|| {
+                    egui::epaint::RectShape::filled(tab.rect, CornerRadius::ZERO, PANEL).into()
+                });
+                ui.painter().set(*slot, shape);
+            }
+        }
+    } else {
+        ui.add_space(4.0);
+    }
     tabs
+}
+
+/// A tab's side, top or bottom panel without a fill, its margins kept: PoB's background shows
+/// through, one tone across the tab (main:DrawBackground)
+pub fn clear_side_panel(ui: &egui::Ui) -> egui::Frame {
+    egui::Frame::side_top_panel(ui.style()).fill(Color32::TRANSPARENT)
+}
+
+/// A tab's central panel without a fill, its margins kept
+pub fn clear_central_panel(ui: &egui::Ui) -> egui::Frame {
+    egui::Frame::central_panel(ui.style()).fill(Color32::TRANSPARENT)
 }
 
 /// A gold Fontin heading.
@@ -1028,5 +1091,82 @@ mod tests {
             assert_eq!(glyph("\u{F781}"), glyph("\u{F700}"), "{family:?}: 0x81");
             assert_ne!(glyph("\u{F781}"), glyph("?"), "{family:?}: 0x81");
         }
+    }
+
+    /// Under the main tabs PoB's background runs edge to edge from the band's bottom line down,
+    /// and the selected tab is filled with the same tile from the content's corner, so it joins
+    /// the content; the band stays darker than the tile (#26)
+    #[test]
+    fn the_background_fills_the_panel_under_the_band_and_the_selected_tab() {
+        let dir = crate::test_dir::TestDir::new("theme-tile");
+        std::fs::create_dir_all(dir.join("TreeData")).unwrap();
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([8, 12, 17, 255]))
+            .save(dir.join("TreeData/Background2.png"))
+            .unwrap();
+        let ctx = egui::Context::default();
+        apply(&ctx);
+        crate::widgets::art::set_context_root(&ctx, &dir);
+        crate::widgets::art::hold_decodes(&ctx);
+        let size = egui::vec2(1200.0, 600.0);
+        let mut found = None;
+        for i in 0..300 {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                time: Some(0.01 * f64::from(i)),
+                ..Default::default()
+            };
+            let mut tabs = Vec::new();
+            let mut out = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    tabs = main_tabs(ui, &["Tree", "Skills", "Items"], 1, true);
+                });
+            });
+            out.textures_delta.clear();
+            let mut meshes = Vec::new();
+            fn walk(s: &egui::Shape, out: &mut Vec<(Rect, egui::TextureId, Rect)>) {
+                match s {
+                    egui::Shape::Mesh(m) => {
+                        let uv =
+                            Rect::from_points(&m.vertices.iter().map(|v| v.uv).collect::<Vec<_>>());
+                        out.push((m.calc_bounds(), m.texture_id, uv));
+                    }
+                    egui::Shape::Vec(v) => v.iter().for_each(|x| walk(x, out)),
+                    _ => {}
+                }
+            }
+            for c in &out.shapes {
+                walk(&c.shape, &mut meshes);
+            }
+            if meshes.len() >= 2 {
+                found = Some((tabs.iter().map(|t| t.rect).collect::<Vec<_>>(), meshes));
+                break;
+            }
+            crate::widgets::art::run_decodes(&ctx);
+        }
+        let (tabs, meshes) = found.expect("the tile is drawn once loaded");
+        let bottom = tabs[1].bottom();
+        let content = meshes
+            .iter()
+            .find(|m| m.0.width() == size.x)
+            .expect("the content's tile");
+        assert_eq!(
+            content.0,
+            Rect::from_x_y_ranges(0.0..=size.x, bottom..=size.y)
+        );
+        assert_eq!(
+            content.0,
+            tile_rect(Rect::from_min_size(Pos2::ZERO, size), bottom)
+        );
+        let selected = meshes
+            .iter()
+            .find(|m| m.0 == tabs[1])
+            .expect("the selected tab is the tile");
+        assert_eq!(selected.1, content.1);
+        // its texture coordinates continue the content's, above it
+        assert!((selected.2.max.y - 0.0).abs() < 1e-4, "{:?}", selected.2);
+        assert!((selected.2.min.x - tabs[1].left() / 100.0).abs() < 1e-4);
+        // the band is darker than the tile at PoB's half brightness (mean about 4, 6, 9)
+        let [r, g, b, _] = TAB_BAND.to_array();
+        assert!(r < 4 && g < 6 && b < 9);
     }
 }

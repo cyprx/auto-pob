@@ -4,7 +4,7 @@
 use crate::engine::views::{GemRow, GemSearchView, GemTooltipView};
 use crate::engine::{Command, DpsMark, GemFilter, GemSearchQuery, GemTarget, GemTooltipQuery};
 use crate::ui::tree::Rects;
-use crate::widgets::{pob_colour, tooltip_ui};
+use crate::widgets::pob_colour;
 use eframe::egui;
 use std::sync::Arc;
 
@@ -441,7 +441,16 @@ impl GemPicker {
                         && t.query.gem_id.as_deref() == Some(&gem.gem_id)
                         && !t.lines.is_empty()
                     {
-                        response.clone().on_hover_ui(|ui| tooltip_ui(ui, &t.lines));
+                        response.clone().on_hover_ui(|ui| {
+                            crate::widgets::styled_tooltip_ui(
+                                ui,
+                                &t.lines,
+                                &crate::widgets::Look {
+                                    header: t.header.as_deref(),
+                                    ..Default::default()
+                                },
+                            )
+                        });
                     }
                     if response.clicked() {
                         out.commands.push(self.pick_row(gem));

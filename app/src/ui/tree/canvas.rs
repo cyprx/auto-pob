@@ -70,7 +70,6 @@ pub fn show(
         handle_input(ui, tab, &response);
         tab.camera.limit(rect, layout.size);
     }
-    let sheets = upload_sheets(tab, ui.ctx(), layout);
     let camera = tab.camera;
     let zoom = camera.zoom;
     let to_screen = |p: [f32; 2]| camera.to_screen(rect, p);
@@ -126,6 +125,10 @@ pub fn show(
         time_ms: (!tab.animations_off).then_some(now * 1000.0),
     };
     let images = scene::build(layout, state, &tab.draw_sets, &tab.index, &look);
+    let pob_zoom = look.pob_zoom;
+    // only the files this frame draws are decoded and uploaded
+    let used: HashSet<usize> = images.iter().map(|i| i.sprite.sheet).collect();
+    let sheets = upload_sheets(tab, ui.ctx(), layout, &used);
     paint(
         &painter,
         &sheets,
@@ -143,14 +146,7 @@ pub fn show(
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(RING_FRAME_MS));
     }
-    draw_flavour(
-        &painter,
-        layout,
-        &tab.draw_sets,
-        camera,
-        rect,
-        look.pob_zoom,
-    );
+    draw_flavour(&painter, layout, &tab.draw_sets, camera, rect, pob_zoom);
     // a node whose art couldn't be loaded is still shown, as a dot
     for node in &layout.nodes {
         let art = &node.art;
@@ -417,28 +413,35 @@ fn wheel_notches(ui: &egui::Ui) -> (f32, bool) {
     })
 }
 
-/// Uploads the images that aren't on the GPU yet. Returns them indexed like
-/// [`TreeLayout::sheets`]; one still decoding is `None` for now. The pixels are decoded on a
+/// Uploads the images `used` draws that aren't on the GPU yet. Returns the uploaded ones
+/// indexed like [`TreeLayout::sheets`]; one still decoding, or not used yet, is `None` for now. The pixels are decoded on a
 /// thread of their own the first time they are wanted, and dropped once uploaded: the texture
 /// is what gets drawn, and keeping the decoded copy would hold it twice.
 fn upload_sheets(
     tab: &mut TreeTab,
     ctx: &egui::Context,
     layout: &TreeLayout,
+    used: &HashSet<usize>,
 ) -> Vec<Option<Sheet>> {
     let mut to_decode = Vec::new();
     let mut waiting = false;
     let sheets = layout
         .sheets
         .iter()
-        .map(|sheet| {
+        .enumerate()
+        .map(|(i, sheet)| {
             let sheet = sheet.as_ref()?;
             let size = Vec2::new(sheet.size[0] as f32, sheet.size[1] as f32);
-            let pixels = sheet.take_rgba();
             if let Some(texture) = tab.textures.get(&sheet.path) {
                 // a copy decoded again for this layout is dropped
+                let _ = sheet.take_rgba();
                 return Some((texture.id(), size));
             }
+            // a file nothing draws yet stays on disk
+            if !used.contains(&i) {
+                return None;
+            }
+            let pixels = sheet.take_rgba();
             let rgba = match pixels {
                 SheetPixels::Ready(rgba) => rgba,
                 SheetPixels::Pending => {
@@ -771,6 +774,35 @@ mod tests {
         layout
     }
 
+    /// Both sheets of `sheet_layout`
+    fn all() -> HashSet<usize> {
+        [0, 1].into()
+    }
+
+    /// A file no image of the frame draws is neither decoded nor uploaded
+    #[test]
+    fn only_the_files_drawn_are_decoded() {
+        let ctx = egui::Context::default();
+        let mut tab = TreeTab::default();
+        let dir = crate::test_dir::TestDir::new("unused-sheet");
+        let path = dir.join("art.png");
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 255]))
+            .save(&path)
+            .unwrap();
+        let lazy = std::sync::Arc::new(crate::engine::SheetImage::lazy(path, [1, 1]));
+        let up = upload_sheets(&mut tab, &ctx, &sheet_layout(&lazy), &HashSet::new());
+        assert!(up[0].is_none());
+        assert!(
+            lazy.is_unloaded(),
+            "decoding started for a file nothing draws"
+        );
+        let ready = sheet();
+        let up = upload_sheets(&mut tab, &ctx, &sheet_layout(&ready), &[1].into());
+        assert!(up[0].is_none());
+        assert!(tab.textures.is_empty());
+        assert!(ready.has_rgba());
+    }
+
     fn sheet() -> std::sync::Arc<crate::engine::SheetImage> {
         std::sync::Arc::new(crate::engine::SheetImage::new(
             "TreeData/3_29/skills-3.jpg".into(),
@@ -942,7 +974,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut tab = TreeTab::default();
         let first = sheet();
-        let up = upload_sheets(&mut tab, &ctx, &sheet_layout(&first));
+        let up = upload_sheets(&mut tab, &ctx, &sheet_layout(&first), &all());
         assert_eq!(up.len(), 2);
         let (id, size) = up[0].expect("uploaded");
         assert_eq!(size, Vec2::new(2.0, 1.0));
@@ -950,16 +982,16 @@ mod tests {
         // the texture holds the sheet now; the decoded copy is gone
         assert!(!first.has_rgba());
         // later frames draw from the texture
-        let again = upload_sheets(&mut tab, &ctx, &sheet_layout(&first));
+        let again = upload_sheets(&mut tab, &ctx, &sheet_layout(&first), &all());
         assert_eq!(again[0].map(|s| s.0), Some(id));
         // a later layout's fresh copy of a sheet already up is dropped too, not kept
         let second = sheet();
-        let next = upload_sheets(&mut tab, &ctx, &sheet_layout(&second));
+        let next = upload_sheets(&mut tab, &ctx, &sheet_layout(&second), &all());
         assert_eq!(next[0].map(|s| s.0), Some(id));
         assert!(!second.has_rgba());
         // without pixels nor a texture the sheet's sprites are left out, not a panic
         let mut other = TreeTab::default();
-        assert!(upload_sheets(&mut other, &ctx, &sheet_layout(&first))[0].is_none());
+        assert!(upload_sheets(&mut other, &ctx, &sheet_layout(&first), &all())[0].is_none());
         assert!(other.textures.is_empty());
     }
 
@@ -977,11 +1009,11 @@ mod tests {
         let ctx = egui::Context::default();
         let mut tab = TreeTab::default();
         // the first frame starts the decoding and draws without it
-        assert!(upload_sheets(&mut tab, &ctx, &sheet_layout(&lazy))[0].is_none());
+        assert!(upload_sheets(&mut tab, &ctx, &sheet_layout(&lazy), &all())[0].is_none());
         assert!(!lazy.is_unloaded());
         let start = std::time::Instant::now();
         let up = loop {
-            if let Some(up) = upload_sheets(&mut tab, &ctx, &sheet_layout(&lazy))[0] {
+            if let Some(up) = upload_sheets(&mut tab, &ctx, &sheet_layout(&lazy), &all())[0] {
                 break up;
             }
             assert!(start.elapsed().as_secs() < 10, "never decoded");
@@ -997,6 +1029,6 @@ mod tests {
         ));
         broken.decode();
         assert_eq!(broken.take_rgba(), crate::engine::SheetPixels::Failed);
-        assert!(upload_sheets(&mut tab, &ctx, &sheet_layout(&broken))[0].is_none());
+        assert!(upload_sheets(&mut tab, &ctx, &sheet_layout(&broken), &all())[0].is_none());
     }
 }

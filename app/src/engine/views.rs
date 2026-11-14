@@ -535,7 +535,22 @@ impl SheetImage {
 
     /// Decodes the pixels `claim` claimed
     pub fn decode_claimed(&self) {
-        let decoded = image::open(&self.path).map(|i| i.into_rgba8());
+        self.decode_with(|path| image::open(path).map(|i| i.into_rgba8()));
+    }
+
+    /// Decodes the claimed pixels with `decode`. A decoder that panics leaves the file failed,
+    /// not loading for good.
+    pub fn decode_with(
+        &self,
+        decode: impl FnOnce(&std::path::Path) -> image::ImageResult<image::RgbaImage>
+        + std::panic::UnwindSafe,
+    ) {
+        let path = self.path.clone();
+        let Ok(decoded) = std::panic::catch_unwind(move || decode(&path)) else {
+            eprintln!("Unable to load {}: the decoder failed", self.path.display());
+            self.fail();
+            return;
+        };
         *self.pixels() = match decoded {
             Ok(image) if [image.width() as usize, image.height() as usize] == self.size => {
                 Pixels::Ready(image.into_raw())
@@ -546,6 +561,16 @@ impl SheetImage {
                 Pixels::Failed
             }
         };
+    }
+
+    /// Marks the file as one that can't be decoded
+    pub fn fail(&self) {
+        *self.pixels() = Pixels::Failed;
+    }
+
+    /// Whether the file couldn't be decoded
+    pub fn is_failed(&self) -> bool {
+        matches!(*self.pixels(), Pixels::Failed)
     }
 
     /// Whether the pixels are decoded and not taken

@@ -149,8 +149,7 @@ pub fn show(
     draw_flavour(&painter, layout, &tab.draw_sets, camera, rect, pob_zoom);
     // a node whose art couldn't be loaded is still shown, as a dot
     for node in &layout.nodes {
-        let art = &node.art;
-        if art.base.iter().chain(&art.overlay).any(Option::is_some) {
+        if !art_missing(layout, &node.art) {
             continue;
         }
         let pos = to_screen(node.pos);
@@ -465,24 +464,47 @@ fn upload_sheets(
             Some((id, size))
         })
         .collect();
-    if !to_decode.is_empty() {
-        let ctx = ctx.clone();
-        let spawned = std::thread::Builder::new()
-            .name("tree-art".into())
-            .spawn(move || {
-                for sheet in &to_decode {
-                    sheet.decode_claimed();
-                    ctx.request_repaint();
-                }
-            });
-        if spawned.is_err() {
-            eprintln!("Unable to start decoding the tree's art");
-        }
+    // if nothing can decode them, they are drawn as dots and the canvas doesn't wait
+    if !to_decode.is_empty() && !decode_in_background(to_decode, ctx, spawn_named) {
+        waiting = false;
     }
     if waiting {
         ctx.request_repaint_after(std::time::Duration::from_millis(50));
     }
     sheets
+}
+
+/// A thread that runs `work`, named for the tree's art
+fn spawn_named(work: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name("tree-art".into())
+        .spawn(work)
+        .map(|_| ())
+}
+
+/// Decodes the claimed `sheets` on a thread `spawn` starts, asking for a frame after each. If
+/// no thread starts the files are marked failed, so nothing waits for them; returns whether one
+/// started.
+fn decode_in_background(
+    sheets: Vec<std::sync::Arc<crate::engine::SheetImage>>,
+    ctx: &egui::Context,
+    spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()>,
+) -> bool {
+    let ctx = ctx.clone();
+    let failed = sheets.clone();
+    let started = spawn(Box::new(move || {
+        for sheet in &sheets {
+            sheet.decode_claimed();
+            ctx.request_repaint();
+        }
+    }));
+    if started.is_err() {
+        eprintln!("Unable to start decoding the tree's art");
+        for sheet in &failed {
+            sheet.fail();
+        }
+    }
+    started.is_ok()
 }
 
 /// Whether a file's art repeats across what it is drawn on: the line connectors along a
@@ -588,6 +610,17 @@ fn compare_only_at(nodes: &[CompareOnlyNode], at: [f32; 2], zoom: f32) -> Option
         .filter(|(n, d)| *d <= node_radius(&n.kind).max(floor))
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(n, _)| n)
+}
+
+/// Whether none of a node's art can be drawn: it has none, or its files couldn't be loaded
+fn art_missing(layout: &TreeLayout, art: &crate::engine::NodeArt) -> bool {
+    art.base.iter().chain(&art.overlay).flatten().all(|s| {
+        layout
+            .sheets
+            .get(s.sheet)
+            .and_then(Option::as_ref)
+            .is_none_or(|f| f.is_failed())
+    })
 }
 
 /// PoB's `zoom` for a view: its scale is the view's smaller side over `tree.size`, times the
@@ -777,6 +810,74 @@ mod tests {
     /// Both sheets of `sheet_layout`
     fn all() -> HashSet<usize> {
         [0, 1].into()
+    }
+
+    /// A file that fails to decode, the decoder panicking included, stops the waiting, and its
+    /// nodes' art counts as missing (drawn as dots)
+    #[test]
+    fn a_failed_decode_ends_the_wait_and_leaves_dots() {
+        let dir = crate::test_dir::TestDir::new("bad-sheet");
+        let path = dir.join("art.png");
+        std::fs::write(&path, b"\x89PNG\r\n\x1a\nnot a png").unwrap();
+        let bad = std::sync::Arc::new(crate::engine::SheetImage::lazy(path, [1, 1]));
+        assert!(bad.claim());
+        bad.decode_claimed();
+        assert!(bad.is_failed());
+        // a decoder that panics
+        let panicked = crate::engine::SheetImage::lazy(dir.join("x.png"), [1, 1]);
+        assert!(panicked.claim());
+        panicked.decode_with(|_| panic!("a damaged file"));
+        assert!(panicked.is_failed());
+        // no thread to decode on
+        let orphan =
+            std::sync::Arc::new(crate::engine::SheetImage::lazy(dir.join("y.png"), [1, 1]));
+        assert!(orphan.claim());
+        let ctx = egui::Context::default();
+        let started = decode_in_background(vec![orphan.clone()], &ctx, |_| {
+            Err(std::io::Error::other("no threads"))
+        });
+        assert!(!started);
+        assert!(orphan.is_failed());
+        assert!(!bad.claim(), "a failed file isn't decoded again");
+        let mut layout = sheet_layout(&bad);
+        let sprite = crate::engine::Sprite {
+            sheet: 0,
+            rect: [0.0, 0.0, 1.0, 1.0],
+        };
+        let art = crate::engine::NodeArt {
+            base: [Some(sprite); 3],
+            ..Default::default()
+        };
+        assert!(art_missing(&layout, &art));
+        layout.sheets[0] = Some(sheet());
+        assert!(!art_missing(&layout, &art));
+        // a failed file asks for no more frames
+        let mut tab = TreeTab::default();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            let up = upload_sheets(&mut tab, ui.ctx(), &sheet_layout(&bad), &all());
+            assert!(up[0].is_none());
+        })
+        .textures_delta
+        .clear();
+        // egui itself asks for the first few frames
+        let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
+        for _ in 0..4 {
+            out.textures_delta.clear();
+            out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                upload_sheets(&mut tab, ui.ctx(), &sheet_layout(&bad), &all());
+            });
+        }
+        out.textures_delta.clear();
+        assert!(
+            out.viewport_output
+                .values()
+                .all(|v| v.repaint_delay == std::time::Duration::MAX),
+            "the canvas still waits for a failed file: {:?}",
+            out.viewport_output
+                .values()
+                .map(|v| v.repaint_delay)
+                .collect::<Vec<_>>()
+        );
     }
 
     /// A file no image of the frame draws is neither decoded nor uploaded

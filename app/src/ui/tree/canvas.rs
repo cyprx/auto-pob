@@ -6,11 +6,12 @@ use super::geometry::{MIN_HIT_POINTS, arc_points, node_radius};
 use super::overlays::{self, ALLOCATED, Legend};
 use super::scene;
 use crate::engine::{
-    CompareOnlyNode, NodePower, NodeTooltip, TooltipLine, TreeLayout, TreeNode, TreeState,
+    CompareOnlyNode, NodePower, NodeTooltip, SheetPixels, TooltipLine, TreeLayout, TreeNode,
+    TreeState,
 };
 use crate::theme;
 use crate::widgets::tooltip_ui;
-use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, TextureHandle, Tooltip, Vec2};
+use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Tooltip, Vec2};
 use std::collections::HashSet;
 
 /// What the user did on the canvas this frame.
@@ -416,41 +417,69 @@ fn wheel_notches(ui: &egui::Ui) -> (f32, bool) {
     })
 }
 
-/// Uploads sprite sheets that aren't on the GPU yet. Returns them indexed like
-/// [`TreeLayout::sheets`]. Every sheet's pixels are taken and dropped, uploaded or not: the
-/// texture is what gets drawn, and keeping the decoded copy would hold it twice.
+/// Uploads the images that aren't on the GPU yet. Returns them indexed like
+/// [`TreeLayout::sheets`]; one still decoding is `None` for now. The pixels are decoded on a
+/// thread of their own the first time they are wanted, and dropped once uploaded: the texture
+/// is what gets drawn, and keeping the decoded copy would hold it twice.
 fn upload_sheets(
     tab: &mut TreeTab,
     ctx: &egui::Context,
     layout: &TreeLayout,
 ) -> Vec<Option<Sheet>> {
-    layout
+    let mut to_decode = Vec::new();
+    let mut waiting = false;
+    let sheets = layout
         .sheets
         .iter()
         .map(|sheet| {
             let sheet = sheet.as_ref()?;
-            let rgba = sheet.take_rgba();
-            let texture: &TextureHandle = match tab.textures.entry(sheet.path.clone()) {
-                std::collections::hash_map::Entry::Occupied(held) => held.into_mut(),
-                std::collections::hash_map::Entry::Vacant(slot) => {
-                    // no pixels: this UI took them before and has the texture (an engine
-                    // serves one UI), so this can't happen; the sprites would be left out, as
-                    // for a sheet that couldn't be loaded
-                    let image = egui::ColorImage::from_rgba_unmultiplied(sheet.size, &rgba?);
-                    let mut options = egui::TextureOptions::LINEAR
-                        .with_mipmap_mode(Some(egui::TextureFilter::Linear));
-                    if repeats(&sheet.path) {
-                        options.wrap_mode = egui::TextureWrapMode::Repeat;
+            let size = Vec2::new(sheet.size[0] as f32, sheet.size[1] as f32);
+            let pixels = sheet.take_rgba();
+            if let Some(texture) = tab.textures.get(&sheet.path) {
+                // a copy decoded again for this layout is dropped
+                return Some((texture.id(), size));
+            }
+            let rgba = match pixels {
+                SheetPixels::Ready(rgba) => rgba,
+                SheetPixels::Pending => {
+                    if sheet.claim() {
+                        to_decode.push(std::sync::Arc::clone(sheet));
                     }
-                    slot.insert(ctx.load_texture(sheet.path.display().to_string(), image, options))
+                    waiting = true;
+                    return None;
                 }
+                SheetPixels::Failed => return None,
             };
-            Some((
-                texture.id(),
-                Vec2::new(sheet.size[0] as f32, sheet.size[1] as f32),
-            ))
+            let image = egui::ColorImage::from_rgba_unmultiplied(sheet.size, &rgba);
+            let mut options =
+                egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear));
+            if repeats(&sheet.path) {
+                options.wrap_mode = egui::TextureWrapMode::Repeat;
+            }
+            let texture = ctx.load_texture(sheet.path.display().to_string(), image, options);
+            let id = texture.id();
+            tab.textures.insert(sheet.path.clone(), texture);
+            Some((id, size))
         })
-        .collect()
+        .collect();
+    if !to_decode.is_empty() {
+        let ctx = ctx.clone();
+        let spawned = std::thread::Builder::new()
+            .name("tree-art".into())
+            .spawn(move || {
+                for sheet in &to_decode {
+                    sheet.decode_claimed();
+                    ctx.request_repaint();
+                }
+            });
+        if spawned.is_err() {
+            eprintln!("Unable to start decoding the tree's art");
+        }
+    }
+    if waiting {
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
+    }
+    sheets
 }
 
 /// Whether a file's art repeats across what it is drawn on: the line connectors along a
@@ -838,5 +867,42 @@ mod tests {
         let mut other = TreeTab::default();
         assert!(upload_sheets(&mut other, &ctx, &sheet_layout(&first))[0].is_none());
         assert!(other.textures.is_empty());
+    }
+
+    /// A file is decoded off the frame the first time it is wanted, then uploaded; the layout
+    /// only read its size (crate::engine::tree::load_sheet)
+    #[test]
+    fn a_files_pixels_are_decoded_when_first_drawn() {
+        let dir = crate::test_dir::TestDir::new("lazy-sheet");
+        let path = dir.join("art.png");
+        image::RgbaImage::from_pixel(3, 2, image::Rgba([1, 2, 3, 255]))
+            .save(&path)
+            .unwrap();
+        let lazy = std::sync::Arc::new(crate::engine::SheetImage::lazy(path, [3, 2]));
+        assert!(lazy.is_unloaded());
+        let ctx = egui::Context::default();
+        let mut tab = TreeTab::default();
+        // the first frame starts the decoding and draws without it
+        assert!(upload_sheets(&mut tab, &ctx, &sheet_layout(&lazy))[0].is_none());
+        assert!(!lazy.is_unloaded());
+        let start = std::time::Instant::now();
+        let up = loop {
+            if let Some(up) = upload_sheets(&mut tab, &ctx, &sheet_layout(&lazy))[0] {
+                break up;
+            }
+            assert!(start.elapsed().as_secs() < 10, "never decoded");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(up.1, Vec2::new(3.0, 2.0));
+        // uploaded: the pixels are dropped
+        assert!(!lazy.has_rgba());
+        // a file that can't be decoded is left out for good
+        let broken = std::sync::Arc::new(crate::engine::SheetImage::lazy(
+            dir.join("none.png"),
+            [1, 1],
+        ));
+        broken.decode();
+        assert_eq!(broken.take_rgba(), crate::engine::SheetPixels::Failed);
+        assert!(upload_sheets(&mut tab, &ctx, &sheet_layout(&broken))[0].is_none());
     }
 }

@@ -52,7 +52,18 @@ pub(super) fn layout(lua: &Lua, pob_dir: &Path) -> mlua::Result<TreeLayout> {
         if value.is_nil() {
             return Ok(None);
         }
-        Ok(lua.from_value::<LuaSprite>(value)?.resolve(&sheets))
+        // read by hand: serde over ~25k sprites a layout is several times slower
+        let mlua::Value::Table(t) = value else {
+            return Ok(None);
+        };
+        let sprite = LuaSprite {
+            sheet: t.get("sheet")?,
+            x: t.get("x")?,
+            y: t.get("y")?,
+            w: t.get("w")?,
+            h: t.get("h")?,
+        };
+        Ok(sprite.resolve(&sheets))
     };
 
     let nodes = tree
@@ -102,7 +113,11 @@ pub(super) fn layout(lua: &Lua, pob_dir: &Path) -> mlua::Result<TreeLayout> {
         })
         .collect::<mlua::Result<_>>()?;
 
-    let connectors: Vec<Connector> = lua.from_value(tree.get("connectors")?)?;
+    let connectors = tree
+        .get::<Table>("connectors")?
+        .sequence_values::<Table>()
+        .map(|c| connector(&c?))
+        .collect::<mlua::Result<Vec<_>>>()?;
     let groups = tree
         .get::<Table>("groups")?
         .sequence_values::<mlua::Value>()
@@ -157,6 +172,27 @@ pub(super) fn layout(lua: &Lua, pob_dir: &Path) -> mlua::Result<TreeLayout> {
     })
 }
 
+/// A connector as `connector_entry` (glue/tree.lua) lists it
+fn connector(c: &Table) -> mlua::Result<Connector> {
+    let pair = |t: Table| -> mlua::Result<[f32; 2]> { Ok([t.get(1)?, t.get(2)?]) };
+    let ids: Table = c.get("ids")?;
+    let ends: Table = c.get("ends")?;
+    let quad = match c.get::<Option<Table>>("quad")? {
+        Some(q) => Some([pair(q.get(1)?)?, pair(q.get(2)?)?, pair(q.get(3)?)?]),
+        None => None,
+    };
+    Ok(Connector {
+        ids: [ids.get(1)?, ids.get(2)?],
+        kind: c.get("kind")?,
+        ascendancy: c.get("ascendancy")?,
+        ends: [pair(ends.get(1)?)?, pair(ends.get(2)?)?],
+        centre: c.get::<Option<Table>>("centre")?.map(pair).transpose()?,
+        quad,
+        p: c.get::<Option<f32>>("p")?.unwrap_or(0.0),
+        abyss: c.get::<Option<bool>>("abyss")?.unwrap_or(false),
+    })
+}
+
 /// A `^xRRGGBB` colour code's colour; white for anything else
 fn colour_code(code: &str) -> [u8; 3] {
     let hex = code.strip_prefix("^x").unwrap_or(code);
@@ -168,11 +204,9 @@ fn colour_code(code: &str) -> [u8; 3] {
     [channel(0), channel(2), channel(4)]
 }
 
-/// Decodes a sprite sheet, caching it since every loaded build resends the tree. The cache is
-/// the engine thread's, and each UI gets an engine thread of its own (a restart spawns a new
-/// one), so once that UI took a sheet's pixels to upload them it has the texture: the sheet is
-/// handed out again without them rather than decoded again (about 30 ms for a 3.29 tree,
-/// which a mastery pick would pay, since it resends the layout).
+/// A tree image, its size read from the file's header and its pixels left to decode when the
+/// UI wants them (see [`SheetImage`]). Cached, since every loaded build resends the tree: the
+/// cache is the engine thread's, and each UI gets an engine thread of its own.
 fn load_sheet(path: &Path) -> Option<Arc<SheetImage>> {
     thread_local! {
         static CACHE: RefCell<HashMap<PathBuf, Arc<SheetImage>>> = RefCell::default();
@@ -180,18 +214,14 @@ fn load_sheet(path: &Path) -> Option<Arc<SheetImage>> {
     if let Some(sheet) = CACHE.with(|cache| cache.borrow().get(path).cloned()) {
         return Some(sheet);
     }
-    let image = match image::open(path) {
-        Ok(image) => image.into_rgba8(),
+    let (w, h) = match image::image_dimensions(path) {
+        Ok(size) => size,
         Err(e) => {
             eprintln!("Unable to load {}: {e}", path.display());
             return None;
         }
     };
-    let sheet = Arc::new(SheetImage::new(
-        path.to_owned(),
-        [image.width() as usize, image.height() as usize],
-        image.into_raw(),
-    ));
+    let sheet = Arc::new(SheetImage::lazy(path.to_owned(), [w as usize, h as usize]));
     CACHE.with(|cache| {
         cache
             .borrow_mut()

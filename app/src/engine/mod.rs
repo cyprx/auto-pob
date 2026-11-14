@@ -42,10 +42,10 @@ pub use views::{
     ModLineRef, NodeArt, NodePath, NodePower, NodePowerEntry, NodeTooltip, NoteColour, NotesView,
     OAuthView, PendingRequest, Points, PopupControl, PopupControlKind, PopupRow, PopupView,
     PowerReport, PowerReportRow, PublicStage, PublicView, RangeLineView, RequestsView,
-    SettingEffect, SettingRow, SettingsView, ShareView, SheetImage, SiteRef, SkillOptionsView,
-    SkillSetEntry, SkillsView, SlotChoice, SlotKind, SlotView, SocketGroupText, SocketGroupView,
-    SocketView, SpecEntry, Sprite, StatRow, StatsView, TooltipLine, TreeLayout, TreeNode,
-    TreeState, VariantView,
+    SettingEffect, SettingRow, SettingsView, ShareView, SheetImage, SheetPixels, SiteRef,
+    SkillOptionsView, SkillSetEntry, SkillsView, SlotChoice, SlotKind, SlotView, SocketGroupText,
+    SocketGroupView, SocketView, SpecEntry, Sprite, StatRow, StatsView, TooltipLine, TreeLayout,
+    TreeNode, TreeState, VariantView,
 };
 pub use views::{
     ClassArt, Connector, DrawState, Flavour, GroupArt, HelpSection, HelpView, JewelRadius,

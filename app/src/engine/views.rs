@@ -443,35 +443,119 @@ pub struct TreeLayout {
     pub key: String,
 }
 
-/// A decoded sprite sheet.
+/// An image file the tree draws: a sprite sheet or one of PoB's whole-file assets. Its size is
+/// read from the file's header when the layout is built; its pixels are decoded only when the UI
+/// wants them, off the engine thread, and dropped once uploaded: the GPU copy is what gets drawn.
 pub struct SheetImage {
     pub path: PathBuf,
     pub size: [usize; 2],
-    /// RGBA, 8 bits per channel, not premultiplied, until the UI takes it to upload: the GPU
-    /// copy is what gets drawn, so the pixels aren't kept twice (about 17 MB on a 3.29 tree)
-    rgba: std::sync::Mutex<Option<Vec<u8>>>,
+    pixels: std::sync::Mutex<Pixels>,
+}
+
+/// Where a file's pixels are
+enum Pixels {
+    /// Not decoded, or taken by the UI
+    Unloaded,
+    /// Being decoded
+    Loading,
+    /// RGBA, 8 bits per channel, not premultiplied
+    Ready(Vec<u8>),
+    /// The file couldn't be decoded
+    Failed,
+}
+
+/// What [`SheetImage::take_rgba`] found
+#[derive(Debug, PartialEq)]
+pub enum SheetPixels {
+    Ready(Vec<u8>),
+    /// Not decoded yet: call [`SheetImage::decode`] (it may already be running)
+    Pending,
+    Failed,
 }
 
 impl SheetImage {
+    /// An image with its pixels already decoded
     pub fn new(path: PathBuf, size: [usize; 2], rgba: Vec<u8>) -> SheetImage {
         SheetImage {
             path,
             size,
-            rgba: std::sync::Mutex::new(Some(rgba)),
+            pixels: std::sync::Mutex::new(Pixels::Ready(rgba)),
         }
     }
 
-    /// The pixels, once: `None` after the first call.
-    pub fn take_rgba(&self) -> Option<Vec<u8>> {
-        self.rgba.lock().unwrap_or_else(|e| e.into_inner()).take()
+    /// An image of `size` whose pixels are decoded from `path` when asked for
+    pub fn lazy(path: PathBuf, size: [usize; 2]) -> SheetImage {
+        SheetImage {
+            path,
+            size,
+            pixels: std::sync::Mutex::new(Pixels::Unloaded),
+        }
     }
 
-    /// Whether `take_rgba` would still give the pixels
+    fn pixels(&self) -> std::sync::MutexGuard<'_, Pixels> {
+        self.pixels.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The decoded pixels, once: they are the caller's after this, and the image is undecoded
+    /// again. `Pending` when they aren't decoded yet.
+    pub fn take_rgba(&self) -> SheetPixels {
+        let mut pixels = self.pixels();
+        match std::mem::replace(&mut *pixels, Pixels::Unloaded) {
+            Pixels::Ready(rgba) => SheetPixels::Ready(rgba),
+            Pixels::Failed => {
+                *pixels = Pixels::Failed;
+                SheetPixels::Failed
+            }
+            Pixels::Loading => {
+                *pixels = Pixels::Loading;
+                SheetPixels::Pending
+            }
+            Pixels::Unloaded => SheetPixels::Pending,
+        }
+    }
+
+    /// Decodes the file, unless that is done or under way. Slow: call it off the UI's and the
+    /// engine's threads.
+    pub fn decode(&self) {
+        if self.claim() {
+            self.decode_claimed();
+        }
+    }
+
+    /// Marks the pixels as being decoded, unless that is done or under way; true when the
+    /// caller is to decode them (`decode_claimed`)
+    pub fn claim(&self) -> bool {
+        let mut pixels = self.pixels();
+        if !matches!(*pixels, Pixels::Unloaded) {
+            return false;
+        }
+        *pixels = Pixels::Loading;
+        true
+    }
+
+    /// Decodes the pixels `claim` claimed
+    pub fn decode_claimed(&self) {
+        let decoded = image::open(&self.path).map(|i| i.into_rgba8());
+        *self.pixels() = match decoded {
+            Ok(image) if [image.width() as usize, image.height() as usize] == self.size => {
+                Pixels::Ready(image.into_raw())
+            }
+            Ok(_) => Pixels::Failed,
+            Err(e) => {
+                eprintln!("Unable to load {}: {e}", self.path.display());
+                Pixels::Failed
+            }
+        };
+    }
+
+    /// Whether the pixels are decoded and not taken
     pub fn has_rgba(&self) -> bool {
-        self.rgba
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_some()
+        matches!(*self.pixels(), Pixels::Ready(_))
+    }
+
+    /// Whether nothing has started decoding the file
+    pub fn is_unloaded(&self) -> bool {
+        matches!(*self.pixels(), Pixels::Unloaded)
     }
 }
 

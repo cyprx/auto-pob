@@ -1759,6 +1759,84 @@ mod tests {
         assert!(h.tab.has_dialog());
     }
 
+    /// The canvas draws the scene's images as meshes of the uploaded files; a search match off
+    /// the view is held at its edge (PassiveTreeView.lua:1017-1031)
+    #[test]
+    fn the_canvas_draws_the_art_and_snaps_search_rings() {
+        let shapes = |edge: bool| {
+            let (l, s) = sample();
+            let mut layout = (*l).clone();
+            layout.sheets = vec![Some(Arc::new(crate::engine::SheetImage::new(
+                "TreeData/x.png".into(),
+                [2, 2],
+                vec![255; 16],
+            )))];
+            let sprite = crate::engine::Sprite {
+                sheet: 0,
+                rect: [0.0, 0.0, 2.0, 2.0],
+            };
+            for node in &mut layout.nodes {
+                node.art.base = [Some(sprite); 3];
+            }
+            layout.assets.insert("highlightRing".into(), sprite);
+            layout.size = 2000.0;
+            let mut state = (*s).clone();
+            state.search_matches = vec![4];
+            let mut h = Harness::new(Arc::new(layout), Arc::new(state));
+            h.tab
+                .set_ui_settings(overlays::PowerTheme::RedBlue, edge, true);
+            h.frame(vec![]);
+            let rect = h.tab.rect.unwrap();
+            // node 4, at (600, 600), well off the view's right bottom
+            h.tab.camera.zoom = 0.5;
+            h.tab.camera.center = egui::vec2(600.0, 600.0) - rect.size() / 0.5;
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                time: Some(h.time + 1.0),
+                ..Default::default()
+            };
+            let mut output = h.ctx.run_ui(input, |ui| {
+                h.tab.show(ui, false);
+            });
+            output.textures_delta.clear();
+            let mut meshes = Vec::new();
+            fn walk(shape: &egui::Shape, out: &mut Vec<egui::Mesh>) {
+                match shape {
+                    egui::Shape::Mesh(m) => out.push((**m).clone()),
+                    egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                    _ => {}
+                }
+            }
+            output
+                .shapes
+                .iter()
+                .for_each(|c| walk(&c.shape, &mut meshes));
+            (meshes, rect)
+        };
+        let (meshes, rect) = shapes(true);
+        // the red ring, the only red vertices, inside the view
+        let red: Vec<Pos2> = meshes
+            .iter()
+            .flat_map(|m| &m.vertices)
+            .filter(|v| v.color == egui::Color32::RED)
+            .map(|v| v.pos)
+            .collect();
+        assert_eq!(red.len(), 4, "{meshes:?}");
+        let centre = red.iter().fold(Vec2::ZERO, |a, p| a + p.to_vec2()) / 4.0;
+        assert!(
+            rect.expand(1.0).contains(centre.to_pos2()),
+            "{centre:?} {rect:?}"
+        );
+        let (meshes, rect) = shapes(false);
+        assert!(
+            meshes
+                .iter()
+                .flat_map(|m| &m.vertices)
+                .filter(|v| v.color == egui::Color32::RED)
+                .all(|v| !rect.contains(v.pos))
+        );
+    }
+
     #[test]
     fn a_failed_shrink_ends_with_its_request() {
         // TreeTab.lua:820-826: the button says Done after a failure too (PoB's message is the

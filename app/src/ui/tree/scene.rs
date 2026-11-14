@@ -41,6 +41,10 @@ pub enum Tag {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Image {
     pub layer: u8,
+    /// Within a layer, what must go above what: a node's frame over its icon, the rings over
+    /// the nodes. Images of one pass may be drawn in any order, so the canvas can draw each
+    /// file's at once.
+    pub pass: u8,
     pub sprite: Sprite,
     /// The corners in tree units, in PoB's order (`DrawImageQuad`; an upright image goes
     /// top-left, top-right, bottom-right, bottom-left)
@@ -200,6 +204,7 @@ fn asset(sprite: Sprite, centre: Vec2, flip: bool) -> ([Vec2; 4], [Vec2; 4]) {
 struct Scene<'a> {
     images: Vec<Image>,
     layer: u8,
+    pass: u8,
     view: Rect,
     _marker: std::marker::PhantomData<&'a ()>,
 }
@@ -221,6 +226,7 @@ impl Scene<'_> {
         let (quad, uv) = asset(sprite, at, false);
         self.images.push(Image {
             layer: self.layer,
+            pass: self.pass,
             sprite,
             quad,
             uv,
@@ -243,6 +249,7 @@ impl Scene<'_> {
             let (quad, uv) = asset(sprite, centre, flip);
             self.images.push(Image {
                 layer: self.layer,
+                pass: self.pass,
                 sprite,
                 quad,
                 uv,
@@ -278,6 +285,7 @@ impl Scene<'_> {
         let corner = |x: f32, y: f32| at + Vec2::new(x * cos - y * sin, x * sin + y * cos);
         self.images.push(Image {
             layer: self.layer,
+            pass: self.pass,
             sprite,
             quad: [corner(-h, -h), corner(h, -h), corner(h, h), corner(-h, h)],
             uv: [
@@ -509,6 +517,7 @@ pub fn build(
     let mut scene = Scene {
         images: Vec::with_capacity(layout.nodes.len() * 2 + layout.connectors.len()),
         layer: LAYER_BACK,
+        pass: 0,
         view: look.view,
         _marker: std::marker::PhantomData,
     };
@@ -532,6 +541,7 @@ pub fn build(
             .map(|p| p.to_vec2());
             scene.images.push(Image {
                 layer: LAYER_BACK,
+                pass: 0,
                 sprite: bg,
                 quad: corners,
                 uv: corners.map(|c| c / tile),
@@ -588,6 +598,7 @@ pub fn build(
         }
         scene.images.push(Image {
             layer: LAYER_CONNECTOR,
+            pass: 0,
             sprite: art,
             quad,
             uv,
@@ -662,12 +673,15 @@ pub fn build(
             LAYER_NODE
         };
         let colour = node_colour(node, is_alloc, sets, look);
+        scene.pass = 0;
         if effect.is_some() {
             scene.layer = LAYER_MASTERY;
             scene.draw_asset(effect, at, colour, Tag::Node(id));
             layer = LAYER_NODE;
         }
         scene.layer = layer;
+        // a mastery's icon over effects, a frame over icons
+        scene.pass = 1;
         let mut current = colour;
         if base.is_some() {
             if node.kind == "Socket" && look.deps.contains(&id) {
@@ -688,6 +702,7 @@ pub fn build(
                     }
                 }
             }
+            scene.pass = 2;
             scene.draw_asset(overlay, at, current, Tag::Node(id));
         }
         if sets.search.contains(&id) {
@@ -706,12 +721,15 @@ pub fn build(
         };
         let base = art.base.and_then(|s| s.resolve(&layout.sheets));
         let overlay = art.overlay.and_then(|s| s.resolve(&layout.sheets));
+        scene.pass = 3;
         scene.draw_asset(base, at, GREEN, Tag::CompareOnly(node.id));
+        scene.pass = 4;
         scene.draw_asset(overlay, at, GREEN, Tag::CompareOnly(node.id));
     }
 
     // the sockets' radius rings (PassiveTreeView.lua:1198-1248)
     let time = look.time_ms.map(|ms| (ms * 0.00003) as f32);
+    scene.pass = 5;
     for socket in &state.socket_rings {
         let Some(node) = index.get(&socket.node).map(|&i| &layout.nodes[i]) else {
             continue;

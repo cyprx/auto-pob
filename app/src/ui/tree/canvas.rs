@@ -607,7 +607,11 @@ fn paint(
             painter.add(egui::Shape::mesh(std::mem::take(mesh)));
         }
     };
-    for image in images {
+    // PoB's layers, and within one each pass a file at a time: one mesh per file, not one per
+    // switch between a node's icon and its frame
+    let mut order: Vec<&scene::Image> = images.iter().collect();
+    order.sort_by_key(|i| (i.layer, i.pass, i.sprite.sheet));
+    for image in order {
         let Some((texture, size)) = sheets.get(image.sprite.sheet).copied().flatten() else {
             continue;
         };

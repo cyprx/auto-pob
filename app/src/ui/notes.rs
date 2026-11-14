@@ -265,9 +265,14 @@ impl NotesUi {
                     ui.label(pob_text(&self.text, font, default));
                 });
             // a label never has the keyboard: while the preview is up the keys are the notes',
-            // and the wheel counts anywhere over the preview, as over the editor that fills it
+            // unless a popup, a dialog or a box elsewhere has them; the wheel counts anywhere
+            // over the preview, as over the editor that fills it, but not over what covers it
+            let ctx = ui.ctx();
+            let covered = ctx.any_popup_open()
+                || ctx.memory(|m| m.focused().is_some() || m.top_modal_layer().is_some());
+            // (rect_contains_pointer leaves out a pointer over a layer above this one)
             let hovered = ui.rect_contains_pointer(area.inner_rect);
-            self.zoom_keys(ui, true, hovered);
+            self.zoom_keys(ui, !covered, hovered);
         } else {
             egui::ScrollArea::vertical()
                 .auto_shrink(false)
@@ -758,6 +763,66 @@ mod tests {
         assert_eq!(ui.line_height, NOTES_LINE_HEIGHT + 1);
         run(&mut ui, 0.5, vec![over, wheel(-1.0)]);
         assert_eq!(ui.line_height, NOTES_LINE_HEIGHT);
+    }
+
+    /// With a dialog over the preview, its box keeps Ctrl+= and the wheel over the dialog
+    /// isn't the notes'
+    #[test]
+    fn the_preview_leaves_the_zoom_to_what_covers_it() {
+        let ctx = egui::Context::default();
+        let mut ui = NotesUi {
+            text: "^1red".into(),
+            preview: true,
+            line_height: 30,
+            ..NotesUi::default()
+        };
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let mut typed = String::new();
+        let mut run = |ui: &mut NotesUi, events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |ui_| {
+                    ui.show(ui_, 0.0);
+                    egui::Window::new("dialog")
+                        .fixed_pos(egui::pos2(300.0, 300.0))
+                        .fixed_size(egui::vec2(200.0, 100.0))
+                        .show(ui_.ctx(), |w| {
+                            let edit = w.text_edit_singleline(&mut typed);
+                            edit.request_focus();
+                        });
+                },
+            );
+            out.textures_delta.clear();
+        };
+        run(&mut ui, vec![]);
+        run(&mut ui, vec![]);
+        let key = egui::Event::Key {
+            key: egui::Key::Equals,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        run(&mut ui, vec![key]);
+        assert_eq!(ui.line_height, 30, "the dialog's box has the keys");
+        let over = egui::pos2(380.0, 340.0);
+        let wheel = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::COMMAND,
+            source: egui::MouseWheelSource::Wheel,
+        };
+        run(&mut ui, vec![egui::Event::PointerMoved(over)]);
+        run(&mut ui, vec![egui::Event::PointerMoved(over), wheel]);
+        assert_eq!(
+            ui.line_height, 30,
+            "the wheel over the dialog isn't the notes'"
+        );
     }
 
     /// The preview shows the text at the box's zoom, and Ctrl+wheel over it zooms it

@@ -44,8 +44,11 @@ const PEEKABOO: f32 = 1.15;
 const FLAVOUR_MIN_ZOOM: f32 = 2.5;
 /// PoB's flavour text size at a scale of 1 (PassiveTreeView.lua:611)
 const FLAVOUR_SIZE: f32 = 52.0;
-/// While jewel rings turn, the canvas is redrawn this often
-const RING_FRAME_MS: u64 = 200;
+/// While jewel rings turn, the canvas is redrawn when their edge has moved about a pixel, but
+/// no more often than this ...
+const RING_FRAME_MIN_MS: f32 = 100.0;
+/// ... nor less often than this
+const RING_FRAME_MAX_MS: f32 = 2000.0;
 
 pub fn show(
     ui: &mut egui::Ui,
@@ -137,14 +140,22 @@ pub fn show(
         camera,
         !tab.edge_search_off,
     );
-    if !tab.animations_off
-        && images
+    if !tab.animations_off {
+        let shown: HashSet<u32> = images
             .iter()
-            .any(|i| matches!(i.tag, scene::Tag::JewelRing(_)))
-    {
-        // the jewel rings turn slowly; a few frames a second follow them
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(RING_FRAME_MS));
+            .filter_map(|i| match i.tag {
+                scene::Tag::JewelRing(node) => Some(node),
+                _ => None,
+            })
+            .collect();
+        let rings = state
+            .socket_rings
+            .iter()
+            .filter(|s| shown.contains(&s.node))
+            .flat_map(|s| &s.rings);
+        if let Some(wait) = ring_frame_interval(rings, zoom) {
+            ui.ctx().request_repaint_after(wait);
+        }
     }
     draw_flavour(&painter, layout, &tab.draw_sets, camera, rect, pob_zoom);
     // a node whose art couldn't be loaded is still shown, as a dot
@@ -612,6 +623,26 @@ fn compare_only_at(nodes: &[CompareOnlyNode], at: [f32; 2], zoom: f32) -> Option
         .map(|(n, _)| n)
 }
 
+/// How long the turning jewel rings can wait for a frame: until the fastest edge on screen has
+/// moved about a pixel (PoB turns a ring `spin * 0.03` radians a second, PassiveTreeView.lua:
+/// 1250-1274), within [`RING_FRAME_MIN_MS`] and [`RING_FRAME_MAX_MS`]. `None` without rings.
+fn ring_frame_interval<'a>(
+    rings: impl Iterator<Item = &'a crate::engine::RingImage>,
+    zoom: f32,
+) -> Option<std::time::Duration> {
+    let fastest = rings
+        .map(|r| r.size / 2.0 * zoom * r.spin.abs() * 0.03)
+        .reduce(f32::max)?;
+    let ms = if fastest > 0.0 {
+        1000.0 / fastest
+    } else {
+        RING_FRAME_MAX_MS
+    };
+    Some(std::time::Duration::from_secs_f32(
+        ms.clamp(RING_FRAME_MIN_MS, RING_FRAME_MAX_MS) / 1000.0,
+    ))
+}
+
 /// Whether none of a node's art can be drawn: it has none, or its files couldn't be loaded
 fn art_missing(layout: &TreeLayout, art: &crate::engine::NodeArt) -> bool {
     art.base.iter().chain(&art.overlay).flatten().all(|s| {
@@ -878,6 +909,33 @@ mod tests {
                 .map(|v| v.repaint_delay)
                 .collect::<Vec<_>>()
         );
+    }
+
+    /// The rings' frames follow how fast their edge moves on screen
+    #[test]
+    fn ring_frames_follow_the_rings_on_screen() {
+        let ring = |size: f32, spin: f32| crate::engine::RingImage {
+            image: "jewelShadedOuterRing".into(),
+            size,
+            spin,
+            x: 0.0,
+            y: 0.0,
+            tint: [1.0; 4],
+        };
+        let ms = |rings: &[crate::engine::RingImage], zoom| {
+            ring_frame_interval(rings.iter(), zoom).map(|d| d.as_millis())
+        };
+        assert_eq!(ms(&[], 1.0), None);
+        // a 2400 radius ring at fit zoom (0.03): its edge moves 1.5 px a second
+        let big = ring(4800.0, -0.7);
+        assert_eq!(ms(std::slice::from_ref(&big), 0.03), Some(661));
+        // a small one barely moves: a frame every 2 s
+        assert_eq!(ms(&[ring(100.0, 0.7)], 0.03), Some(2000));
+        // zoomed in, a frame per pixel, but no more than 10 a second
+        assert_eq!(ms(std::slice::from_ref(&big), 0.1), Some(198));
+        assert_eq!(ms(std::slice::from_ref(&big), 0.27), Some(100));
+        // the fastest ring counts
+        assert_eq!(ms(&[ring(100.0, 0.7), big], 0.1), Some(198));
     }
 
     /// A file no image of the frame draws is neither decoded nor uploaded
